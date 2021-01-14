@@ -2,7 +2,7 @@
 
 © Andreas Wendleder 2019-2021
 
-It is possible to render a production scene with Swift.
+Render a production scene with Swift.
 
 ## Moana
 
