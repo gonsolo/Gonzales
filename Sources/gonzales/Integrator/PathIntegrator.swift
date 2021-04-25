@@ -13,10 +13,8 @@ struct PathIntegrator: Integrator {
                 var normal = Normal()
                 for bounce in 0...maxDepth {
                         guard let interaction = try intersectOrInfiniteLights(ray: ray, tHit: &tHit, bounce: bounce, L: &L) else {
-                                //print("no interaction")
                                 break
                         }
-                        //print("interaction")
                         guard let primitive = interaction.primitive else {
                                 break
                         }
@@ -37,18 +35,12 @@ struct PathIntegrator: Integrator {
                                 normal = interaction.normal
                         }
                         let Ld = try beta * sampleOneLight(at: interaction, bsdf: bsdf, with: sampler, in: scene)
-                        //print("bounce Ld, beta: ", bounce, Ld, beta)
                         L += Ld
                         let (f, wi, pdf, _) = try bsdf.sample(wo: interaction.wo, u: sampler.get2D())
-                        //print("bsdf.sample f pdf: ", f, pdf)
-
                         guard pdf != 0 && !pdf.isNaN else {
                                 return (L, white, Normal())
                         }
-                        //print("old beta, f, absDot, pdf: ", beta, f, absDot(wi, interaction.normal), pdf)
                         beta = beta * f * absDot(wi, interaction.normal) / pdf
-                        //print("beta now: ", beta, f, absDot(wi, interaction.normal), pdf)
-
                         ray = interaction.spawnRay(inDirection: wi)
                         tHit = FloatX.infinity
                         if bounce > 3 && russianRoulette(beta: &beta) {
