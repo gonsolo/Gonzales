@@ -14,6 +14,6 @@ This image was denoised with OpenImageDenoise.
 
 ## Compile
 
-To compile you should have OpenEXR and Ptex installed.
+To compile, you should have OpenEXR and Ptex installed.
 Then a simple "swift build" should be enough.
-Building with "swift build -c release" or even "swift build -c release -Xswiftc -Ounchecked" should be better though when rendering Moana.
+Building with "swift build -c release" or even "swift build -c release -Xswiftc -Ounchecked" should be better when rendering Moana.
