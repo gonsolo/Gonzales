@@ -1,6 +1,5 @@
-/**
-        A basic interaction when a ray hits a surface.
-*/
+/// A basic interaction when a ray hits a surface.
+
 protocol Interaction {
 
         var position: Point { get set }
@@ -16,8 +15,6 @@ protocol Interaction {
         func offsetRayOrigin(point: Point, direction: Vector) -> Point
 }
 
-fileprivate let epsilon: FloatX = 0.0001
-
 extension Interaction {
 
         func spawnRay(inDirection direction: Vector) -> Ray {
@@ -32,8 +29,7 @@ extension Interaction {
         }
 
         func offsetRayOrigin(point: Point, direction: Vector) -> Point {
+                let epsilon: FloatX = 0.0001
                 return Point(point + epsilon * direction)
         }
 }
-
-

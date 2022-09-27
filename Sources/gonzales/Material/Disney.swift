@@ -1,11 +1,11 @@
-import Foundation // pow
+import Foundation  // pow
 
-fileprivate func schlickWeight(_ cosTheta: FloatX) -> FloatX {
+private func schlickWeight(_ cosTheta: FloatX) -> FloatX {
         let m = clamp(value: 1 - cosTheta, low: 0, high: 1)
         return m * m * m * m * m
 }
 
-fileprivate func fresnelSchlick(r0: Spectrum, cosTheta: FloatX) -> Spectrum {
+private func fresnelSchlick(r0: Spectrum, cosTheta: FloatX) -> Spectrum {
         return lerp(with: Spectrum(intensity: schlickWeight(cosTheta)), between: r0, and: white)
 }
 
@@ -23,9 +23,9 @@ final class DisneyDiffuse: BxDF {
         }
 
         func evaluate(wo: Vector, wi: Vector) -> Spectrum {
-                let fo = schlickWeight(absCosTheta(wo))
-                let fi = schlickWeight(absCosTheta(wi))
-                let result = reflectance * (1 - fo/2) * (1 - fi/2) / FloatX.pi
+                let weightOut = schlickWeight(absCosTheta(wo))
+                let weightIn = schlickWeight(absCosTheta(wi))
+                let result = reflectance * (1 - weightOut / 2) * (1 - weightIn / 2) / FloatX.pi
                 return result
         }
 
@@ -49,11 +49,16 @@ final class DisneyFakeSubsurface: BxDF {
                 let cosThetaIn = absCosTheta(wi)
                 let cosThetaOut = absCosTheta(wo)
                 let fss90 = cosThetaD * cosThetaD * roughness
-                let fo = schlickWeight(cosThetaOut)
-                let fi = schlickWeight(cosThetaIn)
-                let fss = lerp(with: fo, between: 1, and: fss90) * lerp(with: fi, between: 1, and: fss90)
+                let weightOut = schlickWeight(cosThetaOut)
+                let weightIn = schlickWeight(cosThetaIn)
+                let fss =
+                        lerp(with: weightOut, between: 1, and: fss90)
+                        * lerp(with: weightIn, between: 1, and: fss90)
                 let preserveAlbedo: FloatX = 1.25
-                let ss = preserveAlbedo * (fss * (FloatX(1) / (cosThetaOut + cosThetaIn) - FloatX(0.5)) + FloatX(0.5))
+                let ss =
+                        preserveAlbedo
+                        * (fss * (FloatX(1) / (cosThetaOut + cosThetaIn) - FloatX(0.5))
+                                + FloatX(0.5))
                 let result = reflectance * ss / FloatX.pi
                 return result
         }
@@ -72,14 +77,16 @@ final class DisneyRetroReflection: BxDF {
         }
 
         func evaluate(wo: Vector, wi: Vector) -> Spectrum {
-                var half = wi + wo;
+                var half = wi + wo
                 if half.isZero { return black }
                 half.normalize()
-                let cosThetaD = dot(wi, half);
-                let fo = schlickWeight(absCosTheta(wo))
-                let fi = schlickWeight(absCosTheta(wi))
-                let rr = 2 * roughness * cosThetaD * cosThetaD;
-                let result = reflectance * rr * (fo + fi + fo * fi * (rr - 1)) / FloatX.pi
+                let cosThetaD = dot(wi, half)
+                let weightOut = schlickWeight(absCosTheta(wo))
+                let weightIn = schlickWeight(absCosTheta(wi))
+                let rr = 2 * roughness * cosThetaD * cosThetaD
+                let result =
+                        reflectance * rr * (weightOut + weightIn + weightOut * weightIn * (rr - 1))
+                        / FloatX.pi
                 return result
         }
 
@@ -96,11 +103,11 @@ final class DisneySheen: BxDF {
         }
 
         func evaluate(wo: Vector, wi: Vector) -> Spectrum {
-                var half = wi + wo;
+                var half = wi + wo
                 if half.isZero { return black }
                 half.normalize()
-                let cosThetaD = dot(wi, half);
-                let result = reflectance * schlickWeight(cosThetaD);
+                let cosThetaD = dot(wi, half)
+                let result = reflectance * schlickWeight(cosThetaD)
                 return result
         }
 
@@ -109,25 +116,39 @@ final class DisneySheen: BxDF {
         var reflectance: Spectrum
 }
 
-final class DisneyMicrofacetDistribution: TrowbridgeReitzDistribution {
+final class DisneyMicrofacetDistribution: MicrofacetDistribution {
+
+        init(alpha: (FloatX, FloatX)) {
+                trowbridgeReitzDistribution = TrowbridgeReitzDistribution(alpha: alpha)
+        }
+
+        func differentialArea(withNormal half: Vector) -> FloatX {
+                return trowbridgeReitzDistribution.differentialArea(withNormal: half)
+        }
+
+        func lambda(_ vector: Vector) -> FloatX {
+                return trowbridgeReitzDistribution.lambda(vector)
+        }
+
+        func sampleHalfVector(wo: Vector, u: Point2F) -> Vector {
+                return trowbridgeReitzDistribution.sampleHalfVector(wo: wo, u: u)
+        }
 
         func visibleFraction(from wo: Vector, and wi: Vector) -> FloatX {
                 return maskingShadowing(wo) * maskingShadowing(wi)
         }
+
+        let trowbridgeReitzDistribution: TrowbridgeReitzDistribution
 }
 
 struct DisneyFresnel: Fresnel {
 
-        init(r0: Spectrum, metallic: FloatX, eta: FloatX) {
-                self.r0 = r0
-                self.metallic = metallic
-                self.eta = eta
-        }
-
         func evaluate(cosTheta: FloatX) -> Spectrum {
-                return lerp(with: Spectrum(intensity: metallic),
-                            between: Spectrum(intensity: frDielectric(cosThetaI: cosTheta, etaI: 1, etaT: eta)),
-                            and: fresnelSchlick(r0: r0, cosTheta: cosTheta))
+                return lerp(
+                        with: Spectrum(intensity: metallic),
+                        between: Spectrum(
+                                intensity: frDielectric(cosThetaI: cosTheta, etaI: 1, etaT: eta)),
+                        and: fresnelSchlick(r0: r0, cosTheta: cosTheta))
         }
 
         let r0: Spectrum
@@ -164,7 +185,9 @@ final class DisneyClearCoat: BxDF {
                 half.normalize()
                 let dr = gtr1(cosTheta: absCosTheta(half), alpha: gloss)
                 let fr = frSchlick(r0: 0.04, cosTheta: dot(wo, half))
-                let gr = smithGGX(cosTheta: absCosTheta(wo), alpha: 0.25) * smithGGX(cosTheta: absCosTheta(wi), alpha: 0.25)
+                let gr =
+                        smithGGX(cosTheta: absCosTheta(wo), alpha: 0.25)
+                        * smithGGX(cosTheta: absCosTheta(wi), alpha: 0.25)
                 return Spectrum(intensity: weight * gr * fr * dr / 4)
         }
 
@@ -203,51 +226,53 @@ final class DisneyClearCoat: BxDF {
 
 final class Disney: Material {
 
-        init(color:             Texture<Spectrum>,
-             scatterDistance:   Texture<Spectrum>,
-             anisotropic:       Texture<FloatX>,
-             clearcoat:         Texture<FloatX>,
-             clearcoatGloss:    Texture<FloatX>,
-             diffTrans:         Texture<FloatX>,
-             eta:               Texture<FloatX>,
-             flatness:          Texture<FloatX>,
-             metallic:          Texture<FloatX>,
-             roughness:         Texture<FloatX>,
-             sheen:             Texture<FloatX>,
-             sheenTint:         Texture<FloatX>,
-             specularTint:     Texture<FloatX>,
-             specularTrans:     Texture<FloatX>,
-             thin:              Bool) {
-                self.color              = color
-                self.scatterDistance    = scatterDistance
-                self.anisotropic        = anisotropic
-                self.clearcoat          = clearcoat
-                self.clearcoatGloss     = clearcoatGloss
-                self.diffTrans          = diffTrans
-                self.eta                = eta
-                self.flatness           = flatness
-                self.metallic           = metallic
-                self.roughness          = roughness
-                self.specularTrans      = specularTrans
-                self.sheen              = sheen
-                self.sheenTint          = sheenTint
-                self.specularTint       = specularTint
-                self.thin               = thin
+        init(
+                color: SpectrumTexture,
+                scatterDistance: SpectrumTexture,
+                anisotropic: FloatTexture,
+                clearcoat: FloatTexture,
+                clearcoatGloss: FloatTexture,
+                diffTrans: FloatTexture,
+                eta: FloatTexture,
+                flatness: FloatTexture,
+                metallic: FloatTexture,
+                roughness: FloatTexture,
+                sheen: FloatTexture,
+                sheenTint: FloatTexture,
+                specularTint: FloatTexture,
+                specularTrans: FloatTexture,
+                thin: Bool
+        ) {
+                self.color = color
+                self.scatterDistance = scatterDistance
+                self.anisotropic = anisotropic
+                self.clearcoat = clearcoat
+                self.clearcoatGloss = clearcoatGloss
+                self.diffTrans = diffTrans
+                self.eta = eta
+                self.flatness = flatness
+                self.metallic = metallic
+                self.roughness = roughness
+                self.specularTrans = specularTrans
+                self.sheen = sheen
+                self.sheenTint = sheenTint
+                self.specularTint = specularTint
+                self.thin = thin
         }
 
         private func schlickR0(from eta: FloatX) -> FloatX {
-               return square(eta - 1) / square(eta + 1)
+                return square(eta - 1) / square(eta + 1)
         }
 
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
                 var bsdf = BSDF(interaction: interaction)
                 var bssrdf: BSSRDF! = nil
-                let metallic = self.metallic.evaluate(at: interaction)
-                let specularTrans = self.specularTrans.evaluate(at: interaction)
+                let metallic = self.metallic.evaluateFloat(at: interaction)
+                let specularTrans = self.specularTrans.evaluateFloat(at: interaction)
                 let diffuse = (1 - metallic) * (1 - specularTrans)
-                let color = self.color.evaluate(at: interaction)
-                let roughness = self.roughness.evaluate(at: interaction)
-                let eta = self.eta.evaluate(at: interaction)
+                let color = self.color.evaluateSpectrum(at: interaction)
+                let roughness = self.roughness.evaluateFloat(at: interaction)
+                let eta = self.eta.evaluateFloat(at: interaction)
                 let luminance: FloatX = color.luminance
                 var tintColor: Spectrum
                 if luminance > 0 {
@@ -255,91 +280,115 @@ final class Disney: Material {
                 } else {
                         tintColor = white
                 }
-                let diffTrans = self.diffTrans.evaluate(at: interaction) / 2
+                let diffTrans = self.diffTrans.evaluateFloat(at: interaction) / 2
                 let diffuseColor = diffuse * color
-
-                // TEST
-                //let bladistribution = DisneyMicrofacetDistribution(alpha: (0.01, 0.01))
-                //let blatransmission = MicrofacetTransmission(t: white, distribution: bladistribution, eta: (1.0, 1.01))
-                //bsdf.add(bxdf: blatransmission)
-                //return (bsdf, bssrdf)
-                // TEST
 
                 if diffuse > 0 {
                         if thin {
-                                let flatness = self.flatness.evaluate(at: interaction)
-                                let thinReflectance = diffuse * (1.0 - flatness) * (1.0 - diffTrans) * color
+                                let flatness = self.flatness.evaluateFloat(at: interaction)
+                                let thinReflectance =
+                                        diffuse * (1.0 - flatness) * (1.0 - diffTrans) * color
                                 if !thinReflectance.isBlack {
                                         bsdf.add(bxdf: DisneyDiffuse(reflectance: thinReflectance))
                                 }
-                                let subsurfaceReflectance = diffuse * flatness * (1 - diffTrans) * color
+                                let subsurfaceReflectance =
+                                        diffuse * flatness * (1 - diffTrans) * color
                                 if !subsurfaceReflectance.isBlack {
-                                        bsdf.add(bxdf: DisneyFakeSubsurface(reflectance: subsurfaceReflectance, roughness: roughness))
+                                        bsdf.add(
+                                                bxdf: DisneyFakeSubsurface(
+                                                        reflectance: subsurfaceReflectance,
+                                                        roughness: roughness))
                                 }
                         } else {
-                                let scatterDistance = self.scatterDistance.evaluate(at: interaction)
+                                let scatterDistance = self.scatterDistance.evaluateSpectrum(
+                                        at: interaction)
                                 if scatterDistance.isBlack {
                                         if !diffuseColor.isBlack {
-                                                bsdf.add(bxdf: DisneyDiffuse(reflectance: diffuseColor))
+                                                bsdf.add(
+                                                        bxdf: DisneyDiffuse(
+                                                                reflectance: diffuseColor))
                                         }
                                 } else {
-                                        bsdf.add(bxdf: SpecularTransmission(t: white, etaA: 1, etaB: eta))
+                                        bsdf.add(
+                                                bxdf: SpecularTransmission(
+                                                        t: white, etaA: 1, etaB: eta))
                                         if !diffuseColor.isBlack {
-                                                bssrdf = DisneyBSSRDF(reflectance: diffuseColor,
-                                                                      distance: scatterDistance,
-                                                                      interaction: interaction,
-                                                                      eta: eta)
+                                                bssrdf = DisneyBSSRDF(
+                                                        reflectance: diffuseColor,
+                                                        distance: scatterDistance,
+                                                        interaction: interaction,
+                                                        eta: eta)
                                         }
                                 }
                         }
                         if !diffuseColor.isBlack {
-                                bsdf.add(bxdf: DisneyRetroReflection(reflectance: diffuseColor, roughness: roughness))
+                                bsdf.add(
+                                        bxdf: DisneyRetroReflection(
+                                                reflectance: diffuseColor, roughness: roughness))
                         }
-                        let sheen = self.sheen.evaluate(at: interaction)
+                        let sheen = self.sheen.evaluateFloat(at: interaction)
                         if sheen > 0 {
-                                let sheenTint = self.sheenTint.evaluate(at: interaction)
-                                let sheenColor = lerp(with: Spectrum(intensity: sheenTint), between: white, and: tintColor)
-                                bsdf.add(bxdf: DisneySheen(reflectance: diffuse * sheen * sheenColor))
+                                let sheenTint = self.sheenTint.evaluateFloat(at: interaction)
+                                let sheenColor = lerp(
+                                        with: Spectrum(intensity: sheenTint), between: white,
+                                        and: tintColor)
+                                bsdf.add(
+                                        bxdf: DisneySheen(reflectance: diffuse * sheen * sheenColor)
+                                )
                         }
                 }
-                let aspect = (1 - anisotropic.evaluate(at: interaction) * 0.9).squareRoot()
-                let alpha = (max(0.001, square(roughness) / aspect),
-                             max(0.001, square(roughness) * aspect))
+                let aspect = (1 - anisotropic.evaluateFloat(at: interaction) * 0.9).squareRoot()
+                let alpha = (
+                        max(0.001, square(roughness) / aspect),
+                        max(0.001, square(roughness) * aspect)
+                )
                 let distribution = DisneyMicrofacetDistribution(alpha: alpha)
-                let specularTint = self.specularTint.evaluate(at: interaction)
-                let r0 = lerp(with: Spectrum(intensity: metallic),
-                              between: schlickR0(from: eta) * lerp(with: Spectrum(intensity: specularTint),
-                                                                   between: white,
-                                                                   and: tintColor),
-                              and: color)
+                let specularTint = self.specularTint.evaluateFloat(at: interaction)
+                let r0 = lerp(
+                        with: Spectrum(intensity: metallic),
+                        between: schlickR0(from: eta)
+                                * lerp(
+                                        with: Spectrum(intensity: specularTint),
+                                        between: white,
+                                        and: tintColor),
+                        and: color)
                 let fresnel = DisneyFresnel(r0: r0, metallic: metallic, eta: eta)
-                bsdf.add(bxdf: MicrofacetReflection(reflectance: white,
-                                                    distribution: distribution,
-                                                    fresnel: fresnel))
-                let clearcoat = self.clearcoat.evaluate(at: interaction)
-                let clearcoatGloss = self.clearcoatGloss.evaluate(at: interaction)
+                bsdf.add(
+                        bxdf: MicrofacetReflection(
+                                reflectance: white,
+                                distribution: distribution,
+                                fresnel: fresnel))
+                let clearcoat = self.clearcoat.evaluateFloat(at: interaction)
+                let clearcoatGloss = self.clearcoatGloss.evaluateFloat(at: interaction)
                 if clearcoat > 0 {
-                        bsdf.add(bxdf: DisneyClearCoat(weight: clearcoat,
-                                                       gloss: lerp(with: clearcoatGloss,
-                                                                   between: 0.1,
-                                                                   and: 0.001)))
+                        bsdf.add(
+                                bxdf: DisneyClearCoat(
+                                        weight: clearcoat,
+                                        gloss: lerp(
+                                                with: clearcoatGloss,
+                                                between: 0.1,
+                                                and: 0.001)))
                 }
                 if specularTrans > 0 {
                         let t = specularTrans * color.squareRoot()
                         if thin {
                                 let scaledRoughness = (0.65 * eta - 0.35) * roughness
                                 let squaredRoughness = max(0.001, square(scaledRoughness))
-                                let alpha = (squaredRoughness / aspect,
-                                             squaredRoughness * aspect)
+                                let alpha = (
+                                        squaredRoughness / aspect,
+                                        squaredRoughness * aspect
+                                )
                                 let scaledDistribution = TrowbridgeReitzDistribution(alpha: alpha)
-                                let transmission = MicrofacetTransmission(t: t,
-                                                                          distribution: scaledDistribution,
-                                                                          eta: (1.0, eta))
+                                let transmission = MicrofacetTransmission(
+                                        t: t,
+                                        distribution: scaledDistribution,
+                                        eta: (1.0, eta))
                                 bsdf.add(bxdf: transmission)
                         } else {
-                                let transmission = MicrofacetTransmission(t: t,
-                                                                          distribution: distribution,
-                                                                          eta: (1.0, eta))
+                                let transmission = MicrofacetTransmission(
+                                        t: t,
+                                        distribution: distribution,
+                                        eta: (1.0, eta))
                                 bsdf.add(bxdf: transmission)
                         }
                 }
@@ -349,53 +398,56 @@ final class Disney: Material {
                 return (bsdf, bssrdf)
         }
 
-        let color:              Texture<Spectrum>
-        let scatterDistance:    Texture<Spectrum>
-        let anisotropic:        Texture<FloatX>
-        let clearcoat:          Texture<FloatX>
-        let clearcoatGloss:     Texture<FloatX>
-        let diffTrans:          Texture<FloatX>
-        let eta:                Texture<FloatX>
-        let flatness:           Texture<FloatX>
-        let metallic:           Texture<FloatX>
-        let roughness:          Texture<FloatX>
-        let sheen:              Texture<FloatX>
-        let sheenTint:          Texture<FloatX>
-        let specularTint:       Texture<FloatX>
-        let specularTrans:      Texture<FloatX>
-        let thin:               Bool
+        let color: SpectrumTexture
+        let scatterDistance: SpectrumTexture
+
+        let anisotropic: FloatTexture
+        let clearcoat: FloatTexture
+        let clearcoatGloss: FloatTexture
+        let diffTrans: FloatTexture
+        let eta: FloatTexture
+        let flatness: FloatTexture
+        let metallic: FloatTexture
+        let roughness: FloatTexture
+        let sheen: FloatTexture
+        let sheenTint: FloatTexture
+        let specularTint: FloatTexture
+        let specularTrans: FloatTexture
+
+        let thin: Bool
 }
 
 func createDisney(parameters: ParameterDictionary) throws -> Disney {
-        let color               = try parameters.findSpectrumTexture(name: "color", else: gray)
-        let scatterDistance     = try parameters.findSpectrumTexture(name: "scatterdistance", else: black)
-        let anisotropic         = try parameters.findFloatXTexture(name: "anisotropic", else: 0)
-        let clearcoat           = try parameters.findFloatXTexture(name: "clearcoat", else: 0)
-        let clearcoatGloss      = try parameters.findFloatXTexture(name: "clearcoatgloss", else: 1)
-        let diffTrans           = try parameters.findFloatXTexture(name: "difftrans", else: 1)
-        let eta                 = try parameters.findFloatXTexture(name: "eta", else: 1.5)
-        let flatness            = try parameters.findFloatXTexture(name: "flatness", else: 0)
-        let metallic            = try parameters.findFloatXTexture(name: "metallic", else: 0)
-        let roughness           = try parameters.findFloatXTexture(name: "roughness", else: 0.5)
-        let sheen               = try parameters.findFloatXTexture(name: "sheen", else: 0)
-        let sheenTint           = try parameters.findFloatXTexture(name: "sheentint", else: 0.5)
-        let specularTint        = try parameters.findFloatXTexture(name: "speculartint", else: 0)
-        let specularTrans       = try parameters.findFloatXTexture(name: "spectrans", else: 0)
-        let thin                = try parameters.findOneBool(called: "thin", else: false)
-        return Disney(color: color,
-                      scatterDistance: scatterDistance,
-                      anisotropic: anisotropic,
-                      clearcoat: clearcoat,
-                      clearcoatGloss: clearcoatGloss,
-                      diffTrans: diffTrans,
-                      eta: eta,
-                      flatness: flatness,
-                      metallic: metallic,
-                      roughness: roughness,
-                      sheen: sheen,
-                      sheenTint: sheenTint,
-                      specularTint: specularTint,
-                      specularTrans: specularTrans,
-                      thin: thin)
+        let color = try parameters.findSpectrumTexture(name: "color", else: gray)
+        let scatterDistance = try parameters.findSpectrumTexture(
+                name: "scatterdistance", else: black)
+        let anisotropic = try parameters.findFloatXTexture(name: "anisotropic", else: 0)
+        let clearcoat = try parameters.findFloatXTexture(name: "clearcoat", else: 0)
+        let clearcoatGloss = try parameters.findFloatXTexture(name: "clearcoatgloss", else: 1)
+        let diffTrans = try parameters.findFloatXTexture(name: "difftrans", else: 1)
+        let eta = try parameters.findFloatXTexture(name: "eta", else: 1.5)
+        let flatness = try parameters.findFloatXTexture(name: "flatness", else: 0)
+        let metallic = try parameters.findFloatXTexture(name: "metallic", else: 0)
+        let roughness = try parameters.findFloatXTexture(name: "roughness", else: 0.5)
+        let sheen = try parameters.findFloatXTexture(name: "sheen", else: 0)
+        let sheenTint = try parameters.findFloatXTexture(name: "sheentint", else: 0.5)
+        let specularTint = try parameters.findFloatXTexture(name: "speculartint", else: 0)
+        let specularTrans = try parameters.findFloatXTexture(name: "spectrans", else: 0)
+        let thin = try parameters.findOneBool(called: "thin", else: false)
+        return Disney(
+                color: color,
+                scatterDistance: scatterDistance,
+                anisotropic: anisotropic,
+                clearcoat: clearcoat,
+                clearcoatGloss: clearcoatGloss,
+                diffTrans: diffTrans,
+                eta: eta,
+                flatness: flatness,
+                metallic: metallic,
+                roughness: roughness,
+                sheen: sheen,
+                sheenTint: sheenTint,
+                specularTint: specularTint,
+                specularTrans: specularTrans,
+                thin: thin)
 }
-

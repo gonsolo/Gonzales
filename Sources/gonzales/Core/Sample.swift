@@ -5,4 +5,3 @@ struct Sample {
         var weight: FloatX
         var location: Point2F
 }
-

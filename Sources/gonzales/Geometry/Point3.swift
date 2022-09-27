@@ -1,47 +1,51 @@
 public struct Point3<T> {
 
         init(x: T, y: T, z: T) {
-                self.x = x
-                self.y = y
-                self.z = z
+                self.xyz = (x, y, z)
         }
 
         init(_ point: Point3) {
-                self.x = point.x
-                self.y = point.y
-                self.z = point.z
+                self.xyz = (point.x, point.y, point.z)
         }
 
         init(xyz: (T, T, T)) {
-                self.x = xyz.0
-                self.y = xyz.1
-                self.z = xyz.2
+                self.xyz = xyz
         }
 
         subscript(index: Int) -> T {
-
                 get {
                         switch index {
-                        case 0: return x
-                        case 1: return y
-                        case 2: return z
-                        default: return x
+                        case 0: return xyz.0
+                        case 1: return xyz.1
+                        case 2: return xyz.2
+                        default: return xyz.0
                         }
                 }
 
                 set(newValue) {
                         switch index {
-                        case 0: x = newValue
-                        case 1: y = newValue
-                        case 2: z = newValue
-                        default: break
+                        case 0: xyz.0 = newValue
+                        case 1: xyz.1 = newValue
+                        case 2: xyz.2 = newValue
+                        default: xyz.0 = newValue
                         }
                 }
         }
 
-        public var x: T
-        public var y: T
-        public var z: T
+        var x: T {
+                get { return xyz.0 }
+                set { xyz.0 = newValue }
+        }
+        var y: T {
+                get { return xyz.1 }
+                set { xyz.1 = newValue }
+        }
+        var z: T {
+                get { return xyz.2 }
+                set { xyz.2 = newValue }
+        }
+
+        var xyz: (T, T, T)
 }
 
 extension Point3: CustomStringConvertible {
@@ -64,9 +68,10 @@ extension Point3: Three where T: FloatingPoint {
 
 extension Point3 where T: FloatingPoint {
         init(_ normal: Normal3<T>) {
-                self.init(x: normal.x,
-                          y: normal.y,
-                          z: normal.z)
+                self.init(
+                        x: normal.x,
+                        y: normal.y,
+                        z: normal.z)
         }
 }
 
@@ -98,5 +103,3 @@ extension Point3 where T: FloatingPoint {
                 return Vector3<T>(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
         }
 }
-
-

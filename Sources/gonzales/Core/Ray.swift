@@ -6,7 +6,7 @@ struct Ray {
 
         init(origin: Point, direction: Vector) {
                 self.origin = origin
-                self.direction = direction        
+                self.direction = direction
         }
 
         func getPointFor(parameter t: FloatX) -> Point {
@@ -22,4 +22,3 @@ extension Ray: CustomStringConvertible {
                 return "Ray [ o: \(origin) d: \(direction)]"
         }
 }
-

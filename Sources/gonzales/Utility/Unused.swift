@@ -4,4 +4,3 @@ public func unused(_ any: Any...) {
                 _ = x
         }
 }
-

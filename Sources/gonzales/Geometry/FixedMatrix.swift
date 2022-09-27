@@ -1,7 +1,7 @@
 struct FixedMatrix<MatrixBackingFloat: BinaryFloatingPoint> {
 
         private func index(_ row: Int, _ column: Int) -> Int {
-            return 4*row + column
+                return 4 * row + column
         }
 
         subscript(row: Int, column: Int) -> MatrixBackingFloat {
@@ -11,4 +11,3 @@ struct FixedMatrix<MatrixBackingFloat: BinaryFloatingPoint> {
 
         private var storage = FixedArray16<MatrixBackingFloat>()
 }
-

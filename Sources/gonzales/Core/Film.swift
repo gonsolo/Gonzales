@@ -16,29 +16,26 @@ final class Film {
                 self.normalImage = Image(resolution: resolution)
                 self.fileName = fileName
                 self.filter = filter
-                self.crop = Bounds2i(pMin: upperPoint2i(resolution * crop.pMin),
-                                     pMax: upperPoint2i(resolution * crop.pMax))
-		            self.locker = Locker()
+                self.crop = Bounds2i(
+                        pMin: upperPoint2i(resolution * crop.pMin),
+                        pMax: upperPoint2i(resolution * crop.pMax))
+                self.locker = Locker()
         }
 
-        func getFilterSupportAsInt() -> Point2I {
-
-                func toInt(_ x: FloatX) -> Int { return Int((x / 2.0).rounded(.up)) }
-
-                return Point2I(x: toInt(filter.support.x), y: toInt(filter.support.y))
-        }
-    
         func getSampleBounds() -> Bounds2i {
-                let support = getFilterSupportAsInt()
-                return Bounds2i(pMin: Point2I(x: crop.pMin.x - support.x, y: crop.pMin.y - support.y),
-                                pMax: Point2I(x: crop.pMax.x + support.x, y: crop.pMax.y + support.y))
+                return crop
         }
 
         private func chooseWriter(name: String) throws -> ImageWriter {
-                if name.hasSuffix(".png")           { return PngWriter() }
-                else if name.hasSuffix(".exr")      { return ExrWriter() }
-                else if name.hasSuffix(".ascii")    { return AsciiWriter() }
-                else                                { throw FilmError.unknownFileType(name: name) }
+                if name.hasSuffix(".png") {
+                        return PngWriter()
+                } else if name.hasSuffix(".exr") {
+                        return ExrWriter()
+                } else if name.hasSuffix(".ascii") {
+                        return AsciiWriter()
+                } else {
+                        throw FilmError.unknownFileType(name: name)
+                }
         }
 
         func writeImages() throws {
@@ -56,9 +53,21 @@ final class Film {
         func add(samples: [Sample]) {
                 locker.locked {
                         for sample in samples {
-                                add(value: sample.light, weight: sample.weight, location: sample.location, image: &image)
-                                add(value: sample.albedo, weight: sample.weight, location: sample.location, image: &albedoImage)
-                                add(value: Spectrum(from: sample.normal), weight: sample.weight, location: sample.location, image: &normalImage)
+                                add(
+                                        value: sample.light,
+                                        weight: sample.weight,
+                                        location: sample.location,
+                                        image: &image)
+                                add(
+                                        value: sample.albedo,
+                                        weight: sample.weight,
+                                        location: sample.location,
+                                        image: &albedoImage)
+                                add(
+                                        value: Spectrum(from: sample.normal),
+                                        weight: sample.weight,
+                                        location: sample.location,
+                                        image: &normalImage)
                         }
                 }
         }
@@ -78,25 +87,37 @@ final class Film {
                 let (ymin, ymax) = getRasterBounds(from: location.y, delta: radius.y)
                 let pMin = Point2I(x: xmin, y: ymin)
                 let pMax = Point2I(x: xmax, y: ymax)
-                return  Bounds2i(pMin: pMin, pMax: pMax)
+                return Bounds2i(pMin: pMin, pMax: pMax)
         }
 
         private func isWithin(location: Point2I, resolution: Point2I) -> Bool {
-                return location.x >= 0 && location.y >= 0 && location.x < resolution.x && location.y < resolution.y
+                return location.x >= 0 && location.y >= 0 && location.x < resolution.x
+                        && location.y < resolution.y
         }
 
         private func isWithin(location: Point2F, support: Vector2F) -> Bool {
                 return abs(location.x) < support.x && abs(location.y) < support.y
         }
 
-        func filterAndWrite(sample: Point2F, pixel: Point2I, image: inout Image, value: Spectrum, weight: FloatX) {
+        func filterAndWrite(
+                sample: Point2F,
+                pixel: Point2I,
+                image: inout Image,
+                value: Spectrum,
+                weight: FloatX
+        ) {
                 if isWithin(location: pixel, resolution: image.fullResolution) {
-                        let pixelCenter = Point2F(x: FloatX(pixel.x) + 0.5, y: FloatX(pixel.y) + 0.5) 
+                        let pixelCenter = Point2F(
+                                x: FloatX(pixel.x) + 0.5,
+                                y: FloatX(pixel.y) + 0.5)
                         let relativeLocation = Point2F(from: sample - pixelCenter)
                         if isWithin(location: relativeLocation, support: filter.support) {
                                 let color = filter.evaluate(atLocation: relativeLocation) * value
                                 let weight = filter.evaluate(atLocation: relativeLocation) * weight
-                                image.addPixel(withColor: color, withWeight: weight, atLocation: pixel)
+                                image.addPixel(
+                                        withColor: color,
+                                        withWeight: weight,
+                                        atLocation: pixel)
                         }
                 }
         }
@@ -106,7 +127,12 @@ final class Film {
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
                                 let pixelLocation = Point2I(x: x, y: y)
-                                filterAndWrite(sample: location, pixel: pixelLocation, image: &image, value: value, weight: weight)
+                                filterAndWrite(
+                                        sample: location,
+                                        pixel: pixelLocation,
+                                        image: &image,
+                                        value: value,
+                                        weight: weight)
                         }
                 }
         }
@@ -120,4 +146,3 @@ final class Film {
         var crop: Bounds2i
         let locker: Locker
 }
-

@@ -9,27 +9,29 @@ enum MainError: Error {
 
 func handle(_ error: Error) {
         switch error {
-        case let error as ApiError:
-		switch error {
-		case ApiError.ply(let message):
-			print(message)
-		case ApiError.unknownTextureFormat(let suffix):
-			print("Unknown texture format: \(suffix)")
-		default:
-			print("ApiError: \(error)")
-		}
-        case let error as MainError:
-                print("MainError: \(error)")
-        case let error as RenderError:
-                print("RenderError: \(error)")
-        case let error as ImageError:
-                print("ImageError \(error)")
-        case let error as ParameterError:
+        case is ApiError:
                 switch error {
-                case .missing(let parameter):
+                case ApiError.ply(let message):
+                        print(message)
+                case ApiError.unknownTextureFormat(let suffix):
+                        print("Unknown texture format: \(suffix)")
+                default:
+                        print("ApiError: \(error)")
+                }
+        case is MainError:
+                print("MainError: \(error)")
+        case is RenderError:
+                print("RenderError: \(error)")
+        case is ImageError:
+                print("ImageError \(error)")
+        case is ParameterError:
+                switch error {
+                case ParameterError.missing(let parameter):
                         print("Missing Parameter: \(parameter)")
-                case .isNil:
+                case ParameterError.isNil:
                         print("isNil")
+                default:
+                        print("Parameter error!")
                 }
         default:
                 print("General error \(error)")
@@ -51,7 +53,7 @@ func parseArguments() throws -> String {
         while let argument = iterator.next() {
                 switch argument {
                 case "--quick":
-                        quick = true;
+                        quick = true
                 case "--verbose":
                         verbose = true
                 case "--single":
@@ -101,9 +103,9 @@ func main() {
                 sceneDirectory = url.path
                 api.start()
                 try api.include(file: sceneNameLast)
-       } catch let error {
+        } catch let error {
                 handle(error)
-       }
+        }
 }
 
 main()

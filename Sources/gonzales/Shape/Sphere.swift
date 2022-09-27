@@ -26,7 +26,7 @@ final class Sphere: Shape {
         func uniformSampleSphere(u: Point2F) -> Point {
 
                 let z = 1 - 2 * u[0]
-                let r = max(0, 1 - z*z).squareRoot()
+                let r = max(0, 1 - z * z).squareRoot()
                 let phi = 2 * FloatX.pi * u[1]
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
@@ -51,9 +51,10 @@ final class Sphere: Shape {
                                 pdf = 0
                         } else {
                                 wi = normalized(wi)
-                                pdf *= distanceSquared(ref.position, interaction.position) /
+                                pdf *=
+                                        distanceSquared(ref.position, interaction.position)
                                         //absDot(interaction.normal, Normal(vector: -wi))
-                                        absDot(interaction.normal, Normal(-wi))
+                                        / absDot(interaction.normal, Normal(-wi))
                         }
                         if pdf.isInfinite { pdf = 0 }
                         return (interaction, pdf)
@@ -72,16 +73,19 @@ final class Sphere: Shape {
                         sinTheta2 = sinThetaMax2 * u[0]
                         cosTheta = (1 - sinTheta2).squareRoot()
                 }
-                let cosAlpha = sinTheta2 * invSinThetaMax +
-                        cosTheta * (max(0, 1 - sinTheta2 * invSinThetaMax * invSinThetaMax)).squareRoot()
+                let cosAlpha =
+                        sinTheta2 * invSinThetaMax + cosTheta
+                        * (max(0, 1 - sinTheta2 * invSinThetaMax * invSinThetaMax)).squareRoot()
                 let sinAlpha = max(0, 1 - cosAlpha * cosAlpha).squareRoot()
                 let phi = u[1] * 2 * FloatX.pi
-                let worldNormal = Normal(sphericalDirection(sinTheta: sinAlpha,
-                                                            cosTheta: cosAlpha,
-                                                            phi: phi,
-                                                            x: -wcX,
-                                                            y: -wcY,
-                                                            z: -wc))
+                let worldNormal = Normal(
+                        sphericalDirection(
+                                sinTheta: sinAlpha,
+                                cosTheta: cosAlpha,
+                                phi: phi,
+                                x: -wcX,
+                                y: -wcY,
+                                z: -wc))
                 let worldPoint = center + radius * Point(worldNormal)
                 let interaction = SurfaceInteraction(position: worldPoint, normal: worldNormal)
                 let pdf: FloatX = 1.0 / (2 * FloatX.pi * (1 - cosThetaMax))
@@ -93,7 +97,7 @@ final class Sphere: Shape {
         }
 
         func quadratic(a: FloatX, b: FloatX, c: FloatX) -> (FloatX, FloatX)? {
-                let discriminant = b*b - 4*a*c
+                let discriminant = b * b - 4 * a * c
                 guard discriminant > 0 else {
                         return nil
                 }
@@ -104,13 +108,13 @@ final class Sphere: Shape {
                 } else {
                         q = -FloatX(0.5) * (b + rootDiscriminant)
                 }
-                let ta = [q/a, c/q].sorted()
+                let ta = [q / a, c / q].sorted()
                 return (ta[0], ta[1])
         }
 
-        func intersect(ray worldRay: Ray, tHit: inout FloatX) throws -> SurfaceInteraction? {
-                let empty = {(line: Int) -> SurfaceInteraction? in
-                        return nil
+        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+                let empty = { (line: Int) -> SurfaceInteraction in
+                        return SurfaceInteraction()
                 }
                 let ray = worldToObject * worldRay
                 let ox = ray.origin.x
@@ -119,9 +123,9 @@ final class Sphere: Shape {
                 let dx = ray.direction.x
                 let dy = ray.direction.y
                 let dz = ray.direction.z
-                let a = dx*dx + dy*dy + dz*dz
-                let b = 2 * (dx*ox + dy*oy + dz*oz)
-                let c = ox*ox + oy*oy + oz*oz - radius*radius
+                let a = dx * dx + dy * dy + dz * dz
+                let b = 2 * (dx * ox + dy * oy + dz * oz)
+                let c = ox * ox + oy * oy + oz * oz - radius * radius
 
                 guard let t = quadratic(a: a, b: b, c: c) else {
                         return empty(#line)
@@ -145,13 +149,15 @@ final class Sphere: Shape {
                 let dpdu = Vector(x: -phiMax * pHit.y, y: phiMax * pHit.x, z: 0)
 
                 let uv = Point2F()
-                let localInteraction = SurfaceInteraction(position: pHit,
-                                                        normal: normal,
-                                                        shadingNormal: normal,
-                                                        wo: -ray.direction,
-                                                        dpdu: dpdu,
-                                                        uv: uv)
-                let worldInteraction = objectToWorld * localInteraction
+                let localInteraction = SurfaceInteraction(
+                        position: pHit,
+                        normal: normal,
+                        shadingNormal: normal,
+                        wo: -ray.direction,
+                        dpdu: dpdu,
+                        uv: uv)
+                var worldInteraction = objectToWorld * localInteraction
+                worldInteraction.valid = true
                 tHit = shapeHit
                 return worldInteraction
         }
@@ -164,4 +170,3 @@ func createSphere(objectToWorld: Transform, parameters: ParameterDictionary) thr
         let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
         return Sphere(radius: radius, objectToWorld: objectToWorld)
 }
-

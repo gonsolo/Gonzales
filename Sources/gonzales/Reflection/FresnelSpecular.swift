@@ -8,7 +8,7 @@ final class FresnelSpecular: BxDF {
         }
 
         func evaluate(wo: Vector, wi: Vector) -> Spectrum { return black }
-        
+
         func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {
 
                 func reflective(fresnel: FloatX) -> (Spectrum, Vector, FloatX) {
@@ -30,27 +30,26 @@ final class FresnelSpecular: BxDF {
                                 return (black, nullVector, 0)
                         }
                         let pdf = 1 - dielectric
-                        let radiance =  transmittance * (1 - dielectric)
+                        let radiance = transmittance * (1 - dielectric)
                         return (radiance, wt, pdf)
                 }
 
                 let dielectric = frDielectric(cosThetaI: cosTheta(wo), etaI: etaA, etaT: etaB)
                 if u.x < dielectric {
                         return reflective(fresnel: dielectric)
-                }
-                else {
+                } else {
                         return transmittive(fresnel: dielectric)
                 }
         }
-        
+
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
                 return 1
         }
-        
+
         func albedo() -> Spectrum { return white }
 
-        var isReflective : Bool { get { return true } }
-        var isTransmissive: Bool { get { return true } }
+        var isReflective: Bool { return true }
+        var isTransmissive: Bool { return true }
 
         var reflectance: Spectrum
         var transmittance: Spectrum

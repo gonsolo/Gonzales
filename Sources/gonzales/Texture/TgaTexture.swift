@@ -1,6 +1,6 @@
 import Foundation
 
-final class TgaTexture: Texture<Spectrum> {
+final class TgaTexture: SpectrumTexture {
 
         init(width: Int, height: Int, channels: Int, data: [UInt8]) {
                 self.width = width
@@ -17,25 +17,25 @@ final class TgaTexture: Texture<Spectrum> {
                         return UInt16(a) + UInt16(b) * 256
                 }
 
-		guard let handle = FileHandle(forReadingAtPath: path) else {
-			throw RenderError.noFileHandle
-		}
+                guard let handle = FileHandle(forReadingAtPath: path) else {
+                        throw RenderError.noFileHandle
+                }
                 let data = handle.readDataToEndOfFile()
                 let width = Int(get16Bit(from: data, at: 12))
                 let height = Int(get16Bit(from: data, at: 14))
                 let bits = data[16]
                 let descriptor = data[17]
-                let right_to_left = descriptor & 4
-                let top_to_bottom = descriptor & 5
+                let rightToLeft = descriptor & 4
+                let topToBottom = descriptor & 5
                 let channels = Int(bits / 8)
                 let length = UInt(width) * UInt(height) * UInt(channels)
                 let end = 18 + length
-                var imageData:  [UInt8] = []
+                var imageData: [UInt8] = []
                 imageData = Array(data[18..<end])
-                if right_to_left == 1 {
+                if rightToLeft == 1 {
                         for y in 0..<height {
                                 let left = y * width
-                                for x in 0..<width/2 {
+                                for x in 0..<width / 2 {
                                         let from = left + x
                                         let to = left + width - x
                                         for c in 0..<channels {
@@ -47,8 +47,8 @@ final class TgaTexture: Texture<Spectrum> {
                                 }
                         }
                 }
-                if top_to_bottom == 1 {
-                        for y in 0..<height/2 {
+                if topToBottom == 1 {
+                        for y in 0..<height / 2 {
                                 let from = y
                                 let to = height - y
                                 for x in 0..<width {
@@ -77,7 +77,7 @@ final class TgaTexture: Texture<Spectrum> {
                 return Spectrum(r: inverseGamma(s.r), g: inverseGamma(s.g), b: inverseGamma(s.b))
         }
 
-        override func evaluate(at interaction: Interaction) -> Spectrum {
+        func evaluateSpectrum(at interaction: Interaction) -> Spectrum {
 
                 func getRGB(from index: Int) -> (UInt8, UInt8, UInt8) {
                         let b = data[index + 0]
@@ -113,11 +113,10 @@ final class TgaTexture: Texture<Spectrum> {
                 let ints = getRGB(from: index)
                 let srgb = getSpectrum(from: ints)
                 return inverseGamma(srgb)
-       }
-       
-       let width: Int
-       let height: Int
-       let channels: Int
-       let data: [UInt8]
-}
+        }
 
+        let width: Int
+        let height: Int
+        let channels: Int
+        let data: [UInt8]
+}

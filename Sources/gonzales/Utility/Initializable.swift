@@ -1,7 +1,4 @@
-/**
-        A type that can be initialized.
-*/
+///        A type that can be initialized.
 protocol Initializable {
         init()
 }
-

@@ -9,4 +9,3 @@ final class None: Material {
 func createNone() throws -> None {
         return None()
 }
-

@@ -23,7 +23,7 @@ struct Pixel {
         private var weight: FloatX
 }
 
-extension Pixel : CustomStringConvertible {
+extension Pixel: CustomStringConvertible {
         public var description: String {
                 return "[ \(light) \(weight) ]"
         }
@@ -34,4 +34,3 @@ extension Pixel {
                 return Pixel(light: left.light + right.light, weight: left.weight + right.weight)
         }
 }
-

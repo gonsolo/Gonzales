@@ -2,14 +2,14 @@ struct Statistics {
 
         func report() {
                 print("Statistics:")
+                BoundingHierarchyBuilder.statistics()
+                BoundingHierarchy.statistics()
                 renderer?.camera.statistics()
                 scene.statistics()
-                Triangle<Int>.statistics()
+                Triangle.statistics()
                 //Curve.statistics()
-                BoundingHierarchyBuilder.statistics()
-                //Bounds3.statistics()
+                Bounds3.statistics()
         }
 }
 
 var statistics = Statistics()
-

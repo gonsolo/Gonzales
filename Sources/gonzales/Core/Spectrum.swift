@@ -9,7 +9,7 @@ public struct BaseSpectrum<T: FloatingPoint>: Initializable, Three {
         init(x: T, y: T, z: T) {
                 self.x = x
                 self.y = y
-                self.z = z  
+                self.z = z
         }
 
         init(r: T, g: T, b: T) {
@@ -28,36 +28,34 @@ public struct BaseSpectrum<T: FloatingPoint>: Initializable, Three {
                 self.z = rgb.2
         }
 
-        var isNaN: Bool  {
-                get {
-                        return r.isNaN || g.isNaN || b.isNaN
-                }
+        var isNaN: Bool {
+                return r.isNaN || g.isNaN || b.isNaN
         }
 
-        var isInfinite: Bool  {
-                get {
-                        return r.isInfinite || g.isInfinite || b.isInfinite
-                }
+        var isInfinite: Bool {
+                return r.isInfinite || g.isInfinite || b.isInfinite
         }
 
-	// Conform to Three
+        // Conform to Three
         var x: T
         var y: T
         var z: T
 
-	// Convenience accessors for Spectrum
+        // Convenience accessors for Spectrum
         var r: T {
-		get { return x }
-		set { x = newValue }
-	}
+                get { return x }
+                set { x = newValue }
+        }
+
         var g: T {
-		get { return y }
-		set { y = newValue }
-	}
+                get { return y }
+                set { y = newValue }
+        }
+
         var b: T {
-		get { return z }
-		set { z = newValue }
-	}
+                get { return z }
+                set { z = newValue }
+        }
 }
 
 extension BaseSpectrum: CustomStringConvertible {
@@ -85,21 +83,27 @@ extension BaseSpectrum where T: FloatingPoint {
         }
 
         public static func + (spectrum: BaseSpectrum<T>, value: T) -> BaseSpectrum {
-                return BaseSpectrum(r: spectrum.r + value,
-                                    g: spectrum.g + value,
-                                    b: spectrum.b + value)
+                return BaseSpectrum(
+                        r: spectrum.r + value,
+                        g: spectrum.g + value,
+                        b: spectrum.b + value)
         }
 
-         public static func - (spectrum: BaseSpectrum<T>, value: T) -> BaseSpectrum {
-                return BaseSpectrum(r: spectrum.r - value,
-                                    g: spectrum.g - value,
-                                    b: spectrum.b - value)
+        public static func - (spectrum: BaseSpectrum<T>, value: T) -> BaseSpectrum {
+                return BaseSpectrum(
+                        r: spectrum.r - value,
+                        g: spectrum.g - value,
+                        b: spectrum.b - value)
         }
 
-        public static func / (numerator: BaseSpectrum<T>, denominator: BaseSpectrum<T>) -> BaseSpectrum {
-                return BaseSpectrum(r: numerator.r / denominator.r,
-                                g: numerator.g / denominator.g,
-                                b: numerator.b / denominator.b)
+        public static func / (
+                numerator: BaseSpectrum<T>,
+                denominator: BaseSpectrum<T>
+        ) -> BaseSpectrum {
+                return BaseSpectrum(
+                        r: numerator.r / denominator.r,
+                        g: numerator.g / denominator.g,
+                        b: numerator.b / denominator.b)
         }
 
         public static func == (a: BaseSpectrum<T>, b: BaseSpectrum<T>) -> Bool {
@@ -111,9 +115,10 @@ extension BaseSpectrum where T: FloatingPoint {
         }
 
         public func squareRoot() -> BaseSpectrum {
-                return BaseSpectrum(r: r.squareRoot(),
-                                    g: g.squareRoot(),
-                                    b: b.squareRoot())
+                return BaseSpectrum(
+                        r: r.squareRoot(),
+                        g: g.squareRoot(),
+                        b: b.squareRoot())
         }
 
         func average() -> T {
@@ -124,12 +129,10 @@ extension BaseSpectrum where T: FloatingPoint {
 extension BaseSpectrum where T: BinaryFloatingPoint {
 
         var luminance: T {
-                get {
-                        let rw: T = 0.212671 * r
-                        let gw: T = 0.715160 * g
-                        let bw: T = 0.072169 * b
-                        return rw + gw + bw
-                }
+                let rw: T = 0.212671 * r
+                let gw: T = 0.715160 * g
+                let bw: T = 0.072169 * b
+                return rw + gw + bw
         }
 }
 
@@ -144,16 +147,17 @@ extension BaseSpectrum where T: FloatingPoint {
 typealias Spectrum = BaseSpectrum<FloatX>
 
 let black = Spectrum(intensity: 0)
-let gray  = Spectrum(intensity: 0.5)
+let gray = Spectrum(intensity: 0.5)
 let white = Spectrum(intensity: 1)
-let red   = Spectrum(r: 1, g: 0, b: 0)
-let blue  = Spectrum(r: 0, g: 0, b: 1)
+let red = Spectrum(r: 1, g: 0, b: 0)
+let blue = Spectrum(r: 0, g: 0, b: 1)
 let green = Spectrum(r: 0, g: 1, b: 0)
 
 func pow(base: Spectrum, exp: FloatX) -> Spectrum {
-        return Spectrum(r: pow(base.r, exp),
-                        g: pow(base.g, exp),
-                        b: pow(base.b, exp))
+        return Spectrum(
+                r: pow(base.r, exp),
+                g: pow(base.g, exp),
+                b: pow(base.b, exp))
 }
 
 func gammaLinearToSrgb(light: Spectrum) -> Spectrum {
@@ -171,4 +175,3 @@ func gammaSrgbToLinear(light: Spectrum) -> Spectrum {
         converted.b = gammaSrgbToLinear(value: light.b)
         return converted
 }
-

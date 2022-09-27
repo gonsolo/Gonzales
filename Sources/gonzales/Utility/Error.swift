@@ -1,6 +1,6 @@
 import Foundation
 
-enum RenderError : Error {
+enum RenderError: Error {
         case fopen
         case insufficientArguments
         case fileNotExisting(name: String)
@@ -13,23 +13,27 @@ enum RenderError : Error {
         case unsupportedFilter
         case noSceneSpecified
         case noLights
-	case readFloatX
-	case readInt32
-	case readUInt8
+        case readFloatX
+        case readInt32
+        case readUInt8
 }
 
-func unimplemented(function: String = #function, file: String = #file, line: Int   = #line, message: String = "") -> Never {
+func unimplemented(
+        function: String = #function, file: String = #file, line: Int = #line, message: String = ""
+) -> Never {
         print("Unimplemented in function \(function) in file \(file), line \(line), \(message)")
         fatalError()
 }
 
-func todo(function: String = #function, file: String = #file, line: Int   = #line, message: String = "") -> Never {
+func todo(
+        function: String = #function, file: String = #file, line: Int = #line, message: String = ""
+) -> Never {
         print("Unimplemented in function \(function) in file \(file), line \(line), \(message)")
         fatalError()
 }
 
-func notOverridden(function: String = #function, file: String = #file, line: Int   = #line) -> Never {
-        print("Function \(function) in file \(file), line \(line) has to be overriden!")
+func notOverridden(function: String = #function, file: String = #file, line: Int = #line) -> Never {
+        print("Function \(function) in file \(file), line \(line) has to be overridden!")
         fatalError()
 }
 
@@ -41,5 +45,3 @@ func abort(_ message: String) -> Never {
         print("Error: \(message)")
         exit(-1)
 }
-
-

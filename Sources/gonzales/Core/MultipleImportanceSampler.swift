@@ -1,15 +1,16 @@
 struct MultipleImportanceSampler<Sample> {
 
         struct Sampler {
-                typealias sampleFunc = () throws -> (estimate: Spectrum, density: FloatX, sample: Sample)
+                typealias sampleFunc = () throws -> (
+                        estimate: Spectrum,
+                        density: FloatX,
+                        sample: Sample
+                )
+
                 typealias densityFunc = (_ sample: Sample) throws -> FloatX
 
                 let sample: sampleFunc
                 let density: densityFunc
-        }
-
-        init(samplers: (Sampler, Sampler)) {
-                self.samplers = samplers
         }
 
         func evaluate() throws -> Spectrum {
@@ -28,4 +29,3 @@ struct MultipleImportanceSampler<Sample> {
 
         let samplers: (Sampler, Sampler)
 }
-

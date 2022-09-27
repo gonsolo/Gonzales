@@ -4,4 +4,3 @@ struct BoxFilter: Filter {
 
         var support: Vector2F
 }
-

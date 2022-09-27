@@ -23,10 +23,10 @@ func frDielectric(cosThetaI: FloatX, etaI: FloatX, etaT: FloatX) -> FloatX {
 struct FresnelDielectric: Fresnel {
 
         func evaluate(cosTheta: FloatX) -> Spectrum {
-                return Spectrum(intensity: frDielectric(cosThetaI: cosTheta, etaI: etaI, etaT: etaT))
+                return Spectrum(
+                        intensity: frDielectric(cosThetaI: cosTheta, etaI: etaI, etaT: etaT))
         }
 
         var etaI: FloatX = 1.0
         var etaT: FloatX = 1.0
 }
-

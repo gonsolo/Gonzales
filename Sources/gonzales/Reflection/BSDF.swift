@@ -1,9 +1,7 @@
 import Foundation
 
-/**
-        Bidirectional Scattering Distribution Function
-        Describes how light is scattered by a surface.
-*/
+///        Bidirectional Scattering Distribution Function
+///        Describes how light is scattered by a surface.
 struct BSDF {
 
         init() {
@@ -54,14 +52,18 @@ struct BSDF {
         private func worldToLocal(world: Vector) -> Vector {
                 return normalized(Vector(x: dot(world, ss), y: dot(world, ts), z: dot(world, ns)))
         }
-        
+
         private func localToWorld(local: Vector) -> Vector {
-                return normalized(Vector(x: ss.x * local.x + ts.x * local.y + ns.x * local.z,
-                                         y: ss.y * local.x + ts.y * local.y + ns.y * local.z,
-                                         z: ss.z * local.x + ts.z * local.y + ns.z * local.z))
+                return normalized(
+                        Vector(
+                                x: ss.x * local.x + ts.x * local.y + ns.x * local.z,
+                                y: ss.y * local.x + ts.y * local.y + ns.y * local.z,
+                                z: ss.z * local.x + ts.z * local.y + ns.z * local.z))
         }
-        
-        func sample(wo woWorld: Vector, u: Point2F) throws -> (L: Spectrum, wi: Vector, pdf: FloatX, isTransmissive: Bool) {
+
+        func sample(wo woWorld: Vector, u: Point2F) throws -> (
+                L: Spectrum, wi: Vector, pdf: FloatX, isTransmissive: Bool
+        ) {
                 guard let randomBxdf = bxdfs.randomElement() else {
                         warning("BxDF count zero!")
                         return (black, up, 0, false)
@@ -114,4 +116,3 @@ struct BSDF {
         var ts = up
         var eta: FloatX = 1.0
 }
-

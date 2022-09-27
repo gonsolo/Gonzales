@@ -1,4 +1,4 @@
-final class Metal : Material {
+final class Metal: Material {
 
         init(eta: Spectrum, k: Spectrum, roughness: (FloatX, FloatX)) {
 
@@ -10,12 +10,14 @@ final class Metal : Material {
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
                 var bsdf = BSDF(interaction: interaction)
                 let trowbridge = TrowbridgeReitzDistribution(alpha: roughness)
-                let fresnel = FresnelConductor(etaI: white,
-                                               etaT: eta,
-                                               k: k)
-                let reflection = MicrofacetReflection(reflectance: white,
-                                                      distribution: trowbridge,
-                                                      fresnel: fresnel)
+                let fresnel = FresnelConductor(
+                        etaI: white,
+                        etaT: eta,
+                        k: k)
+                let reflection = MicrofacetReflection(
+                        reflectance: white,
+                        distribution: trowbridge,
+                        fresnel: fresnel)
                 bsdf.add(bxdf: reflection)
                 return (bsdf, nil)
         }
@@ -38,4 +40,3 @@ func createMetal(parameters: ParameterDictionary) throws -> Metal {
         let roughness = (uRoughness, vRoughness)
         return Metal(eta: eta, k: k, roughness: roughness)
 }
-

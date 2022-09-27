@@ -1,4 +1,4 @@
-import Foundation // DispatchSemaphore
+import Foundation  // DispatchSemaphore
 
 enum ImageError: Error {
         case lock
@@ -24,9 +24,13 @@ struct Image {
                 pixels = try pixels.map { return try $0.normalized() }
         }
 
-        mutating func addPixel(withColor color: Spectrum, withWeight weight: FloatX, atLocation location: Point2I) {
+        mutating func addPixel(
+                withColor color: Spectrum,
+                withWeight weight: FloatX,
+                atLocation location: Point2I
+        ) {
                 let index = location.y * fullResolution.x + location.x
-                if(index >= 0 && index < pixels.count) {
+                if index >= 0 && index < pixels.count {
                         pixels[index] = pixels[index] + Pixel(light: color, weight: weight)
                 }
         }
@@ -34,4 +38,3 @@ struct Image {
         var fullResolution: Point2I
         var pixels: [Pixel]
 }
-

@@ -6,11 +6,13 @@ struct UninstancedMaterial {
 struct State {
 
         init() {
-                namedMaterials = [String: UninstancedMaterial]() 
+                namedMaterials = [String: UninstancedMaterial]()
                 currentNamedMaterial = "None"
-                namedMaterials["None"] =  UninstancedMaterial(type: "matte", parameters: ParameterDictionary())
-                spectrumTextures = [String: Texture<Spectrum>]()
-                floatTextures = [String: Texture<FloatX>]()
+                namedMaterials["None"] = UninstancedMaterial(
+                        type: "matte",
+                        parameters: ParameterDictionary()
+                )
+                textures = [String: Texture]()
                 ptexCache = PtexCache()
         }
 
@@ -20,14 +22,14 @@ struct State {
                         material = currentMaterial!
                 } else {
                         assert(currentNamedMaterial != "")
-		                    guard let named = namedMaterials[currentNamedMaterial] else {
-			                          warning("The material \(currentNamedMaterial) was not defined!")
-			                          return Matte(kd: ConstantTexture(value: gray))
-		                    }
+                        guard let named = namedMaterials[currentNamedMaterial] else {
+                                warning("The material \(currentNamedMaterial) was not defined!")
+                                return Matte(kd: ConstantTexture(value: gray))
+                        }
                         material = named
                 }
                 var merged = parameters
-                merged.merge(material.parameters) {(current, _) in current}
+                merged.merge(material.parameters) { (current, _) in current }
                 return try api.makeMaterial(name: material.type, parameters: merged)
         }
 
@@ -37,8 +39,6 @@ struct State {
         var areaLight = ""
         var areaLightParameters = ParameterDictionary()
         var objectName: String? = nil
-        var spectrumTextures: [String: Texture<Spectrum>]
-        var floatTextures: [String: Texture<FloatX>]
+        var textures: [String: Texture]
         let ptexCache: PtexCache
 }
-

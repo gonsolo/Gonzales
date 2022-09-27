@@ -14,9 +14,13 @@ struct Scene {
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
         }
 
-        mutating func intersect(ray: Ray, tHit: inout FloatX) throws -> SurfaceInteraction? {
+        mutating func intersect(ray: Ray, tHit: inout FloatX) throws -> SurfaceInteraction {
                 intersectionTests += 1
-                return try primitive?.intersect(ray: ray, tHit: &tHit)
+                guard let primitive else {
+                        return SurfaceInteraction()
+                }
+                let interaction = try primitive.intersect(ray: ray, tHit: &tHit, material: -1)
+                return interaction
         }
 
         func bound() -> Bounds3f {
@@ -38,4 +42,3 @@ struct Scene {
         var lights: [Light]
         var infiniteLights: [Light]
 }
-

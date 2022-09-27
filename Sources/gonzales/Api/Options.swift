@@ -5,7 +5,7 @@ struct Options {
         }
 
         var acceleratorParameters = ParameterDictionary()
-        var cameraName  = "perspective"
+        var cameraName = "perspective"
         var cameraParameters = ParameterDictionary()
         var cameraToWorld = Transform()
         var filmName = "image"
@@ -23,7 +23,10 @@ struct Options {
         func makeFilm(filter: Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
-                if quick { x /= 4; y /= 4 }
+                if quick {
+                        x /= 4
+                        y /= 4
+                }
                 let resolution = Point2I(x: x, y: y)
                 let fileName = try filmParameters.findString(called: "filename") ?? "gonzales.exr"
                 let crop = try filmParameters.findFloatXs(called: "cropwindow")
@@ -33,12 +36,19 @@ struct Options {
                         cropWindow.pMin = Point2F(x: crop[0], y: crop[2])
                         cropWindow.pMax = Point2F(x: crop[1], y: crop[3])
                 }
-                return Film(name: fileName, resolution: resolution, fileName: fileName, filter: filter, crop: cropWindow)
+                return Film(
+                        name: fileName,
+                        resolution: resolution,
+                        fileName: fileName,
+                        filter: filter,
+                        crop: cropWindow
+                )
         }
 
         func makeFilter(name: String, parameters: ParameterDictionary) throws -> Filter {
 
-                func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F {
+                func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F
+                {
                         let xwidth = try parameters.findOneFloatX(called: "xwidth", else: support.0)
                         let ywidth = try parameters.findOneFloatX(called: "ywidth", else: support.1)
                         return Vector2F(x: xwidth, y: ywidth)
@@ -47,7 +57,7 @@ struct Options {
                 var filter: Filter
                 switch name {
                 case "triangle":
-			                  let support = try makeSupport()
+                        let support = try makeSupport()
                         filter = TriangleFilter(support: support)
                 case "box":
                         let support = try makeSupport(withDefault: (0.5, 0.5))
@@ -66,20 +76,21 @@ struct Options {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter)
-                let frame = FloatX(film.image.fullResolution.x) / FloatX(film.image.fullResolution.y)
+                let resolution = film.image.fullResolution
+                let frame = FloatX(resolution.x) / FloatX(resolution.y)
                 var screen = Bounds2f()
 
                 if frame > 1 {
-		        // Blender does not like this
+                        // Blender does not like this
                         screen.pMin.x = -frame
-                        screen.pMax.x =  frame
+                        screen.pMax.x = +frame
                         screen.pMin.y = -1
-                        screen.pMax.y =  1
+                        screen.pMax.y = +1
                 } else {
                         screen.pMin.x = -1
-                        screen.pMax.x =  1
+                        screen.pMax.x = +1
                         screen.pMin.y = -1 / frame
-                        screen.pMax.y =  1 / frame
+                        screen.pMax.y = +1 / frame
                 }
                 let screenWindow = try cameraParameters.findFloatXs(called: "screenwindow")
                 if !screenWindow.isEmpty {
@@ -93,17 +104,30 @@ struct Options {
                         }
                 }
                 let fov = try cameraParameters.findOneFloatX(called: "fov", else: 30)
-                let focalDistance = try cameraParameters.findOneFloatX(called: "focaldistance", else: 1e6)
+                let focalDistance = try cameraParameters.findOneFloatX(
+                        called: "focaldistance",
+                        else: 1e6)
                 let lensRadius = try cameraParameters.findOneFloatX(called: "lensradius", else: 0)
-                return try PerspectiveCamera(cameraToWorld: cameraToWorld, screenWindow: screen, fov: fov,
-                                             focalDistance: focalDistance, lensRadius: lensRadius, film: film)
+                return try PerspectiveCamera(
+                        cameraToWorld: cameraToWorld,
+                        screenWindow: screen,
+                        fov: fov,
+                        focalDistance: focalDistance,
+                        lensRadius: lensRadius,
+                        film: film
+                )
         }
 
         func makeIntegrator(sampler: Sampler) throws -> Integrator {
                 if options.integratorName != "path" {
-                        warning("Integrator \(options.integratorName) not implemented, using path integrator!")
+                        var message = "Integrator \(options.integratorName) not implemented, "
+                        message += "using path integrator!"
+                        warning(message)
                 }
-                let maxDepth = try options.integratorParameters.findOneInt(called: "maxdepth", else: 1)
+                let maxDepth = try options.integratorParameters.findOneInt(
+                        called: "maxdepth",
+                        else: 1
+                )
                 return PathIntegrator(maxDepth: maxDepth)
         }
 
@@ -122,7 +146,12 @@ struct Options {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let integrator = try makeIntegrator(sampler: sampler)
-                return Renderer(camera: camera, integrator: integrator, sampler: sampler, scene: scene)
+                return Renderer(
+                        camera: camera,
+                        integrator: integrator,
+                        sampler: sampler,
+                        scene: scene
+                )
         }
 
         mutating func makeScene() -> Scene {
@@ -133,4 +162,3 @@ struct Options {
                 return scene
         }
 }
-

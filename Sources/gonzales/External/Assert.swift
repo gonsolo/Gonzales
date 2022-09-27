@@ -1,5 +1,6 @@
-func _internalInvariant(_ condition:  @autoclosure () -> Bool,
-			_ message: StaticString = StaticString()) {
-	return
+func _internalInvariant(
+        _ condition: @autoclosure () -> Bool,
+        _ message: StaticString = StaticString()
+) {
+        return
 }
-

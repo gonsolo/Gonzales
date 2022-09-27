@@ -1,20 +1,19 @@
-/*
-        A type that provides the base for all types consisting of three
-        values like points and normals.
-*/
+/// A type that provides the base for all types consisting of three
+/// values like points and normals.
+
 protocol Three {
 
-          associatedtype T: FloatingPoint
+        associatedtype T: FloatingPoint
 
-          init(x: T, y: T, z: T)
+        init(x: T, y: T, z: T)
 
-          var x: T { get set }
-          var y: T { get set }
-          var z: T { get set }
+        var x: T { get set }
+        var y: T { get set }
+        var z: T { get set }
 }
 
 func lengthSquared<T: Three>(_ v: T) -> T.T {
-          return v.x*v.x + v.y*v.y + v.z*v.z
+        return v.x * v.x + v.y * v.y + v.z * v.z
 }
 
 func length<T: Three>(_ v: T) -> T.T {
@@ -26,7 +25,7 @@ func distanceSquared<T: Three>(_ left: T, _ right: T) -> T.T {
 }
 
 func distance<T: Three>(_ left: T, _ right: T) -> T.T {
-          return distanceSquared(left, right).squareRoot()
+        return distanceSquared(left, right).squareRoot()
 }
 
 prefix func - <T: Three>(v: T) -> T {
@@ -38,27 +37,31 @@ func / <T: Three>(v: T, d: T.T) -> T {
 }
 
 func * <T: Three>(left: T, right: T) -> T {
-        return T.init(x: left.x * right.x,
-                      y: left.y * right.y,
-                      z: left.z * right.z)
+        return T.init(
+                x: left.x * right.x,
+                y: left.y * right.y,
+                z: left.z * right.z)
 }
 
 func + <T: Three>(left: T, right: T) -> T {
-        return T.init(x: left.x + right.x,
-                      y: left.y + right.y,
-                      z: left.z + right.z)
+        return T.init(
+                x: left.x + right.x,
+                y: left.y + right.y,
+                z: left.z + right.z)
 }
 
 func - <T: Three>(left: T, right: T) -> T {
-        return T.init(x: left.x - right.x,
-                      y: left.y - right.y,
-                      z: left.z - right.z)
+        return T.init(
+                x: left.x - right.x,
+                y: left.y - right.y,
+                z: left.z - right.z)
 }
 
 func * <T: Three>(left: T, right: T.T) -> T {
-        return T.init(x: left.x * right,
-                      y: left.y * right,
-                      z: left.z * right)
+        return T.init(
+                x: left.x * right,
+                y: left.y * right,
+                z: left.z * right)
 }
 
 func * <T: Three>(left: T.T, right: T) -> T {
@@ -84,7 +87,7 @@ func /= <T: Three>(left: inout T, right: T.T) {
 }
 
 func == <T: Three>(left: T, right: T) -> Bool {
-        return left.x == right.x && left.y == right.y && left.z == right.z 
+        return left.x == right.x && left.y == right.y && left.z == right.z
 }
 
 func != <T: Three>(left: T, right: T) -> Bool {
@@ -109,11 +112,9 @@ func normalized<T: Three>(_ v: T) -> T {
 }
 
 func dot<T: Three>(_ a: T, _ b: T) -> T.T {
-        return a.x*b.x + a.y*b.y + a.z*b.z
+        return a.x * b.x + a.y * b.y + a.z * b.z
 }
 
 func absDot<T: Three>(_ a: T, _ b: T) -> T.T {
         return abs(dot(a, b))
 }
-
-

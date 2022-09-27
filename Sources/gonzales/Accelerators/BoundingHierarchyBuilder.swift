@@ -19,9 +19,10 @@ final class BoundingHierarchyBuilder {
         func getBoundingHierarchy() -> BoundingHierarchy {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
-                return BoundingHierarchy(primitives: cachedPrimitives.map { primitives[$0.0] as! AnyObject & Intersectable
-                                                },
-                                         nodes: nodes)
+                let sortedPrimitives = cachedPrimitives.map {
+                        primitives[$0.0] as! Intersectable
+                }
+                return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
 
         private func growNodes(counter: Int) {
@@ -31,10 +32,12 @@ final class BoundingHierarchyBuilder {
                 }
         }
 
-        private func appendAndInit(offset: Int,
-                                            bounds: Bounds3f,
-                                            range: Range<Int>,
-                                            counter: Int) {
+        private func appendAndInit(
+                offset: Int,
+                bounds: Bounds3f,
+                range: Range<Int>,
+                counter: Int
+        ) {
                 growNodes(counter: counter)
                 nodes[counter].bounds = bounds
                 assert(range.count > 0)
@@ -49,27 +52,41 @@ final class BoundingHierarchyBuilder {
                 let counter = totalNodes
                 totalNodes += 1
                 if range.isEmpty { return Bounds3f() }
-                let bounds = cachedPrimitives[range].reduce(Bounds3f(), {
-                        Union(first: $0,
-                              second: $1.1)
-                })
+                let bounds = cachedPrimitives[range].reduce(
+                        Bounds3f(),
+                        {
+                                union(
+                                        first: $0,
+                                        second: $1.1)
+                        })
                 if range.count < BoundingHierarchyBuilder.primitivesPerNode {
-                        appendAndInit(offset: offsetCounter, bounds: bounds, range: range, counter: counter)
+                        appendAndInit(
+                                offset: offsetCounter,
+                                bounds: bounds,
+                                range: range,
+                                counter: counter)
                         return bounds
                 }
-                let centroidBounds = cachedPrimitives[range].reduce(Bounds3f(), {
-                        Union(bound: $0,
-                              point: $1.2)
-                })
+                let centroidBounds = cachedPrimitives[range].reduce(
+                        Bounds3f(),
+                        {
+                                union(
+                                        bound: $0,
+                                        point: $1.2)
+                        })
                 let dim = centroidBounds.maximumExtent()
                 if centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
-                        appendAndInit(offset: offsetCounter, bounds: bounds, range: range, counter: counter)
+                        appendAndInit(
+                                offset: offsetCounter,
+                                bounds: bounds,
+                                range: range,
+                                counter: counter)
                         return bounds
                 }
                 let pivot = (centroidBounds.pMin[dim] + centroidBounds.pMax[dim]) / 2
                 let mid = cachedPrimitives[range].partition(by: {
-                        $0.2[dim] < pivot}
-                )
+                        $0.2[dim] < pivot
+                })
                 let start = range.first!
                 let end = range.last! + 1
                 guard mid != start && mid != end else {
@@ -78,7 +95,7 @@ final class BoundingHierarchyBuilder {
                 let leftBounds = build(range: start..<mid)
                 let beforeRight = totalNodes
                 let rightBounds = build(range: mid..<end)
-                let combinedBounds = Union(first: leftBounds, second: rightBounds)
+                let combinedBounds = union(first: leftBounds, second: rightBounds)
                 growNodes(counter: counter)
                 nodes[counter].bounds = combinedBounds
                 nodes[counter].axis = dim
@@ -87,16 +104,16 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.interiorNodes += 1
                 return combinedBounds
         }
- 
+
         static func statistics() {
-                print("  BoundingHierarchyBuilder:")
+                print("  BVH:")
                 print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
                 print("    Leaf nodes:\t\t\t\t\t\t\t\t\(leafNodes)")
-                let ratio = FloatX(totalPrimitives) / FloatX(leafNodes)
-                print("    Primitives per leaf node:\t\t\t\t\t\t\(ratio.rounded())")
+                let ratio = String(format: "(%.2f)", Float(totalPrimitives) / Float(leafNodes))
+                print("    Primitives per leaf node:\t\t\t\t\t\(totalPrimitives) /    \(leafNodes) \(ratio)")
         }
 
-        static let primitivesPerNode = 8
+        static let primitivesPerNode = 1
 
         static var interiorNodes = 0
         static var leafNodes = 0
@@ -111,4 +128,3 @@ final class BoundingHierarchyBuilder {
         var cachedPrimitives: [(Int, Bounds3f, Point)]
         var primitives: [Boundable]
 }
-

@@ -19,7 +19,7 @@ func concentricSampleDisk(u: Point2F) -> Point2F {
 
 func cosineSampleHemisphere(u: Point2F) -> Vector {
         let d = concentricSampleDisk(u: u)
-        let z = sqrt(max(0, 1 - d.x*d.x - d.y*d.y))
+        let z = sqrt(max(0, 1 - d.x * d.x - d.y * d.y))
         return Vector(x: d.x, y: d.y, z: z)
 }
 
@@ -27,4 +27,3 @@ func powerHeuristic(f: FloatX, g: FloatX) -> FloatX {
         if f == 0 || g == 0 { return 0 }
         return (f * f) / (f * f + g * g)
 }
-

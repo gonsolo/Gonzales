@@ -12,20 +12,19 @@ final class ExrWriter: ImageWriter {
                 }
 
                 let resolution = crop.pMax - crop.pMin
-                buffer = Array<Float>(repeating: 0, count: resolution.x*resolution.y*4)
+                buffer = [Float](repeating: 0, count: resolution.x * resolution.y * 4)
                 for y in crop.pMin.y..<crop.pMax.y {
                         for x in crop.pMin.x..<crop.pMax.x {
                                 let location = Point2I(x: x, y: y)
                                 let pixel = image.getPixel(atLocation: location)
                                 let px = x - crop.pMin.x
                                 let py = y - crop.pMin.y
-                                let index = py*resolution.x*4 + px*4
+                                let index = py * resolution.x * 4 + px * 4
                                 write(pixel: pixel, at: index)
                         }
                 }
-                writeRgba(fileName, buffer, Int32(resolution.x), Int32(resolution.y));
+                writeRgba(fileName, buffer, Int32(resolution.x), Int32(resolution.y))
         }
 
         var buffer = [Float]()
 }
-

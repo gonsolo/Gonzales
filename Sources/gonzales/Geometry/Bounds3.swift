@@ -1,8 +1,14 @@
 public struct Bounds3<T: Comparable> {
 
         init(first: Point3<T>, second: Point3<T>) {
-                self.pMin = Point3(x: min(first.x, second.x), y: min(first.y, second.y), z: min(first.z, second.z))
-                self.pMax = Point3(x: max(first.x, second.x), y: max(first.y, second.y), z: max(first.z, second.z))
+                self.pMin = Point3(
+                        x: min(first.x, second.x),
+                        y: min(first.y, second.y),
+                        z: min(first.z, second.z))
+                self.pMax = Point3(
+                        x: max(first.x, second.x),
+                        y: max(first.y, second.y),
+                        z: max(first.z, second.z))
         }
 
         subscript(index: Int) -> Point3<T> {
@@ -11,7 +17,7 @@ public struct Bounds3<T: Comparable> {
                         case 0: return pMin
                         case 1: return pMax
                         default: return pMin
-                       }
+                        }
                 }
         }
 
@@ -25,18 +31,16 @@ public struct Bounds3<T: Comparable> {
         }
 
         var points: [Point3<T>] {
-                get {
-                        return [
-                                Point3(x: pMin.x, y: pMin.y, z: pMin.z),
-                                Point3(x: pMin.x, y: pMin.y, z: pMax.z),
-                                Point3(x: pMin.x, y: pMax.y, z: pMin.z),
-                                Point3(x: pMin.x, y: pMax.y, z: pMax.z),
-                                Point3(x: pMax.x, y: pMin.y, z: pMin.z),
-                                Point3(x: pMax.x, y: pMin.y, z: pMax.z),
-                                Point3(x: pMax.x, y: pMax.y, z: pMin.z),
-                                Point3(x: pMax.x, y: pMax.y, z: pMax.z),
-                                ]
-                }
+                return [
+                        Point3(x: pMin.x, y: pMin.y, z: pMin.z),
+                        Point3(x: pMin.x, y: pMin.y, z: pMax.z),
+                        Point3(x: pMin.x, y: pMax.y, z: pMin.z),
+                        Point3(x: pMin.x, y: pMax.y, z: pMax.z),
+                        Point3(x: pMax.x, y: pMin.y, z: pMin.z),
+                        Point3(x: pMax.x, y: pMin.y, z: pMax.z),
+                        Point3(x: pMax.x, y: pMax.y, z: pMin.z),
+                        Point3(x: pMax.x, y: pMax.y, z: pMax.z),
+                ]
         }
 
         var pMin: Point3<T>
@@ -60,10 +64,11 @@ extension Bounds3 where T == FloatX {
         }
 
         static func * (transform: Transform, bound: Bounds3) -> Bounds3 {
-                var transformedBound = Bounds3(first:  transform * bound.points[0],
-                                               second: transform * bound.points[1])
+                var transformedBound = Bounds3(
+                        first: transform * bound.points[0],
+                        second: transform * bound.points[1])
                 for i in 2..<8 {
-                    transformedBound.add(point: transform * bound.points[i])
+                        transformedBound.add(point: transform * bound.points[i])
                 }
                 return transformedBound
         }
@@ -88,19 +93,22 @@ extension Bounds3 where T == FloatX {
         }
 }
 
-func Union(first: Bounds3f, second: Bounds3f) -> Bounds3f {
-        let pMin = Point(x: min(first.pMin.x, second.pMin.x),
-                           y: min(first.pMin.y, second.pMin.y),
-                           z: min(first.pMin.z, second.pMin.z))
-        let pMax = Point(x: max(first.pMax.x, second.pMax.x),
-                           y: max(first.pMax.y, second.pMax.y),
-                           z: max(first.pMax.z, second.pMax.z))
+func union(first: Bounds3f, second: Bounds3f) -> Bounds3f {
+        let pMin = Point(
+                x: min(first.pMin.x, second.pMin.x),
+                y: min(first.pMin.y, second.pMin.y),
+                z: min(first.pMin.z, second.pMin.z))
+        let pMax = Point(
+                x: max(first.pMax.x, second.pMax.x),
+                y: max(first.pMax.y, second.pMax.y),
+                z: max(first.pMax.z, second.pMax.z))
         return Bounds3f(first: pMin, second: pMax)
 }
 
 func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
-        return Bounds3f(first:  bounds.pMin - Point(x: delta, y: delta, z: delta),
-                        second: bounds.pMax + Point(x: delta, y: delta, z: delta))
+        return Bounds3f(
+                first: bounds.pMin - Point(x: delta, y: delta, z: delta),
+                second: bounds.pMax + Point(x: delta, y: delta, z: delta))
 }
 
 extension Bounds3 where T == FloatX {
@@ -137,9 +145,6 @@ extension Bounds3 where T == FloatX {
 
 extension Bounds3f {
         var center: Point {
-                get {
-                        return 0.5 * self.pMin + 0.5 * self.pMax
-                }
+                return 0.5 * self.pMin + 0.5 * self.pMax
         }
 }
-

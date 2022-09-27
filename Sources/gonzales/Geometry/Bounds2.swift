@@ -55,8 +55,9 @@ extension Bounds2i: Sequence {
                                 return nil
                         }
                         times = times + 1
-                        return Point2I(x: bounds.pMin.x + times % dx,
-                                       y: bounds.pMin.y + times / dx)
+                        return Point2I(
+                                x: bounds.pMin.x + times % dx,
+                                y: bounds.pMin.y + times / dx)
                 }
 
                 let bounds: Bounds2i
@@ -69,4 +70,3 @@ extension Bounds2i: Sequence {
                 return Iterator(self)
         }
 }
-

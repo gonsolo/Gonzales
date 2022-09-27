@@ -1,6 +1,6 @@
 final class Plastic: Material {
 
-        init(kd: Texture<Spectrum>, ks: Texture<Spectrum>, roughness: Texture<FloatX>) {
+        init(kd: SpectrumTexture, ks: SpectrumTexture, roughness: FloatTexture) {
                 self.kd = kd
                 self.ks = ks
                 self.roughness = roughness
@@ -8,25 +8,26 @@ final class Plastic: Material {
 
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
                 var bsdf = BSDF(interaction: interaction)
-                let kd = self.kd.evaluate(at: interaction)
+                let kd = self.kd.evaluateSpectrum(at: interaction)
                 if !kd.isBlack {
                         let diffuse = LambertianReflection(reflectance: kd)
                         bsdf.add(bxdf: diffuse)
                 }
-                let ks = self.ks.evaluate(at: interaction)
+                let ks = self.ks.evaluateSpectrum(at: interaction)
                 if !ks.isBlack {
                         let dielectric = FresnelDielectric(etaI: 1.5, etaT: 1)
-                        let roughness = self.roughness.evaluate(at: interaction)
+                        let roughness = self.roughness.evaluateFloat(at: interaction)
                         let trowbridge = TrowbridgeReitzDistribution(alpha: (roughness, roughness))
-                        let specular = MicrofacetReflection(reflectance: ks, distribution: trowbridge, fresnel: dielectric)
+                        let specular = MicrofacetReflection(
+                                reflectance: ks, distribution: trowbridge, fresnel: dielectric)
                         bsdf.add(bxdf: specular)
                 }
-		            return (bsdf, nil)
+                return (bsdf, nil)
         }
 
-        var kd: Texture<Spectrum>
-        var ks: Texture<Spectrum>
-        var roughness: Texture<FloatX>
+        var kd: SpectrumTexture
+        var ks: SpectrumTexture
+        var roughness: FloatTexture
 }
 
 func createPlastic(parameters: ParameterDictionary) throws -> Plastic {
@@ -35,4 +36,3 @@ func createPlastic(parameters: ParameterDictionary) throws -> Plastic {
         let roughness = try parameters.findFloatXTexture(name: "roughness", else: 0.1)
         return Plastic(kd: kd, ks: ks, roughness: roughness)
 }
-

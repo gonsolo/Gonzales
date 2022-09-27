@@ -42,4 +42,3 @@ final class MicrofacetReflection: BxDF {
         var distribution: MicrofacetDistribution
         var fresnel: Fresnel
 }
-

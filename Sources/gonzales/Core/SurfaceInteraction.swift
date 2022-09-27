@@ -1,14 +1,18 @@
 struct SurfaceInteraction: Interaction {
 
-        init(position: Point = Point(),
-             normal: Normal = Normal(),
-             shadingNormal: Normal = Normal(),
-             wo: Vector = Vector(),
-             dpdu: Vector = Vector(),
-             uv: Point2F = Point2F(),
-             faceIndex: Int = 0,
-             primitive: (Boundable & Intersectable)? = nil) {
-
+        init(
+                valid: Bool = false,
+                position: Point = Point(),
+                normal: Normal = Normal(),
+                shadingNormal: Normal = Normal(),
+                wo: Vector = Vector(),
+                dpdu: Vector = Vector(),
+                uv: Point2F = Point2F(),
+                faceIndex: Int = 0,
+                primitive: (Boundable & Intersectable)? = nil,
+                material: MaterialIndex = -1
+        ) {
+                self.valid = valid
                 self.position = position
                 self.normal = normal
                 self.shadingNormal = shadingNormal
@@ -17,9 +21,11 @@ struct SurfaceInteraction: Interaction {
                 self.uv = uv
                 self.faceIndex = faceIndex
                 self.primitive = primitive
+                self.material = material
         }
 
         init(_ other: SurfaceInteraction) {
+                self.valid = other.valid
                 self.position = other.position
                 self.normal = other.normal
                 self.shadingNormal = other.shadingNormal
@@ -28,8 +34,10 @@ struct SurfaceInteraction: Interaction {
                 self.uv = other.uv
                 self.faceIndex = other.faceIndex
                 self.primitive = other.primitive
+                self.material = other.material
         }
 
+        var valid = false
         var position: Point
         var normal: Normal
         var shadingNormal: Normal
@@ -39,6 +47,7 @@ struct SurfaceInteraction: Interaction {
         var faceIndex: Int
 
         var primitive: (Boundable & Intersectable)?
+        var material: MaterialIndex
 }
 
 extension SurfaceInteraction: CustomStringConvertible {
@@ -46,4 +55,3 @@ extension SurfaceInteraction: CustomStringConvertible {
                 return "[pos: \(position) n: \(normal) wo: \(wo) ]"
         }
 }
-

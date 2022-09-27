@@ -4,14 +4,18 @@ final class PngWriter: ImageWriter {
 
         func clamp(value: FloatX, minValue: FloatX, maxValue: FloatX) -> FloatX {
                 if value.isNaN { return maxValue }
-                if value > maxValue { return  maxValue }
-                else if value < minValue { return minValue }
-                else { return value }
+                if value > maxValue {
+                        return maxValue
+                } else if value < minValue {
+                        return minValue
+                } else {
+                        return value
+                }
         }
 
         func write(fileName: String, crop: Bounds2i, image: Image) throws {
                 let resolution = crop.pMax - crop.pMin
-                var buffer = Array<UInt8>(repeating: 0, count: resolution.x*resolution.y*3)
+                var buffer = [UInt8](repeating: 0, count: resolution.x * resolution.y * 3)
 
                 func doubleToInt(_ x: FloatX) -> UInt8 {
                         return UInt8(clamp(value: 255 * x, minValue: 0, maxValue: 255))
@@ -42,11 +46,17 @@ final class PngWriter: ImageWriter {
                 for y in 0..<resolution.y {
                         for x in 0..<resolution.x {
                                 let index = y * resolution.y * 3 + x * 3
-                                let rgba = PNG.RGBA<UInt8>(buffer[index], buffer[index+1], buffer[index+2], 255)
+                                let rgba = PNG.RGBA<UInt8>(
+                                        buffer[index], buffer[index + 1], buffer[index + 2], 255)
                                 pngBuffer.append(rgba)
                         }
                 }
-                try PNG.encode(rgba: pngBuffer, size: (resolution.x, resolution.y), as: PNG.Properties.Format.Code.rgb8, path: fileName)
+                //try PNG.encode(
+                //        rgba: pngBuffer, size: (resolution.x, resolution.y),
+                //        as: PNG.Properties.Format.Code.rgb8, path: fileName)
+
+                let image:PNG.Data.Rectangular = .init(packing: pngBuffer, size: (resolution.x, resolution.y),
+                    layout: .init(format: .rgba8(palette: [], fill: nil)))
+                try image.compress(path: fileName, level: 9)
         }
 }
-

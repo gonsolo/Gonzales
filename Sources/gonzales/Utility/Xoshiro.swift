@@ -6,7 +6,7 @@ public struct Xoshiro: RandomNumberGenerator {
 
         // This could be anything *except* randomized via /dev/urandom or similar since
         // then the renderer is close to not debuggable.
-        private var state: StateType = (666, 1234567, 565000565, 939393939393)
+        private var state: StateType = (666, 1_234_567, 565_000_565, 939_393_939_393)
 
         public mutating func next() -> UInt64 {
                 // Derived from public domain implementation of xoshiro256** here:
@@ -24,4 +24,3 @@ public struct Xoshiro: RandomNumberGenerator {
                 return result
         }
 }
-

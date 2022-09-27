@@ -1,4 +1,4 @@
-public struct Vector3<T: FloatingPoint> : Three {
+public struct Vector3<T: FloatingPoint>: Three {
 
         public init(x: T, y: T, z: T) {
                 self.x = x
@@ -44,17 +44,13 @@ public struct Vector3<T: FloatingPoint> : Three {
         }
 
         var isNaN: Bool {
-                get {
-                        return x.isNaN || y.isNaN || z.isNaN
-                }
+                return x.isNaN || y.isNaN || z.isNaN
         }
 
         var isZero: Bool {
-                get {
-                        return x.isZero && y.isZero && z.isZero
-                }
+                return x.isZero && y.isZero && z.isZero
         }
-        
+
         public var x: T
         public var y: T
         public var z: T
@@ -80,9 +76,10 @@ extension Vector3: CustomStringConvertible {
 }
 
 func cross(_ a: Vector, _ b: Vector) -> Vector {
-        return Vector(x: a.y * b.z - a.z * b.y,
-                        y: a.z * b.x - a.x * b.z,
-                        z: a.x * b.y - a.y * b.x)
+        return Vector(
+                x: a.y * b.z - a.z * b.y,
+                y: a.z * b.x - a.x * b.z,
+                z: a.x * b.y - a.y * b.x)
 }
 
 public typealias Vector = Vector3<FloatX>
@@ -91,11 +88,9 @@ let nullVector = Vector(x: 0, y: 0, z: 0)
 let up = Vector(x: 0, y: 1, z: 0)
 
 func abs<T: FloatingPoint>(_ vector: Vector3<T>) -> Vector3<T> {
-          return Vector3(x: abs(vector.x), y: abs(vector.y), z: abs(vector.z))
+        return Vector3(x: abs(vector.x), y: abs(vector.y), z: abs(vector.z))
 }
 
 func permute<T>(vector: Vector3<T>, x: Int, y: Int, z: Int) -> Vector3<T> {
         return Vector3(x: vector[x], y: vector[y], z: vector[z])
 }
-
- 

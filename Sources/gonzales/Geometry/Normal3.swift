@@ -1,4 +1,4 @@
-public struct Normal3<T:FloatingPoint> : Three {
+public struct Normal3<T: FloatingPoint>: Three {
 
         init() {
                 self.x = 0
@@ -36,16 +36,15 @@ public struct Normal3<T:FloatingPoint> : Three {
                 self.z = xyz.2
         }
 
-        var x: T 
-        var y: T 
+        var x: T
+        var y: T
         var z: T
 }
 
-extension Normal3 : CustomStringConvertible {
+extension Normal3: CustomStringConvertible {
         public var description: String {
                 return "[ \(x) \(y) \(z)]"
         }
 }
 
 public typealias Normal = Normal3<FloatX>
-

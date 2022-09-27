@@ -1,6 +1,3 @@
-class Texture<T> {
-        func evaluate(at: Interaction) -> T {
-                fatalError()
-        }
+protocol Texture {
+        func evaluate(at interaction: Interaction) -> TextureEvaluation
 }
-

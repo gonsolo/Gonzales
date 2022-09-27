@@ -1,19 +1,16 @@
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Build Status](https://github.com/gonsolo/gonzales_private/actions/workflows/main.yml/badge.svg)](https://github.com/gonsolo/gonzales_private/actions/workflows/main.yml)
+
 # Gonzales Renderer
 
 © Andreas Wendleder 2019-2021
 
-Render a production scene with Swift.
+Brute-force path tracing written in Swift.
 
-## Moana
+### Moana
 
-2048x858 pixels, 64 samples per pixel, 26 hours on a Google Compute Engine with
-8 CPUs and 64 GB of memory. Memory usage was around 50GB.
-This image was denoised with OpenImageDenoise.
+2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 GB of memory.
+Memory usage was around 50GB.
 
 ![Moana](Images/moana.png)
 
-## Compile
-
-To compile, you should have OpenEXR and Ptex installed.
-Then a simple "swift build" should be enough.
-Building with "swift build -c release" or even "swift build -c release -Xswiftc -Ounchecked" should be better when rendering Moana.

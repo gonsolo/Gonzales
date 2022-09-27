@@ -20,18 +20,18 @@ func refract(wi: Vector, normal: Normal, eta: FloatX) -> Vector? {
         return wt
 }
 
-func sinTheta (_ w: Vector) -> FloatX { return sin2Theta(w).squareRoot() }
+func sinTheta(_ w: Vector) -> FloatX { return sin2Theta(w).squareRoot() }
 func sin2Theta(_ w: Vector) -> FloatX { return max(0, 1 - cos2Theta(w)) }
-func cosTheta (_ w: Vector) -> FloatX { return w.z }
+func cosTheta(_ w: Vector) -> FloatX { return w.z }
 func cos2Theta(_ w: Vector) -> FloatX { return w.z * w.z }
 func tan2Theta(_ w: Vector) -> FloatX { return sin2Theta(w) / cos2Theta(w) }
-func tanTheta (_ w: Vector) -> FloatX { return sinTheta(w) / cosTheta(w) }
+func tanTheta(_ w: Vector) -> FloatX { return sinTheta(w) / cosTheta(w) }
 
 func sinPhi(_ w: Vector) -> FloatX {
         if sinTheta(w) == 0 {
                 return 0
         } else {
-                 return clamp(value: w.y / sinTheta(w), low: -1, high: 1);
+                return clamp(value: w.y / sinTheta(w), low: -1, high: 1)
         }
 }
 
@@ -42,7 +42,6 @@ func cosPhi(_ w: Vector) -> FloatX {
         if sinTheta(w) == 0 {
                 return 1
         } else {
-                return clamp(value: w.x / sinTheta(w), low: -1, high: 1);
+                return clamp(value: w.x / sinTheta(w), low: -1, high: 1)
         }
 }
-

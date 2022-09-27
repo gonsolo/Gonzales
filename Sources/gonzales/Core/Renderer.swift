@@ -16,8 +16,9 @@ final class Renderer {
                         var x = bounds.pMin.x
                         while x < bounds.pMax.x {
                                 let pMin = Point2I(x: x, y: y)
-                                let pMax = Point2I(x: min(x+Tile.size, bounds.pMax.x),
-						   y: min(y+Tile.size, bounds.pMax.y))
+                                let pMax = Point2I(
+                                        x: min(x + Tile.size, bounds.pMax.x),
+                                        y: min(y + Tile.size, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)
                                 let tile = Tile(bounds: bounds)
                                 tiles.append(tile)
@@ -30,11 +31,13 @@ final class Renderer {
 
         func renderTile(tile: Tile) throws -> [Sample] {
                 let tileSampler = self.sampler.clone()
-                return try tile.render(reporter: reporter,
-                                       scene: scene,
-                                       sampler: tileSampler,
-                                       camera: self.camera,
-                                       integrator: self.integrator)
+                return try tile.render(
+                        reporter: reporter,
+                        scene: scene,
+                        sampler: tileSampler,
+                        camera: self.camera,
+                        integrator: self.integrator
+                )
         }
 
         private func renderAndMergeTile(tile: Tile) throws {
@@ -43,7 +46,7 @@ final class Renderer {
         }
 
         private func renderSync(tile: Tile) throws {
-                try queue.sync() {
+                try queue.sync {
                         try renderAndMergeTile(tile: tile)
                 }
         }
@@ -70,8 +73,7 @@ final class Renderer {
         func generateBounds() -> Bounds2i {
                 let sampleBounds = camera.film.getSampleBounds()
                 if singleRay {
-                        let support = camera.film.getFilterSupportAsInt()
-                        let point = sampleBounds.pMin + singleRayCoordinate + support
+                        let point = sampleBounds.pMin + singleRayCoordinate
                         return Bounds2i(pMin: point, pMax: point + Point2I(x: 1, y: 1))
                 } else {
                         return Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
@@ -107,4 +109,3 @@ final class Renderer {
         let sampler: Sampler
         let scene: Scene
 }
-

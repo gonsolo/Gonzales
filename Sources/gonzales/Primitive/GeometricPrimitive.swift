@@ -1,14 +1,13 @@
 final class GeometricPrimitive: Boundable, Intersectable, Material {
 
-        init(shape: Shape, material: Material) {
+        init(shape: Shape, material: MaterialIndex) {
                 self.shape = shape
                 self.material = material
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX) throws -> SurfaceInteraction? {
-                var shapeInteraction = try shape.intersect(ray: ray, tHit: &tHit)
-                shapeInteraction?.primitive = self
-                return shapeInteraction
+        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+                // argument material is unused
+                return try shape.intersect(ray: ray, tHit: &tHit, material: self.material)
         }
 
         func worldBound() -> Bounds3f {
@@ -20,9 +19,13 @@ final class GeometricPrimitive: Boundable, Intersectable, Material {
         }
 
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
-                return material.computeScatteringFunctions(interaction: interaction)
+                return materials[material]!.computeScatteringFunctions(interaction: interaction)
         }
 
         var shape: Shape
-        var material: Material
+        var material: MaterialIndex
 }
+
+typealias MaterialIndex = Int
+var materials: [Int:Material] = [:]
+var materialCounter: MaterialIndex = 0

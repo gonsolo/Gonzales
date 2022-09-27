@@ -29,7 +29,6 @@ public struct Vector2<T> {
         public var y: T
 }
 
-
 public typealias Vector2F = Vector2<FloatX>
 
 extension Vector2 where T: FloatingPoint {
@@ -38,7 +37,6 @@ extension Vector2 where T: FloatingPoint {
         }
 
 }
-
 
 func lengthSquared(_ vector: Vector2F) -> FloatX {
         return vector.x * vector.x + vector.y * vector.y
@@ -58,5 +56,3 @@ extension Vector2 where T: FloatingPoint {
         }
 
 }
-
-

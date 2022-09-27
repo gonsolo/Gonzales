@@ -1,8 +1,6 @@
-/**
-        A type that is a generalization of BRDFs (Bidirectional Reflection
-        Distribution Functions) and BTDFs (Bidirectional Transmission
-        Distribution Functions).
-*/
+///        A type that is a generalization of BRDFs (Bidirectional Reflection
+///        Distribution Functions) and BTDFs (Bidirectional Transmission
+///        Distribution Functions).
 protocol BxDF: AnyObject {
         func evaluate(wo: Vector, wi: Vector) -> Spectrum
         func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX)
@@ -15,7 +13,9 @@ protocol BxDF: AnyObject {
 
 extension BxDF {
 
-        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> Spectrum) -> (Spectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> Spectrum) -> (
+                Spectrum, Vector, FloatX
+        ) {
                 var wi = cosineSampleHemisphere(u: u)
                 if wo.z < 0 { wi.z = -wi.z }
                 let density = probabilityDensity(wo: wo, wi: wi)
@@ -34,15 +34,10 @@ extension BxDF {
         }
 
         var isReflective: Bool {
-                get {
-                        return true
-                }
+                return true
         }
 
         var isTransmissive: Bool {
-                get {
-                        return false
-                }
+                return false
         }
 }
-

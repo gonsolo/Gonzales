@@ -12,4 +12,3 @@ final class LambertianReflection: BxDF {
 
         var reflectance: Spectrum
 }
-

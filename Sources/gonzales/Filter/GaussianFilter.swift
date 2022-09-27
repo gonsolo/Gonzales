@@ -14,7 +14,9 @@ struct GaussianFilter: Filter {
         }
 
         func evaluate(atLocation point: Point2F) -> FloatX {
-               return gaussian(x: point.x, secondTerm: exponent.0) * gaussian(x: point.y, secondTerm: exponent.1)
+                let x = gaussian(x: point.x, secondTerm: exponent.0)
+                let y = gaussian(x: point.y, secondTerm: exponent.1)
+                return x * y
         }
 
         let alpha: FloatX

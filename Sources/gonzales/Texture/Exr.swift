@@ -1,6 +1,6 @@
 import exr
 
-final class ExrTexture: Texture<Spectrum> {
+final class ExrTexture: SpectrumTexture {
 
         init(width: Int, height: Int, channels: Int, data: [Float]) {
                 self.width = width
@@ -14,7 +14,8 @@ final class ExrTexture: Texture<Spectrum> {
                 widthPointer.initialize(repeating: 0, count: 1)
                 let heightPointer = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
                 heightPointer.initialize(repeating: 0, count: 1)
-                let pointer: UnsafeMutablePointer<Float> = readRgba(path, widthPointer, heightPointer)
+                let pointer: UnsafeMutablePointer<Float> = readRgba(
+                        path, widthPointer, heightPointer)
                 let width = Int(widthPointer.pointee)
                 let height = Int(heightPointer.pointee)
                 let length: Int = width * height * 4
@@ -30,7 +31,7 @@ final class ExrTexture: Texture<Spectrum> {
                 return (r, g, b)
         }
 
-        override func evaluate(at interaction: Interaction) -> Spectrum {
+        func evaluateSpectrum(at interaction: Interaction) -> Spectrum {
 
                 func getImageCoordinates(from uv: Point2F) -> (Int, Int) {
                         var uv = uv
@@ -38,7 +39,7 @@ final class ExrTexture: Texture<Spectrum> {
                         uv[1].formTruncatingRemainder(dividingBy: 1)
                         if uv[0] < 0 { uv[0] = 1 + uv[0] }
                         if uv[1] < 0 { uv[1] = 1 + uv[1] }
-			                  uv[1] = 1 - uv[1]
+                        uv[1] = 1 - uv[1]
                         let y = Int(uv[0] * FloatX(width))
                         let x = Int(uv[1] * FloatX(height))
                         return (x, y)
@@ -57,4 +58,3 @@ final class ExrTexture: Texture<Spectrum> {
         let channels: Int
         let data: [Float]
 }
-

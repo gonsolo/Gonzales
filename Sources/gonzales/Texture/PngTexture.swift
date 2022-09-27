@@ -1,7 +1,11 @@
 import Foundation
 import PNG
 
-final class PngTexture: Texture<Spectrum> {
+enum PngTextureError: Error {
+    case decompress
+}
+
+final class PngTexture: SpectrumTexture {
 
         init(width: Int, height: Int, channels: Int, data: [UInt8]) {
                 self.width = width
@@ -11,7 +15,14 @@ final class PngTexture: Texture<Spectrum> {
         }
 
         convenience init(path: String) throws {
-                let (pixels, (x: width, y: height)) = try PNG.rgba(path: path, of: UInt8.self)
+                //let (pixels, (x:width, y:height)) = try PNG.rgba(path: path, of: UInt8.self)
+                guard let image:PNG.Data.Rectangular = try .decompress(path: path)
+                else {
+                    throw PngTextureError.decompress
+                }
+                let pixels:[PNG.RGBA<UInt8>] = image.unpack(as: PNG.RGBA<UInt8>.self)
+                let (x:width, y:height) = image.size
+
                 let channels = 4
                 var data: [UInt8] = []
                 for pixel in pixels {
@@ -35,7 +46,7 @@ final class PngTexture: Texture<Spectrum> {
                 return Spectrum(r: inverseGamma(s.r), g: inverseGamma(s.g), b: inverseGamma(s.b))
         }
 
-        override func evaluate(at interaction: Interaction) -> Spectrum {
+        func evaluateSpectrum(at interaction: Interaction) -> Spectrum {
 
                 func getRGB(from index: Int) -> (UInt8, UInt8, UInt8) {
                         let r = data[index + 0]
@@ -73,11 +84,10 @@ final class PngTexture: Texture<Spectrum> {
                 let srgb = getSpectrum(from: ints)
                 return srgb
                 //return inverseGamma(srgb)
-       }
-       
-       let width: Int
-       let height: Int
-       let channels: Int
-       let data: [UInt8]
-}
+        }
 
+        let width: Int
+        let height: Int
+        let channels: Int
+        let data: [UInt8]
+}

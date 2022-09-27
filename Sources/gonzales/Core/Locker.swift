@@ -6,12 +6,11 @@ struct Locker {
 
         func unlock() { semaphore.signal() }
 
-	func locked(closure: () -> Void) {
-		lock()
-		defer { unlock() }
-		closure()
-	}
+        func locked(closure: () -> Void) {
+                lock()
+                defer { unlock() }
+                closure()
+        }
 
         let semaphore = DispatchSemaphore(value: 1)
 }
-

@@ -1,4 +1,4 @@
-import Foundation // fflush, stdout
+import Foundation  // fflush, stdout
 
 final class ProgressReporter {
 
@@ -23,4 +23,3 @@ final class ProgressReporter {
         let total: Int
         let frequency: Int = 10000
 }
-

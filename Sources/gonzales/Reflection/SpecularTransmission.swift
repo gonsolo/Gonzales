@@ -15,7 +15,7 @@ final class SpecularTransmission: BxDF {
                 //guard let wi = refract(wi: wo, normal: normal, eta: 1) else {
                 //        return (black, nullVector, 0)
                 //}
-                unimplemented() // spectrum, pdf
+                unimplemented()  // spectrum, pdf
                 //return (black, wi, 0)
         }
 

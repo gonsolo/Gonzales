@@ -5,11 +5,15 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                 self.shape = shape
         }
 
-        func emittedRadiance(from interaction: Interaction, inDirection direction: Vector) -> Spectrum {
+        func emittedRadiance(from interaction: Interaction, inDirection direction: Vector)
+                -> Spectrum
+        {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(for ref: Interaction, u: Point2F) -> (radiance: Spectrum, direction: Vector, pdf: FloatX, visibility: Visibility) {
+        func sample(for ref: Interaction, u: Point2F) -> (
+                radiance: Spectrum, direction: Vector, pdf: FloatX, visibility: Visibility
+        ) {
                 let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - ref.position)
                 assert(!direction.isNaN)
@@ -18,13 +22,16 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                 return (radiance, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction) throws -> FloatX {
-                return try shape.probabilityDensityFor(samplingDirection: direction, from: reference)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
+                throws -> FloatX
+        {
+                return try shape.probabilityDensityFor(
+                        samplingDirection: direction, from: reference)
         }
 
         func radianceFromInfinity(for ray: Ray) -> Spectrum { return black }
 
-        var isDelta: Bool { get { return false } }
+        var isDelta: Bool { return false }
 
         func worldBound() -> Bounds3f {
                 return shape.worldBound()
@@ -34,9 +41,9 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                 return shape.objectBound()
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX) throws -> SurfaceInteraction? {
-                var interaction = try shape.intersect(ray: ray, tHit: &tHit)
-                interaction?.primitive = self
+        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+                var interaction = try shape.intersect(ray: ray, tHit: &tHit, material: material)
+                interaction.primitive = self
                 return interaction
         }
 
@@ -49,4 +56,3 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
         let shape: Shape
         let brightness: Spectrum
 }
-

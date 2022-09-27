@@ -1,4 +1,4 @@
-import Foundation // tmp
+import Foundation  // tmp
 
 final class MicrofacetTransmission: BxDF {
 
@@ -32,7 +32,7 @@ final class MicrofacetTransmission: BxDF {
                 if half.z < 0 { half = -half }
                 let f = fresnel.evaluate(cosTheta: dot(wo, half))
                 let sqrtDenom = dot(wo, half) + eta * dot(wi, half)
-                let factor = 1 / eta // TODO: Transport mode or always radiance with path tracing?
+                let factor = 1 / eta  // TODO: Transport mode or always radiance with path tracing?
                 let d = distribution.differentialArea(withNormal: half)
                 let g = distribution.visibleFraction(from: wo, and: wi)
                 let termA: Spectrum = (white - f) * t
@@ -77,11 +77,10 @@ final class MicrofacetTransmission: BxDF {
                 return t
         }
 
-        var isTransmissive: Bool { get { return true } }
+        var isTransmissive: Bool { return true }
 
         var t: Spectrum
         var distribution: MicrofacetDistribution
         var eta: (FloatX, FloatX)
         var fresnel: FresnelDielectric
 }
-

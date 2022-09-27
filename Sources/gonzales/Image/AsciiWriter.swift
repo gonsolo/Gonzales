@@ -5,17 +5,17 @@ struct AsciiWriter: ImageWriter {
         func write(fileName: String, crop: Bounds2i, image: Image) throws {
 
                 let resolution = crop.pMax - crop.pMin
-		var text = String(resolution.x) + " " + String(resolution.y) + "\n"
+                var text = String(resolution.x) + " " + String(resolution.y) + "\n"
 
                 func write(pixel: Pixel, at index: Int) {
                         text.append(String(pixel.light.r))
-			text.append(" ")
+                        text.append(" ")
                         text.append(String(pixel.light.g))
-			text.append(" ")
+                        text.append(" ")
                         text.append(String(pixel.light.b))
-			text.append(" ")
+                        text.append(" ")
                         text.append("1.0")
-			text.append(" ")
+                        text.append(" ")
                 }
 
                 for y in crop.pMin.y..<crop.pMax.y {
@@ -24,18 +24,17 @@ struct AsciiWriter: ImageWriter {
                                 let pixel = image.getPixel(atLocation: location)
                                 let px = x - crop.pMin.x
                                 let py = y - crop.pMin.y
-                                let index = py*resolution.x*4 + px*4
+                                let index = py * resolution.x * 4 + px * 4
                                 write(pixel: pixel, at: index)
                         }
                 }
 
-		let url = URL(fileURLWithPath: "/home/gonsolo/" + fileName)
-		print(url)
-		do {
-			try text.write(to: url, atomically: true, encoding: String.Encoding.utf8)
-		} catch {
-			print("Error writing file")
-		}
+                let url = URL(fileURLWithPath: "/home/gonsolo/" + fileName)
+                print(url)
+                do {
+                        try text.write(to: url, atomically: true, encoding: String.Encoding.utf8)
+                } catch {
+                        print("Error writing file")
+                }
         }
 }
-

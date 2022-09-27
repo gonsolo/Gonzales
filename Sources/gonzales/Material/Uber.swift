@@ -1,7 +1,15 @@
 final class Uber: Material {
 
-        init(kd: Texture<Spectrum>, ks: Texture<Spectrum>, kr: Texture<Spectrum>, kt: Texture<Spectrum>,
-             roughness: Texture<FloatX>, remapRoughness: Bool, opacity: Texture<Spectrum>, eta: Texture<FloatX>) {
+        init(
+                kd: SpectrumTexture,
+                ks: SpectrumTexture,
+                kr: SpectrumTexture,
+                kt: SpectrumTexture,
+                roughness: FloatTexture,
+                remapRoughness: Bool,
+                opacity: SpectrumTexture,
+                eta: FloatTexture
+        ) {
                 self.kd = kd
                 self.ks = ks
                 self.kr = kr
@@ -14,37 +22,38 @@ final class Uber: Material {
 
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
                 var bsdf = BSDF(interaction: interaction)
-                let eta = self.eta.evaluate(at: interaction)
-                let opacity = self.opacity.evaluate(at: interaction)
+                let eta = self.eta.evaluateFloat(at: interaction)
+                let opacity = self.opacity.evaluateSpectrum(at: interaction)
                 let t = -opacity + white
                 if !t.isBlack {
                         bsdf.add(bxdf: SpecularTransmission(t: t, etaA: 1, etaB: 1))
                 } else {
                         bsdf.eta = eta
                 }
-                let kd = opacity * self.kd.evaluate(at: interaction)
+                let kd = opacity * self.kd.evaluateSpectrum(at: interaction)
                 if !kd.isBlack {
                         bsdf.add(bxdf: LambertianReflection(reflectance: kd))
                 }
-                let ks = opacity * self.ks.evaluate(at: interaction)
+                let ks = opacity * self.ks.evaluateSpectrum(at: interaction)
                 if !ks.isBlack {
-                        var roughness = self.roughness.evaluate(at: interaction)
+                        var roughness = self.roughness.evaluateFloat(at: interaction)
                         if remapRoughness {
                                 roughness = TrowbridgeReitzDistribution.getAlpha(from: roughness)
                         }
                         let trowbridge = TrowbridgeReitzDistribution(alpha: (roughness, roughness))
                         let dielectric = FresnelDielectric(etaI: 1, etaT: eta)
-                        let microfacet = MicrofacetReflection(reflectance: ks, distribution: trowbridge, fresnel: dielectric)
+                        let microfacet = MicrofacetReflection(
+                                reflectance: ks, distribution: trowbridge, fresnel: dielectric)
                         bsdf.add(bxdf: microfacet)
 
                 }
-                let kr = opacity * self.kr.evaluate(at: interaction)
+                let kr = opacity * self.kr.evaluateSpectrum(at: interaction)
                 if !kr.isBlack {
                         let dielectric = FresnelDielectric(etaI: 1, etaT: eta)
                         let specular = SpecularReflection(reflectance: kr, fresnel: dielectric)
                         bsdf.add(bxdf: specular)
                 }
-                let kt = opacity * self.kt.evaluate(at: interaction)
+                let kt = opacity * self.kt.evaluateSpectrum(at: interaction)
                 if !kt.isBlack {
                         let transmission = SpecularTransmission(t: kt, etaA: 1, etaB: eta)
                         bsdf.add(bxdf: transmission)
@@ -52,23 +61,23 @@ final class Uber: Material {
                 return (bsdf, nil)
         }
 
-        var kd: Texture<Spectrum>
-        var ks: Texture<Spectrum>
-        var kr: Texture<Spectrum>
-        var kt: Texture<Spectrum>
-        var roughness: Texture<FloatX>
+        var kd: SpectrumTexture
+        var ks: SpectrumTexture
+        var kr: SpectrumTexture
+        var kt: SpectrumTexture
+        var roughness: FloatTexture
         let remapRoughness: Bool
-        var opacity: Texture<Spectrum>
-        var eta: Texture<FloatX>
+        var opacity: SpectrumTexture
+        var eta: FloatTexture
 }
 
 func createUber(parameters: ParameterDictionary) throws -> Uber {
 
-        func makeSpectrum(_ name: String, else value: Spectrum) throws -> Texture<Spectrum> {
+        func makeSpectrum(_ name: String, else value: Spectrum) throws -> SpectrumTexture {
                 return try parameters.findSpectrumTexture(name: name, else: value)
         }
 
-        func makeFloatX(_ name: String, else value: FloatX) throws -> Texture<FloatX> {
+        func makeFloatX(_ name: String, else value: FloatX) throws -> FloatTexture {
                 return try parameters.findFloatXTexture(name: name, else: value)
         }
 
@@ -81,8 +90,8 @@ func createUber(parameters: ParameterDictionary) throws -> Uber {
         let opacity = try makeSpectrum("opacity", else: Spectrum(intensity: 1))
         let remapRoughness = try parameters.findOneBool(called: "remapRoughness", else: true)
 
-        return Uber(kd: kd, ks: ks, kr: kr, kt: kt,
-                    roughness: roughness, remapRoughness: remapRoughness,
-                    opacity: opacity, eta: eta)
+        return Uber(
+                kd: kd, ks: ks, kr: kr, kt: kt,
+                roughness: roughness, remapRoughness: remapRoughness,
+                opacity: opacity, eta: eta)
 }
-

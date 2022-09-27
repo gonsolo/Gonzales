@@ -1,16 +1,18 @@
-/**
-        A collection of parameters.
-        Every parameter has a type an a value (or a collection of
-        values).
-*/
-typealias ParameterDictionary = Dictionary<String, Parameter>
+/// A collection of parameters.
+///
+/// Every parameter has a type an a value (or a collection of values).
+
+typealias ParameterDictionary = [String: Parameter]
 
 extension ParameterDictionary {
 
         func findSpectrum(name: String, else spectrum: Spectrum? = nil) throws -> Spectrum? {
                 let spectra = try findSpectra(name: name)
-                if spectra.isEmpty { return spectrum }
-                else { return spectra[0] }
+                if spectra.isEmpty {
+                        return spectrum
+                } else {
+                        return spectra[0]
+                }
         }
 
         func findOnePoint(name: String, else preset: Point) throws -> Point {
@@ -35,11 +37,14 @@ extension ParameterDictionary {
                 return try findString(called: name) ?? ""
         }
 
-        func findSpectrumTexture(name: String, else spectrum: Spectrum = Spectrum(intensity: 1)) throws -> Texture<Spectrum> {
+        func findSpectrumTexture(name: String, else spectrum: Spectrum = Spectrum(intensity: 1))
+                throws -> SpectrumTexture
+        {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = state.spectrumTextures[textureName] else {
-                                warning("Coud not find texture \(textureName)")
+                        //guard let texture = state.spectrumTextures[textureName] else {
+                        guard let texture = state.textures[textureName] as? SpectrumTexture else {
+                                warning("Could not find texture \(textureName)")
                                 return ConstantTexture<Spectrum>(value: red)
                         }
                         return texture
@@ -51,10 +56,10 @@ extension ParameterDictionary {
                 }
         }
 
-        func findFloatXTexture(name: String, else value: FloatX = 1.0) throws -> Texture<FloatX> {
+        func findFloatXTexture(name: String, else value: FloatX = 1.0) throws -> FloatTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = state.floatTextures[textureName] else {
+                        guard let texture = state.textures[textureName] as? FloatTexture else {
                                 print("No texture")
                                 fatalError()
                         }
@@ -91,23 +96,14 @@ extension ParameterDictionary {
                         return ints[0]
                 }
         }
-  
+
         func findFloatXs(called name: String) throws -> [FloatX] {
                 guard let floats = self[name] as? [FloatX] else {
                         return []
                 }
                 return floats
         }
-/*
-        // This could be used instead of findInts etc...
-        func find(name: String) throws -> Parameter {
-                guard let values = self[name] else {
-                        return []
-                }
-                return values
 
-        }
-*/
         func findPoints(name: String) throws -> [Point] {
                 guard let points = self[name] as? [Point] else {
                         return []
@@ -150,4 +146,3 @@ extension ParameterDictionary {
                 return bools
         }
 }
-

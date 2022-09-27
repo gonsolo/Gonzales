@@ -1,8 +1,6 @@
-/**
-        A type that describes the reflected light from a surface based on the
-        theory that the surface consists of many differently oriented perfect
-        specular microfacets.
-*/
+///        A type that describes the reflected light from a surface based on the
+///        theory that the surface consists of many differently oriented perfect
+///        specular microfacets.
 protocol MicrofacetDistribution {
 
         // D in PBRT
@@ -25,7 +23,6 @@ extension MicrofacetDistribution {
 
         func maskingShadowing(_ vector: Vector) -> FloatX {
                 let result = 1 / (1 + lambda(vector))
-                //print(#function, vector, lambda(vector), result)
                 return result
         }
 
@@ -34,7 +31,7 @@ extension MicrofacetDistribution {
         }
 
         func pdf(wo: Vector, half: Vector) -> FloatX {
-                return differentialArea(withNormal: half) * maskingShadowing(wo) * absDot(wo, half) / absCosTheta(wo)
+                return differentialArea(withNormal: half) * maskingShadowing(wo) * absDot(wo, half)
+                        / absCosTheta(wo)
         }
 }
-

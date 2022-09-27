@@ -1,33 +1,39 @@
-import Foundation // sin, cos
+import Foundation  // sin, cos
 
 struct InfiniteLight: Light {
 
-        init(lightToWorld: Transform, brightness: Spectrum, texture: Texture<Spectrum>) {
+        init(lightToWorld: Transform, brightness: Spectrum, texture: SpectrumTexture) {
                 self.lightToWorld = lightToWorld
                 self.brightness = brightness
                 self.texture = texture
         }
 
-        func sample(for reference: Interaction, u: Point2F) -> (radiance: Spectrum,
-                                                                direction: Vector,
-                                                                pdf: FloatX,
-                                                                visibility: Visibility) {
+        func sample(for reference: Interaction, u: Point2F) -> (
+                radiance: Spectrum,
+                direction: Vector,
+                pdf: FloatX,
+                visibility: Visibility
+        ) {
                 let theta = u[1] * FloatX.pi
                 let phi = u[0] * 2 * FloatX.pi
-                let lightDirection = Vector(x: sin(theta) * cos(phi),
-                                              y: sin(theta) * sin(phi),
-                                              z: cos(theta))
+                let lightDirection = Vector(
+                        x: sin(theta) * cos(phi),
+                        y: sin(theta) * sin(phi),
+                        z: cos(theta))
                 let direction = lightToWorld * lightDirection
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
-                let distantPoint = SurfaceInteraction(position: reference.position + direction * scene.diameter())
+                let distantPoint = SurfaceInteraction(
+                        position: reference.position + direction * scene.diameter())
                 let visibility = Visibility(from: reference, to: distantPoint)
-		let uv = directionToUV(direction: -direction)
+                let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
-		let color = texture.evaluate(at: interaction)
+                let color = texture.evaluateSpectrum(at: interaction)
                 return (radiance: color, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction) throws -> FloatX {
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
+                throws -> FloatX
+        {
                 let incoming = worldToLight * direction
                 let (theta, _) = sphericalCoordinatesFrom(vector: incoming)
                 guard theta > machineEpsilon else { return 0 }
@@ -54,7 +60,7 @@ struct InfiniteLight: Light {
                 let w = normalized(worldToLight * direction)
                 let u = sphericalPhi(w) * inv2Pi
                 var v = sphericalTheta(w) * inv2Pi
-                v = 2 * (1 - v) // PBRT compatibility. Where does this come from?
+                v = 2 * (1 - v)  // PBRT compatibility. Where does this come from?
                 let uv = Point2F(x: u, y: v)
                 return uv
         }
@@ -62,26 +68,28 @@ struct InfiniteLight: Light {
         func radianceFromInfinity(for ray: Ray) -> Spectrum {
                 let uv = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                let radiance = texture.evaluate(at: interaction)
+                let radiance = texture.evaluateSpectrum(at: interaction)
                 return radiance
         }
 
-        var isDelta: Bool { get { return false } }
+        var isDelta: Bool { return false }
 
-        var worldToLight: Transform { get { return lightToWorld.inverse } }
+        var worldToLight: Transform { return lightToWorld.inverse }
 
         let brightness: Spectrum
-        let texture: Texture<Spectrum>
+        let texture: SpectrumTexture
         let lightToWorld: Transform
 }
 
-func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary) throws -> InfiniteLight {
+func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary) throws
+        -> InfiniteLight
+{
         guard let mapname = try parameters.findString(called: "mapname") else {
                 let brightness = try parameters.findSpectrum(name: "L") ?? white
                 let texture = ConstantTexture(value: brightness)
-                return InfiniteLight(lightToWorld: lightToWorld, brightness: brightness, texture: texture)
+                return InfiniteLight(
+                        lightToWorld: lightToWorld, brightness: brightness, texture: texture)
         }
         let texture = try getTextureFrom(name: mapname)
         return InfiniteLight(lightToWorld: lightToWorld, brightness: white, texture: texture)
 }
-
