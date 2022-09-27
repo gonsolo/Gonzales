@@ -2,3 +2,6 @@
 Package.resolved
 /*.exr
 /*.pfm
+/perf.data
+/perf.data.old
+/tags

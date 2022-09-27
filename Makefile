@@ -7,27 +7,10 @@ VERBOSE = --verbose
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
 
-#SCENE = ../../src/bitterli/bathroom/scene-v4.pbrt
-#IMAGE =  bathroom.exr
 SCENE = ../../src/bitterli/cornell-box/scene-v4.pbrt
 IMAGE =  cornell-box.exr
-
-#IMAGE =  ecosys.exr
-#SCENE = Scenes/bitterli/cornell-box/modified.pbrt
-#SCENE = Scenes/bitterli/cornell-box/cornell.4.pbrt
-#IMAGE = cornell-box.exr
-#SCENE = Scenes/moana/pbrt/island/pbrt/island.pbrt
-#IMAGE = island.exr
-##SCENE = ~/blender.pbrt
-#SCENE = Scenes/bitterli/material-testball/scene.pbrt
-#IMAGE = material-testball.exr
-#SCENE = Scenes/gonzo/ptex/scene.pbrt
-#IMAGE = ptex.exr
-#SCENE = Scenes/emily/renderData/modified.pbrt
-#IMAGE = gonzales.exr
-#SCENE = Scenes/bitterli/veach-mis/scene.pbrt
-#SCENE = Scenes/bitterli/veach-mis/modified.pbrt
-#IMAGE = veach-mis.exr
+#SCENE = ~/src/pbrt-v4-scenes/killeroos/killeroo-coated-gold.pbrt
+#IMAGE = killeroo-coated-gold.exr
 
 PFM = $(IMAGE:.exr=.pfm)
 

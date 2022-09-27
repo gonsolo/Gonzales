@@ -89,6 +89,7 @@ final class BoundingHierarchyBuilder {
                 })
                 let start = range.first!
                 let end = range.last! + 1
+
                 guard mid != start && mid != end else {
                         fatalError("Partition error: \(start) \(mid) \(end)!")
                 }
@@ -109,8 +110,8 @@ final class BoundingHierarchyBuilder {
                 print("  BVH:")
                 print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
                 print("    Leaf nodes:\t\t\t\t\t\t\t\t\(leafNodes)")
-                let ratio = String(format: "(%.2f)", Float(totalPrimitives) / Float(leafNodes))
-                print("    Primitives per leaf node:\t\t\t\t\t\(totalPrimitives) /    \(leafNodes) \(ratio)")
+                let ratio = String(format: " (%.2f)", Float(totalPrimitives) / Float(leafNodes))
+                print("    Primitives per leaf node:\t\t\t\t\t\(totalPrimitives) /    \(leafNodes)\(ratio)")
         }
 
         static let primitivesPerNode = 1
