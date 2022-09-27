@@ -27,7 +27,7 @@ let package = Package(
                         ])],
                         linkerSettings: [.unsafeFlags([
                                 "-LExtern/openexr/build/src/lib/OpenEXR",
-                                "-lOpenEXR-3_1",
+                                "-lOpenEXR-3_2",
                                 "-LExtern/openexr/build/_deps/imath-build/src/Imath",
                                 "-lImath-3_2"
                         ])]

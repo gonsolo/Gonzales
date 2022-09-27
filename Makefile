@@ -1,4 +1,4 @@
-all: test_debug
+all: debug
 
 #SINGLERAY = --single 5 20
 #SYNC = --sync
