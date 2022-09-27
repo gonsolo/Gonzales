@@ -1,9 +1,9 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Build Status](https://github.com/gonsolo/gonzales_private/actions/workflows/main.yml/badge.svg)](https://github.com/gonsolo/gonzales_private/actions/workflows/main.yml)
+[![Build Status](https://github.com/gonsolo/gonzales/actions/workflows/main.yml/badge.svg)](https://github.com/gonsolo/gonzales_private/actions/workflows/main.yml)
 
 # Gonzales Renderer
 
-© Andreas Wendleder 2019-2021
+© Andreas Wendleder 2019-2022
 
 Brute-force path tracing written in Swift.
 
