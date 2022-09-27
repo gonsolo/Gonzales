@@ -98,8 +98,8 @@ editScene:
 em: editMakefile
 editMakefile:
 	@vi Makefile
-openexr: Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_1.so
-Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_1.so:
+openexr: Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_2.so
+Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_2.so:
 	@mkdir -p Extern/openexr/build
 	@cd Extern/openexr/build; cmake ..; make -j8 -s
 ptex: Extern/ptex/build/src/ptex/libPtex.so
