@@ -14,3 +14,10 @@ Memory usage was around 50GB.
 
 ![Moana](Images/moana.png)
 
+### Build
+
+Type `make` and wait for error messages. :)
+
+### Acknowledgments
+
+[PBRT](https://www.pbr-book.org/) was an inspiration since it was called lrt.
