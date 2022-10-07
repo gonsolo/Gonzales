@@ -114,7 +114,8 @@ final class BoundingHierarchyBuilder {
                 print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
                 print("    Leaf nodes:\t\t\t\t\t\t\t\t\(leafNodes)")
                 let ratio = String(format: " (%.2f)", Float(totalPrimitives) / Float(leafNodes))
-                print("    Primitives per leaf node:\t\t\t\t\t\(totalPrimitives) /    \(leafNodes)\(ratio)")
+                print("    Primitives per leaf node:\t\t\t\t\t", terminator: "")
+                print("\(totalPrimitives) /    \(leafNodes)\(ratio)")
         }
 
         static let primitivesPerNode = 1
