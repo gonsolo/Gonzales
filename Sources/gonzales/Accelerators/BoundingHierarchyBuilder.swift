@@ -63,12 +63,22 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.totalPrimitives += range.count
         }
 
+        private func isSmaller(_ a: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
+                return a.center[dimension] < pivot
+        }
+
+        private func isSmaller(_ a: CachedPrimitive, _ b: CachedPrimitive, in dimension: Int)
+                -> Bool
+        {
+                return isSmaller(a, b.center[dimension], in: dimension)
+        }
+
         private func splitMiddle(bounds: Bounds3f, dimension: Int, range: Range<Int>)
                 -> (start: Int, middle: Int, end: Int)
         {
                 let pivot = (bounds.pMin[dimension] + bounds.pMax[dimension]) / 2
                 let mid = cachedPrimitives[range].partition(by: {
-                        $0.center[dimension] < pivot
+                        isSmaller($0, pivot, in: dimension)
                 })
                 let start = range.first!
                 let end = range.last! + 1
@@ -82,7 +92,7 @@ final class BoundingHierarchyBuilder {
                 -> (start: Int, middle: Int, end: Int)
         {
                 // There is no nth_element so let's sort for now
-                cachedPrimitives[range].sort(by: { $0.center[dimension] < $1.center[dimension] })
+                cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
                 let start = range.first!
                 let mid = start + cachedPrimitives[range].count / 2
                 let end = range.last! + 1
@@ -92,7 +102,11 @@ final class BoundingHierarchyBuilder {
         private func splitSurfaceAreaHeuristic(bounds: Bounds3f, dimension: Int, range: Range<Int>)
                 -> (start: Int, middle: Int, end: Int)
         {
-                // TODO
+                if cachedPrimitives.count <= 2 {
+                    cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
+                } else {
+
+                }
                 return (0, 1, 2)
         }
 
