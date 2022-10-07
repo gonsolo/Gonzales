@@ -80,8 +80,10 @@ final class Triangle: Shape {
         static func statistics() {
                 print("  Number of triangles:\t\t\t\t\t\t\t\(numberOfTriangles)")
                 print("  Triangle memory:\t\t\t\t\t\t\t\(formatHuman(triangleMemory))")
-                let intersectionRatio = String(format: " (%.2f)", Float(triangleHits) / Float(triangleIntersections))
-                print("  Ray-Triangle intersection tests:\t\t\t\t\(triangleHits) /\t\(triangleIntersections)\(intersectionRatio)")
+                let ratio = Float(triangleHits) / Float(triangleIntersections)
+                let intersectionRatio = String(format: " (%.2f)", ratio)
+                print("  Ray-Triangle intersection tests:\t\t\t\t", terminator: "")
+                print("\(triangleHits) /\t\(triangleIntersections)\(intersectionRatio)")
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
@@ -117,8 +119,9 @@ final class Triangle: Shape {
                 }
         }
 
-        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
-
+        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 let empty = { (line: Int) -> SurfaceInteraction in
                         //print("No triangle intersection at line ", line)
                         //Thread.callStackSymbols.forEach { print($0) }

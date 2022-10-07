@@ -2,7 +2,7 @@ import Foundation
 import PNG
 
 enum PngTextureError: Error {
-    case decompress
+        case decompress
 }
 
 final class PngTexture: SpectrumTexture {
@@ -15,12 +15,10 @@ final class PngTexture: SpectrumTexture {
         }
 
         convenience init(path: String) throws {
-                //let (pixels, (x:width, y:height)) = try PNG.rgba(path: path, of: UInt8.self)
-                guard let image:PNG.Data.Rectangular = try .decompress(path: path)
-                else {
-                    throw PngTextureError.decompress
+                guard let image: PNG.Data.Rectangular = try .decompress(path: path) else {
+                        throw PngTextureError.decompress
                 }
-                let pixels:[PNG.RGBA<UInt8>] = image.unpack(as: PNG.RGBA<UInt8>.self)
+                let pixels: [PNG.RGBA<UInt8>] = image.unpack(as: PNG.RGBA<UInt8>.self)
                 let (x:width, y:height) = image.size
 
                 let channels = 4

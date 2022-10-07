@@ -5,7 +5,9 @@ final class GeometricPrimitive: Boundable, Intersectable, Material {
                 self.material = material
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 // argument material is unused
                 return try shape.intersect(ray: ray, tHit: &tHit, material: self.material)
         }
@@ -27,5 +29,5 @@ final class GeometricPrimitive: Boundable, Intersectable, Material {
 }
 
 typealias MaterialIndex = Int
-var materials: [Int:Material] = [:]
+var materials: [Int: Material] = [:]
 var materialCounter: MaterialIndex = 0

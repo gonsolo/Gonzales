@@ -131,7 +131,11 @@ final class Curve: Shape {
                         let splitPoints = subdivideBezier(points: points)
                         let u = [u.0, (u.0 + u.1) / 2, u.1]
                         typealias InteractionAndT = (SurfaceInteraction, FloatX)
-                        var hits: [InteractionAndT] = [(SurfaceInteraction(), 0), (SurfaceInteraction(), 0)]
+                        var hits: [InteractionAndT] = [
+                                (SurfaceInteraction(), 0),
+                                (SurfaceInteraction(), 0),
+                        ]
+
                         for segment in 0..<2 {
                                 let cps = segment * 3
                                 let maxWidth = computeMaxWidth(
@@ -268,7 +272,9 @@ final class Curve: Shape {
                 return overlaps
         }
 
-        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 let ray = worldToObject * worldRay
                 let points = blossomBezier(points: common.points, u: u)
                 let dx = cross(ray.direction, points.3 - points.0)

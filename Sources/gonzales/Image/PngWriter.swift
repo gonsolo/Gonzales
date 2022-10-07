@@ -51,12 +51,10 @@ final class PngWriter: ImageWriter {
                                 pngBuffer.append(rgba)
                         }
                 }
-                //try PNG.encode(
-                //        rgba: pngBuffer, size: (resolution.x, resolution.y),
-                //        as: PNG.Properties.Format.Code.rgb8, path: fileName)
-
-                let image:PNG.Data.Rectangular = .init(packing: pngBuffer, size: (resolution.x, resolution.y),
-                    layout: .init(format: .rgba8(palette: [], fill: nil)))
+                let image: PNG.Data.Rectangular = .init(
+                        packing: pngBuffer,
+                        size: (resolution.x, resolution.y),
+                        layout: .init(format: .rgba8(palette: [], fill: nil)))
                 try image.compress(path: fileName, level: 9)
         }
 }

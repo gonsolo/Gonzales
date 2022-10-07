@@ -16,7 +16,7 @@ struct PathIntegrator: Integrator {
                 var normal = Normal()
                 for bounce in 0...maxDepth {
                         let interaction = try intersectOrInfiniteLights(
-                                        ray: ray, tHit: &tHit, bounce: bounce, l: &l)
+                                ray: ray, tHit: &tHit, bounce: bounce, l: &l)
                         if !interaction.valid {
                                 break
                         }

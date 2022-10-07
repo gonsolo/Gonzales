@@ -112,7 +112,9 @@ final class Sphere: Shape {
                 return (ta[0], ta[1])
         }
 
-        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 let empty = { (line: Int) -> SurfaceInteraction in
                         return SurfaceInteraction()
                 }

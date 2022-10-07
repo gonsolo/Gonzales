@@ -41,7 +41,9 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                 return shape.objectBound()
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 var interaction = try shape.intersect(ray: ray, tHit: &tHit, material: material)
                 interaction.primitive = self
                 return interaction

@@ -521,7 +521,7 @@ final class Parser {
                 var string = ""
                 if try parseString(string: &string) {
                         warning("Ignoring named spectrum \(string)!")
-                        let spectrum = Spectrum(rgb: (1, 1, 1)) // TODO: named spectra
+                        let spectrum = Spectrum(rgb: (1, 1, 1))  // TODO: named spectra
                         spectra.append(spectrum)
                         return spectra
                 }

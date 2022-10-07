@@ -6,4 +6,3 @@ extension Transform {
                         direction: transform * ray.direction)
         }
 }
-

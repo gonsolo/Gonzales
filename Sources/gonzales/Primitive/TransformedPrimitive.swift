@@ -7,10 +7,15 @@ final class TransformedPrimitive: Boundable & Intersectable {
                 self.transform = transform
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 let localRay = transform.inverse * ray
                 // TODO: transform tHit?
-                var intersection = try primitive.intersect(ray: localRay, tHit: &tHit, material: material)
+                var intersection = try primitive.intersect(
+                        ray: localRay,
+                        tHit: &tHit,
+                        material: material)
                 if !intersection.valid {
                         return SurfaceInteraction()
                 }
