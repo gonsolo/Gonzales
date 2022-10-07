@@ -9,22 +9,22 @@ struct Node {
         var axis: Int = 0
 }
 
-@_silgen_name("_swift_stdlib_immortalize")
-func _swift_stdlib_immortalize(_ p: UnsafeMutableRawPointer)
+//@_silgen_name("_swift_stdlib_immortalize")
+//func _swift_stdlib_immortalize(_ p: UnsafeMutableRawPointer)
 
-func immortalize(_ o: AnyObject) {
-	withExtendedLifetime(o) { // not sure this is required
-		_swift_stdlib_immortalize(Unmanaged.passUnretained(o).toOpaque())
-	}
-}
+//func immortalize(_ o: AnyObject) {
+//	withExtendedLifetime(o) { // not sure this is required
+//		_swift_stdlib_immortalize(Unmanaged.passUnretained(o).toOpaque())
+//	}
+//}
 
 final class BoundingHierarchy: Boundable, Intersectable {
 
         init(primitives: [Intersectable], nodes: [Node]) {
                 self.primitives = primitives
-                for p in self.primitives {
-                        immortalize(p)
-                }
+//                for p in self.primitives {
+//                        immortalize(p)
+//                }
                 self.nodes = nodes
         }
 

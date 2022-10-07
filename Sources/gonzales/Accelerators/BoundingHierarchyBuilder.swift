@@ -83,16 +83,19 @@ final class BoundingHierarchyBuilder {
                                 counter: counter)
                         return bounds
                 }
+
+                // Split method middle
                 let pivot = (centroidBounds.pMin[dim] + centroidBounds.pMax[dim]) / 2
                 let mid = cachedPrimitives[range].partition(by: {
                         $0.2[dim] < pivot
                 })
                 let start = range.first!
                 let end = range.last! + 1
-
                 guard mid != start && mid != end else {
                         fatalError("Partition error: \(start) \(mid) \(end)!")
                 }
+                // End split method middle
+
                 let leftBounds = build(range: start..<mid)
                 let beforeRight = totalNodes
                 let rightBounds = build(range: mid..<end)
