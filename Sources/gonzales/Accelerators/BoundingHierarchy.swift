@@ -22,13 +22,15 @@ final class BoundingHierarchy: Boundable, Intersectable {
 
         init(primitives: [Intersectable], nodes: [Node]) {
                 self.primitives = primitives
-//                for p in self.primitives {
-//                        immortalize(p)
-//                }
+                //for p in self.primitives {
+                //  immortalize(p)
+                //}
                 self.nodes = nodes
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws -> SurfaceInteraction {
+        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
+                -> SurfaceInteraction
+        {
                 var interaction = SurfaceInteraction()
                 var toVisit = 0
                 var current = 0
