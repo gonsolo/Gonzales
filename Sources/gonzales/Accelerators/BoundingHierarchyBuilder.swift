@@ -1,28 +1,43 @@
 final class BoundingHierarchyBuilder {
 
-        init(primitives: [Boundable]) {
+        internal init(primitives: [Boundable]) {
                 self.nodes = []
                 self.cachedPrimitives = primitives.enumerated().map { index, primitive in
                         let bound = primitive.worldBound()
-                        return (index, bound, bound.center)
+                        return CachedPrimitive(index: index, bound: bound, center: bound.center)
                 }
                 self.primitives = primitives
                 buildHierarchy()
         }
 
-        func buildHierarchy() {
-                if cachedPrimitives.isEmpty { return }
-                nodes = []
-                let _ = build(range: 0..<cachedPrimitives.count)
-        }
-
-        func getBoundingHierarchy() -> BoundingHierarchy {
+        internal func getBoundingHierarchy() -> BoundingHierarchy {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
                 let sortedPrimitives = cachedPrimitives.map {
-                        primitives[$0.0] as! Intersectable
+                        primitives[$0.index] as! Intersectable
                 }
                 return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
+        }
+
+        internal static func statistics() {
+                print("  BVH:")
+                print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
+                print("    Leaf nodes:\t\t\t\t\t\t\t\t\(leafNodes)")
+                let ratio = String(format: " (%.2f)", Float(totalPrimitives) / Float(leafNodes))
+                print("    Primitives per leaf node:\t\t\t\t\t", terminator: "")
+                print("\(totalPrimitives) /    \(leafNodes)\(ratio)")
+        }
+
+        private struct CachedPrimitive {
+                let index: Int
+                let bound: Bounds3f
+                let center: Point
+        }
+
+        private func buildHierarchy() {
+                if cachedPrimitives.isEmpty { return }
+                nodes = []
+                let _ = build(range: 0..<cachedPrimitives.count)
         }
 
         private func growNodes(counter: Int) {
@@ -53,7 +68,7 @@ final class BoundingHierarchyBuilder {
         {
                 let pivot = (bounds.pMin[dimension] + bounds.pMax[dimension]) / 2
                 let mid = cachedPrimitives[range].partition(by: {
-                        $0.2[dimension] < pivot
+                        $0.center[dimension] < pivot
                 })
                 let start = range.first!
                 let end = range.last! + 1
@@ -67,23 +82,28 @@ final class BoundingHierarchyBuilder {
                 -> (start: Int, middle: Int, end: Int)
         {
                 // There is no nth_element so let's sort for now
-                cachedPrimitives[range].sort(by: { $0.2[dimension] < $1.2[dimension] })
+                cachedPrimitives[range].sort(by: { $0.center[dimension] < $1.center[dimension] })
                 let start = range.first!
                 let mid = start + cachedPrimitives[range].count / 2
                 let end = range.last! + 1
                 return (start, mid, end)
         }
 
-        func build(range: Range<Int>) -> Bounds3f {
+        private func splitSurfaceAreaHeuristic(bounds: Bounds3f, dimension: Int, range: Range<Int>)
+                -> (start: Int, middle: Int, end: Int)
+        {
+                // TODO
+                return (0, 1, 2)
+        }
+
+        private func build(range: Range<Int>) -> Bounds3f {
                 let counter = totalNodes
                 totalNodes += 1
                 if range.isEmpty { return Bounds3f() }
                 let bounds = cachedPrimitives[range].reduce(
                         Bounds3f(),
                         {
-                                union(
-                                        first: $0,
-                                        second: $1.1)
+                                union(first: $0, second: $1.bound)
                         })
                 if range.count < BoundingHierarchyBuilder.primitivesPerNode {
                         appendAndInit(
@@ -98,7 +118,7 @@ final class BoundingHierarchyBuilder {
                         {
                                 union(
                                         bound: $0,
-                                        point: $1.2)
+                                        point: $1.center)
                         })
                 let dim = centroidBounds.maximumExtent()
                 if centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
@@ -110,8 +130,7 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
-                //let (start, mid, end) = splitMiddle(
-                let (start, mid, end) = splitEqual(
+                let (start, mid, end) = splitMiddle(
                         bounds: centroidBounds,
                         dimension: dim,
                         range: range)
@@ -129,27 +148,18 @@ final class BoundingHierarchyBuilder {
                 return combinedBounds
         }
 
-        static func statistics() {
-                print("  BVH:")
-                print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
-                print("    Leaf nodes:\t\t\t\t\t\t\t\t\(leafNodes)")
-                let ratio = String(format: " (%.2f)", Float(totalPrimitives) / Float(leafNodes))
-                print("    Primitives per leaf node:\t\t\t\t\t", terminator: "")
-                print("\(totalPrimitives) /    \(leafNodes)\(ratio)")
-        }
+        private static let primitivesPerNode = 1
 
-        static let primitivesPerNode = 1
+        private static var interiorNodes = 0
+        private static var leafNodes = 0
+        private static var totalPrimitives = 0
+        private static var callsToPartition = 0
+        private static var bhNodes = 0
+        private static var bhPrimitives = 0
 
-        static var interiorNodes = 0
-        static var leafNodes = 0
-        static var totalPrimitives = 0
-        static var callsToPartition = 0
-        static var bhNodes = 0
-        static var bhPrimitives = 0
-
-        var totalNodes = 0
-        var offsetCounter = 0
-        var nodes: [Node]
-        var cachedPrimitives: [(Int, Bounds3f, Point)]
-        var primitives: [Boundable]
+        private var totalNodes = 0
+        private var offsetCounter = 0
+        private var nodes: [Node]
+        private var cachedPrimitives: [CachedPrimitive]
+        private var primitives: [Boundable]
 }
