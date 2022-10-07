@@ -48,6 +48,21 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.totalPrimitives += range.count
         }
 
+        private func splitMiddle(bounds: Bounds3f, dimension: Int, range: Range<Int>)
+                -> (start: Int, middle: Int, end: Int)
+        {
+                let pivot = (bounds.pMin[dimension] + bounds.pMax[dimension]) / 2
+                let mid = cachedPrimitives[range].partition(by: {
+                        $0.2[dimension] < pivot
+                })
+                let start = range.first!
+                let end = range.last! + 1
+                guard mid != start && mid != end else {
+                        fatalError("Partition error: \(start) \(mid) \(end)!")
+                }
+                return (start, mid, end)
+        }
+
         func build(range: Range<Int>) -> Bounds3f {
                 let counter = totalNodes
                 totalNodes += 1
@@ -84,17 +99,10 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
-                // Split method middle
-                let pivot = (centroidBounds.pMin[dim] + centroidBounds.pMax[dim]) / 2
-                let mid = cachedPrimitives[range].partition(by: {
-                        $0.2[dim] < pivot
-                })
-                let start = range.first!
-                let end = range.last! + 1
-                guard mid != start && mid != end else {
-                        fatalError("Partition error: \(start) \(mid) \(end)!")
-                }
-                // End split method middle
+                let (start, mid, end) = splitMiddle(
+                        bounds: centroidBounds,
+                        dimension: dim,
+                        range: range)
 
                 let leftBounds = build(range: start..<mid)
                 let beforeRight = totalNodes
