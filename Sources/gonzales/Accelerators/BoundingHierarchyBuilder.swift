@@ -58,8 +58,19 @@ final class BoundingHierarchyBuilder {
                 let start = range.first!
                 let end = range.last! + 1
                 guard mid != start && mid != end else {
-                        fatalError("Partition error: \(start) \(mid) \(end)!")
+                        return splitEqual(bounds: bounds, dimension: dimension, range: range)
                 }
+                return (start, mid, end)
+        }
+
+        private func splitEqual(bounds: Bounds3f, dimension: Int, range: Range<Int>)
+                -> (start: Int, middle: Int, end: Int)
+        {
+                // There is no nth_element so let's sort for now
+                cachedPrimitives[range].sort(by: { $0.2[dimension] < $1.2[dimension] })
+                let start = range.first!
+                let mid = start + cachedPrimitives[range].count / 2
+                let end = range.last! + 1
                 return (start, mid, end)
         }
 
@@ -99,7 +110,8 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
-                let (start, mid, end) = splitMiddle(
+                //let (start, mid, end) = splitMiddle(
+                let (start, mid, end) = splitEqual(
                         bounds: centroidBounds,
                         dimension: dim,
                         range: range)
