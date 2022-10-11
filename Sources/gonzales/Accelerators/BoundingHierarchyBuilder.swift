@@ -1,4 +1,4 @@
-import Foundation // exit
+import Foundation  // exit
 
 final class BoundingHierarchyBuilder {
 
@@ -67,6 +67,7 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.leafNodes += 1
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
+                //print("appending leaf")
         }
 
         private func isSmaller(_ a: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
@@ -243,6 +244,11 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
+                //let (start, mid, end) = splitEqual(
+                //        bounds: centroidBounds,
+                //        dimension: dim,
+                //        range: range)
+
                 //let (start, mid, end) = splitMiddle(
                 //        bounds: centroidBounds,
                 //        dimension: dim,
@@ -253,23 +259,32 @@ final class BoundingHierarchyBuilder {
                         dimension: dim,
                         range: range,
                         counter: counter)
-
                 if start == 0 && mid == 0 && end == 0 {
                         return blaBounds
                 }
+
                 //print("recursion: ", start, mid, end)
                 let leftBounds = build(range: start..<mid)
                 let beforeRight = totalNodes
                 let rightBounds = build(range: mid..<end)
                 let combinedBounds = union(first: leftBounds, second: rightBounds)
 
+                addInterior(
+                        counter: counter,
+                        combinedBounds: combinedBounds,
+                        dim: dim,
+                        beforeRight: beforeRight)
+                return combinedBounds
+        }
+
+        func addInterior(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
                 nodes[counter].bounds = combinedBounds
                 nodes[counter].axis = dim
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
-                return combinedBounds
+                //print("appending interior")
         }
 
         private let primitivesPerNode = 4
