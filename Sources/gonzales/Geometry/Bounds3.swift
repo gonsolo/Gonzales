@@ -91,6 +91,19 @@ extension Bounds3 where T == FloatX {
         func diagonal() -> Vector3<T> {
                 return Vector3(point: pMax - pMin)
         }
+
+        func offset(point: Point3<T>) -> Vector3<T> {
+                var o: Vector3 = point - pMin
+                for i in 0..<3 {
+                        if pMax[i] > pMin[i] { o[i] /= pMax[i] - pMin[i] }
+                }
+                return o
+        }
+
+        func surfaceArea() -> T {
+                let d = diagonal()
+                return 2 * (d.x * d.y + d.x * d.z + d.y * d.z)
+        }
 }
 
 func union(first: Bounds3f, second: Bounds3f) -> Bounds3f {

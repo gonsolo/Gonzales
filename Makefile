@@ -1,7 +1,7 @@
-all: debug
+all: td
 
 #SINGLERAY = --single 5 20
-#SYNC = --sync
+SYNC = --sync
 VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse
@@ -186,3 +186,5 @@ format:
 
 codespell:
 	codespell -L inout Sources
+gdb:
+	gdb -x .gdb_commands .build/debug/gonzales

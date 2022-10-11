@@ -1,3 +1,5 @@
+import Foundation // exit
+
 final class BoundingHierarchyBuilder {
 
         internal init(primitives: [Boundable]) {
@@ -32,6 +34,10 @@ final class BoundingHierarchyBuilder {
                 let index: Int
                 let bound: Bounds3f
                 let center: Point
+
+                func centroid() -> Point {
+                        return 0.5 * bound.pMin + 0.5 * bound.pMax
+                }
         }
 
         private func buildHierarchy() {
@@ -99,15 +105,104 @@ final class BoundingHierarchyBuilder {
                 return (start, mid, end)
         }
 
-        private func splitSurfaceAreaHeuristic(bounds: Bounds3f, dimension: Int, range: Range<Int>)
-                -> (start: Int, middle: Int, end: Int)
-        {
-                if cachedPrimitives.count <= 2 {
-                    cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
-                } else {
+        struct BVHSplitBucket {
+                var count = 0
+                var bounds = Bounds3f()
+        }
 
+        private func splitSurfaceAreaHeuristic(
+                bounds: Bounds3f,
+                dimension: Int,
+                range: Range<Int>,
+                counter: Int
+        )
+                -> (start: Int, middle: Int, end: Int, bounds: Bounds3f)
+        {
+                var mid = 0
+                if cachedPrimitives[range].count <= 2 {
+                        mid = cachedPrimitives[range].count / 2
+                        cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
+                } else {
+                        let nBuckets = 12
+                        var buckets = Array(repeating: BVHSplitBucket(), count: nBuckets)
+                        for prim in cachedPrimitives[range] {
+                                let offset: Vector = bounds.offset(point: prim.centroid())
+                                var b = Int(Float(nBuckets) * offset[dimension])
+                                if b == nBuckets {
+                                        b = nBuckets - 1
+                                }
+                                assert(b >= 0)
+                                assert(b < nBuckets)
+                                buckets[b].count += 1
+                                buckets[b].bounds = union(
+                                        first: buckets[b].bounds,
+                                        second: prim.bound)
+                                //print("b: ", b, " count: ", buckets[b].count, " bounds: ", buckets[b].bounds)
+                        }
+                        let nSplits = nBuckets - 1
+                        var costs = Array(repeating: FloatX(0.0), count: nSplits)
+                        var countBelow = 0
+                        var boundBelow = Bounds3f()
+                        for i in 0..<nSplits {
+                                boundBelow = union(first: boundBelow, second: buckets[i].bounds)
+                                countBelow += buckets[i].count
+                                costs[i] = costs[i] + FloatX(countBelow) * boundBelow.surfaceArea()
+                                //print("boundBelow: ", boundBelow)
+                                //print("countBelow: ", countBelow)
+                                //print("costs[i]: ", costs[i])
+                        }
+                        var countAbove = 0
+                        var boundAbove = Bounds3f()
+                        for i in (1...nSplits).reversed() {
+                                boundAbove = union(first: boundAbove, second: buckets[i].bounds)
+                                countAbove += buckets[i].count
+                                costs[i - 1] =
+                                        costs[i - 1] + FloatX(countAbove) * boundAbove.surfaceArea()
+                                //print("boundAbove: ", boundAbove)
+                                //print("countAbove: ", countAbove)
+                                //print("costs[i-1]: ", costs[i-1])
+                        }
+                        var minCostSplitBucket = -1
+                        var minCost = FloatX.infinity
+                        for i in 0..<nSplits {
+                                if costs[i] < minCost {
+                                        minCost = costs[i]
+                                        minCostSplitBucket = i
+                                }
+                        }
+                        let leafCost = FloatX(cachedPrimitives[range].count)
+                        minCost = 1.0 / 2.0 + minCost / bounds.surfaceArea()
+                        //print("minCost: ", minCost)
+
+                        //print("before")
+                        if cachedPrimitives[range].count > primitivesPerNode || minCost < leafCost {
+                                mid = cachedPrimitives[range].partition(by: {
+                                        let offset = bounds.offset(point: $0.centroid())[dimension]
+                                        var b = Int(FloatX(nBuckets) * offset)
+                                        if b == nBuckets {
+                                                b = nBuckets + 1
+                                        }
+                                        //print("offset: ", offset)
+                                        //print("b: ", b)
+                                        //print("minCostSplitBucket: ", minCostSplitBucket)
+                                        return b <= minCostSplitBucket
+                                })
+                                //print("mid: ", mid)
+                                //exit(0)
+                        } else {
+                                //print("leaf")
+                                //exit(0)
+                                appendAndInit(
+                                        offset: offsetCounter,
+                                        bounds: bounds,
+                                        range: range,
+                                        counter: counter)
+                                return (0, 0, 0, bounds)
+                        }
                 }
-                return (0, 1, 2)
+                let start = range.first!
+                let end = range.last! + 1
+                return (start, mid, end, Bounds3f())
         }
 
         private func build(range: Range<Int>) -> Bounds3f {
@@ -119,7 +214,7 @@ final class BoundingHierarchyBuilder {
                         {
                                 union(first: $0, second: $1.bound)
                         })
-                if range.count < BoundingHierarchyBuilder.primitivesPerNode {
+                if range.count < primitivesPerNode {
                         appendAndInit(
                                 offset: offsetCounter,
                                 bounds: bounds,
@@ -134,6 +229,10 @@ final class BoundingHierarchyBuilder {
                                         bound: $0,
                                         point: $1.center)
                         })
+
+                //print("Centroid Bound: ", centroidBounds)
+                //print("range: ", range)
+
                 let dim = centroidBounds.maximumExtent()
                 if centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
                         appendAndInit(
@@ -144,15 +243,26 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
-                let (start, mid, end) = splitMiddle(
+                //let (start, mid, end) = splitMiddle(
+                //        bounds: centroidBounds,
+                //        dimension: dim,
+                //        range: range)
+
+                let (start, mid, end, blaBounds) = splitSurfaceAreaHeuristic(
                         bounds: centroidBounds,
                         dimension: dim,
-                        range: range)
+                        range: range,
+                        counter: counter)
 
+                if start == 0 && mid == 0 && end == 0 {
+                        return blaBounds
+                }
+                //print("recursion: ", start, mid, end)
                 let leftBounds = build(range: start..<mid)
                 let beforeRight = totalNodes
                 let rightBounds = build(range: mid..<end)
                 let combinedBounds = union(first: leftBounds, second: rightBounds)
+
                 growNodes(counter: counter)
                 nodes[counter].bounds = combinedBounds
                 nodes[counter].axis = dim
@@ -162,7 +272,7 @@ final class BoundingHierarchyBuilder {
                 return combinedBounds
         }
 
-        private static let primitivesPerNode = 1
+        private let primitivesPerNode = 4
 
         private static var interiorNodes = 0
         private static var leafNodes = 0
