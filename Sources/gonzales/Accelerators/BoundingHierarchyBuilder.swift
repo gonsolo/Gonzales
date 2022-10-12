@@ -53,11 +53,12 @@ final class BoundingHierarchyBuilder {
                 }
         }
 
-        private func appendAndInit(
+        private func addLeafNode(
                 offset: Int,
                 bounds: Bounds3f,
                 range: Range<Int>,
-                counter: Int
+                counter: Int,
+                dimension: Int
         ) {
                 growNodes(counter: counter)
                 nodes[counter].bounds = bounds
@@ -67,6 +68,12 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.leafNodes += 1
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
+
+                print("Leaf: counter: ", counter, "count: ", range.count, "offset: ", offset, "range: ", range)
+                //for i in 0..<node.count {
+                //        let primitive = primitives[node.offset + i]
+                //cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
+
         }
 
         private func isSmaller(_ a: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
@@ -177,11 +184,12 @@ final class BoundingHierarchyBuilder {
                                         return b <= minCostSplitBucket
                                 })
                         } else {
-                                appendAndInit(
+                                addLeafNode(
                                         offset: offsetCounter,
                                         bounds: bounds,
                                         range: range,
-                                        counter: counter)
+                                        counter: counter,
+                                        dimension: dimension)
                                 return (0, 0, 0, bounds)
                         }
                 }
@@ -199,14 +207,6 @@ final class BoundingHierarchyBuilder {
                         {
                                 union(first: $0, second: $1.bound)
                         })
-                if range.count < primitivesPerNode {
-                        appendAndInit(
-                                offset: offsetCounter,
-                                bounds: bounds,
-                                range: range,
-                                counter: counter)
-                        return bounds
-                }
                 let centroidBounds = cachedPrimitives[range].reduce(
                         Bounds3f(),
                         {
@@ -216,12 +216,15 @@ final class BoundingHierarchyBuilder {
                         })
 
                 let dim = centroidBounds.maximumExtent()
-                if centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
-                        appendAndInit(
+                if range.count <= primitivesPerNode
+                        || centroidBounds.pMax[dim] == centroidBounds.pMin[dim]
+                {
+                        addLeafNode(
                                 offset: offsetCounter,
                                 bounds: bounds,
                                 range: range,
-                                counter: counter)
+                                counter: counter,
+                                dimension: dim)
                         return bounds
                 }
 
@@ -231,8 +234,8 @@ final class BoundingHierarchyBuilder {
                         case surfaceArea
                 }
                 //let splitStrategy = SplitStrategy.equal
-                //let splitStrategy = SplitStrategy.middle
-                let splitStrategy = SplitStrategy.surfaceArea
+                let splitStrategy = SplitStrategy.middle
+                //let splitStrategy = SplitStrategy.surfaceArea
                 var start = 0
                 var mid = 0
                 var end = 0
@@ -264,7 +267,7 @@ final class BoundingHierarchyBuilder {
                 let rightBounds = build(range: mid..<end)
                 let combinedBounds = union(first: leftBounds, second: rightBounds)
 
-                addInterior(
+                addInteriorNode(
                         counter: counter,
                         combinedBounds: combinedBounds,
                         dim: dim,
@@ -272,13 +275,14 @@ final class BoundingHierarchyBuilder {
                 return combinedBounds
         }
 
-        func addInterior(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
+        func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
                 nodes[counter].bounds = combinedBounds
                 nodes[counter].axis = dim
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
+                print("Interior counter: ", counter)
         }
 
         private let primitivesPerNode = 1

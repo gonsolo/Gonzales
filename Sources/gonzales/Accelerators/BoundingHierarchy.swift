@@ -42,7 +42,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
                         nodesVisited += 1
                         let node = nodes[current]
                         if node.bounds.intersects(ray: ray, tHit: &tHit) {
-                                if node.count > 0 {
+                                if node.count > 0 { // leaf
                                         for i in 0..<node.count {
                                                 let primitive = primitives[node.offset + i]
                                                 let tentativeInteraction =
@@ -57,7 +57,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
                                         if toVisit == 0 { break }
                                         toVisit -= 1
                                         current = nodesToVisit[toVisit]!
-                                } else {
+                                } else { // interior
                                         if ray.direction[node.axis] < 0 {
                                                 nodesToVisit[toVisit] = current + 1
                                                 current = node.offset
