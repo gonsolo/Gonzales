@@ -1,5 +1,12 @@
 import Foundation  // exit
 
+private enum SplitStrategy {
+        case equal
+        case middle
+        case surfaceArea
+}
+private let splitStrategy = SplitStrategy.surfaceArea
+
 final class BoundingHierarchyBuilder {
 
         internal init(primitives: [Boundable]) {
@@ -69,10 +76,11 @@ final class BoundingHierarchyBuilder {
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
 
-                print("Leaf: counter: ", counter, "count: ", range.count, "offset: ", offset, "range: ", range)
-                //for i in 0..<node.count {
-                //        let primitive = primitives[node.offset + i]
-                //cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
+                //print(
+                //        "Leaf: counter: ", counter,
+                //        "count: ", range.count,
+                //        "offset: ", offset,
+                //        "range: ", range)
 
         }
 
@@ -228,14 +236,6 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
-                enum SplitStrategy {
-                        case equal
-                        case middle
-                        case surfaceArea
-                }
-                //let splitStrategy = SplitStrategy.equal
-                let splitStrategy = SplitStrategy.middle
-                //let splitStrategy = SplitStrategy.surfaceArea
                 var start = 0
                 var mid = 0
                 var end = 0
@@ -282,10 +282,10 @@ final class BoundingHierarchyBuilder {
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
-                print("Interior counter: ", counter)
+                //print("Interior counter: ", counter)
         }
 
-        private let primitivesPerNode = 1
+        private let primitivesPerNode = 4
 
         private static var interiorNodes = 0
         private static var leafNodes = 0
