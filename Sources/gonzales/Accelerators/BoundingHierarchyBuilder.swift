@@ -48,6 +48,7 @@ final class BoundingHierarchyBuilder {
 
         private func growNodes(counter: Int) {
                 let missing = counter - nodes.count + 1
+                //print("missing: ", missing)
                 if missing > 0 {
                         nodes += Array(repeating: Node(), count: missing)
                 }
@@ -67,7 +68,9 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.leafNodes += 1
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
-                //print("appending leaf")
+                //print(
+                //        "appending leaf with n ", range.count,
+                //        ", counter: ", counter, ", offsetCounter: ", offsetCounter)
         }
 
         private func isSmaller(_ a: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
@@ -119,7 +122,9 @@ final class BoundingHierarchyBuilder {
         )
                 -> (start: Int, middle: Int, end: Int, bounds: Bounds3f)
         {
+                var start = 0
                 var mid = 0
+                var end = 0
                 if cachedPrimitives[range].count <= 2 {
                         mid = cachedPrimitives[range].count / 2
                         cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
@@ -181,18 +186,14 @@ final class BoundingHierarchyBuilder {
                                         let offset = bounds.offset(point: $0.centroid())[dimension]
                                         var b = Int(FloatX(nBuckets) * offset)
                                         if b == nBuckets {
-                                                b = nBuckets + 1
+                                                b = nBuckets - 1
                                         }
                                         //print("offset: ", offset)
                                         //print("b: ", b)
                                         //print("minCostSplitBucket: ", minCostSplitBucket)
                                         return b <= minCostSplitBucket
                                 })
-                                //print("mid: ", mid)
-                                //exit(0)
                         } else {
-                                //print("leaf")
-                                //exit(0)
                                 appendAndInit(
                                         offset: offsetCounter,
                                         bounds: bounds,
@@ -201,12 +202,13 @@ final class BoundingHierarchyBuilder {
                                 return (0, 0, 0, bounds)
                         }
                 }
-                let start = range.first!
-                let end = range.last! + 1
+                start = range.first!
+                end = range.last! + 1
                 return (start, mid, end, Bounds3f())
         }
 
         private func build(range: Range<Int>) -> Bounds3f {
+                //print("build range: ", range)
                 let counter = totalNodes
                 totalNodes += 1
                 if range.isEmpty { return Bounds3f() }
@@ -244,26 +246,40 @@ final class BoundingHierarchyBuilder {
                         return bounds
                 }
 
-                //let (start, mid, end) = splitEqual(
-                //        bounds: centroidBounds,
-                //        dimension: dim,
-                //        range: range)
-
-                //let (start, mid, end) = splitMiddle(
-                //        bounds: centroidBounds,
-                //        dimension: dim,
-                //        range: range)
-
-                let (start, mid, end, blaBounds) = splitSurfaceAreaHeuristic(
-                        bounds: centroidBounds,
-                        dimension: dim,
-                        range: range,
-                        counter: counter)
+                enum SplitStrategy {
+                        case equal
+                        case middle
+                        case surfaceArea
+                }
+                //let splitStrategy = SplitStrategy.equal
+                //let splitStrategy = SplitStrategy.middle
+                let splitStrategy = SplitStrategy.surfaceArea
+                var start = 0
+                var mid = 0
+                var end = 0
+                var blaBounds = Bounds3f()
+                switch splitStrategy {
+                case .equal:
+                        (start, mid, end) = splitEqual(
+                                bounds: centroidBounds,
+                                dimension: dim,
+                                range: range)
+                case .middle:
+                        (start, mid, end) = splitMiddle(
+                                bounds: centroidBounds,
+                                dimension: dim,
+                                range: range)
+                case .surfaceArea:
+                        (start, mid, end, blaBounds) = splitSurfaceAreaHeuristic(
+                                bounds: centroidBounds,
+                                dimension: dim,
+                                range: range,
+                                counter: counter)
+                }
                 if start == 0 && mid == 0 && end == 0 {
                         return blaBounds
                 }
 
-                //print("recursion: ", start, mid, end)
                 let leftBounds = build(range: start..<mid)
                 let beforeRight = totalNodes
                 let rightBounds = build(range: mid..<end)
@@ -284,7 +300,7 @@ final class BoundingHierarchyBuilder {
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
-                //print("appending interior")
+                //print("appending interior at ", counter)
         }
 
         private let primitivesPerNode = 4
