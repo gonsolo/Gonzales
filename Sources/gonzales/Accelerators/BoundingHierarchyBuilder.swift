@@ -60,6 +60,9 @@ final class BoundingHierarchyBuilder {
                 range: Range<Int>,
                 counter: Int
         ) {
+                print(
+                        "appending leaf with n ", range.count,
+                        ", counter: ", counter, ", offsetCounter: ", offsetCounter)
                 growNodes(counter: counter)
                 nodes[counter].bounds = bounds
                 assert(range.count > 0)
@@ -68,9 +71,6 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.leafNodes += 1
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
-                //print(
-                //        "appending leaf with n ", range.count,
-                //        ", counter: ", counter, ", offsetCounter: ", offsetCounter)
         }
 
         private func isSmaller(_ a: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
@@ -208,7 +208,7 @@ final class BoundingHierarchyBuilder {
         }
 
         private func build(range: Range<Int>) -> Bounds3f {
-                //print("build range: ", range)
+                print("build range: ", range)
                 let counter = totalNodes
                 totalNodes += 1
                 if range.isEmpty { return Bounds3f() }
@@ -252,8 +252,8 @@ final class BoundingHierarchyBuilder {
                         case surfaceArea
                 }
                 //let splitStrategy = SplitStrategy.equal
-                //let splitStrategy = SplitStrategy.middle
-                let splitStrategy = SplitStrategy.surfaceArea
+                let splitStrategy = SplitStrategy.middle
+                //let splitStrategy = SplitStrategy.surfaceArea
                 var start = 0
                 var mid = 0
                 var end = 0
@@ -300,7 +300,7 @@ final class BoundingHierarchyBuilder {
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
-                //print("appending interior at ", counter)
+                print("appending interior at      counter: ", counter, ", offset: ", beforeRight)
         }
 
         private let primitivesPerNode = 4

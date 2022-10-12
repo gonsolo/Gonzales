@@ -72,12 +72,15 @@ final class Renderer {
 
         func generateBounds() -> Bounds2i {
                 let sampleBounds = camera.film.getSampleBounds()
+                var bounds: Bounds2i
                 if singleRay {
                         let point = sampleBounds.pMin + singleRayCoordinate
-                        return Bounds2i(pMin: point, pMax: point + Point2I(x: 1, y: 1))
+                        bounds = Bounds2i(pMin: point, pMax: point + Point2I(x: 1, y: 1))
                 } else {
-                        return Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
+                        bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
                 }
+                print("bounds: ", bounds)
+                return bounds
         }
 
         func renderTiles(tiles: [Tile]) throws {
@@ -86,8 +89,7 @@ final class Renderer {
                 }
         }
 
-        func renderImage() throws {
-                let bounds = generateBounds()
+        func renderImage(bounds: Bounds2i) throws {
                 let tiles = generateTiles(from: bounds)
                 try renderTiles(tiles: tiles)
         }
@@ -96,7 +98,7 @@ final class Renderer {
                 let bounds = generateBounds()
                 reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
                 reporter.reset()
-                try renderImage()
+                try renderImage(bounds: bounds)
                 group.wait()
                 try camera.film.writeImages()
         }

@@ -74,6 +74,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
                         }
                 }
                 boundingHierarchyNodesVisited += nodesVisited
+                print("interaction found at ", current)
                 return interaction
         }
 
