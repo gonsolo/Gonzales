@@ -79,7 +79,6 @@ final class Renderer {
                 } else {
                         bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
                 }
-                print("bounds: ", bounds)
                 return bounds
         }
 

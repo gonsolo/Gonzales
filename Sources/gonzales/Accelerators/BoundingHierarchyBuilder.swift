@@ -48,7 +48,6 @@ final class BoundingHierarchyBuilder {
 
         private func growNodes(counter: Int) {
                 let missing = counter - nodes.count + 1
-                //print("missing: ", missing)
                 if missing > 0 {
                         nodes += Array(repeating: Node(), count: missing)
                 }
@@ -60,9 +59,6 @@ final class BoundingHierarchyBuilder {
                 range: Range<Int>,
                 counter: Int
         ) {
-                print(
-                        "appending leaf with n ", range.count,
-                        ", counter: ", counter, ", offsetCounter: ", offsetCounter)
                 growNodes(counter: counter)
                 nodes[counter].bounds = bounds
                 assert(range.count > 0)
@@ -104,7 +100,7 @@ final class BoundingHierarchyBuilder {
                 // There is no nth_element so let's sort for now
                 cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
                 let start = range.first!
-                let mid = start + cachedPrimitives[range].count / 2
+                let mid = start + range.count / 2
                 let end = range.last! + 1
                 return (start, mid, end)
         }
@@ -125,8 +121,8 @@ final class BoundingHierarchyBuilder {
                 var start = 0
                 var mid = 0
                 var end = 0
-                if cachedPrimitives[range].count <= 2 {
-                        mid = cachedPrimitives[range].count / 2
+                if range.count <= 2 {
+                        mid = range.first! + range.count / 2
                         cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
                 } else {
                         let nBuckets = 12
@@ -143,7 +139,6 @@ final class BoundingHierarchyBuilder {
                                 buckets[b].bounds = union(
                                         first: buckets[b].bounds,
                                         second: prim.bound)
-                                //print("b: ", b, " count: ", buckets[b].count, " bounds: ", buckets[b].bounds)
                         }
                         let nSplits = nBuckets - 1
                         var costs = Array(repeating: FloatX(0.0), count: nSplits)
@@ -153,9 +148,6 @@ final class BoundingHierarchyBuilder {
                                 boundBelow = union(first: boundBelow, second: buckets[i].bounds)
                                 countBelow += buckets[i].count
                                 costs[i] = costs[i] + FloatX(countBelow) * boundBelow.surfaceArea()
-                                //print("boundBelow: ", boundBelow)
-                                //print("countBelow: ", countBelow)
-                                //print("costs[i]: ", costs[i])
                         }
                         var countAbove = 0
                         var boundAbove = Bounds3f()
@@ -164,9 +156,6 @@ final class BoundingHierarchyBuilder {
                                 countAbove += buckets[i].count
                                 costs[i - 1] =
                                         costs[i - 1] + FloatX(countAbove) * boundAbove.surfaceArea()
-                                //print("boundAbove: ", boundAbove)
-                                //print("countAbove: ", countAbove)
-                                //print("costs[i-1]: ", costs[i-1])
                         }
                         var minCostSplitBucket = -1
                         var minCost = FloatX.infinity
@@ -176,21 +165,15 @@ final class BoundingHierarchyBuilder {
                                         minCostSplitBucket = i
                                 }
                         }
-                        let leafCost = FloatX(cachedPrimitives[range].count)
+                        let leafCost = FloatX(range.count)
                         minCost = 1.0 / 2.0 + minCost / bounds.surfaceArea()
-                        //print("minCost: ", minCost)
-
-                        //print("before")
-                        if cachedPrimitives[range].count > primitivesPerNode || minCost < leafCost {
+                        if range.count > primitivesPerNode || minCost < leafCost {
                                 mid = cachedPrimitives[range].partition(by: {
                                         let offset = bounds.offset(point: $0.centroid())[dimension]
                                         var b = Int(FloatX(nBuckets) * offset)
                                         if b == nBuckets {
                                                 b = nBuckets - 1
                                         }
-                                        //print("offset: ", offset)
-                                        //print("b: ", b)
-                                        //print("minCostSplitBucket: ", minCostSplitBucket)
                                         return b <= minCostSplitBucket
                                 })
                         } else {
@@ -208,7 +191,6 @@ final class BoundingHierarchyBuilder {
         }
 
         private func build(range: Range<Int>) -> Bounds3f {
-                print("build range: ", range)
                 let counter = totalNodes
                 totalNodes += 1
                 if range.isEmpty { return Bounds3f() }
@@ -233,9 +215,6 @@ final class BoundingHierarchyBuilder {
                                         point: $1.center)
                         })
 
-                //print("Centroid Bound: ", centroidBounds)
-                //print("range: ", range)
-
                 let dim = centroidBounds.maximumExtent()
                 if centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
                         appendAndInit(
@@ -252,8 +231,8 @@ final class BoundingHierarchyBuilder {
                         case surfaceArea
                 }
                 //let splitStrategy = SplitStrategy.equal
-                let splitStrategy = SplitStrategy.middle
-                //let splitStrategy = SplitStrategy.surfaceArea
+                //let splitStrategy = SplitStrategy.middle
+                let splitStrategy = SplitStrategy.surfaceArea
                 var start = 0
                 var mid = 0
                 var end = 0
@@ -300,10 +279,9 @@ final class BoundingHierarchyBuilder {
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
-                print("appending interior at      counter: ", counter, ", offset: ", beforeRight)
         }
 
-        private let primitivesPerNode = 4
+        private let primitivesPerNode = 1
 
         private static var interiorNodes = 0
         private static var leafNodes = 0

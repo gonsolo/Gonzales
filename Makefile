@@ -1,7 +1,7 @@
 all: td
 
-SINGLERAY = --single 20 32
-SYNC = --sync
+#SINGLERAY = --single 20 32
+#SYNC = --sync
 VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse
