@@ -1,8 +1,8 @@
-all: vd
+all: td
 
 #SINGLERAY = --single 20 32
 #SYNC = --sync
-VERBOSE = --verbose
+#VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
@@ -47,7 +47,7 @@ else
 	endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
-	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
+	SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	SWIFT_OPTIMIZE_FLAG	= -Xswiftc -Ounchecked -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO)

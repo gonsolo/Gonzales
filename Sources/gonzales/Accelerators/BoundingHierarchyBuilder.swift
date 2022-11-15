@@ -127,6 +127,7 @@ final class BoundingHierarchyBuilder {
 
         private func splitSurfaceAreaHeuristic(
                 bounds: Bounds3f,
+                centroidBounds: Bounds3f,
                 dimension: Int,
                 range: Range<Int>,
                 counter: Int
@@ -143,7 +144,7 @@ final class BoundingHierarchyBuilder {
                         let nBuckets = 12
                         var buckets = Array(repeating: BVHSplitBucket(), count: nBuckets)
                         for prim in cachedPrimitives[range] {
-                                let offset: Vector = bounds.offset(point: prim.centroid())
+                                let offset: Vector = centroidBounds.offset(point: prim.centroid())
                                 var b = Int(Float(nBuckets) * offset[dimension])
                                 if b == nBuckets {
                                         b = nBuckets - 1
@@ -181,10 +182,15 @@ final class BoundingHierarchyBuilder {
                                 }
                         }
                         let leafCost = FloatX(range.count)
+
+                        print("bounds: \(bounds)")
+                        print("surfaceArea: ", bounds.surfaceArea())
                         minCost = 1.0 / 2.0 + minCost / bounds.surfaceArea()
+                        print("minCost: \(minCost)")
+
                         if range.count > primitivesPerNode || minCost < leafCost {
                                 mid = cachedPrimitives[range].partition(by: {
-                                        let offset = bounds.offset(point: $0.centroid())[dimension]
+                                        let offset = centroidBounds.offset(point: $0.centroid())[dimension]
                                         var b = Int(FloatX(nBuckets) * offset)
                                         if b == nBuckets {
                                                 b = nBuckets - 1
@@ -222,7 +228,6 @@ final class BoundingHierarchyBuilder {
                                         bound: $0,
                                         point: $1.center)
                         })
-
                 let dim = centroidBounds.maximumExtent()
                 if range.count <= primitivesPerNode
                         || centroidBounds.pMax[dim] == centroidBounds.pMin[dim]
@@ -253,7 +258,8 @@ final class BoundingHierarchyBuilder {
                                 range: range)
                 case .surfaceArea:
                         (start, mid, end, blaBounds) = splitSurfaceAreaHeuristic(
-                                bounds: centroidBounds,
+                                bounds: bounds,
+                                centroidBounds: centroidBounds,
                                 dimension: dim,
                                 range: range,
                                 counter: counter)
@@ -282,7 +288,6 @@ final class BoundingHierarchyBuilder {
                 nodes[counter].count = 0
                 nodes[counter].offset = beforeRight
                 BoundingHierarchyBuilder.interiorNodes += 1
-                //print("Interior counter: ", counter)
         }
 
         private let primitivesPerNode = 4
