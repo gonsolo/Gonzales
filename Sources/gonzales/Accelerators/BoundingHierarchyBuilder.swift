@@ -67,6 +67,7 @@ final class BoundingHierarchyBuilder {
                 counter: Int,
                 dimension: Int
         ) {
+                //print("leaf")
                 growNodes(counter: counter)
                 nodes[counter].bounds = bounds
                 assert(range.count > 0)
@@ -183,21 +184,31 @@ final class BoundingHierarchyBuilder {
                         }
                         let leafCost = FloatX(range.count)
 
-                        print("bounds: \(bounds)")
-                        print("surfaceArea: ", bounds.surfaceArea())
                         minCost = 1.0 / 2.0 + minCost / bounds.surfaceArea()
-                        print("minCost: \(minCost)")
+
+                        //print("deciding:")
+                        //print("  minCost: \(minCost)")
+                        //print("  leafCost: \(leafCost)")
+                        //print("  primitives size: \(range.count)")
+                        //print("  prims per node: \(primitivesPerNode)")
 
                         if range.count > primitivesPerNode || minCost < leafCost {
+
                                 mid = cachedPrimitives[range].partition(by: {
+                                        //print("bp bound: \($0.bound)")
                                         let offset = centroidBounds.offset(point: $0.centroid())[dimension]
                                         var b = Int(FloatX(nBuckets) * offset)
                                         if b == nBuckets {
                                                 b = nBuckets - 1
                                         }
-                                        return b <= minCostSplitBucket
+                                        //print("b: \(b), minCostSplitBucket: \(minCostSplitBucket)")
+                                        //return b <= minCostSplitBucket
+                                        return b > minCostSplitBucket
                                 })
+                                //print("mid: \(mid)")
+                                //print("range: \(range)")
                         } else {
+                                //print("sah leaf")
                                 addLeafNode(
                                         offset: offsetCounter,
                                         bounds: bounds,
@@ -229,9 +240,16 @@ final class BoundingHierarchyBuilder {
                                         point: $1.center)
                         })
                 let dim = centroidBounds.maximumExtent()
-                if range.count <= primitivesPerNode
+
+                //print("deciding 2:")
+                //print("  \(centroidBounds.pMax[dim]) \(centroidBounds.pMin[dim])")
+                //print("  prims \(range.count), maxPrims: \(primitivesPerNode)")
+
+                if bounds.surfaceArea() == 0
+                        || range.count == 1
                         || centroidBounds.pMax[dim] == centroidBounds.pMin[dim]
                 {
+                        //print("centroid leaf")
                         addLeafNode(
                                 offset: offsetCounter,
                                 bounds: bounds,
@@ -282,6 +300,7 @@ final class BoundingHierarchyBuilder {
         }
 
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
+                //print("interior")
                 growNodes(counter: counter)
                 nodes[counter].bounds = combinedBounds
                 nodes[counter].axis = dim
