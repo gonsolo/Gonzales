@@ -5,7 +5,7 @@ var numberOfTriangles = 0
 var triangleMemory = 0
 var worldBoundCalled = 0
 
-final class TriangleMesh {
+struct TriangleMesh {
 
         init(
                 objectToWorld: Transform,
@@ -318,7 +318,7 @@ final class Triangle: Shape {
                 return mesh.objectToWorld
         }
 
-        unowned let mesh: TriangleMesh
+        let mesh: TriangleMesh
 
         // Can't be something else than Int because Array subscripting is not
         // possible/slow with UInt8 or others.
