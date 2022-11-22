@@ -30,7 +30,8 @@ final class BoundingHierarchy: Boundable, Intersectable {
                 var interaction = SurfaceInteraction()
                 var toVisit = 0
                 var current = 0
-                var nodesToVisit: [Int: Int] = [:]
+                //var nodesToVisit: [Int: Int] = [:]
+                var nodesToVisit = Array(repeating: 0, count: 64)
                 var nodesVisited = 0
 
                 if nodes.isEmpty { return interaction }
@@ -52,7 +53,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
                                         }
                                         if toVisit == 0 { break }
                                         toVisit -= 1
-                                        current = nodesToVisit[toVisit]!
+                                        current = nodesToVisit[toVisit]
                                 } else {  // interior
                                         if ray.direction[node.axis] < 0 {
                                                 nodesToVisit[toVisit] = current + 1
@@ -66,7 +67,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
                         } else {
                                 if toVisit == 0 { break }
                                 toVisit -= 1
-                                current = nodesToVisit[toVisit]!
+                                current = nodesToVisit[toVisit]
                         }
                 }
                 boundingHierarchyNodesVisited += nodesVisited
