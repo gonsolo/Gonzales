@@ -19,8 +19,7 @@ struct Scene {
                 guard let primitive else {
                         return SurfaceInteraction()
                 }
-                let interaction = try primitive.intersect(ray: ray, tHit: &tHit, material: -1)
-                return interaction
+                return try primitive.intersect(ray: ray, tHit: &tHit, material: -1)
         }
 
         func bound() -> Bounds3f {
