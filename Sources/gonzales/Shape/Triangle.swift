@@ -25,13 +25,18 @@ struct TriangleMesh {
                 self.faceIndices = faceIndices
         }
 
+        func getVertexIndex(at: Int) -> Int {
+                return vertexIndices[at]
+        }
+
         let objectToWorld: Transform
-        let vertexIndices: [Int]
         let numberTriangles: Int
         let points: [Point]
         let normals: [Normal]
         let uvs: [Vector2F]
         let faceIndices: [Int]
+
+        private let vertexIndices: [Int]
 }
 
 enum TriangleError: Error {
@@ -87,9 +92,9 @@ final class Triangle: Shape {
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
-        var vertexIndex0: Int { return mesh.vertexIndices[idx + 0] }
-        var vertexIndex1: Int { return mesh.vertexIndices[idx + 1] }
-        var vertexIndex2: Int { return mesh.vertexIndices[idx + 2] }
+        var vertexIndex0: Int { return mesh.getVertexIndex(at: idx + 0) }
+        var vertexIndex1: Int { return mesh.getVertexIndex(at: idx + 1) }
+        var vertexIndex2: Int { return mesh.getVertexIndex(at: idx + 2) }
 
         var point0: Point { return mesh.points[vertexIndex0] }
         var point1: Point { return mesh.points[vertexIndex1] }
