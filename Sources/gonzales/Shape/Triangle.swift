@@ -25,17 +25,25 @@ struct TriangleMesh {
                 self.faceIndices = faceIndices
         }
 
-        func getVertexIndex(at: Int) -> Int {
-                return vertexIndices[at]
+        func getVertexIndex(at index: Int) -> Int {
+                vertexIndices[index]
+        }
+
+        func getPoint(at index: Int) -> Point {
+                points[index]
+        }
+
+        var pointCount: Int {
+                points.count
         }
 
         let objectToWorld: Transform
         let numberTriangles: Int
-        let points: [Point]
         let normals: [Normal]
         let uvs: [Vector2F]
         let faceIndices: [Int]
 
+        private let points: [Point]
         private let vertexIndices: [Int]
 }
 
@@ -65,8 +73,8 @@ final class Triangle: Shape {
                 triangleMemory += MemoryLayout<Self>.stride
 
                 guard
-                        vertexIndex0 < mesh.points.count && vertexIndex1 < mesh.points.count
-                                && vertexIndex2 < mesh.points.count
+                        vertexIndex0 < mesh.pointCount && vertexIndex1 < mesh.pointCount
+                                && vertexIndex2 < mesh.pointCount
                 else {
                         throw TriangleError.index
                 }
@@ -96,9 +104,9 @@ final class Triangle: Shape {
         var vertexIndex1: Int { return mesh.getVertexIndex(at: idx + 1) }
         var vertexIndex2: Int { return mesh.getVertexIndex(at: idx + 2) }
 
-        var point0: Point { return mesh.points[vertexIndex0] }
-        var point1: Point { return mesh.points[vertexIndex1] }
-        var point2: Point { return mesh.points[vertexIndex2] }
+        var point0: Point { return mesh.getPoint(at: vertexIndex0) }
+        var point1: Point { return mesh.getPoint(at: vertexIndex1) }
+        var point2: Point { return mesh.getPoint(at: vertexIndex2) }
 
         func objectBound() -> Bounds3f {
                 let (p0, p1, p2) = getLocalPoints()
@@ -276,7 +284,7 @@ final class Triangle: Shape {
         }
 
         private func getLocalPoint(index: Int) -> Point {
-                return mesh.points[index]
+                return mesh.getPoint(at: index)
         }
 
         public func getLocalPoints() -> (Point, Point, Point) {
