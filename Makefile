@@ -1,8 +1,8 @@
 all: td
 
-#SINGLERAY = --single 20 32
+SINGLERAY = --single 8 8
 #SYNC = --sync
-#VERBOSE = --verbose
+VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
@@ -186,5 +186,6 @@ format:
 
 codespell:
 	codespell -L inout Sources
-gdb:
-	gdb -x .gdb_commands .build/debug/gonzales
+lldb:
+	lldb --one-line "run" .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
+
