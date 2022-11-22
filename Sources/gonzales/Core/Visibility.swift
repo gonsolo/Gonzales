@@ -18,6 +18,6 @@ struct Visibility {
                 return try scene.intersect(ray: ray, tHit: &tHit)
         }
 
-        var from: Interaction
-        var to: Interaction
+        let from: Interaction
+        let to: Interaction
 }
