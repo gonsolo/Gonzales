@@ -87,10 +87,8 @@ final class BoundingHierarchyBuilder {
                 dimension: Int
         ) {
                 growNodes(counter: counter)
-                nodes[counter].bounds = bounds
                 assert(range.count > 0)
-                nodes[counter].offset = offset
-                nodes[counter].count = range.count
+                nodes[counter] = Node(bounds: bounds, count: range.count, offset: offset, axis: 0)
                 BoundingHierarchyBuilder.leafNodes += 1
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
@@ -295,10 +293,7 @@ final class BoundingHierarchyBuilder {
 
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
-                nodes[counter].bounds = combinedBounds
-                nodes[counter].axis = dim
-                nodes[counter].count = 0
-                nodes[counter].offset = beforeRight
+                nodes[counter] = Node(bounds: combinedBounds, offset: beforeRight, axis: dim)
                 BoundingHierarchyBuilder.interiorNodes += 1
         }
 
