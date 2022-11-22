@@ -18,6 +18,7 @@ struct Options {
         var filterParameters = ParameterDictionary()
         var lights = [Light]()
         var primitives = [Boundable & Intersectable]()
+        var meshes = [TriangleMesh]()
         var objects = ["": [Boundable & Intersectable]()]
 
         func makeFilm(filter: Filter) throws -> Film {

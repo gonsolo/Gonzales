@@ -322,12 +322,14 @@ struct PlyMesh {
         var dataIndex = 0
 }
 
-func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {
+func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
+        -> (TriangleMesh?, [Shape])
+{
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {
                 warning("Could not find ply file at: \(absoluteFileName)")
-                return []
+                return (nil, [])
         }
         guard let file = FileHandle(forReadingAtPath: absoluteFileName) else {
                 throw RenderError.noFileHandle
@@ -341,4 +343,5 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) th
                 normals: plyMesh.normals,
                 uvs: plyMesh.uvs,
                 faceIndices: plyMesh.faceIndices)
+
 }

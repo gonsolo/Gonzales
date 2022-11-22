@@ -522,9 +522,13 @@ struct Api {
         {
                 switch name {
                 case "plymesh":
-                        return try createPlyMesh(
+                        let (mesh, shapes) = try createPlyMesh(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
+                        if let mesh = mesh {
+                                options.meshes.append(mesh)
+                        }
+                        return shapes
                 case "sphere":
                         return [
                                 try createSphere(
@@ -532,13 +536,17 @@ struct Api {
                                         parameters: parameters)
                         ]
                 case "trianglemesh":
-                        return try createTriangleMeshShape(
+                        let (mesh, shapes) = try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
+                        options.meshes.append(mesh)
+                        return shapes
                 case "loopsubdiv":
-                        return try createTriangleMeshShape(
+                        let (mesh, shapes) = try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)  // TODO
+                        options.meshes.append(mesh)
+                        return shapes
                 case "curve":
                         return try createCurveShape(
                                 objectToWorld: objectToWorld,

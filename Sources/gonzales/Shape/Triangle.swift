@@ -5,7 +5,7 @@ var numberOfTriangles = 0
 var triangleMemory = 0
 var worldBoundCalled = 0
 
-struct TriangleMesh {
+final class TriangleMesh {
 
         init(
                 objectToWorld: Transform,
@@ -318,7 +318,7 @@ final class Triangle: Shape {
                 return mesh.objectToWorld
         }
 
-        let mesh: TriangleMesh
+        unowned let mesh: TriangleMesh
 
         // Can't be something else than Int because Array subscripting is not
         // possible/slow with UInt8 or others.
@@ -328,7 +328,7 @@ final class Triangle: Shape {
 func createTriangleMeshShape(
         objectToWorld: Transform,
         parameters: ParameterDictionary
-) throws -> [Shape] {
+) throws -> (TriangleMesh, [Shape]) {
         let indices = try parameters.findInts(name: "indices")
         guard indices.count % 3 == 0 else {
                 throw ApiError.input(message: "Triangle indices must be multiplies of 3")
@@ -358,7 +358,7 @@ func createTriangleMesh(
         normals: [Normal],
         uvs: [Vector2F],
         faceIndices: [Int]
-) throws -> [Shape] {
+) throws -> (TriangleMesh, [Shape]) {
         let numberTriangles = indices.count / 3
         let trianglePoints = points
         let triangleNormals = normals
@@ -376,5 +376,5 @@ func createTriangleMesh(
         for i in 0..<numberTriangles {
                 triangles.append(try Triangle(mesh: mesh, number: i))
         }
-        return triangles
+        return (mesh, triangles)
 }

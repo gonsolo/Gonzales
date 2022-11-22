@@ -5,7 +5,9 @@ private enum SplitStrategy {
         case middle
         case surfaceArea
 }
-private let splitStrategy = SplitStrategy.surfaceArea
+private let splitStrategy = SplitStrategy.surfaceArea // 21.2s
+//private let splitStrategy = SplitStrategy.equal // 25.2s
+//private let splitStrategy = SplitStrategy.middle //  22.3s
 
 final class BoundingHierarchyBuilder {
 

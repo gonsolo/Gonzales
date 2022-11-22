@@ -16,7 +16,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: all c clean e edit es editScene em editMakefile p perf tags t test \
+.PHONY: all c clean e edit es editScene em editMakefile lldb p perf tags t test \
 	test_unchecked test_debug test_release v view wc openexr
 
 PBRT_OPTIONS = --stats --nthreads 1 #--quiet --v 2
@@ -187,8 +187,10 @@ format:
 codespell:
 	codespell -L inout Sources
 lldb:
-	echo "breakpoint set --method BoundingHierarchy.intersect" > .lldb_commands
-	echo "breakpoint command add -o \"bt\"" >> .lldb_commands
-	echo "run" >> .lldb_commands
+	rm -f .lldb_commands
+	touch .lldb_commands
+	#echo "breakpoint set --method BoundingHierarchy.intersect" >> .lldb_commands
+	#echo "breakpoint command add -o \"bt\"" >> .lldb_commands
+	#echo "run" >> .lldb_commands
 	lldb --source .lldb_commands .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
 
