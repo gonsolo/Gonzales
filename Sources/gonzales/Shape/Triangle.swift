@@ -33,6 +33,17 @@ struct TriangleMesh {
                 points[index]
         }
 
+        func getUVs(indices: (Int, Int, Int)) -> (Vector2F, Vector2F, Vector2F) {
+                guard !uvs.isEmpty else {
+                        return (Vector2F(), Vector2F(), Vector2F())
+                }
+                return (
+                        Vector2F(uvs[indices.0]),
+                        Vector2F(uvs[indices.1]),
+                        Vector2F(uvs[indices.2])
+                )
+        }
+
         var pointCount: Int {
                 points.count
         }
@@ -40,11 +51,11 @@ struct TriangleMesh {
         let objectToWorld: Transform
         let numberTriangles: Int
         let normals: [Normal]
-        let uvs: [Vector2F]
         let faceIndices: [Int]
 
         private let points: [Point]
         private let vertexIndices: [Int]
+        private let uvs: [Vector2F]
 }
 
 enum TriangleError: Error {
@@ -116,20 +127,6 @@ final class Triangle: Shape {
         func worldBound() -> Bounds3f {
                 worldBoundCalled += 1
                 return objectToWorld * objectBound()
-        }
-
-        func getUVs() -> (Vector2F, Vector2F, Vector2F) {
-                if mesh.uvs.isEmpty {
-                        let z = Vector2F()
-                        return (z, z, z)
-                } else {
-                        let uvs = mesh.uvs
-                        return (
-                                Vector2F(uvs[vertexIndex0]),
-                                Vector2F(uvs[vertexIndex1]),
-                                Vector2F(uvs[vertexIndex2])
-                        )
-                }
         }
 
         func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
@@ -205,7 +202,7 @@ final class Triangle: Shape {
                 let dp12 = Vector(point: point1 - point2)
                 let normal = normalized(Normal(cross(dp02, dp12)))
 
-                let uv = getUVs()
+                let uv = mesh.getUVs(indices: (vertexIndex0, vertexIndex1, vertexIndex2))
                 let uvHit0: Point2F = b0 * Point2F(from: uv.0)
                 let uvHit1: Point2F = b1 * Point2F(from: uv.1)
                 let uvHit2: Point2F = b2 * Point2F(from: uv.2)
