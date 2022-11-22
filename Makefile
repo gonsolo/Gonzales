@@ -187,5 +187,8 @@ format:
 codespell:
 	codespell -L inout Sources
 lldb:
-	lldb --one-line "run" .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
+	echo "breakpoint set --method BoundingHierarchy.intersect" > .lldb_commands
+	echo "breakpoint command add -o \"bt\"" >> .lldb_commands
+	echo "run" >> .lldb_commands
+	lldb --source .lldb_commands .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
 
