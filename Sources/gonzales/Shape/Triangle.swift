@@ -351,10 +351,8 @@ final class Triangle: Shape {
         }
 
         var objectToWorld: Transform {
-                var mesh = TriangleMesh()
-                mesh = options.getMesh(index: meshIndex)
-                let transform = mesh.getObjectToWorld()
-                return transform
+                let mesh = options.getMesh(index: meshIndex)
+                return mesh.getObjectToWorld()
         }
 
         let meshIndex: Int
