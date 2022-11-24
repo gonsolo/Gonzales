@@ -34,9 +34,7 @@ class Options {
         }
 
         func getMesh(index: Int) -> TriangleMesh {
-                var mesh = TriangleMesh()
-                mesh = meshes[index]
-                return mesh
+                return meshes[index]
         }
 
         func makeFilm(filter: Filter) throws -> Film {
