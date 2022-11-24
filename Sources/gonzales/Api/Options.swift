@@ -1,32 +1,6 @@
-class Options {
+struct TriangleMeshes {
 
-        enum OptionError: Error {
-                case camera, crop
-        }
-
-        var acceleratorParameters = ParameterDictionary()
-        var cameraName = "perspective"
-        var cameraParameters = ParameterDictionary()
-        var cameraToWorld = Transform()
-        var filmName = "image"
-        var filmParameters = ParameterDictionary()
-        var integratorName = "path"
-        var integratorParameters = ParameterDictionary()
-        var samplerName = "random"
-        var samplerParameters = ParameterDictionary()
-        var filterName = "box"
-        var filterParameters = ParameterDictionary()
-        var lights = [Light]()
-        var primitives = [Boundable & Intersectable]()
-        var objects = ["": [Boundable & Intersectable]()]
-
-        private var meshes: [TriangleMesh] = []
-
-        init() {
-                meshes = [TriangleMesh]()
-        }
-
-        func appendMesh(mesh: TriangleMesh) -> Int {
+        mutating func appendMesh(mesh: TriangleMesh) -> Int {
                 var meshIndex = 0
                 meshIndex = meshes.count
                 meshes.append(mesh)
@@ -64,6 +38,35 @@ class Options {
         func getObjectToWorldFor(meshIndex: Int) -> Transform {
                 return meshes[meshIndex].getObjectToWorld()
         }
+
+        var meshes: [TriangleMesh] = []
+}
+
+var triangleMeshes = TriangleMeshes()
+
+class Options {
+
+        enum OptionError: Error {
+                case camera, crop
+        }
+
+        var acceleratorParameters = ParameterDictionary()
+        var cameraName = "perspective"
+        var cameraParameters = ParameterDictionary()
+        var cameraToWorld = Transform()
+        var filmName = "image"
+        var filmParameters = ParameterDictionary()
+        var integratorName = "path"
+        var integratorParameters = ParameterDictionary()
+        var samplerName = "random"
+        var samplerParameters = ParameterDictionary()
+        var filterName = "box"
+        var filterParameters = ParameterDictionary()
+        var lights = [Light]()
+        var primitives = [Boundable & Intersectable]()
+        var objects = ["": [Boundable & Intersectable]()]
+
+        init() {}
 
         func makeFilm(filter: Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)

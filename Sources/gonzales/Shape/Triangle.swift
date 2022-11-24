@@ -96,11 +96,10 @@ final class Triangle: Shape {
                 self.idx = 3 * number
                 numberOfTriangles += 1
                 triangleMemory += MemoryLayout<Self>.stride
-
+                let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 guard
-                        vertexIndex0 < options.getPointCountFor(meshIndex: meshIndex)
-                                && vertexIndex1 < options.getPointCountFor(meshIndex: meshIndex)
-                                && vertexIndex2 < options.getPointCountFor(meshIndex: meshIndex)
+                        vertexIndex0 < pointCount && vertexIndex1 < pointCount
+                                && vertexIndex2 < pointCount
                 else {
                         throw TriangleError.index
                 }
@@ -127,20 +126,28 @@ final class Triangle: Shape {
         }
 
         var vertexIndex0: Int {
-                return options.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
+                return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
         }
 
         var vertexIndex1: Int {
-                return options.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
+                return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
         }
 
         var vertexIndex2: Int {
-                return options.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
+                return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
         }
 
-        var point0: Point { return options.getPointFor(meshIndex: meshIndex, at: vertexIndex0) }
-        var point1: Point { return options.getPointFor(meshIndex: meshIndex, at: vertexIndex1) }
-        var point2: Point { return options.getPointFor(meshIndex: meshIndex, at: vertexIndex2) }
+        var point0: Point {
+                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex0)
+        }
+
+        var point1: Point {
+                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex1)
+        }
+
+        var point2: Point {
+                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex2)
+        }
 
         func objectBound() -> Bounds3f {
                 let (p0, p1, p2) = getLocalPoints()
@@ -225,7 +232,7 @@ final class Triangle: Shape {
                 let dp12 = Vector(point: point1 - point2)
                 let normal = normalized(Normal(cross(dp02, dp12)))
 
-                let uv = options.getUVFor(
+                let uv = triangleMeshes.getUVFor(
                         meshIndex: meshIndex,
                         indices: (vertexIndex0, vertexIndex1, vertexIndex2))
 
@@ -258,10 +265,10 @@ final class Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if options.getNormalsFor(meshIndex: meshIndex).isEmpty {
+                if triangleMeshes.getNormalsFor(meshIndex: meshIndex).isEmpty {
                         shadingNormal = normal
                 } else {
-                        let meshNormals = options.getNormalsFor(meshIndex: meshIndex)
+                        let meshNormals = triangleMeshes.getNormalsFor(meshIndex: meshIndex)
                         let sn0 = b0 * Normal(meshNormals[vertexIndex0])
                         let sn1 = b1 * Normal(meshNormals[vertexIndex1])
                         let sn2 = b2 * Normal(meshNormals[vertexIndex2])
@@ -286,7 +293,7 @@ final class Triangle: Shape {
                 dpdu = ss
 
                 var faceIndex: Int = 0
-                let meshFaceIndices = options.getFaceIndicesFor(meshIndex: meshIndex)
+                let meshFaceIndices = triangleMeshes.getFaceIndicesFor(meshIndex: meshIndex)
                 if !meshFaceIndices.isEmpty {
                         faceIndex = meshFaceIndices[idx / 3]
                 }
@@ -317,7 +324,7 @@ final class Triangle: Shape {
         }
 
         private func getLocalPoint(index: Int) -> Point {
-                return options.getPointFor(meshIndex: meshIndex, at: index)
+                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)
         }
 
         public func getLocalPoints() -> (Point, Point, Point) {
@@ -361,7 +368,7 @@ final class Triangle: Shape {
         }
 
         var objectToWorld: Transform {
-                return options.getObjectToWorldFor(meshIndex: meshIndex)
+                return triangleMeshes.getObjectToWorldFor(meshIndex: meshIndex)
         }
 
         let meshIndex: Int
@@ -417,7 +424,7 @@ func createTriangleMesh(
                 uvs: triangleUvs,
                 faceIndices: faceIndices)
 
-        let meshIndex = options.appendMesh(mesh: mesh)
+        let meshIndex = triangleMeshes.appendMesh(mesh: mesh)
         for i in 0..<numberTriangles {
                 triangles.append(try Triangle(meshIndex: meshIndex, number: i))
         }
