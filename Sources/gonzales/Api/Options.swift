@@ -37,6 +37,34 @@ class Options {
                 return meshes[index]
         }
 
+        func getUVFor(meshIndex: Int, indices: (Int, Int, Int)) -> (Vector2F, Vector2F, Vector2F) {
+                return meshes[meshIndex].getUVs(indices: indices)
+        }
+
+        func getPointCountFor(meshIndex: Int) -> Int {
+                return meshes[meshIndex].pointCount
+        }
+
+        func getVertexIndexFor(meshIndex: Int, at vertexIndex: Int) -> Int {
+                return meshes[meshIndex].getVertexIndex(at: vertexIndex)
+        }
+
+        func getPointFor(meshIndex: Int, at vertexIndex: Int) -> Point {
+                return meshes[meshIndex].getPoint(at: vertexIndex)
+        }
+
+        func getNormalsFor(meshIndex: Int) -> [Normal] {
+                return meshes[meshIndex].normals
+        }
+
+        func getFaceIndicesFor(meshIndex: Int) -> [Int] {
+                return meshes[meshIndex].faceIndices
+        }
+
+        func getObjectToWorldFor(meshIndex: Int) -> Transform {
+                return meshes[meshIndex].getObjectToWorld()
+        }
+
         func makeFilm(filter: Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
