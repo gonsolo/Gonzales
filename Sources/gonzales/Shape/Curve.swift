@@ -234,9 +234,19 @@ final class Curve: Shape {
                                 dpdu: dpdu,
                                 uv: uvHit,
                                 faceIndex: 0)
-                        var worldInteraction = objectToWorld * localInteraction
-                        worldInteraction.valid = true
-                        return (worldInteraction, tHit)
+                        let worldInteraction = objectToWorld * localInteraction
+                        let validWorldInteraction = SurfaceInteraction(
+                                valid: true,
+                                position: worldInteraction.position,
+                                normal: worldInteraction.normal,
+                                shadingNormal: worldInteraction.shadingNormal,
+                                wo: worldInteraction.wo,
+                                dpdu: worldInteraction.dpdu,
+                                uv: worldInteraction.uv,
+                                faceIndex: worldInteraction.faceIndex,
+                                primitive: worldInteraction.primitive,
+                                material: worldInteraction.material)
+                        return (validWorldInteraction, tHit)
                 }
         }
 

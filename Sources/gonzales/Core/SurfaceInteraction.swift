@@ -37,17 +37,17 @@ struct SurfaceInteraction: Interaction {
                 self.material = other.material
         }
 
-        var valid = false
-        var position: Point
-        var normal: Normal
-        var shadingNormal: Normal
-        var wo: Vector
-        var dpdu: Vector
-        var uv: Point2F
-        var faceIndex: Int
+        let valid: Bool
+        let position: Point
+        let normal: Normal
+        let shadingNormal: Normal
+        let wo: Vector
+        let dpdu: Vector
+        let uv: Point2F
+        let faceIndex: Int
 
-        var primitive: (Boundable & Intersectable)?
-        var material: MaterialIndex
+        let primitive: (Boundable & Intersectable)?
+        let material: MaterialIndex
 }
 
 extension SurfaceInteraction: CustomStringConvertible {

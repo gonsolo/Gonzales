@@ -289,13 +289,21 @@ final class Triangle: Shape {
                         dpdu: dpdu,
                         uv: uvHit,
                         faceIndex: Int(faceIndex))
-                var worldInteraction = objectToWorld * localInteraction
+                let worldInteraction = objectToWorld * localInteraction
                 tHit = t
                 triangleHits += 1
-                worldInteraction.valid = true
-                worldInteraction.primitive = self
-                worldInteraction.material = material
-                return worldInteraction
+                return SurfaceInteraction(
+                        valid: true,
+                        position: worldInteraction.position,
+                        normal: worldInteraction.normal,
+                        shadingNormal: worldInteraction.shadingNormal,
+                        wo: worldInteraction.wo,
+                        dpdu: worldInteraction.dpdu,
+                        uv: worldInteraction.uv,
+                        faceIndex: worldInteraction.faceIndex,
+                        primitive: self,
+                        material: material
+                )
         }
 
         private func getLocalPoint(index: Int) -> Point {

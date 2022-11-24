@@ -2,11 +2,11 @@
 
 protocol Interaction {
 
-        var position: Point { get set }
-        var normal: Normal { get set }
-        var shadingNormal: Normal { get set }
+        var position: Point { get }
+        var normal: Normal { get }
+        var shadingNormal: Normal { get }
         var dpdu: Vector { get }
-        var primitive: (Boundable & Intersectable)? { get set }
+        var primitive: (Boundable & Intersectable)? { get }
         var uv: Point2F { get }
         var faceIndex: Int { get }
 

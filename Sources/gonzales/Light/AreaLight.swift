@@ -44,9 +44,19 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
         func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
                 -> SurfaceInteraction
         {
-                var interaction = try shape.intersect(ray: ray, tHit: &tHit, material: material)
-                interaction.primitive = self
-                return interaction
+                let interaction = try shape.intersect(ray: ray, tHit: &tHit, material: material)
+                return SurfaceInteraction(
+                        valid: interaction.valid,
+                        position: interaction.position,
+                        normal: interaction.normal,
+                        shadingNormal: interaction.shadingNormal,
+                        wo: interaction.wo,
+                        dpdu: interaction.dpdu,
+                        uv: interaction.uv,
+                        faceIndex: interaction.faceIndex,
+                        primitive: self,
+                        material: interaction.material
+                )
         }
 
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {

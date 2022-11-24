@@ -158,10 +158,19 @@ final class Sphere: Shape {
                         wo: -ray.direction,
                         dpdu: dpdu,
                         uv: uv)
-                var worldInteraction = objectToWorld * localInteraction
-                worldInteraction.valid = true
+                let worldInteraction = objectToWorld * localInteraction
                 tHit = shapeHit
-                return worldInteraction
+                return SurfaceInteraction(
+                        valid: true,
+                        position: worldInteraction.position,
+                        normal: worldInteraction.normal,
+                        shadingNormal: worldInteraction.shadingNormal,
+                        wo: worldInteraction.wo,
+                        dpdu: worldInteraction.dpdu,
+                        uv: worldInteraction.uv,
+                        faceIndex: worldInteraction.faceIndex,
+                        primitive: self,
+                        material: material)
         }
 
         var objectToWorld: Transform
