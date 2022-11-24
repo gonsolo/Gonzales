@@ -5,14 +5,13 @@ private enum SplitStrategy {
         case middle
         case surfaceArea
 }
-private let splitStrategy = SplitStrategy.surfaceArea // 21.2s
+private let splitStrategy = SplitStrategy.surfaceArea  // 21.2s
 //private let splitStrategy = SplitStrategy.equal // 25.2s
 //private let splitStrategy = SplitStrategy.middle //  22.3s
 
 final class BoundingHierarchyBuilder {
 
         internal init(primitives: [Boundable]) {
-                self.nodes = []
                 self.cachedPrimitives = primitives.enumerated().map { index, primitive in
                         let bound = primitive.worldBound()
                         return CachedPrimitive(index: index, bound: bound, center: bound.center)
@@ -27,7 +26,7 @@ final class BoundingHierarchyBuilder {
                 let sortedPrimitives = cachedPrimitives.map {
                         primitives[$0.index] as! Intersectable
                 }
-                return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
+                return BoundingHierarchy(primitives: sortedPrimitives)
         }
 
         internal static func statistics() {
@@ -67,7 +66,6 @@ final class BoundingHierarchyBuilder {
 
         private func buildHierarchy() {
                 if cachedPrimitives.isEmpty { return }
-                nodes = []
                 let _ = build(range: 0..<cachedPrimitives.count)
                 //printNodes()
         }
@@ -308,7 +306,6 @@ final class BoundingHierarchyBuilder {
 
         private var totalNodes = 0
         private var offsetCounter = 0
-        private var nodes: [Node]
         private var cachedPrimitives: [CachedPrimitive]
         private var primitives: [Boundable]
 }

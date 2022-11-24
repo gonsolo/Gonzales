@@ -2,6 +2,8 @@ import Foundation
 
 var boundingHierarchyNodesVisited = 0
 
+var nodes = [Node]()
+
 struct Node {
 
         init(bounds: Bounds3f = Bounds3f(), count: Int = 0, offset: Int = 0, axis: Int = 0) {
@@ -19,9 +21,8 @@ struct Node {
 
 final class BoundingHierarchy: Boundable, Intersectable {
 
-        init(primitives: [Intersectable], nodes: [Node]) {
+        init(primitives: [Intersectable]) {
                 self.primitives = primitives
-                self.nodes = nodes
         }
 
         func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
@@ -91,5 +92,4 @@ final class BoundingHierarchy: Boundable, Intersectable {
         }
 
         let primitives: [Intersectable]
-        let nodes: [Node]
 }
