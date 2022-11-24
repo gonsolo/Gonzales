@@ -188,7 +188,7 @@ struct Api {
         }
 
         func objectInstance(name: String) throws {
-                guard var primitives = options.objects[name] else {
+                guard var primitives = objects[name] else {
                         return
                 }
                 if primitives.isEmpty {
@@ -197,7 +197,7 @@ struct Api {
                 var instance: Boundable & Intersectable
                 if primitives.count > 1 {
                         let accelerator = makeAccelerator(primitives: &primitives)
-                        options.objects[name] = [accelerator]
+                        objects[name] = [accelerator]
                         instance = TransformedPrimitive(
                                 primitive: accelerator,
                                 transform: currentTransform)
@@ -210,7 +210,7 @@ struct Api {
                                 primitive: first,
                                 transform: currentTransform)
                 }
-                options.primitives.append(instance)
+                primitives.append(instance)
         }
 
         func sampler(name: String, parameters: ParameterDictionary) {
@@ -265,17 +265,17 @@ struct Api {
                         }
                 }
                 if let name = state.objectName {
-                        if options.objects[name] == nil {
+                        if objects[name] == nil {
                                 if !(material is None) {
-                                        options.objects[name] = prims
+                                        objects[name] = prims
                                 }
                         } else {
                                 if !(material is None) {
-                                        options.objects[name]!.append(contentsOf: prims)
+                                        objects[name]!.append(contentsOf: prims)
                                 }
                         }
                 } else {
-                        options.primitives.append(contentsOf: prims)
+                        primitives.append(contentsOf: prims)
                         options.lights.append(contentsOf: areaLights)
                 }
         }
@@ -391,8 +391,8 @@ struct Api {
         }
 
         func dumpPrimitives() {
-                print("\nNumber of primitives: ", options.primitives.count)
-                for primitive in options.primitives {
+                print("\nNumber of primitives: ", primitives.count)
+                for primitive in primitives {
                         var type = ""
                         var shape: Shape? = nil
                         if let geom = primitive as? GeometricPrimitive {
@@ -522,13 +522,9 @@ struct Api {
         {
                 switch name {
                 case "plymesh":
-                        let (mesh, shapes) = try createPlyMesh(
+                        return try createPlyMesh(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
-                        if let mesh = mesh {
-                                options.meshes.append(mesh)
-                        }
-                        return shapes
                 case "sphere":
                         return [
                                 try createSphere(
@@ -536,17 +532,13 @@ struct Api {
                                         parameters: parameters)
                         ]
                 case "trianglemesh":
-                        let (mesh, shapes) = try createTriangleMeshShape(
+                        return try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
-                        options.meshes.append(mesh)
-                        return shapes
                 case "loopsubdiv":
-                        let (mesh, shapes) = try createTriangleMeshShape(
+                        return try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)  // TODO
-                        options.meshes.append(mesh)
-                        return shapes
                 case "curve":
                         return try createCurveShape(
                                 objectToWorld: objectToWorld,

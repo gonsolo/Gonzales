@@ -1,3 +1,7 @@
+var meshLocker = Locker()
+var primitives = [Boundable & Intersectable]()
+var objects = ["": [Boundable & Intersectable]()]
+
 struct Options {
 
         enum OptionError: Error {
@@ -17,9 +21,25 @@ struct Options {
         var filterName = "box"
         var filterParameters = ParameterDictionary()
         var lights = [Light]()
-        var primitives = [Boundable & Intersectable]()
-        var meshes = [TriangleMesh]()
-        var objects = ["": [Boundable & Intersectable]()]
+
+        private var meshes: [TriangleMesh] = []
+
+        init() {
+                meshes = [TriangleMesh]()
+        }
+
+        mutating func appendMesh(mesh: TriangleMesh) -> Int {
+                var meshIndex = 0
+                meshIndex = meshes.count
+                meshes.append(mesh)
+                return meshIndex
+        }
+
+        func getMesh(index: Int) -> TriangleMesh {
+                var mesh = TriangleMesh()
+                mesh = meshes[index]
+                return mesh
+        }
 
         func makeFilm(filter: Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
@@ -155,7 +175,7 @@ struct Options {
                 )
         }
 
-        mutating func makeScene() -> Scene {
+        func makeScene() -> Scene {
                 let accelerator = makeAccelerator(primitives: &primitives)
                 primitives = []
                 objects = [:]

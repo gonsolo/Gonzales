@@ -7,6 +7,16 @@ var worldBoundCalled = 0
 
 struct TriangleMesh {
 
+        init() {
+                objectToWorld = Transform()
+                numberTriangles = 0
+                vertexIndices = []
+                points = []
+                normals = []
+                uvs = []
+                faceIndices = []
+        }
+
         init(
                 objectToWorld: Transform,
                 numberTriangles: Int,
@@ -44,15 +54,19 @@ struct TriangleMesh {
                 )
         }
 
+        func getObjectToWorld() -> Transform {
+                objectToWorld
+        }
+
         var pointCount: Int {
                 points.count
         }
 
-        let objectToWorld: Transform
         let numberTriangles: Int
         let normals: [Normal]
         let faceIndices: [Int]
 
+        private let objectToWorld: Transform
         private let points: [Point]
         private let vertexIndices: [Int]
         private let uvs: [Vector2F]
@@ -75,17 +89,20 @@ extension Array {
 final class Triangle: Shape {
 
         init(
-                mesh: TriangleMesh,
+                //mesh: TriangleMesh,
+                meshIndex: Int,
                 number: Int
         ) throws {
-                self.mesh = mesh
+                //self.mesh = mesh
+                self.meshIndex = meshIndex
                 self.idx = 3 * number
                 numberOfTriangles += 1
                 triangleMemory += MemoryLayout<Self>.stride
 
                 guard
-                        vertexIndex0 < mesh.pointCount && vertexIndex1 < mesh.pointCount
-                                && vertexIndex2 < mesh.pointCount
+                        vertexIndex0 < options.getMesh(index: meshIndex).pointCount
+                                && vertexIndex1 < options.getMesh(index: meshIndex).pointCount
+                                && vertexIndex2 < options.getMesh(index: meshIndex).pointCount
                 else {
                         throw TriangleError.index
                 }
@@ -111,13 +128,13 @@ final class Triangle: Shape {
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
-        var vertexIndex0: Int { return mesh.getVertexIndex(at: idx + 0) }
-        var vertexIndex1: Int { return mesh.getVertexIndex(at: idx + 1) }
-        var vertexIndex2: Int { return mesh.getVertexIndex(at: idx + 2) }
+        var vertexIndex0: Int { return options.getMesh(index: meshIndex).getVertexIndex(at: idx + 0) }
+        var vertexIndex1: Int { return options.getMesh(index: meshIndex).getVertexIndex(at: idx + 1) }
+        var vertexIndex2: Int { return options.getMesh(index: meshIndex).getVertexIndex(at: idx + 2) }
 
-        var point0: Point { return mesh.getPoint(at: vertexIndex0) }
-        var point1: Point { return mesh.getPoint(at: vertexIndex1) }
-        var point2: Point { return mesh.getPoint(at: vertexIndex2) }
+        var point0: Point { return options.getMesh(index: meshIndex).getPoint(at: vertexIndex0) }
+        var point1: Point { return options.getMesh(index: meshIndex).getPoint(at: vertexIndex1) }
+        var point2: Point { return options.getMesh(index: meshIndex).getPoint(at: vertexIndex2) }
 
         func objectBound() -> Bounds3f {
                 let (p0, p1, p2) = getLocalPoints()
@@ -202,7 +219,8 @@ final class Triangle: Shape {
                 let dp12 = Vector(point: point1 - point2)
                 let normal = normalized(Normal(cross(dp02, dp12)))
 
-                let uv = mesh.getUVs(indices: (vertexIndex0, vertexIndex1, vertexIndex2))
+                let uv = options.getMesh(index: meshIndex).getUVs(
+                        indices: (vertexIndex0, vertexIndex1, vertexIndex2))
                 let uvHit0: Point2F = b0 * Point2F(from: uv.0)
                 let uvHit1: Point2F = b1 * Point2F(from: uv.1)
                 let uvHit2: Point2F = b2 * Point2F(from: uv.2)
@@ -232,12 +250,12 @@ final class Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if mesh.normals.isEmpty {
+                if options.getMesh(index: meshIndex).normals.isEmpty {
                         shadingNormal = normal
                 } else {
-                        let sn0 = b0 * Normal(mesh.normals[vertexIndex0])
-                        let sn1 = b1 * Normal(mesh.normals[vertexIndex1])
-                        let sn2 = b2 * Normal(mesh.normals[vertexIndex2])
+                        let sn0 = b0 * Normal(options.getMesh(index: meshIndex).normals[vertexIndex0])
+                        let sn1 = b1 * Normal(options.getMesh(index: meshIndex).normals[vertexIndex1])
+                        let sn2 = b2 * Normal(options.getMesh(index: meshIndex).normals[vertexIndex2])
                         shadingNormal = sn0 + sn1 + sn2
                         if lengthSquared(shadingNormal) > 0 {
                                 shadingNormal = normalized(shadingNormal)
@@ -259,8 +277,8 @@ final class Triangle: Shape {
                 dpdu = ss
 
                 var faceIndex: Int = 0
-                if !mesh.faceIndices.isEmpty {
-                        faceIndex = mesh.faceIndices[idx / 3]
+                if !options.getMesh(index: meshIndex).faceIndices.isEmpty {
+                        faceIndex = options.getMesh(index: meshIndex).faceIndices[idx / 3]
                 }
 
                 let localInteraction = SurfaceInteraction(
@@ -281,7 +299,7 @@ final class Triangle: Shape {
         }
 
         private func getLocalPoint(index: Int) -> Point {
-                return mesh.getPoint(at: index)
+                return options.getMesh(index: meshIndex).getPoint(at: index)
         }
 
         public func getLocalPoints() -> (Point, Point, Point) {
@@ -325,20 +343,20 @@ final class Triangle: Shape {
         }
 
         var objectToWorld: Transform {
-                return mesh.objectToWorld
+                var mesh = TriangleMesh()
+                mesh = options.getMesh(index: meshIndex)
+                let transform = mesh.getObjectToWorld()
+                return transform
         }
 
-        let mesh: TriangleMesh
-
-        // Can't be something else than Int because Array subscripting is not
-        // possible/slow with UInt8 or others.
+        let meshIndex: Int
         let idx: Int
 }
 
 func createTriangleMeshShape(
         objectToWorld: Transform,
         parameters: ParameterDictionary
-) throws -> (TriangleMesh, [Shape]) {
+) throws -> [Shape] {
         let indices = try parameters.findInts(name: "indices")
         guard indices.count % 3 == 0 else {
                 throw ApiError.input(message: "Triangle indices must be multiplies of 3")
@@ -368,7 +386,7 @@ func createTriangleMesh(
         normals: [Normal],
         uvs: [Vector2F],
         faceIndices: [Int]
-) throws -> (TriangleMesh, [Shape]) {
+) throws -> [Shape] {
         let numberTriangles = indices.count / 3
         let trianglePoints = points
         let triangleNormals = normals
@@ -383,8 +401,10 @@ func createTriangleMesh(
                 normals: triangleNormals,
                 uvs: triangleUvs,
                 faceIndices: faceIndices)
+
+        let meshIndex = options.appendMesh(mesh: mesh)
         for i in 0..<numberTriangles {
-                triangles.append(try Triangle(mesh: mesh, number: i))
+                triangles.append(try Triangle(meshIndex: meshIndex, number: i))
         }
-        return (mesh, triangles)
+        return triangles
 }
