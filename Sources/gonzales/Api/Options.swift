@@ -1,8 +1,4 @@
-var meshLocker = Locker()
-var primitives = [Boundable & Intersectable]()
-var objects = ["": [Boundable & Intersectable]()]
-
-struct Options {
+class Options {
 
         enum OptionError: Error {
                 case camera, crop
@@ -21,6 +17,8 @@ struct Options {
         var filterName = "box"
         var filterParameters = ParameterDictionary()
         var lights = [Light]()
+        var primitives = [Boundable & Intersectable]()
+        var objects = ["": [Boundable & Intersectable]()]
 
         private var meshes: [TriangleMesh] = []
 
@@ -28,7 +26,7 @@ struct Options {
                 meshes = [TriangleMesh]()
         }
 
-        mutating func appendMesh(mesh: TriangleMesh) -> Int {
+        func appendMesh(mesh: TriangleMesh) -> Int {
                 var meshIndex = 0
                 meshIndex = meshes.count
                 meshes.append(mesh)

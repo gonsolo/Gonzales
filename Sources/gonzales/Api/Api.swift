@@ -188,7 +188,7 @@ struct Api {
         }
 
         func objectInstance(name: String) throws {
-                guard var primitives = objects[name] else {
+                guard var primitives = options.objects[name] else {
                         return
                 }
                 if primitives.isEmpty {
@@ -197,7 +197,7 @@ struct Api {
                 var instance: Boundable & Intersectable
                 if primitives.count > 1 {
                         let accelerator = makeAccelerator(primitives: &primitives)
-                        objects[name] = [accelerator]
+                        options.objects[name] = [accelerator]
                         instance = TransformedPrimitive(
                                 primitive: accelerator,
                                 transform: currentTransform)
@@ -265,17 +265,17 @@ struct Api {
                         }
                 }
                 if let name = state.objectName {
-                        if objects[name] == nil {
+                        if options.objects[name] == nil {
                                 if !(material is None) {
-                                        objects[name] = prims
+                                        options.objects[name] = prims
                                 }
                         } else {
                                 if !(material is None) {
-                                        objects[name]!.append(contentsOf: prims)
+                                        options.objects[name]!.append(contentsOf: prims)
                                 }
                         }
                 } else {
-                        primitives.append(contentsOf: prims)
+                        options.primitives.append(contentsOf: prims)
                         options.lights.append(contentsOf: areaLights)
                 }
         }
@@ -391,8 +391,8 @@ struct Api {
         }
 
         func dumpPrimitives() {
-                print("\nNumber of primitives: ", primitives.count)
-                for primitive in primitives {
+                print("\nNumber of primitives: ", options.primitives.count)
+                for primitive in options.primitives {
                         var type = ""
                         var shape: Shape? = nil
                         if let geom = primitive as? GeometricPrimitive {
