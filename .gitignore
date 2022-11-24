@@ -4,5 +4,5 @@ Package.resolved
 /*.pfm
 /perf.data
 /perf.data.old
-/tags
+tags
 /.lldb_commands
