@@ -50,10 +50,11 @@ else
 	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	SWIFT_OPTIMIZE_FLAG	= -Xswiftc -Ounchecked -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
+	SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
 	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO)
 	LINK_PTEX		= -Xlinker -L -Xlinker ../../src/ptex/build/src/ptex/ -Xlinker -lPtex
-	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX)
-        RELEASE_OPTIONS 	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX) $(SWIFT_OPTIMIZE)
+	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX) $(SWIFT_ANNOTATIONS)
+	RELEASE_OPTIONS 	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX) $(SWIFT_OPTIMIZE) $(SWIFT_ANNOTATIONS)
 	BUILD			= $(SWIFT) build
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
 	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)

@@ -66,7 +66,7 @@ struct TriangleMesh {
         let normals: [Normal]
         let faceIndices: [Int]
 
-        private let objectToWorld: Transform
+        let objectToWorld: Transform
         private let points: [Point]
         private let vertexIndices: [Int]
         private let uvs: [Vector2F]
@@ -86,7 +86,7 @@ extension Array {
         }
 }
 
-final class Triangle: Shape {
+struct Triangle: Shape {
 
         init(
                 meshIndex: Int,
@@ -159,6 +159,8 @@ final class Triangle: Shape {
                 return objectToWorld * objectBound()
         }
 
+        //@_noAllocation
+        // @_semantics("optremark")
         func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
                 -> SurfaceInteraction
         {

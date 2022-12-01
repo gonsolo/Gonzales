@@ -1,4 +1,4 @@
-final class GeometricPrimitive: Boundable, Intersectable, Material {
+struct GeometricPrimitive: Boundable, Intersectable, Material {
 
         init(shape: Shape, material: MaterialIndex) {
                 self.shape = shape

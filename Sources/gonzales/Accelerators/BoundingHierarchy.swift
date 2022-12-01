@@ -1,5 +1,3 @@
-import Foundation
-
 var boundingHierarchyNodesVisited = 0
 
 var nodes = [Node]()
@@ -25,10 +23,13 @@ final class BoundingHierarchy: Boundable, Intersectable {
                 self.primitives = primitives
         }
 
+        //@_noAllocation
+        //@_semantics("optremark")
         func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
                 -> SurfaceInteraction
         {
-                var interaction = SurfaceInteraction()
+                //var interaction = SurfaceInteraction()
+                var interaction = Interaction()
                 var toVisit = 0
                 var current = 0
                 //var nodesToVisit: [Int: Int] = [:]

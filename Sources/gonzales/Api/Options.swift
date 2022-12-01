@@ -36,12 +36,12 @@ struct TriangleMeshes {
         }
 
         func getObjectToWorldFor(meshIndex: Int) -> Transform {
-                return meshes[meshIndex].getObjectToWorld()
+                return meshes[meshIndex].objectToWorld
         }
 
-        var meshes: [TriangleMesh] = []
 }
 
+var meshes: [TriangleMesh] = []
 var triangleMeshes = TriangleMeshes()
 
 class Options {

@@ -1,5 +1,3 @@
-import Foundation  // exit
-
 private enum SplitStrategy {
         case equal
         case middle
