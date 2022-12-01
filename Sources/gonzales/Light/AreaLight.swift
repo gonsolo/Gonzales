@@ -54,7 +54,7 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                         dpdu: interaction.dpdu,
                         uv: interaction.uv,
                         faceIndex: interaction.faceIndex,
-                        primitive: self,
+                        areaLight: self,
                         material: interaction.material
                 )
         }

@@ -11,7 +11,7 @@ struct Interaction {
                 dpdu: Vector = Vector(),
                 uv: Point2F = Point2F(),
                 faceIndex: Int = 0,
-                primitive: (Boundable & Intersectable)? = nil,
+                areaLight: AreaLight? = nil,
                 material: MaterialIndex = -1
         ) {
                 self.valid = valid
@@ -22,7 +22,7 @@ struct Interaction {
                 self.dpdu = dpdu
                 self.uv = uv
                 self.faceIndex = faceIndex
-                self.primitive = primitive
+                self.areaLight = areaLight
                 self.material = material
         }
 
@@ -35,7 +35,7 @@ struct Interaction {
                 self.dpdu = other.dpdu
                 self.uv = other.uv
                 self.faceIndex = other.faceIndex
-                self.primitive = other.primitive
+                self.areaLight = other.areaLight
                 self.material = other.material
         }
 
@@ -63,8 +63,7 @@ struct Interaction {
         let dpdu: Vector
         let uv: Point2F
         let faceIndex: Int
-
-        let primitive: (Boundable & Intersectable)?
+        let areaLight: AreaLight?
         let material: MaterialIndex
 }
 

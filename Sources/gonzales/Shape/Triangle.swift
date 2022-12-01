@@ -300,6 +300,9 @@ struct Triangle: Shape {
                         faceIndex = meshFaceIndices[idx / 3]
                 }
 
+                tHit = t
+                triangleHits += 1
+
                 let localInteraction = SurfaceInteraction(
                         position: pHit,
                         normal: normal,
@@ -309,8 +312,6 @@ struct Triangle: Shape {
                         uv: uvHit,
                         faceIndex: Int(faceIndex))
                 let worldInteraction = objectToWorld * localInteraction
-                tHit = t
-                triangleHits += 1
                 return SurfaceInteraction(
                         valid: true,
                         position: worldInteraction.position,
@@ -320,7 +321,6 @@ struct Triangle: Shape {
                         dpdu: worldInteraction.dpdu,
                         uv: worldInteraction.uv,
                         faceIndex: worldInteraction.faceIndex,
-                        primitive: self,
                         material: material
                 )
         }

@@ -249,7 +249,6 @@ struct Api {
                                 }
                                 let areaLight = AreaLight(brightness: brightness, shape: shape)
                                 areaLights.append(areaLight)
-                                //print("add area light to prims")
                                 prims.append(areaLight)
                         }
                 } else {

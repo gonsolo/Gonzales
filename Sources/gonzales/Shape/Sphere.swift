@@ -169,7 +169,6 @@ final class Sphere: Shape {
                         dpdu: worldInteraction.dpdu,
                         uv: worldInteraction.uv,
                         faceIndex: worldInteraction.faceIndex,
-                        primitive: self,
                         material: material)
         }
 

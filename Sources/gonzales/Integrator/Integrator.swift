@@ -101,10 +101,7 @@ extension Integrator {
                                 }
                                 return zero
                         }
-                        guard let primitive = brdfInteraction.primitive else {
-                                return zero
-                        }
-                        guard let brdfAreaLight = primitive as? AreaLight else {
+                        guard let brdfAreaLight = brdfInteraction.areaLight else {
                                 return zero
                         }
                         guard let areaLight = light as? AreaLight else {

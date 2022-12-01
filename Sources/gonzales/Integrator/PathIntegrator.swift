@@ -20,11 +20,8 @@ struct PathIntegrator: Integrator {
                         if !interaction.valid {
                                 break
                         }
-                        guard let primitive = interaction.primitive else {
-                                break
-                        }
                         if bounce == 0 {
-                                if let areaLight = primitive as? AreaLight {
+                                if let areaLight = interaction.areaLight {
                                         l +=
                                                 beta
                                                 * areaLight.emittedRadiance(
@@ -35,10 +32,6 @@ struct PathIntegrator: Integrator {
                         guard bounce < maxDepth else {
                                 break
                         }
-                        //guard let material = primitive as? Material else {
-                        //guard let material = interaction.material else {
-                        //        break
-                        //}
                         if interaction.material == -1 {
                                 break
                         }
