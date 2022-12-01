@@ -160,15 +160,14 @@ struct Triangle: Shape {
         }
 
         //@_noAllocation
-        // @_semantics("optremark")
+        @_semantics("optremark")
         func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
                 -> SurfaceInteraction
         {
                 let empty = { (line: Int) -> SurfaceInteraction in
                         //print("No triangle intersection at line ", line)
                         //Thread.callStackSymbols.forEach { print($0) }
-                        let surfaceInteraction = SurfaceInteraction()
-                        return surfaceInteraction
+                        return SurfaceInteraction()
                 }
 
                 let ray = worldToObject * worldRay
@@ -262,7 +261,9 @@ struct Triangle: Shape {
 
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
                         let ng: Vector = cross(point2 - point0, point1 - point0)
-                        if lengthSquared(ng) == 0 { return empty(#line) }
+                        if lengthSquared(ng) == 0 {
+                                return empty(#line)
+                        }
                         (dpdu, dpdv) = makeCoordinateSystem(from: normalized(ng))
                 }
 
