@@ -151,8 +151,9 @@ wc:
 
 # To be able to use perf the following has to be done:
 # sudo sysctl -w kernel.perf_event_paranoid=0
+# sudo sh -c " echo 0 > /proc/sys/kernel/kptr_restrict"
 PERF_RECORD_OPTIONS = --freq=100 --call-graph dwarf
-PERF_REPORT_OPTIONS = --no-children #--percent-limit 5
+PERF_REPORT_OPTIONS = --no-children --percent-limit 1
 p: perf
 perf: release
 	perf record $(PERF_RECORD_OPTIONS) $(GONZALES_RELEASE) $(OPTIONS) $(SCENE)

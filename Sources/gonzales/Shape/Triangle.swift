@@ -166,7 +166,7 @@ struct Triangle: Shape {
         }
 
         //@_noAllocation
-        @_semantics("optremark")
+        //@_semantics("optremark")
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,

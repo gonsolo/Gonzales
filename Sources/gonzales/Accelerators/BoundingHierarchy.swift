@@ -24,7 +24,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
         }
 
         //@_noAllocation
-        //@_semantics("optremark")
+        @_semantics("optremark")
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -45,15 +45,11 @@ final class BoundingHierarchy: Boundable, Intersectable {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
                                                 let primitive = primitives[node.offset + i]
-                                                var tentativeInteraction = SurfaceInteraction()
                                                 try primitive.intersect(
                                                         ray: ray,
                                                         tHit: &tHit,
                                                         material: -1,
-                                                        interaction: &tentativeInteraction)
-                                                if tentativeInteraction.valid {
-                                                        interaction = tentativeInteraction
-                                                }
+                                                        interaction: &interaction)
                                         }
                                         if toVisit == 0 { break }
                                         toVisit -= 1
