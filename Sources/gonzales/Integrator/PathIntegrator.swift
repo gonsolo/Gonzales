@@ -14,8 +14,9 @@ struct PathIntegrator: Integrator {
                 var ray = ray
                 var albedo = black
                 var normal = Normal()
+                var interaction = SurfaceInteraction()
                 for bounce in 0...maxDepth {
-                        var interaction = SurfaceInteraction()
+                        interaction.valid = false
                         try intersectOrInfiniteLights(
                                 ray: ray,
                                 tHit: &tHit,
