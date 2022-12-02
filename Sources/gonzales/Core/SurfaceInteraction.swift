@@ -55,16 +55,16 @@ struct Interaction {
                 return Point(point + epsilon * direction)
         }
 
-        let valid: Bool
-        let position: Point
-        let normal: Normal
-        let shadingNormal: Normal
-        let wo: Vector
-        let dpdu: Vector
-        let uv: Point2F
-        let faceIndex: Int
+        var valid: Bool
+        var position: Point
+        var normal: Normal
+        var shadingNormal: Normal
+        var wo: Vector
+        var dpdu: Vector
+        var uv: Point2F
+        var faceIndex: Int
         var areaLight: AreaLight?
-        let material: MaterialIndex
+        var material: MaterialIndex
 }
 
 extension Interaction: CustomStringConvertible {

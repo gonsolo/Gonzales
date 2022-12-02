@@ -313,17 +313,15 @@ struct Triangle: Shape {
                 tHit = t
                 triangleHits += 1
 
-                let localInteraction = SurfaceInteraction(
-                        valid: true,
-                        position: pHit,
-                        normal: normal,
-                        shadingNormal: shadingNormal,
-                        wo: -ray.direction,
-                        dpdu: dpdu,
-                        uv: uvHit,
-                        faceIndex: faceIndex,
-                        material: material)
-                interaction = objectToWorld * localInteraction
+                interaction.valid = true
+                interaction.position = objectToWorld * pHit
+                interaction.normal = normalized(objectToWorld * normal)
+                interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
+                interaction.wo = normalized(objectToWorld * -ray.direction)
+                interaction.dpdu = dpdu
+                interaction.uv = uvHit
+                interaction.faceIndex = faceIndex
+                interaction.material = material
         }
 
         private func getLocalPoint(index: Int) -> Point {
