@@ -161,13 +161,16 @@ struct Triangle: Shape {
 
         //@_noAllocation
         @_semantics("optremark")
-        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
-                -> SurfaceInteraction
-        {
-                let empty = { (line: Int) -> SurfaceInteraction in
+        func intersect(
+                ray worldRay: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                let empty = { (line: Int) in
                         //print("No triangle intersection at line ", line)
                         //Thread.callStackSymbols.forEach { print($0) }
-                        return SurfaceInteraction()
+                        return
                 }
 
                 let ray = worldToObject * worldRay
@@ -305,25 +308,16 @@ struct Triangle: Shape {
                 triangleHits += 1
 
                 let localInteraction = SurfaceInteraction(
+                        valid: true,
                         position: pHit,
                         normal: normal,
                         shadingNormal: shadingNormal,
                         wo: -ray.direction,
                         dpdu: dpdu,
                         uv: uvHit,
-                        faceIndex: Int(faceIndex))
-                let worldInteraction = objectToWorld * localInteraction
-                return SurfaceInteraction(
-                        valid: true,
-                        position: worldInteraction.position,
-                        normal: worldInteraction.normal,
-                        shadingNormal: worldInteraction.shadingNormal,
-                        wo: worldInteraction.wo,
-                        dpdu: worldInteraction.dpdu,
-                        uv: worldInteraction.uv,
-                        faceIndex: worldInteraction.faceIndex,
-                        material: material
-                )
+                        faceIndex: faceIndex,
+                        material: material)
+                interaction = objectToWorld * localInteraction
         }
 
         private func getLocalPoint(index: Int) -> Point {

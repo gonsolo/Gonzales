@@ -16,10 +16,16 @@ struct Scene {
 
         mutating func intersect(ray: Ray, tHit: inout FloatX) throws -> SurfaceInteraction {
                 intersectionTests += 1
+                var interaction = SurfaceInteraction()
                 guard let primitive else {
-                        return SurfaceInteraction()
+                        return interaction
                 }
-                return try primitive.intersect(ray: ray, tHit: &tHit, material: -1)
+                try primitive.intersect(
+                        ray: ray,
+                        tHit: &tHit,
+                        material: -1,
+                        interaction: &interaction)
+                return interaction
         }
 
         func bound() -> Bounds3f {

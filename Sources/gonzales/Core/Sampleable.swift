@@ -36,12 +36,13 @@ extension Sampleable where Self: Intersectable {
         {
                 let ray = interaction.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
-                let isect = try intersect(ray: ray, tHit: &tHit, material: -1)
-                if !isect.valid {
+                var interaction = SurfaceInteraction()
+                try intersect(ray: ray, tHit: &tHit, material: -1, interaction: &interaction)
+                if !interaction.valid {
                         return 0
                 }
-                let squaredDistance = distanceSquared(interaction.position, isect.position)
-                let angle = absDot(isect.normal, -direction)
+                let squaredDistance = distanceSquared(interaction.position, interaction.position)
+                let angle = absDot(interaction.normal, -direction)
                 let angleTimesArea = angle * area()
                 let density = squaredDistance / angleTimesArea
                 if density.isInfinite {

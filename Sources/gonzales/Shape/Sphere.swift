@@ -112,12 +112,16 @@ final class Sphere: Shape {
                 return (ta[0], ta[1])
         }
 
-        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
-                -> SurfaceInteraction
-        {
-                let empty = { (line: Int) -> SurfaceInteraction in
-                        return SurfaceInteraction()
+        func intersect(
+                ray worldRay: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                let empty = { (line: Int) in
+                        return
                 }
+
                 let ray = worldToObject * worldRay
                 let ox = ray.origin.x
                 let oy = ray.origin.y
@@ -152,24 +156,15 @@ final class Sphere: Shape {
 
                 let uv = Point2F()
                 let localInteraction = SurfaceInteraction(
+                        valid: true,
                         position: pHit,
                         normal: normal,
                         shadingNormal: normal,
                         wo: -ray.direction,
                         dpdu: dpdu,
                         uv: uv)
-                let worldInteraction = objectToWorld * localInteraction
+                interaction = objectToWorld * localInteraction
                 tHit = shapeHit
-                return SurfaceInteraction(
-                        valid: true,
-                        position: worldInteraction.position,
-                        normal: worldInteraction.normal,
-                        shadingNormal: worldInteraction.shadingNormal,
-                        wo: worldInteraction.wo,
-                        dpdu: worldInteraction.dpdu,
-                        uv: worldInteraction.uv,
-                        faceIndex: worldInteraction.faceIndex,
-                        material: material)
         }
 
         var objectToWorld: Transform

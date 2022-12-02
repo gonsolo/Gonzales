@@ -5,11 +5,18 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
                 self.material = material
         }
 
-        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
-                -> SurfaceInteraction
-        {
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 // argument material is unused
-                return try shape.intersect(ray: ray, tHit: &tHit, material: self.material)
+                try shape.intersect(
+                        ray: ray,
+                        tHit: &tHit,
+                        material: self.material,
+                        interaction: &interaction)
         }
 
         func worldBound() -> Bounds3f {

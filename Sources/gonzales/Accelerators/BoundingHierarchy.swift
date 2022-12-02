@@ -25,18 +25,19 @@ final class BoundingHierarchy: Boundable, Intersectable {
 
         //@_noAllocation
         //@_semantics("optremark")
-        func intersect(ray: Ray, tHit: inout FloatX, material: MaterialIndex) throws
-                -> SurfaceInteraction
-        {
-                //var interaction = SurfaceInteraction()
-                var interaction = Interaction()
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 var toVisit = 0
                 var current = 0
                 //var nodesToVisit: [Int: Int] = [:]
                 var nodesToVisit = Array(repeating: 0, count: 64)
                 var nodesVisited = 0
 
-                if nodes.isEmpty { return interaction }
+                if nodes.isEmpty { return }
                 while true {
                         nodesVisited += 1
                         let node = nodes[current]
@@ -44,11 +45,12 @@ final class BoundingHierarchy: Boundable, Intersectable {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
                                                 let primitive = primitives[node.offset + i]
-                                                let tentativeInteraction =
-                                                        try primitive.intersect(
-                                                                ray: ray,
-                                                                tHit: &tHit,
-                                                                material: -1)
+                                                var tentativeInteraction = SurfaceInteraction()
+                                                try primitive.intersect(
+                                                        ray: ray,
+                                                        tHit: &tHit,
+                                                        material: -1,
+                                                        interaction: &tentativeInteraction)
                                                 if tentativeInteraction.valid {
                                                         interaction = tentativeInteraction
                                                 }
@@ -73,7 +75,6 @@ final class BoundingHierarchy: Boundable, Intersectable {
                         }
                 }
                 boundingHierarchyNodesVisited += nodesVisited
-                return interaction
         }
 
         func objectBound() -> Bounds3f {

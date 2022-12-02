@@ -282,9 +282,12 @@ final class Curve: Shape {
                 return overlaps
         }
 
-        func intersect(ray worldRay: Ray, tHit: inout FloatX, material: MaterialIndex) throws
-                -> SurfaceInteraction
-        {
+        func intersect(
+                ray worldRay: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 let ray = worldToObject * worldRay
                 let points = blossomBezier(points: common.points, u: u)
                 let dx = cross(ray.direction, points.3 - points.0)
@@ -300,15 +303,15 @@ final class Curve: Shape {
                 controlPoints[3] = objectToRay * points.3
                 let maxWidth = computeMaxWidth(u: u, width: common.width)
                 if !overlap(points: controlPoints, xyz: 1, width: maxWidth) {
-                        return SurfaceInteraction()
+                        return
                 }
                 if !overlap(points: controlPoints, xyz: 0, width: maxWidth) {
-                        return SurfaceInteraction()
+                        return
                 }
                 let rayLength = length(ray.direction)
                 let zMax = rayLength * tHit
                 if !overlap(points: controlPoints, xyz: 2, width: maxWidth, limits: (0, zMax)) {
-                        return SurfaceInteraction()
+                        return
                 }
                 var l0: FloatX = 0
                 for i in 0..<2 {
@@ -334,7 +337,7 @@ final class Curve: Shape {
                         u: u,
                         depth: maxDepth)
                 tHit = interactionAndT.1
-                return interactionAndT.0
+                interaction = interactionAndT.0
         }
 
         func area() -> FloatX {
