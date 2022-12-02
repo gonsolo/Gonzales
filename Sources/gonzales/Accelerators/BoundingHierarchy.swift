@@ -23,8 +23,8 @@ final class BoundingHierarchy: Boundable, Intersectable {
                 self.primitives = primitives
         }
 
-        @_noAllocation
-        @_semantics("optremark")
+        //@_noAllocation
+        //@_semantics("optremark")
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,

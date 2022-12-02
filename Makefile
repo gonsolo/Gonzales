@@ -1,4 +1,4 @@
-all: d
+all: r
 
 #SINGLERAY = --single 8 8
 #SYNC = --sync

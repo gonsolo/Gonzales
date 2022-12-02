@@ -87,7 +87,8 @@ extension Integrator {
                         scatter *= absDot(wi, interaction.shadingNormal)
                         let ray = interaction.spawnRay(inDirection: wi)
                         var tHit = FloatX.infinity
-                        let brdfInteraction = try scene.intersect(ray: ray, tHit: &tHit)
+                        var brdfInteraction = SurfaceInteraction()
+                        try scene.intersect(ray: ray, tHit: &tHit, interaction: &brdfInteraction)
                         if !brdfInteraction.valid {
                                 for light in scene.lights {
                                         if light is InfiniteLight {
@@ -177,7 +178,8 @@ extension Integrator {
         func intersectOrInfiniteLights(ray: Ray, tHit: inout FloatX, bounce: Int, l: inout Spectrum)
                 throws -> SurfaceInteraction
         {
-                let interaction = try scene.intersect(ray: ray, tHit: &tHit)
+                var interaction = SurfaceInteraction()
+                try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
                 if interaction.valid {
                         return interaction
                 }

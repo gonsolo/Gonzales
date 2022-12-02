@@ -14,18 +14,22 @@ struct Scene {
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
         }
 
-        mutating func intersect(ray: Ray, tHit: inout FloatX) throws -> SurfaceInteraction {
+        //@_noAllocation
+        @_semantics("optremark")
+        mutating func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 intersectionTests += 1
-                var interaction = SurfaceInteraction()
                 guard let primitive else {
-                        return interaction
+                        return
                 }
                 try primitive.intersect(
                         ray: ray,
                         tHit: &tHit,
                         material: -1,
                         interaction: &interaction)
-                return interaction
         }
 
         func bound() -> Bounds3f {
