@@ -175,19 +175,21 @@ extension Integrator {
                 }
         }
 
-        func intersectOrInfiniteLights(ray: Ray, tHit: inout FloatX, bounce: Int, l: inout Spectrum)
-                throws -> SurfaceInteraction
-        {
-                var interaction = SurfaceInteraction()
+        func intersectOrInfiniteLights(
+                ray: Ray,
+                tHit: inout FloatX,
+                bounce: Int,
+                l: inout Spectrum,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
                 if interaction.valid {
-                        return interaction
+                        return
                 }
                 let radiance = scene.infiniteLights.reduce(
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
                 )
                 if bounce == 0 { l += radiance }
-                return SurfaceInteraction()
         }
 }
