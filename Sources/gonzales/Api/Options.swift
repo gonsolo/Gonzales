@@ -27,8 +27,12 @@ struct TriangleMeshes {
                 return meshes[meshIndex].getPoint(at: vertexIndex)
         }
 
-        func getNormalsFor(meshIndex: Int) -> [Normal] {
-                return meshes[meshIndex].normals
+        func getNormal(meshIndex: Int, vertexIndex: Int) -> Normal {
+                return meshes[meshIndex].normals[vertexIndex]
+        }
+
+        func hasNormals(meshIndex: Int) -> Bool {
+                return !meshes[meshIndex].normals.isEmpty
         }
 
         func getFaceIndicesFor(meshIndex: Int) -> [Int] {

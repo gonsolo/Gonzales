@@ -271,13 +271,18 @@ struct Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if triangleMeshes.getNormalsFor(meshIndex: meshIndex).isEmpty {
+                if triangleMeshes.hasNormals(meshIndex: meshIndex) {
                         shadingNormal = normal
                 } else {
-                        let meshNormals = triangleMeshes.getNormalsFor(meshIndex: meshIndex)
-                        let sn0 = b0 * Normal(meshNormals[vertexIndex0])
-                        let sn1 = b1 * Normal(meshNormals[vertexIndex1])
-                        let sn2 = b2 * Normal(meshNormals[vertexIndex2])
+                        let n0 = triangleMeshes.getNormal(
+                                meshIndex: meshIndex, vertexIndex: vertexIndex0)
+                        let sn0 = b0 * n0
+                        let n1 = triangleMeshes.getNormal(
+                                meshIndex: meshIndex, vertexIndex: vertexIndex1)
+                        let sn1 = b1 * n1
+                        let n2 = triangleMeshes.getNormal(
+                                meshIndex: meshIndex, vertexIndex: vertexIndex2)
+                        let sn2 = b2 * n2
                         shadingNormal = sn0 + sn1 + sn2
                         if lengthSquared(shadingNormal) > 0 {
                                 shadingNormal = normalized(shadingNormal)
