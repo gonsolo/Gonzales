@@ -304,9 +304,10 @@ struct Triangle: Shape {
                 dpdu = ss
 
                 var faceIndex: Int = 0
-                let meshFaceIndices = triangleMeshes.getFaceIndicesFor(meshIndex: meshIndex)
-                if !meshFaceIndices.isEmpty {
-                        faceIndex = meshFaceIndices[idx / 3]
+                if triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
+                        faceIndex = triangleMeshes.getFaceIndex(
+                                meshIndex: meshIndex,
+                                index: idx / 3)
                 }
 
                 tHit = t

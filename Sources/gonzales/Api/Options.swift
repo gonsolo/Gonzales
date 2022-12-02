@@ -35,8 +35,12 @@ struct TriangleMeshes {
                 return !meshes[meshIndex].normals.isEmpty
         }
 
-        func getFaceIndicesFor(meshIndex: Int) -> [Int] {
-                return meshes[meshIndex].faceIndices
+        func hasFaceIndices(meshIndex: Int) -> Bool {
+                return !meshes[meshIndex].faceIndices.isEmpty
+        }
+
+        func getFaceIndex(meshIndex: Int, index: Int) -> Int {
+                return meshes[meshIndex].faceIndices[index]
         }
 
         func getObjectToWorldFor(meshIndex: Int) -> Transform {
