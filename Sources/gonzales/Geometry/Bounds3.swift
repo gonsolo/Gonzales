@@ -128,6 +128,7 @@ extension Bounds3 where T == FloatX {
 
         static var intersections = 0
 
+        @inline(__always)
         func intersects(ray: Ray, tHit: inout FloatX) -> Bool {
                 Self.intersections += 1
                 var t0: FloatX = 0.0
