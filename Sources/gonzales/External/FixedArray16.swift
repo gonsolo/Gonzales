@@ -11,7 +11,8 @@ internal struct FixedArray16<T> {
                         T, T, T, T, T, T, T, T
                 )
 
-        var _count: Int8
+        //var _count: Int8
+        var _count: Int
 }
 
 extension FixedArray16 {
@@ -25,7 +26,8 @@ extension FixedArray16 {
 
         internal var count: Int {
                 @inline(__always) get { return Int(truncatingIfNeeded: _count) }
-                @inline(__always) set { _count = Int8(newValue) }
+                //@inline(__always) set { _count = Int8(newValue) }
+                @inline(__always) set { _count = newValue }
         }
 }
 
@@ -94,7 +96,8 @@ extension FixedArray16 where T: ExpressibleByIntegerLiteral {
                         0, 0, 0, 0, 0, 0, 0, 0,
                         0, 0, 0, 0, 0, 0, 0, 0
                 )
-                self._count = Int8(truncatingIfNeeded: count)
+                //self._count = Int8(truncatingIfNeeded: count)
+                self._count = count
         }
 
         @inline(__always)
