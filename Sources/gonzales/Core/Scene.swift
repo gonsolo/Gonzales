@@ -8,7 +8,7 @@ struct Scene {
                 infiniteLights = []
         }
 
-        init(aggregate: Boundable & Intersectable, lights: [Light]) {
+        init(aggregate: BoundingHierarchy, lights: [Light]) {
                 self.primitive = aggregate
                 self.lights = lights
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
@@ -47,7 +47,7 @@ struct Scene {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
-        var primitive: (Boundable & Intersectable)?
+        var primitive: BoundingHierarchy?
         var lights: [Light]
         var infiniteLights: [Light]
 }
