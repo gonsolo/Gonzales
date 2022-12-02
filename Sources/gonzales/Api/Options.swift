@@ -11,6 +11,7 @@ struct TriangleMeshes {
                 return meshes[index]
         }
 
+        @inline(__always)
         func getUVFor(meshIndex: Int, indices: (Int, Int, Int)) -> (Vector2F, Vector2F, Vector2F) {
                 return meshes[meshIndex].getUVs(indices: indices)
         }

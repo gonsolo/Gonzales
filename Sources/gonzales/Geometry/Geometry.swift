@@ -62,6 +62,7 @@ func union(bound: Bounds3f, point: Point) -> Bounds3f {
         return Bounds3f(first: pMin, second: pMax)
 }
 
+@inline(__always)
 func makeCoordinateSystem(from v1: Vector) -> (v2: Vector, v3: Vector) {
         var v2 = up
         if abs(v1.x) > abs(v1.y) {

@@ -125,26 +125,32 @@ struct Triangle: Shape {
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
+        @inline(__always)
         var vertexIndex0: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
         }
 
+        @inline(__always)
         var vertexIndex1: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
         }
 
+        @inline(__always)
         var vertexIndex2: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
         }
 
+        @inline(__always)
         var point0: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex0)
         }
 
+        @inline(__always)
         var point1: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex1)
         }
 
+        @inline(__always)
         var point2: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex2)
         }

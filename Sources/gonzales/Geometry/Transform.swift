@@ -27,6 +27,7 @@ struct Transform {
 
 extension Transform {
 
+        @inline(__always)
         public static func * (t: Transform, v: Vector) -> Vector {
                 let m = t.matrix
                 return Vector(
@@ -35,6 +36,7 @@ extension Transform {
                         z: m[2, 0] * v.x + m[2, 1] * v.y + m[2, 2] * v.z)
         }
 
+        @inline(__always)
         public static func * (t: Transform, n: Normal) -> Normal {
                 let i = t.inverse.matrix
                 return Normal(
@@ -43,6 +45,7 @@ extension Transform {
                         z: i[0, 2] * n.x + i[1, 2] * n.y + i[2, 2] * n.z)
         }
 
+        @inline(__always)
         public static func * (t: Transform, p: Point) -> Point {
                 let m = t.matrix
                 let point = Point(
