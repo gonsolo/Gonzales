@@ -15,16 +15,16 @@ struct Scene {
         }
 
         //@_noAllocation
-        @_semantics("optremark")
+        //@_semantics("optremark")
         mutating func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
                 intersectionTests += 1
-                guard let primitive else {
-                        return
-                }
+                //guard let primitive else {
+                //        return
+                //}
                 try primitive.intersect(
                         ray: ray,
                         tHit: &tHit,
@@ -47,7 +47,7 @@ struct Scene {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
-        var primitive: BoundingHierarchy?
+        var primitive: BoundingHierarchy!
         var lights: [Light]
         var infiniteLights: [Light]
 }
