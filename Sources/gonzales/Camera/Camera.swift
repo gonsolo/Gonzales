@@ -5,6 +5,6 @@
 
 protocol Camera {
         func generateRay(sample: CameraSample) -> Ray
-        func statistics()
+        static func statistics()
         var film: Film { get }
 }

@@ -420,11 +420,11 @@ struct Api {
                 //return
                 print(readTimer.elapsed)
                 if justParse { return }
-                renderer = try buildRenderer()
+                let renderer = try buildRenderer()
                 //if let renderer = renderer {
                 //        dumpCamera(renderer.camera)
                 //}
-                try render(with: renderer!)
+                try render(with: renderer)
                 if verbose { statistics.report() }
                 cleanUp()
         }
@@ -556,4 +556,3 @@ var currentTransform = Transform()
 var transforms = [Transform]()
 var readTimer = Timer("")
 var scene = Scene()
-var renderer: Renderer? = nil

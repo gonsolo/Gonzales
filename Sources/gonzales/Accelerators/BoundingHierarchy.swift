@@ -24,7 +24,7 @@ final class BoundingHierarchy: Boundable, Intersectable {
         }
 
         //@_noAllocation
-        //@_semantics("optremark")
+        @_semantics("optremark")
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,

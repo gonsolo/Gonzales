@@ -4,7 +4,7 @@ struct Statistics {
                 print("Statistics:")
                 BoundingHierarchyBuilder.statistics()
                 BoundingHierarchy.statistics()
-                renderer?.camera.statistics()
+                PerspectiveCamera.statistics()
                 scene.statistics()
                 Triangle.statistics()
                 //Curve.statistics()

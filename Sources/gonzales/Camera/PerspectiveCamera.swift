@@ -1,3 +1,5 @@
+var numberCameraRays = 0
+
 final class PerspectiveCamera: Camera, Transformable {
 
         init(
@@ -45,14 +47,13 @@ final class PerspectiveCamera: Camera, Transformable {
                 return objectToWorld * ray
         }
 
-        func statistics() {
+        static func statistics() {
                 print("  Camera rays traced:\t\t\t\t\t\t\t\(numberCameraRays)")
         }
 
         let fieldOfView: FloatX
         let focalDistance: FloatX
         let lensRadius: FloatX
-        var numberCameraRays = 0
         let cameraTransform: CameraTransform
         let objectToWorld: Transform
         let film: Film

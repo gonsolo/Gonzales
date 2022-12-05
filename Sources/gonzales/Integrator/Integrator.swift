@@ -175,8 +175,6 @@ extension Integrator {
                 }
         }
 
-        //@_noAllocation
-        @_semantics("optremark")
         func intersectOrInfiniteLights(
                 ray: Ray,
                 tHit: inout FloatX,
