@@ -2,12 +2,6 @@ var intersectionTests = 0
 
 struct Scene {
 
-        init() {
-                primitive = nil
-                lights = []
-                infiniteLights = []
-        }
-
         init(aggregate: BoundingHierarchy, lights: [Light]) {
                 self.primitive = aggregate
                 self.lights = lights
@@ -15,17 +9,12 @@ struct Scene {
                 sceneDiameter = diameter()
         }
 
-        //@_noAllocation
-        //@_semantics("optremark")
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
                 intersectionTests += 1
-                //guard let primitive else {
-                //        return
-                //}
                 try primitive.intersect(
                         ray: ray,
                         tHit: &tHit,
@@ -34,10 +23,7 @@ struct Scene {
         }
 
         func bound() -> Bounds3f {
-                guard let p = primitive else {
-                        return Bounds3f()
-                }
-                return p.worldBound()
+                return primitive.worldBound()
         }
 
         func diameter() -> FloatX {
@@ -48,7 +34,7 @@ struct Scene {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
-        var primitive: BoundingHierarchy!
+        var primitive: BoundingHierarchy
         var lights: [Light]
         var infiniteLights: [Light]
 }
