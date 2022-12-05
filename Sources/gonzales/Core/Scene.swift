@@ -1,6 +1,6 @@
-struct Scene {
+var intersectionTests = 0
 
-        var intersectionTests = 0
+struct Scene {
 
         init() {
                 primitive = nil
@@ -12,11 +12,12 @@ struct Scene {
                 self.primitive = aggregate
                 self.lights = lights
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
+                sceneDiameter = diameter()
         }
 
         //@_noAllocation
         //@_semantics("optremark")
-        mutating func intersect(
+        func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
@@ -43,7 +44,7 @@ struct Scene {
                 return length(bound().diagonal())
         }
 
-        func statistics() {
+        static func statistics() {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 

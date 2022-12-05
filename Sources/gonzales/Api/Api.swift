@@ -419,7 +419,7 @@ struct Api {
                 print(readTimer.elapsed)
                 if justParse { return }
                 let timer = Timer("Build accelerator...", newline: false)
-                scene = options.makeScene()
+                let scene = options.makeScene()
                 print(timer.elapsed)
                 let renderer = try options.makeRenderer(scene: scene)
                 try renderer.render()
@@ -538,4 +538,3 @@ var states = [State]()
 var currentTransform = Transform()
 var transforms = [Transform]()
 var readTimer = Timer("")
-var scene = Scene()

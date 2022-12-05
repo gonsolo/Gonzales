@@ -22,7 +22,8 @@ struct PathIntegrator: Integrator {
                                 tHit: &tHit,
                                 bounce: bounce,
                                 l: &l,
-                                interaction: &interaction)
+                                interaction: &interaction,
+                                scene: scene)
                         if !interaction.valid {
                                 break
                         }

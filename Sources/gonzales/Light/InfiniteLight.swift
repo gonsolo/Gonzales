@@ -1,8 +1,14 @@
 import Foundation  // sin, cos
 
+var sceneDiameter: FloatX = 100.0
+
 struct InfiniteLight: Light {
 
-        init(lightToWorld: Transform, brightness: Spectrum, texture: SpectrumTexture) {
+        init(
+                lightToWorld: Transform,
+                brightness: Spectrum,
+                texture: SpectrumTexture
+        ) {
                 self.lightToWorld = lightToWorld
                 self.brightness = brightness
                 self.texture = texture
@@ -23,7 +29,7 @@ struct InfiniteLight: Light {
                 let direction = lightToWorld * lightDirection
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
                 let distantPoint = SurfaceInteraction(
-                        position: reference.position + direction * scene.diameter())
+                        position: reference.position + direction * sceneDiameter)
                 let visibility = Visibility(from: reference, to: distantPoint)
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
@@ -88,7 +94,9 @@ func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionar
                 let brightness = try parameters.findSpectrum(name: "L") ?? white
                 let texture = ConstantTexture(value: brightness)
                 return InfiniteLight(
-                        lightToWorld: lightToWorld, brightness: brightness, texture: texture)
+                        lightToWorld: lightToWorld,
+                        brightness: brightness,
+                        texture: texture)
         }
         let texture = try getTextureFrom(name: mapname)
         return InfiniteLight(lightToWorld: lightToWorld, brightness: white, texture: texture)

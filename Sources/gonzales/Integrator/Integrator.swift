@@ -42,7 +42,8 @@ extension Integrator {
                         light: light,
                         atInteraction: interaction,
                         bsdf: bsdf,
-                        withSampler: sampler)
+                        withSampler: sampler,
+                        scene: scene)
                 return estimate / lightPdf
         }
 
@@ -50,7 +51,8 @@ extension Integrator {
                 light: Light,
                 atInteraction interaction: SurfaceInteraction,
                 bsdf: BSDF,
-                withSampler sampler: Sampler
+                withSampler sampler: Sampler,
+                scene: Scene
         ) throws -> Spectrum {
 
                 let zero = (black, FloatX(0.0), up)
@@ -63,7 +65,7 @@ extension Integrator {
                         guard !radiance.isBlack && !lightDensity.isInfinite else {
                                 return zero
                         }
-                        guard try visibility.unoccluded() else {
+                        guard try visibility.unoccluded(scene: scene) else {
                                 return zero
                         }
                         let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
@@ -180,7 +182,8 @@ extension Integrator {
                 tHit: inout FloatX,
                 bounce: Int,
                 l: inout Spectrum,
-                interaction: inout SurfaceInteraction
+                interaction: inout SurfaceInteraction,
+                scene: Scene
         ) throws {
                 try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
                 if interaction.valid {

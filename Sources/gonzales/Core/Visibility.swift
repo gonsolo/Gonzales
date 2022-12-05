@@ -2,7 +2,7 @@
 
 struct Visibility {
 
-        func unoccluded() throws -> Bool {
+        func unoccluded(scene: Scene) throws -> Bool {
                 var (ray, tHit) = from.spawnRay(to: to.position)
                 var interaction = SurfaceInteraction()
                 try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)

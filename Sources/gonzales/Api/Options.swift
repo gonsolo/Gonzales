@@ -215,7 +215,6 @@ class Options {
                 let accelerator = makeAccelerator(primitives: &primitives)
                 primitives = []
                 objects = [:]
-                let scene = Scene(aggregate: accelerator, lights: lights)
-                return scene
+                return Scene(aggregate: accelerator, lights: lights)
         }
 }
