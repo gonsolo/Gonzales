@@ -416,15 +416,10 @@ struct Api {
         }
 
         func worldEnd() throws {
-                //dumpPrimitives()
-                //return
                 print(readTimer.elapsed)
                 if justParse { return }
                 let renderer = try buildRenderer()
-                //if let renderer = renderer {
-                //        dumpCamera(renderer.camera)
-                //}
-                try render(with: renderer)
+                try renderer.render()
                 if verbose { statistics.report() }
                 cleanUp()
         }
@@ -434,14 +429,6 @@ struct Api {
                 scene = options.makeScene()
                 print(timer.elapsed)
                 return try options.makeRenderer(scene: scene)
-        }
-
-        private func render(with renderer: Renderer) throws {
-                let timer = Timer("Rendering...")
-                try renderer.render()
-                print("\n")
-                print(timer.elapsed)
-                fflush(stdout)
         }
 
         private func cleanUp() {

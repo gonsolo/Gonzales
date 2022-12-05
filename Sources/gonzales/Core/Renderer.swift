@@ -94,12 +94,16 @@ final class Renderer {
         }
 
         func render() throws {
+                let timer = Timer("Rendering...")
                 let bounds = generateBounds()
                 reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
                 reporter.reset()
                 try renderImage(bounds: bounds)
                 group.wait()
                 try camera.film.writeImages()
+                print("\n")
+                print(timer.elapsed)
+                fflush(stdout)
         }
 
         let camera: Camera
