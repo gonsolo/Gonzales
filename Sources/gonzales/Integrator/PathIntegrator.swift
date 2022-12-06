@@ -10,7 +10,6 @@ final class PathIntegrator {
         }
 
         private func chooseLight(
-                inScene scene: Scene,
                 withSampler sampler: Sampler
         ) throws
                 -> (Light, FloatX)
@@ -34,7 +33,7 @@ final class PathIntegrator {
         ) throws -> Spectrum {
 
                 guard scene.lights.count > 0 else { return black }
-                let (light, lightPdf) = try chooseLight(inScene: scene, withSampler: sampler)
+                let (light, lightPdf) = try chooseLight(withSampler: sampler)
                 let estimate = try estimateDirect(
                         light: light,
                         atInteraction: interaction,
