@@ -244,7 +244,6 @@ final class Curve: Shape {
                                 dpdu: worldInteraction.dpdu,
                                 uv: worldInteraction.uv,
                                 faceIndex: worldInteraction.faceIndex,
-                                areaLight: worldInteraction.areaLight,
                                 material: worldInteraction.material)
                         return (validWorldInteraction, tHit)
                 }

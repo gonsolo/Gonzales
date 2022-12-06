@@ -1,8 +1,13 @@
-struct Tile {
+final class Tile {
+
+        init(bounds: Bounds2i) {
+                self.bounds = bounds
+        }
 
         func render(
                 reporter: ProgressReporter,
                 scene: Scene,
+                integrator: PathIntegrator,
                 sampler: Sampler,
                 camera: Camera
         ) throws -> [Sample] {
@@ -12,6 +17,7 @@ struct Tile {
                                 pixel: pixel,
                                 reporter: reporter,
                                 scene: scene,
+                                integrator: integrator,
                                 sampler: sampler,
                                 camera: camera)
                         samples.append(contentsOf: pixelSamples)
@@ -23,6 +29,7 @@ struct Tile {
                 pixel: Point2I,
                 reporter: ProgressReporter,
                 scene: Scene,
+                integrator: PathIntegrator,
                 sampler: Sampler,
                 camera: Camera
         ) throws -> [Sample] {
@@ -48,7 +55,7 @@ struct Tile {
                 return samples
         }
 
-        let integrator: PathIntegrator
         static let size = 64
+
         var bounds: Bounds2i
 }

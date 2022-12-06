@@ -26,7 +26,7 @@ final class PathIntegrator {
                 return (light, probabilityDensity)
         }
 
-        func sampleOneLight(
+        private func sampleOneLight(
                 at interaction: SurfaceInteraction,
                 bsdf: BSDF,
                 with sampler: Sampler
@@ -42,6 +42,83 @@ final class PathIntegrator {
                 return estimate / lightPdf
         }
 
+        func sampleLightSource(
+                light: Light,
+                interaction: Interaction,
+                sampler: Sampler,
+                bsdf: BSDF
+        ) throws -> (
+                estimate: Spectrum, density: FloatX, sample: Vector
+        ) {
+                let zero = (black, FloatX(0.0), up)
+
+                let (radiance, wi, lightDensity, visibility) = light.sample(
+                        for: interaction, u: sampler.get2D())
+                guard !radiance.isBlack && !lightDensity.isInfinite else {
+                        return zero
+                }
+                guard try visibility.unoccluded(scene: scene) else {
+                        return zero
+                }
+                let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
+                let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
+                let scatter = reflected * dot
+                let estimate = scatter * radiance
+                return (estimate: estimate, density: lightDensity, sample: wi)
+        }
+
+        func sampleBrdf(
+                light: Light,
+                interaction: Interaction,
+                sampler: Sampler,
+                bsdf: BSDF
+        ) throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
+
+                let zero = (black, FloatX(0.0), up)
+
+                var (scatter, wi, bsdfDensity, _) = try bsdf.sample(
+                        wo: interaction.wo, u: sampler.get2D())
+                guard scatter != black && bsdfDensity > 0 else {
+                        return zero
+                }
+                scatter *= absDot(wi, interaction.shadingNormal)
+                let ray = interaction.spawnRay(inDirection: wi)
+                var tHit = FloatX.infinity
+                var brdfInteraction = SurfaceInteraction()
+                try scene.intersect(ray: ray, tHit: &tHit, interaction: &brdfInteraction)
+                if !brdfInteraction.valid {
+                        for light in scene.lights {
+                                if light is InfiniteLight {
+                                        let radiance = light.radianceFromInfinity(for: ray)
+                                        let estimate = scatter * radiance
+                                        return (
+                                                estimate: estimate, density: bsdfDensity,
+                                                sample: wi
+                                        )
+                                }
+                        }
+                        return zero
+                }
+                //guard let brdfAreaLight = brdfInteraction.areaLight else {
+                //        return zero
+                //}
+                //guard let areaLight = light as? AreaLight else {
+                //        return zero
+                //}
+                //guard brdfAreaLight === areaLight else {
+                //        return zero
+                //}
+                let radiance = black
+                //let radiance = brdfAreaLight.emittedRadiance(
+                //        from: brdfInteraction,
+                //        inDirection: -wi)
+                //guard radiance != black else {
+                //        return zero
+                //}
+                let estimate = scatter * radiance
+                return (estimate: estimate, density: bsdfDensity, sample: wi)
+        }
+
         //@_semantics("optremark")
         private func estimateDirect(
                 light: Light,
@@ -50,72 +127,9 @@ final class PathIntegrator {
                 withSampler sampler: Sampler
         ) throws -> Spectrum {
 
-                let zero = (black, FloatX(0.0), up)
-
-                func sampleLightSource() throws -> (
-                        estimate: Spectrum, density: FloatX, sample: Vector
-                ) {
-                        let (radiance, wi, lightDensity, visibility) = light.sample(
-                                for: interaction, u: sampler.get2D())
-                        guard !radiance.isBlack && !lightDensity.isInfinite else {
-                                return zero
-                        }
-                        guard try visibility.unoccluded(scene: scene) else {
-                                return zero
-                        }
-                        let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
-                        let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
-                        let scatter = reflected * dot
-                        let estimate = scatter * radiance
-                        return (estimate: estimate, density: lightDensity, sample: wi)
-                }
-
                 func lightDensity(sample: Vector) throws -> FloatX {
                         return try light.probabilityDensityFor(
                                 samplingDirection: sample, from: interaction)
-                }
-
-                func sampleBrdf() throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
-                        var (scatter, wi, bsdfDensity, _) = try bsdf.sample(
-                                wo: interaction.wo, u: sampler.get2D())
-                        guard scatter != black && bsdfDensity > 0 else {
-                                return zero
-                        }
-                        scatter *= absDot(wi, interaction.shadingNormal)
-                        let ray = interaction.spawnRay(inDirection: wi)
-                        var tHit = FloatX.infinity
-                        var brdfInteraction = SurfaceInteraction()
-                        try scene.intersect(ray: ray, tHit: &tHit, interaction: &brdfInteraction)
-                        if !brdfInteraction.valid {
-                                for light in scene.lights {
-                                        if light is InfiniteLight {
-                                                let radiance = light.radianceFromInfinity(for: ray)
-                                                let estimate = scatter * radiance
-                                                return (
-                                                        estimate: estimate, density: bsdfDensity,
-                                                        sample: wi
-                                                )
-                                        }
-                                }
-                                return zero
-                        }
-                        guard let brdfAreaLight = brdfInteraction.areaLight else {
-                                return zero
-                        }
-                        guard let areaLight = light as? AreaLight else {
-                                return zero
-                        }
-                        guard brdfAreaLight === areaLight else {
-                                return zero
-                        }
-                        let radiance = brdfAreaLight.emittedRadiance(
-                                from: brdfInteraction,
-                                inDirection: -wi)
-                        guard radiance != black else {
-                                return zero
-                        }
-                        let estimate = scatter * radiance
-                        return (estimate: estimate, density: bsdfDensity, sample: wi)
                 }
 
                 func brdfDensity(sample: Vector) -> FloatX {
@@ -124,7 +138,11 @@ final class PathIntegrator {
                 }
 
                 if light.isDelta {
-                        let (estimate, density, _) = try sampleLightSource()
+                        let (estimate, density, _) = try sampleLightSource(
+                                light: light,
+                                interaction: interaction,
+                                sampler: sampler,
+                                bsdf: bsdf)
                         if density == 0 {
                                 return black
                         } else {
@@ -152,11 +170,16 @@ final class PathIntegrator {
                 //}
 
                 // Light and BRDF sampling with multiple importance sampling
-                let lightSampler = MultipleImportanceSampler<Vector>.Sampler(
+                let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
-                let brdfSampler = MultipleImportanceSampler<Vector>.Sampler(
+                let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
                         sample: sampleBrdf, density: brdfDensity)
-                let sampler = MultipleImportanceSampler(samplers: (lightSampler, brdfSampler))
+                let sampler = MultipleImportanceSampler(
+                        samplers: (lightSampler, brdfSampler),
+                        light: light,
+                        interaction: interaction,
+                        sampler: sampler,
+                        bsdf: bsdf)
                 return try sampler.evaluate()
         }
 
@@ -189,7 +212,7 @@ final class PathIntegrator {
                 if bounce == 0 { l += radiance }
         }
 
-        @_semantics("optremark")
+        //@_semantics("optremark")
         func getRadianceAndAlbedo(
                 from ray: Ray, tHit: inout FloatX, with sampler: Sampler
         ) throws
@@ -213,13 +236,13 @@ final class PathIntegrator {
                                 break
                         }
                         if bounce == 0 {
-                                if let areaLight = interaction.areaLight {
-                                        l +=
-                                                beta
-                                                * areaLight.emittedRadiance(
-                                                        from: interaction,
-                                                        inDirection: interaction.wo)
-                                }
+                                //if let areaLight = interaction.areaLight {
+                                //        l +=
+                                //                beta
+                                //                * areaLight.emittedRadiance(
+                                //                        from: interaction,
+                                //                        inDirection: interaction.wo)
+                                //}
                         }
                         guard bounce < maxDepth else {
                                 break

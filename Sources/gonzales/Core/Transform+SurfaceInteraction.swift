@@ -10,7 +10,6 @@ extension Transform {
                         dpdu: left * right.dpdu,
                         uv: right.uv,
                         faceIndex: right.faceIndex,
-                        areaLight: right.areaLight,
                         material: right.material)
         }
 }

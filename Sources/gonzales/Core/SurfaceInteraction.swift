@@ -22,7 +22,6 @@ struct Interaction {
                 self.dpdu = dpdu
                 self.uv = uv
                 self.faceIndex = faceIndex
-                self.areaLight = areaLight
                 self.material = material
         }
 
@@ -35,7 +34,6 @@ struct Interaction {
                 self.dpdu = other.dpdu
                 self.uv = other.uv
                 self.faceIndex = other.faceIndex
-                self.areaLight = other.areaLight
                 self.material = other.material
         }
 
@@ -63,7 +61,7 @@ struct Interaction {
         var dpdu: Vector
         var uv: Point2F
         var faceIndex: Int
-        var areaLight: AreaLight?
+        //var areaLight: AreaLight?
         var material: MaterialIndex
 }
 

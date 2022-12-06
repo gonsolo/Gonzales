@@ -20,7 +20,7 @@ final class Renderer {
                                         x: min(x + Tile.size, bounds.pMax.x),
                                         y: min(y + Tile.size, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)
-                                let tile = Tile(integrator: integrator, bounds: bounds)
+                                let tile = Tile(bounds: bounds)
                                 tiles.append(tile)
                                 x += Tile.size
                         }
@@ -34,6 +34,7 @@ final class Renderer {
                 return try tile.render(
                         reporter: reporter,
                         scene: scene,
+                        integrator: integrator,
                         sampler: tileSampler,
                         camera: self.camera
                 )

@@ -52,7 +52,6 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                         tHit: &tHit,
                         material: material,
                         interaction: &interaction)
-                interaction.areaLight = self
         }
 
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
