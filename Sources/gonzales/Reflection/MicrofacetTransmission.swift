@@ -1,5 +1,3 @@
-import Foundation  // tmp
-
 struct MicrofacetTransmission: BxDF {
 
         init(t: Spectrum, distribution: MicrofacetDistribution, eta: (FloatX, FloatX)) {

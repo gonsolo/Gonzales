@@ -1,5 +1,3 @@
-import Foundation
-
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
 struct BSDF {
