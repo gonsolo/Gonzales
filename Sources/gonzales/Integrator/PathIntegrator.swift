@@ -42,7 +42,7 @@ final class PathIntegrator {
                 return estimate / lightPdf
         }
 
-        func sampleLightSource(
+        private func sampleLightSource(
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
@@ -67,7 +67,8 @@ final class PathIntegrator {
                 return (estimate: estimate, density: lightDensity, sample: wi)
         }
 
-        func sampleBrdf(
+        @_semantics("optremark")
+        private func sampleBrdf(
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
@@ -99,24 +100,29 @@ final class PathIntegrator {
                         }
                         return zero
                 }
-                //guard let brdfAreaLight = brdfInteraction.areaLight else {
-                //        return zero
-                //}
-                //guard let areaLight = light as? AreaLight else {
-                //        return zero
-                //}
-                //guard brdfAreaLight === areaLight else {
-                //        return zero
-                //}
                 let radiance = black
-                //let radiance = brdfAreaLight.emittedRadiance(
-                //        from: brdfInteraction,
-                //        inDirection: -wi)
-                //guard radiance != black else {
-                //        return zero
-                //}
                 let estimate = scatter * radiance
                 return (estimate: estimate, density: bsdfDensity, sample: wi)
+        }
+
+        private func lightDensity(
+                light: Light,
+                interaction: Interaction,
+                sample: Vector,
+                bsdf: BSDF
+        ) throws -> FloatX {
+                return try light.probabilityDensityFor(
+                        samplingDirection: sample, from: interaction)
+        }
+
+        private func brdfDensity(
+                light: Light,
+                interaction: Interaction,
+                sample: Vector,
+                bsdf: BSDF
+        ) -> FloatX {
+                let density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
+                return density
         }
 
         //@_semantics("optremark")
@@ -126,16 +132,6 @@ final class PathIntegrator {
                 bsdf: BSDF,
                 withSampler sampler: Sampler
         ) throws -> Spectrum {
-
-                func lightDensity(sample: Vector) throws -> FloatX {
-                        return try light.probabilityDensityFor(
-                                samplingDirection: sample, from: interaction)
-                }
-
-                func brdfDensity(sample: Vector) -> FloatX {
-                        let density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
-                        return density
-                }
 
                 if light.isDelta {
                         let (estimate, density, _) = try sampleLightSource(
@@ -194,6 +190,7 @@ final class PathIntegrator {
                 }
         }
 
+        //@_semantics("optremark")
         func intersectOrInfiniteLights(
                 ray: Ray,
                 tHit: inout FloatX,
