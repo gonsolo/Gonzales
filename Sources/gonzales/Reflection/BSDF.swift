@@ -5,6 +5,7 @@ import Foundation
 struct BSDF {
 
         init() {
+                bxdf = LambertianReflection(reflectance: black)
                 ng = Normal()
                 ns = Normal()
                 ss = up
@@ -12,14 +13,15 @@ struct BSDF {
         }
 
         init(interaction: Interaction) {
+                bxdf = LambertianReflection(reflectance: black)
                 ng = interaction.normal
                 ns = interaction.shadingNormal
                 ss = normalized(interaction.dpdu)
                 ts = cross(Vector(normal: ns), ss)
         }
 
-        mutating func add(bxdf: BxDF) {
-                bxdfs.append(bxdf)
+        mutating func set(bxdf: BxDF) {
+                self.bxdf = bxdf
         }
 
         func evaluate(wo woWorld: Vector, wi wiWorld: Vector) -> Spectrum {
@@ -27,26 +29,19 @@ struct BSDF {
                 let woLocal = worldToLocal(world: woWorld)
                 let wiLocal = worldToLocal(world: wiWorld)
                 let reflect = dot(wiWorld, ng) * dot(woWorld, ng) > 0
-                //print("evaluate reflect wo wi: ", reflect, woWorld, wiWorld)
-                for bxdf in bxdfs {
-                        if reflect && bxdf.isReflective {
-                                //print("reflect and reflective")
-                                totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
-                        }
-                        if !reflect && bxdf.isTransmissive {
-                                //print("not reflect and transmissive")
-                                totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
-                        }
+                if reflect && bxdf.isReflective {
+                        //print("reflect and reflective")
+                        totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
+                }
+                if !reflect && bxdf.isTransmissive {
+                        //print("not reflect and transmissive")
+                        totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
                 }
                 return totalLightScattered
         }
 
         func albedo() -> Spectrum {
-                var total = black
-                for bxdf in bxdfs {
-                        total += bxdf.albedo()
-                }
-                return total / FloatX(bxdfs.count)
+                return bxdf.albedo()
         }
 
         private func worldToLocal(world: Vector) -> Vector {
@@ -64,52 +59,20 @@ struct BSDF {
         func sample(wo woWorld: Vector, u: Point2F) throws -> (
                 L: Spectrum, wi: Vector, pdf: FloatX, isTransmissive: Bool
         ) {
-                guard let randomBxdf = bxdfs.randomElement() else {
-                        warning("BxDF count zero!")
-                        return (black, up, 0, false)
-                }
                 let woLocal = worldToLocal(world: woWorld)
-                var (estimate, wiLocal, density) = randomBxdf.sample(wo: woLocal, u: u)
-                //print("randomBxdf, estimate, density: ", randomBxdf, estimate, density)
+                let (estimate, wiLocal, density) = bxdf.sample(wo: woLocal, u: u)
                 let wiWorld = localToWorld(local: wiLocal)
-                let reflect = dot(wiWorld, ng) * dot(woWorld, ng) > 0
-                for bxdf in bxdfs {
-                        //print("sample bxdf")
-                        if reflect && bxdf.isReflective {
-                                if bxdf !== randomBxdf {
-                                        estimate += bxdf.evaluate(wo: woLocal, wi: wiLocal)
-                                        density += bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
-                                        //print("density now: ", density)
-                                }
-                        }
-                        if !reflect && bxdf.isTransmissive {
-                                if bxdf !== randomBxdf {
-                                        estimate += bxdf.evaluate(wo: woLocal, wi: wiLocal)
-                                        density += bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
-                                        //print("density now: ", density)
-                                }
-                        }
-                }
-                //print("BSDF wo wi density: ", woWorld, wiWorld, density)
-                return (estimate, wiWorld, density, randomBxdf.isTransmissive)
+                return (estimate, wiWorld, density, bxdf.isTransmissive)
         }
 
         func probabilityDensity(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
-                guard bxdfs.count >= 1 else {
-                        warning("BxDF count zero!")
-                        return 0
-                }
                 let wiLocal = worldToLocal(world: wiWorld)
                 let woLocal = worldToLocal(world: woWorld)
                 if woLocal.z == 0 { return 0 }
-                var density: FloatX = 0.0
-                for bxdf in bxdfs {
-                        density += bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
-                }
-                return density
+                return bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
         }
 
-        var bxdfs = [BxDF]()
+        var bxdf: BxDF
         var ng = Normal()
         var ns = Normal()
         var ss = up

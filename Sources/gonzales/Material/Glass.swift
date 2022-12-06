@@ -15,7 +15,7 @@ final class Glass: Material {
                 if reflectance.isBlack && transmittance.isBlack { return (bsdf, nil) }
                 let specular = FresnelSpecular(
                         reflectance: reflectance, transmittance: transmittance, etaA: 1, etaB: eta)
-                bsdf.add(bxdf: specular)
+                bsdf.set(bxdf: specular)
                 return (bsdf, nil)
         }
 

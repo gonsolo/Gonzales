@@ -16,7 +16,7 @@ final class Substrate: Material {
                         diffuseReflection: kd,
                         glossyReflection: ks,
                         distribution: distribution)
-                bsdf.add(bxdf: fresnelBlend)
+                bsdf.set(bxdf: fresnelBlend)
                 return (bsdf, nil)
         }
 

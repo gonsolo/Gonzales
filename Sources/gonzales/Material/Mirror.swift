@@ -5,7 +5,7 @@ final class Mirror: Material {
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectance = kr.evaluateSpectrum(at: interaction)
-                bsdf.add(bxdf: SpecularReflection(reflectance: reflectance, fresnel: FresnelNop()))
+                bsdf.set(bxdf: SpecularReflection(reflectance: reflectance, fresnel: FresnelNop()))
                 return (bsdf, nil)
         }
 

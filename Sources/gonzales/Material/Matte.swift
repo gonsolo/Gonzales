@@ -5,7 +5,7 @@ final class Matte: Material {
         func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
                 var bsdf = BSDF(interaction: interaction)
                 let kde = kd.evaluateSpectrum(at: interaction)
-                bsdf.add(bxdf: LambertianReflection(reflectance: kde))
+                bsdf.set(bxdf: LambertianReflection(reflectance: kde))
                 return (bsdf, nil)
         }
 

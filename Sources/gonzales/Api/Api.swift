@@ -471,8 +471,6 @@ struct Api {
                 switch name {
                 case "diffuse":
                         material = try createMatte(parameters: parameters)
-                case "disney":
-                        material = try createDisney(parameters: parameters)
                 case "glass":
                         material = try createGlass(parameters: parameters)
                 case "matte":
@@ -483,12 +481,8 @@ struct Api {
                         material = try createMirror(parameters: parameters)
                 case "none":
                         material = try createNone()
-                case "plastic":
-                        material = try createPlastic(parameters: parameters)
                 case "substrate":
                         material = try createSubstrate(parameters: parameters)
-                case "uber":
-                        material = try createUber(parameters: parameters)
                 default:
                         try material = makeDefault(insteadOf: name)
                 }

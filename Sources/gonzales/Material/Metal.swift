@@ -18,7 +18,7 @@ final class Metal: Material {
                         reflectance: white,
                         distribution: trowbridge,
                         fresnel: fresnel)
-                bsdf.add(bxdf: reflection)
+                bsdf.set(bxdf: reflection)
                 return (bsdf, nil)
         }
 
