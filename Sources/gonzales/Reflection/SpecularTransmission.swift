@@ -1,4 +1,4 @@
-final class SpecularTransmission: BxDF {
+struct SpecularTransmission: BxDF {
 
         init(t: Spectrum, etaA: FloatX, etaB: FloatX) {
                 self.t = t

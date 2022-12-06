@@ -1,4 +1,4 @@
-final class LambertianTransmission: BxDF {
+struct LambertianTransmission: BxDF {
 
         init(reflectance: Spectrum) {
                 self.reflectance = reflectance

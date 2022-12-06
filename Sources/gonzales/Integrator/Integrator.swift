@@ -47,6 +47,7 @@ extension Integrator {
                 return estimate / lightPdf
         }
 
+        @_semantics("optremark")
         private func estimateDirect(
                 light: Light,
                 atInteraction interaction: SurfaceInteraction,

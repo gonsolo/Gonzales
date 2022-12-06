@@ -1,4 +1,4 @@
-final class LambertianReflection: BxDF {
+struct LambertianReflection: BxDF {
 
         init(reflectance: Spectrum) {
                 self.reflectance = reflectance

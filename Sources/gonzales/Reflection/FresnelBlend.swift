@@ -1,4 +1,4 @@
-final class FresnelBlend: BxDF {
+struct FresnelBlend: BxDF {
 
         init(
                 diffuseReflection: Spectrum,

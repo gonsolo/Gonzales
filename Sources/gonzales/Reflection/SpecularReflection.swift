@@ -1,4 +1,4 @@
-final class SpecularReflection: BxDF {
+struct SpecularReflection: BxDF {
 
         init(reflectance: Spectrum, fresnel: Fresnel) {
                 self.reflectance = reflectance

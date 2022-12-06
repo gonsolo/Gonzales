@@ -1,4 +1,4 @@
-final class FresnelSpecular: BxDF {
+struct FresnelSpecular: BxDF {
 
         init(reflectance: Spectrum, transmittance: Spectrum, etaA: FloatX, etaB: FloatX) {
                 self.reflectance = reflectance

@@ -1,6 +1,6 @@
 import Foundation  // tmp
 
-final class MicrofacetTransmission: BxDF {
+struct MicrofacetTransmission: BxDF {
 
         init(t: Spectrum, distribution: MicrofacetDistribution, eta: (FloatX, FloatX)) {
                 self.t = t

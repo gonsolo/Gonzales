@@ -1,4 +1,4 @@
-final class MicrofacetReflection: BxDF {
+struct MicrofacetReflection: BxDF {
 
         init(reflectance: Spectrum, distribution: MicrofacetDistribution, fresnel: Fresnel) {
                 self.reflectance = reflectance
