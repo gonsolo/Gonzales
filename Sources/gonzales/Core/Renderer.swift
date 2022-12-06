@@ -2,7 +2,7 @@ import Foundation
 
 final class Renderer {
 
-        init(camera: Camera, integrator: Integrator, sampler: Sampler, scene: Scene) {
+        init(camera: Camera, integrator: PathIntegrator, sampler: Sampler, scene: Scene) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
@@ -20,7 +20,7 @@ final class Renderer {
                                         x: min(x + Tile.size, bounds.pMax.x),
                                         y: min(y + Tile.size, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)
-                                let tile = Tile(bounds: bounds)
+                                let tile = Tile(integrator: integrator, bounds: bounds)
                                 tiles.append(tile)
                                 x += Tile.size
                         }
@@ -35,8 +35,7 @@ final class Renderer {
                         reporter: reporter,
                         scene: scene,
                         sampler: tileSampler,
-                        camera: self.camera,
-                        integrator: self.integrator
+                        camera: self.camera
                 )
         }
 
@@ -108,7 +107,7 @@ final class Renderer {
 
         let camera: Camera
         let group = DispatchGroup()
-        let integrator: Integrator
+        let integrator: PathIntegrator
         let queue = DispatchQueue.global()
         var reporter = ProgressReporter()
         let sampler: Sampler

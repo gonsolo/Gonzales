@@ -1,6 +1,6 @@
 var intersectionTests = 0
 
-struct Scene {
+final class Scene {
 
         init(aggregate: BoundingHierarchy, lights: [Light]) {
                 self.primitive = aggregate

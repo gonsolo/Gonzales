@@ -4,8 +4,7 @@ struct Tile {
                 reporter: ProgressReporter,
                 scene: Scene,
                 sampler: Sampler,
-                camera: Camera,
-                integrator: Integrator
+                camera: Camera
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for pixel in bounds {
@@ -14,8 +13,7 @@ struct Tile {
                                 reporter: reporter,
                                 scene: scene,
                                 sampler: sampler,
-                                camera: camera,
-                                integrator: integrator)
+                                camera: camera)
                         samples.append(contentsOf: pixelSamples)
                 }
                 return samples
@@ -26,8 +24,7 @@ struct Tile {
                 reporter: ProgressReporter,
                 scene: Scene,
                 sampler: Sampler,
-                camera: Camera,
-                integrator: Integrator
+                camera: Camera
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for _ in 0..<sampler.samplesPerPixel {
@@ -37,7 +34,6 @@ struct Tile {
                         let (L, albedo, normal) = try integrator.getRadianceAndAlbedo(
                                 from: ray,
                                 tHit: &tHit,
-                                for: scene,
                                 with: sampler)
                         let rayWeight: FloatX = 1.0
                         let sample = Sample(
@@ -52,6 +48,7 @@ struct Tile {
                 return samples
         }
 
+        let integrator: PathIntegrator
         static let size = 64
         var bounds: Bounds2i
 }
