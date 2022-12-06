@@ -43,7 +43,7 @@ final class PathIntegrator {
                 return estimate / lightPdf
         }
 
-        @_semantics("optremark")
+        //@_semantics("optremark")
         private func estimateDirect(
                 light: Light,
                 atInteraction interaction: SurfaceInteraction,
@@ -177,8 +177,7 @@ final class PathIntegrator {
                 tHit: inout FloatX,
                 bounce: Int,
                 l: inout Spectrum,
-                interaction: inout SurfaceInteraction,
-                scene: Scene
+                interaction: inout SurfaceInteraction
         ) throws {
                 try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
                 if interaction.valid {
@@ -191,6 +190,7 @@ final class PathIntegrator {
                 if bounce == 0 { l += radiance }
         }
 
+        @_semantics("optremark")
         func getRadianceAndAlbedo(
                 from ray: Ray, tHit: inout FloatX, with sampler: Sampler
         ) throws
@@ -209,8 +209,7 @@ final class PathIntegrator {
                                 tHit: &tHit,
                                 bounce: bounce,
                                 l: &l,
-                                interaction: &interaction,
-                                scene: scene)
+                                interaction: &interaction)
                         if !interaction.valid {
                                 break
                         }
