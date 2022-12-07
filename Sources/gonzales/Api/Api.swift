@@ -418,10 +418,7 @@ struct Api {
         func worldEnd() throws {
                 print(readTimer.elapsed)
                 if justParse { return }
-                let timer = Timer("Build accelerator...", newline: false)
-                let scene = options.makeScene()
-                print(timer.elapsed)
-                let renderer = try options.makeRenderer(scene: scene)
+                let renderer = try options.makeRenderer()
                 try renderer.render()
                 if verbose { statistics.report() }
                 cleanUp()

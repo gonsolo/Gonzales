@@ -199,7 +199,8 @@ class Options {
                 return sampler
         }
 
-        func makeRenderer(scene: Scene) throws -> Renderer {
+        func makeRenderer() throws -> Renderer {
+                let scene = makeScene()
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
