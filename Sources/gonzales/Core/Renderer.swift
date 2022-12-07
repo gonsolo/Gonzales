@@ -2,11 +2,10 @@ import Foundation
 
 final class Renderer {
 
-        init(camera: Camera, integrator: PathIntegrator, sampler: Sampler, scene: Scene) {
+        init(camera: Camera, integrator: PathIntegrator, sampler: Sampler) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
-                self.scene = scene
         }
 
         func generateTiles(from bounds: Bounds2i) -> [Tile] {
@@ -21,7 +20,6 @@ final class Renderer {
                                         y: min(y + Tile.size, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)
                                 let tile = Tile(
-                                        scene: scene,
                                         integrator: integrator,
                                         bounds: bounds)
                                 tiles.append(tile)
@@ -113,5 +111,4 @@ final class Renderer {
         let queue = DispatchQueue.global()
         var reporter = ProgressReporter()
         let sampler: Sampler
-        let scene: Scene
 }

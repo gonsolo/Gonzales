@@ -17,9 +17,9 @@ final class PathIntegrator {
         {
 
                 assert(scene.lights.count > 0)
-                guard scene.lights.count + scene.infiniteLights.count > 0 else {
-                        throw RenderError.noLights
-                }
+                //guard scene.lights.count + scene.infiniteLights.count > 0 else {
+                //        throw RenderError.noLights
+                //}
                 let u = sampler.get1D()
                 let lightNum = Int(u * FloatX(scene.lights.count))
                 let light = scene.lights[lightNum]
@@ -286,6 +286,6 @@ final class PathIntegrator {
                 }
         }
 
-        unowned var scene: Scene
+        var scene: Scene
         var maxDepth: Int
 }

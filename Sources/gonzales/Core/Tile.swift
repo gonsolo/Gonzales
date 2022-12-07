@@ -1,7 +1,6 @@
 final class Tile {
 
-        init(scene: Scene, integrator: PathIntegrator, bounds: Bounds2i) {
-                self.scene = scene
+        init(integrator: PathIntegrator, bounds: Bounds2i) {
                 self.integrator = integrator
                 self.bounds = bounds
         }
@@ -53,7 +52,6 @@ final class Tile {
 
         static let size = 64
 
-        unowned var scene: Scene
         unowned var integrator: PathIntegrator
         var bounds: Bounds2i
 }

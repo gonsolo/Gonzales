@@ -207,8 +207,7 @@ class Options {
                 return Renderer(
                         camera: camera,
                         integrator: integrator,
-                        sampler: sampler,
-                        scene: scene
+                        sampler: sampler
                 )
         }
 
