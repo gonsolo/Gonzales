@@ -1,13 +1,13 @@
 final class Tile {
 
-        init(bounds: Bounds2i) {
+        init(scene: Scene, integrator: PathIntegrator, bounds: Bounds2i) {
+                self.scene = scene
+                self.integrator = integrator
                 self.bounds = bounds
         }
 
         func render(
                 reporter: ProgressReporter,
-                scene: Scene,
-                integrator: PathIntegrator,
                 sampler: Sampler,
                 camera: Camera
         ) throws -> [Sample] {
@@ -16,8 +16,6 @@ final class Tile {
                         let pixelSamples = try renderPixel(
                                 pixel: pixel,
                                 reporter: reporter,
-                                scene: scene,
-                                integrator: integrator,
                                 sampler: sampler,
                                 camera: camera)
                         samples.append(contentsOf: pixelSamples)
@@ -28,8 +26,6 @@ final class Tile {
         func renderPixel(
                 pixel: Point2I,
                 reporter: ProgressReporter,
-                scene: Scene,
-                integrator: PathIntegrator,
                 sampler: Sampler,
                 camera: Camera
         ) throws -> [Sample] {
@@ -57,5 +53,7 @@ final class Tile {
 
         static let size = 64
 
+        unowned var scene: Scene
+        unowned var integrator: PathIntegrator
         var bounds: Bounds2i
 }

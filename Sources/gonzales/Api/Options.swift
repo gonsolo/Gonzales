@@ -212,7 +212,9 @@ class Options {
         }
 
         func makeScene() -> Scene {
+                let timer = Timer("Build accelerator...", newline: false)
                 let accelerator = makeAccelerator(primitives: &primitives)
+                print(timer.elapsed)
                 primitives = []
                 objects = [:]
                 return Scene(aggregate: accelerator, lights: lights)

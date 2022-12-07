@@ -9,6 +9,7 @@ final class PathIntegrator {
                 self.maxDepth = maxDepth
         }
 
+        @_semantics("optremark")
         private func chooseLight(
                 withSampler sampler: Sampler
         ) throws
@@ -67,7 +68,7 @@ final class PathIntegrator {
                 return (estimate: estimate, density: lightDensity, sample: wi)
         }
 
-        @_semantics("optremark")
+        //@_semantics("optremark")
         private func sampleBrdf(
                 light: Light,
                 interaction: Interaction,
@@ -285,6 +286,6 @@ final class PathIntegrator {
                 }
         }
 
-        var scene: Scene
+        unowned var scene: Scene
         var maxDepth: Int
 }
