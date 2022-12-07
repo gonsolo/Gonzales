@@ -52,6 +52,6 @@ final class Tile {
 
         static let size = 64
 
-        unowned var integrator: PathIntegrator
+        var integrator: PathIntegrator
         var bounds: Bounds2i
 }

@@ -4,12 +4,12 @@
 
 final class PathIntegrator {
 
-        init(scene: Scene, maxDepth: Int) {
-                self.scene = scene
+        init(maxDepth: Int) {
+                self.scene = options.makeScene()
                 self.maxDepth = maxDepth
         }
 
-        @_semantics("optremark")
+        //@_semantics("optremark")
         private func chooseLight(
                 withSampler sampler: Sampler
         ) throws
@@ -126,7 +126,7 @@ final class PathIntegrator {
                 return density
         }
 
-        //@_semantics("optremark")
+        @_semantics("optremark")
         private func estimateDirect(
                 light: Light,
                 atInteraction interaction: SurfaceInteraction,
@@ -191,7 +191,7 @@ final class PathIntegrator {
                 }
         }
 
-        //@_semantics("optremark")
+        @_semantics("optremark")
         func intersectOrInfiniteLights(
                 ray: Ray,
                 tHit: inout FloatX,

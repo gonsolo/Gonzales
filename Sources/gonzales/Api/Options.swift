@@ -175,7 +175,7 @@ class Options {
                 )
         }
 
-        func makeIntegrator(scene: Scene, sampler: Sampler) throws -> PathIntegrator {
+        func makeIntegrator(sampler: Sampler) throws -> PathIntegrator {
                 if options.integratorName != "path" {
                         var message = "Integrator \(options.integratorName) not implemented, "
                         message += "using path integrator!"
@@ -185,7 +185,7 @@ class Options {
                         called: "maxdepth",
                         else: 1
                 )
-                return PathIntegrator(scene: scene, maxDepth: maxDepth)
+                return PathIntegrator(maxDepth: maxDepth)
         }
 
         func makeSampler(film: Film) throws -> Sampler {
@@ -200,10 +200,9 @@ class Options {
         }
 
         func makeRenderer() throws -> Renderer {
-                let scene = makeScene()
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
-                let integrator = try makeIntegrator(scene: scene, sampler: sampler)
+                let integrator = try makeIntegrator(sampler: sampler)
                 return Renderer(
                         camera: camera,
                         integrator: integrator,
