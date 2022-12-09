@@ -9,6 +9,7 @@ final class Tile {
                 reporter: ProgressReporter,
                 sampler: Sampler,
                 camera: Camera,
+                scene: Scene,
                 hierarchy: BoundingHierarchy
         ) throws -> [Sample] {
                 var samples = [Sample]()
@@ -18,6 +19,7 @@ final class Tile {
                                 reporter: reporter,
                                 sampler: sampler,
                                 camera: camera,
+                                scene: scene,
                                 hierarchy: hierarchy)
                         samples.append(contentsOf: pixelSamples)
                 }
@@ -29,6 +31,7 @@ final class Tile {
                 reporter: ProgressReporter,
                 sampler: Sampler,
                 camera: Camera,
+                scene: Scene,
                 hierarchy: BoundingHierarchy
         ) throws -> [Sample] {
                 var samples = [Sample]()
@@ -40,6 +43,7 @@ final class Tile {
                                 from: ray,
                                 tHit: &tHit,
                                 with: sampler,
+                                scene: scene,
                                 hierarchy: hierarchy)
                         let rayWeight: FloatX = 1.0
                         let sample = Sample(

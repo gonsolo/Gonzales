@@ -44,6 +44,7 @@ final class Renderer {
                         reporter: reporter,
                         sampler: tileSampler,
                         camera: self.camera,
+                        scene: scene,
                         hierarchy: hierarchy
                 )
         }

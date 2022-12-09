@@ -210,7 +210,6 @@ private func estimateDirect(
 final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
-                self.scene = scene
                 self.maxDepth = maxDepth
         }
 
@@ -230,6 +229,7 @@ final class PathIntegrator {
                 from ray: Ray,
                 tHit: inout FloatX,
                 with sampler: Sampler,
+                scene: Scene,
                 hierarchy: BoundingHierarchy
         ) throws
                 -> (radiance: Spectrum, albedo: Spectrum, normal: Normal)
@@ -310,6 +310,6 @@ final class PathIntegrator {
                 }
         }
 
-        var scene: Scene
+        //var scene: Scene
         var maxDepth: Int
 }
