@@ -14,9 +14,13 @@ struct MultipleImportanceSampler<Sample> {
                 let density: densityFunc
         }
 
-        func evaluate(scene: Scene, hierarchy: BoundingHierarchy) throws -> Spectrum {
+        func evaluate(scene: Scene, hierarchy: BoundingHierarchy, light: Light) throws -> Spectrum {
 
-                func evaluate(first: MISSampler, second: MISSampler) throws -> Spectrum {
+                func evaluate(
+                        first: MISSampler,
+                        second: MISSampler,
+                        light: Light
+                ) throws -> Spectrum {
                         let (estimate, density, sample) = try first.sample(
                                 light, interaction, sampler, bsdf, scene, hierarchy)
                         let otherDensity = try second.density(
@@ -25,13 +29,13 @@ struct MultipleImportanceSampler<Sample> {
                         return density == 0 ? black : estimate * weight / density
                 }
 
-                let a = try evaluate(first: samplers.0, second: samplers.1)
-                let b = try evaluate(first: samplers.1, second: samplers.0)
+                let a = try evaluate(first: samplers.0, second: samplers.1, light: light)
+                let b = try evaluate(first: samplers.1, second: samplers.0, light: light)
                 return a + b
         }
 
         let samplers: (MISSampler, MISSampler)
-        let light: Light
+        //let light: Light
         let interaction: Interaction
         let sampler: Sampler
         let bsdf: BSDF

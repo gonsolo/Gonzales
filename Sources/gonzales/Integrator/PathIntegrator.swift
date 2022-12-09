@@ -130,7 +130,6 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
-@_semantics("optremark")
 private func sampleOneLight(
         at interaction: SurfaceInteraction,
         bsdf: BSDF,
@@ -201,11 +200,10 @@ private func estimateDirect(
                 sample: sampleBrdf, density: brdfDensity)
         let sampler = MultipleImportanceSampler(
                 samplers: (lightSampler, brdfSampler),
-                light: light,
                 interaction: interaction,
                 sampler: sampler,
                 bsdf: bsdf)
-        return try sampler.evaluate(scene: scene, hierarchy: hierarchy)
+        return try sampler.evaluate(scene: scene, hierarchy: hierarchy, light: light)
 }
 
 final class PathIntegrator {
