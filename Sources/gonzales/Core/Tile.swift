@@ -8,7 +8,8 @@ final class Tile {
         func render(
                 reporter: ProgressReporter,
                 sampler: Sampler,
-                camera: Camera
+                camera: Camera,
+                hierarchy: BoundingHierarchy
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for pixel in bounds {
@@ -16,7 +17,8 @@ final class Tile {
                                 pixel: pixel,
                                 reporter: reporter,
                                 sampler: sampler,
-                                camera: camera)
+                                camera: camera,
+                                hierarchy: hierarchy)
                         samples.append(contentsOf: pixelSamples)
                 }
                 return samples
@@ -26,7 +28,8 @@ final class Tile {
                 pixel: Point2I,
                 reporter: ProgressReporter,
                 sampler: Sampler,
-                camera: Camera
+                camera: Camera,
+                hierarchy: BoundingHierarchy
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for _ in 0..<sampler.samplesPerPixel {
@@ -36,7 +39,8 @@ final class Tile {
                         let (L, albedo, normal) = try integrator.getRadianceAndAlbedo(
                                 from: ray,
                                 tHit: &tHit,
-                                with: sampler)
+                                with: sampler,
+                                hierarchy: hierarchy)
                         let rayWeight: FloatX = 1.0
                         let sample = Sample(
                                 light: L,

@@ -43,7 +43,8 @@ final class Renderer {
                 return try tile.render(
                         reporter: reporter,
                         sampler: tileSampler,
-                        camera: self.camera
+                        camera: self.camera,
+                        hierarchy: hierarchy
                 )
         }
 

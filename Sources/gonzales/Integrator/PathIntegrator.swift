@@ -7,7 +7,8 @@ private func sampleBrdf(
         interaction: Interaction,
         sampler: Sampler,
         bsdf: BSDF,
-        scene: Scene
+        scene: Scene,
+        hierarchy: BoundingHierarchy
 ) throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
 
         let zero = (black, FloatX(0.0), up)
@@ -25,7 +26,7 @@ private func sampleBrdf(
                 ray: ray,
                 tHit: &tHit,
                 interaction: &brdfInteraction,
-                hierarchy: scene.primitive)
+                hierarchy: hierarchy)
         if !brdfInteraction.valid {
                 for light in scene.lights {
                         if light is InfiniteLight {
@@ -49,7 +50,8 @@ private func sampleLightSource(
         interaction: Interaction,
         sampler: Sampler,
         bsdf: BSDF,
-        scene: Scene
+        scene: Scene,
+        hierarchy: BoundingHierarchy
 ) throws -> (
         estimate: Spectrum, density: FloatX, sample: Vector
 ) {
@@ -60,7 +62,7 @@ private func sampleLightSource(
         guard !radiance.isBlack && !lightDensity.isInfinite else {
                 return zero
         }
-        guard try visibility.unoccluded(scene: scene) else {
+        guard try visibility.unoccluded(hierarchy: hierarchy) else {
                 return zero
         }
         let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
@@ -132,7 +134,8 @@ private func sampleOneLight(
         at interaction: SurfaceInteraction,
         bsdf: BSDF,
         with sampler: Sampler,
-        scene: Scene
+        scene: Scene,
+        hierarchy: BoundingHierarchy
 ) throws -> Spectrum {
 
         guard scene.lights.count > 0 else { return black }
@@ -142,7 +145,8 @@ private func sampleOneLight(
                 atInteraction: interaction,
                 bsdf: bsdf,
                 withSampler: sampler,
-                scene: scene)
+                scene: scene,
+                hierarchy: hierarchy)
         return estimate / lightPdf
 }
 
@@ -151,7 +155,8 @@ private func estimateDirect(
         atInteraction interaction: SurfaceInteraction,
         bsdf: BSDF,
         withSampler sampler: Sampler,
-        scene: Scene
+        scene: Scene,
+        hierarchy: BoundingHierarchy
 ) throws -> Spectrum {
 
         if light.isDelta {
@@ -160,7 +165,8 @@ private func estimateDirect(
                         interaction: interaction,
                         sampler: sampler,
                         bsdf: bsdf,
-                        scene: scene)
+                        scene: scene,
+                        hierarchy: hierarchy)
                 if density == 0 {
                         return black
                 } else {
@@ -198,7 +204,7 @@ private func estimateDirect(
                 interaction: interaction,
                 sampler: sampler,
                 bsdf: bsdf)
-        return try sampler.evaluate(scene: scene)
+        return try sampler.evaluate(scene: scene, hierarchy: hierarchy)
 }
 
 final class PathIntegrator {
@@ -221,7 +227,10 @@ final class PathIntegrator {
 
         @_semantics("optremark")
         func getRadianceAndAlbedo(
-                from ray: Ray, tHit: inout FloatX, with sampler: Sampler
+                from ray: Ray,
+                tHit: inout FloatX,
+                with sampler: Sampler,
+                hierarchy: BoundingHierarchy
         ) throws
                 -> (radiance: Spectrum, albedo: Spectrum, normal: Normal)
         {
@@ -240,7 +249,7 @@ final class PathIntegrator {
                                 l: &l,
                                 interaction: &interaction,
                                 scene: scene,
-                                hierarchy: scene.primitive)
+                                hierarchy: hierarchy)
                         if !interaction.valid {
                                 break
                         }
@@ -271,7 +280,11 @@ final class PathIntegrator {
                         let ld =
                                 try beta
                                 * sampleOneLight(
-                                        at: interaction, bsdf: bsdf, with: sampler, scene: scene)
+                                        at: interaction,
+                                        bsdf: bsdf,
+                                        with: sampler,
+                                        scene: scene,
+                                        hierarchy: hierarchy)
                         l += ld
                         let (f, wi, pdf, _) = try bsdf.sample(
                                 wo: interaction.wo, u: sampler.get2D())
