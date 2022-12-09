@@ -6,7 +6,7 @@ final class Substrate: Material {
                 self.roughness = roughness
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
+        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let kd = self.kd.evaluateSpectrum(at: interaction)
                 let ks = self.ks.evaluateSpectrum(at: interaction)
@@ -17,7 +17,7 @@ final class Substrate: Material {
                         glossyReflection: ks,
                         distribution: distribution)
                 bsdf.set(bxdf: fresnelBlend)
-                return (bsdf, nil)
+                return bsdf
         }
 
         var kd: SpectrumTexture

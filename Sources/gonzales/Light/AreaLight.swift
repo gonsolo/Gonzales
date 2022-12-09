@@ -1,4 +1,4 @@
-final class AreaLight: Light, Boundable, Intersectable, Material {
+struct AreaLight: Light, Boundable, Intersectable, Material {
 
         init(brightness: Spectrum, shape: Shape) {
                 self.brightness = brightness
@@ -54,10 +54,9 @@ final class AreaLight: Light, Boundable, Intersectable, Material {
                         interaction: &interaction)
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
+        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 let matte = Matte(kd: ConstantTexture(value: white))
-                let (bsdf, bssrdf) = matte.computeScatteringFunctions(interaction: interaction)
-                return (bsdf, bssrdf)
+                return matte.computeScatteringFunctions(interaction: interaction)
         }
 
         let shape: Shape

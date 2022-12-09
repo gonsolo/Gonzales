@@ -130,6 +130,7 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
+@_semantics("optremark")
 private func sampleOneLight(
         at interaction: SurfaceInteraction,
         bsdf: BSDF,
@@ -224,7 +225,6 @@ final class PathIntegrator {
                 }
         }
 
-        @_semantics("optremark")
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
@@ -271,8 +271,7 @@ final class PathIntegrator {
                         guard let material = materials[interaction.material] else {
                                 break
                         }
-                        let (bsdf, _) = material.computeScatteringFunctions(
-                                interaction: interaction)
+                        let bsdf = material.computeScatteringFunctions(interaction: interaction)
                         if bounce == 0 {
                                 albedo = bsdf.albedo()
                                 normal = interaction.normal

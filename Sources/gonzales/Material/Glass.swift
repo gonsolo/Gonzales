@@ -6,17 +6,17 @@ final class Glass: Material {
                 self.eta = eta
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
+        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let eta = self.eta.evaluateFloat(at: interaction)
                 bsdf.eta = eta
                 let reflectance = self.reflectance.evaluateSpectrum(at: interaction)
                 let transmittance = self.transmittance.evaluateSpectrum(at: interaction)
-                if reflectance.isBlack && transmittance.isBlack { return (bsdf, nil) }
+                if reflectance.isBlack && transmittance.isBlack { return bsdf }
                 let specular = FresnelSpecular(
                         reflectance: reflectance, transmittance: transmittance, etaA: 1, etaB: eta)
                 bsdf.set(bxdf: specular)
-                return (bsdf, nil)
+                return bsdf
         }
 
         var reflectance: SpectrumTexture

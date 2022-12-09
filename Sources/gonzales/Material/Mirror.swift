@@ -2,11 +2,11 @@ final class Mirror: Material {
 
         init(kr: SpectrumTexture) { self.kr = kr }
 
-        func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
+        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectance = kr.evaluateSpectrum(at: interaction)
                 bsdf.set(bxdf: SpecularReflection(reflectance: reflectance, fresnel: FresnelNop()))
-                return (bsdf, nil)
+                return bsdf
         }
 
         var kr: SpectrumTexture

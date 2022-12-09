@@ -7,7 +7,7 @@ final class Metal: Material {
                 self.roughness = roughness
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
+        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let trowbridge = TrowbridgeReitzDistribution(alpha: roughness)
                 let fresnel = FresnelConductor(
@@ -19,7 +19,7 @@ final class Metal: Material {
                         distribution: trowbridge,
                         fresnel: fresnel)
                 bsdf.set(bxdf: reflection)
-                return (bsdf, nil)
+                return bsdf
         }
 
         var eta: Spectrum

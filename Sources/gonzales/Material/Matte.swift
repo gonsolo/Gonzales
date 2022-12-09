@@ -2,11 +2,11 @@ final class Matte: Material {
 
         init(kd: SpectrumTexture) { self.kd = kd }
 
-        func computeScatteringFunctions(interaction: Interaction) -> (BSDF, BSSRDF?) {
+        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let kde = kd.evaluateSpectrum(at: interaction)
                 bsdf.set(bxdf: LambertianReflection(reflectance: kde))
-                return (bsdf, nil)
+                return bsdf
         }
 
         var kd: SpectrumTexture
