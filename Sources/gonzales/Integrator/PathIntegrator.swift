@@ -130,6 +130,7 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
+//@_semantics("optremark")
 private func sampleOneLight(
         at interaction: SurfaceInteraction,
         bsdf: BSDF,
