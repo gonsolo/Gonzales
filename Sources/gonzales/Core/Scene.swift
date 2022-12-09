@@ -1,25 +1,26 @@
 var intersectionTests = 0
 
-final class Scene {
+func intersect(
+        ray: Ray,
+        tHit: inout FloatX,
+        interaction: inout SurfaceInteraction,
+        hierarchy: BoundingHierarchy
+) throws {
+        intersectionTests += 1
+        try hierarchy.intersect(
+                ray: ray,
+                tHit: &tHit,
+                material: -1,
+                interaction: &interaction)
+}
+
+struct Scene {
 
         init(aggregate: BoundingHierarchy, lights: [Light]) {
                 self.primitive = aggregate
                 self.lights = lights
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
                 sceneDiameter = diameter()
-        }
-
-        func intersect(
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                intersectionTests += 1
-                try primitive.intersect(
-                        ray: ray,
-                        tHit: &tHit,
-                        material: -1,
-                        interaction: &interaction)
         }
 
         func bound() -> Bounds3f {

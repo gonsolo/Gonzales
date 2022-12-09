@@ -21,7 +21,11 @@ private func sampleBrdf(
         let ray = interaction.spawnRay(inDirection: wi)
         var tHit = FloatX.infinity
         var brdfInteraction = SurfaceInteraction()
-        try scene.intersect(ray: ray, tHit: &tHit, interaction: &brdfInteraction)
+        try intersect(
+                ray: ray,
+                tHit: &tHit,
+                interaction: &brdfInteraction,
+                hierarchy: scene.primitive)
         if !brdfInteraction.valid {
                 for light in scene.lights {
                         if light is InfiniteLight {
@@ -110,9 +114,10 @@ func intersectOrInfiniteLights(
         bounce: Int,
         l: inout Spectrum,
         interaction: inout SurfaceInteraction,
-        scene: Scene
+        scene: Scene,
+        hierarchy: BoundingHierarchy
 ) throws {
-        try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+        try intersect(ray: ray, tHit: &tHit, interaction: &interaction, hierarchy: hierarchy)
         if interaction.valid {
                 return
         }
@@ -123,7 +128,6 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
-@_semantics("optremark")
 private func sampleOneLight(
         at interaction: SurfaceInteraction,
         bsdf: BSDF,
@@ -215,6 +219,7 @@ final class PathIntegrator {
                 }
         }
 
+        @_semantics("optremark")
         func getRadianceAndAlbedo(
                 from ray: Ray, tHit: inout FloatX, with sampler: Sampler
         ) throws
@@ -234,7 +239,8 @@ final class PathIntegrator {
                                 bounce: bounce,
                                 l: &l,
                                 interaction: &interaction,
-                                scene: scene)
+                                scene: scene,
+                                hierarchy: scene.primitive)
                         if !interaction.valid {
                                 break
                         }
@@ -291,6 +297,6 @@ final class PathIntegrator {
                 }
         }
 
-        unowned var scene: Scene
+        var scene: Scene
         var maxDepth: Int
 }

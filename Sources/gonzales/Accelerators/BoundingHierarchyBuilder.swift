@@ -7,6 +7,10 @@ private let splitStrategy = SplitStrategy.surfaceArea  // 21.2s
 //private let splitStrategy = SplitStrategy.equal // 25.2s
 //private let splitStrategy = SplitStrategy.middle //  22.3s
 
+enum BoundingHierarchyBuilderError: Error {
+        case unknown
+}
+
 final class BoundingHierarchyBuilder {
 
         internal init(primitives: [Boundable]) {
@@ -18,11 +22,22 @@ final class BoundingHierarchyBuilder {
                 buildHierarchy()
         }
 
-        internal func getBoundingHierarchy() -> BoundingHierarchy {
+        internal func getBoundingHierarchy() throws -> BoundingHierarchy {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
-                let sortedPrimitives = cachedPrimitives.map {
-                        primitives[$0.index] as! Intersectable
+                let sortedPrimitives = try cachedPrimitives.map {
+                        //primitives[$0.index] as! Intersectable
+                        if let triangle = primitives[$0.index] as? Triangle {
+                                return IntersectablePrimitive.triangle(triangle)
+                        }
+                        if let geometricPrimitive = primitives[$0.index] as? GeometricPrimitive {
+                                return IntersectablePrimitive.geometricPrimitive(geometricPrimitive)
+                        }
+                        if let areaLight = primitives[$0.index] as? AreaLight {
+                                return IntersectablePrimitive.areaLight(areaLight)
+                        }
+                        print("Unknown primitive \(primitives[$0.index])")
+                        throw BoundingHierarchyBuilderError.unknown
                 }
                 return BoundingHierarchy(primitives: sortedPrimitives)
         }

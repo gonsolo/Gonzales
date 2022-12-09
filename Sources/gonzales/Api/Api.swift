@@ -1,8 +1,8 @@
 import Foundation
 
-func makeAccelerator(primitives: inout [Boundable & Intersectable]) -> BoundingHierarchy {
+func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> BoundingHierarchy {
         let builder = BoundingHierarchyBuilder(primitives: primitives)
-        return builder.getBoundingHierarchy()
+        return try builder.getBoundingHierarchy()
 }
 
 func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
@@ -196,7 +196,7 @@ struct Api {
                 }
                 var instance: Boundable & Intersectable
                 if primitives.count > 1 {
-                        let accelerator = makeAccelerator(primitives: &primitives)
+                        let accelerator = try makeAccelerator(primitives: &primitives)
                         options.objects[name] = [accelerator]
                         instance = TransformedPrimitive(
                                 primitive: accelerator,

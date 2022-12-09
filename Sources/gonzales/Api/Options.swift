@@ -202,9 +202,15 @@ class Options {
         func makeRenderer() throws -> Renderer {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
-                let scene = makeScene()
+                let timer = Timer("Build accelerator...", newline: false)
+                let accelerator = try makeAccelerator(primitives: &primitives)
+                primitives = []
+                objects = [:]
+                print(timer.elapsed)
+                let scene = makeScene(hierarchy: accelerator)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 return Renderer(
+                        hierarchy: accelerator,
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
@@ -212,12 +218,7 @@ class Options {
                 )
         }
 
-        func makeScene() -> Scene {
-                let timer = Timer("Build accelerator...", newline: false)
-                let accelerator = makeAccelerator(primitives: &primitives)
-                print(timer.elapsed)
-                primitives = []
-                objects = [:]
-                return Scene(aggregate: accelerator, lights: lights)
+        func makeScene(hierarchy: BoundingHierarchy) -> Scene {
+                return Scene(aggregate: hierarchy, lights: lights)
         }
 }

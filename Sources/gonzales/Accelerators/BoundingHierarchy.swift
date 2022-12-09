@@ -17,9 +17,9 @@ struct Node {
         let axis: Int
 }
 
-final class BoundingHierarchy: Boundable, Intersectable {
+struct BoundingHierarchy: Boundable, Intersectable {
 
-        init(primitives: [Intersectable]) {
+        init(primitives: [IntersectablePrimitive]) {
                 self.primitives = primitives
         }
 
@@ -88,5 +88,5 @@ final class BoundingHierarchy: Boundable, Intersectable {
                 print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
 
-        let primitives: [Intersectable]
+        let primitives: [IntersectablePrimitive]
 }

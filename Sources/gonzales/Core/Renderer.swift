@@ -2,11 +2,18 @@ import Foundation
 
 final class Renderer {
 
-        init(camera: Camera, integrator: PathIntegrator, sampler: Sampler, scene: Scene) {
+        init(
+                hierarchy: BoundingHierarchy,
+                camera: Camera,
+                integrator: PathIntegrator,
+                sampler: Sampler,
+                scene: Scene
+        ) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
                 self.scene = scene
+                self.hierarchy = hierarchy
         }
 
         func generateTiles(from bounds: Bounds2i) -> [Tile] {
@@ -108,6 +115,7 @@ final class Renderer {
 
         let camera: Camera
         let group = DispatchGroup()
+        let hierarchy: BoundingHierarchy
         let integrator: PathIntegrator
         let queue = DispatchQueue.global()
         var reporter = ProgressReporter()
