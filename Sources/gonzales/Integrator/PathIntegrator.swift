@@ -4,8 +4,8 @@
 
 final class PathIntegrator {
 
-        init(maxDepth: Int) {
-                self.scene = options.makeScene()
+        init(scene: Scene, maxDepth: Int) {
+                self.scene = scene
                 self.maxDepth = maxDepth
         }
 
@@ -126,7 +126,7 @@ final class PathIntegrator {
                 return density
         }
 
-        @_semantics("optremark")
+        //@_semantics("optremark")
         private func estimateDirect(
                 light: Light,
                 atInteraction interaction: SurfaceInteraction,
