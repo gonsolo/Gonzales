@@ -2,29 +2,115 @@
 // "James Kajiya: The Rendering Equation"
 // DOI: 10.1145/15922.15902
 
+//@_semantics("optremark")
+private func sampleBrdf(
+        light: Light,
+        interaction: Interaction,
+        sampler: Sampler,
+        bsdf: BSDF,
+        scene: Scene
+) throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
+
+        let zero = (black, FloatX(0.0), up)
+
+        var (scatter, wi, bsdfDensity, _) = try bsdf.sample(
+                wo: interaction.wo, u: sampler.get2D())
+        guard scatter != black && bsdfDensity > 0 else {
+                return zero
+        }
+        scatter *= absDot(wi, interaction.shadingNormal)
+        let ray = interaction.spawnRay(inDirection: wi)
+        var tHit = FloatX.infinity
+        var brdfInteraction = SurfaceInteraction()
+        try scene.intersect(ray: ray, tHit: &tHit, interaction: &brdfInteraction)
+        if !brdfInteraction.valid {
+                for light in scene.lights {
+                        if light is InfiniteLight {
+                                let radiance = light.radianceFromInfinity(for: ray)
+                                let estimate = scatter * radiance
+                                return (
+                                        estimate: estimate, density: bsdfDensity,
+                                        sample: wi
+                                )
+                        }
+                }
+                return zero
+        }
+        let radiance = black
+        let estimate = scatter * radiance
+        return (estimate: estimate, density: bsdfDensity, sample: wi)
+}
+
+private func sampleLightSource(
+        light: Light,
+        interaction: Interaction,
+        sampler: Sampler,
+        bsdf: BSDF,
+        scene: Scene
+) throws -> (
+        estimate: Spectrum, density: FloatX, sample: Vector
+) {
+        let zero = (black, FloatX(0.0), up)
+
+        let (radiance, wi, lightDensity, visibility) = light.sample(
+                for: interaction, u: sampler.get2D())
+        guard !radiance.isBlack && !lightDensity.isInfinite else {
+                return zero
+        }
+        guard try visibility.unoccluded(scene: scene) else {
+                return zero
+        }
+        let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
+        let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
+        let scatter = reflected * dot
+        let estimate = scatter * radiance
+        return (estimate: estimate, density: lightDensity, sample: wi)
+}
+
+private func lightDensity(
+        light: Light,
+        interaction: Interaction,
+        sample: Vector,
+        bsdf: BSDF
+) throws -> FloatX {
+        return try light.probabilityDensityFor(
+                samplingDirection: sample, from: interaction)
+}
+
+private func brdfDensity(
+        light: Light,
+        interaction: Interaction,
+        sample: Vector,
+        bsdf: BSDF
+) -> FloatX {
+        let density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
+        return density
+}
+
+@_semantics("optremark")
+private func chooseLight(
+        withSampler sampler: Sampler,
+        scene: Scene
+) throws
+        -> (Light, FloatX)
+{
+
+        assert(scene.lights.count > 0)
+        //guard scene.lights.count + scene.infiniteLights.count > 0 else {
+        //        throw RenderError.noLights
+        //}
+        let u = sampler.get1D()
+        let lightNum = Int(u * FloatX(scene.lights.count))
+        let light = scene.lights[lightNum]
+        let probabilityDensity: FloatX = 1.0 / FloatX(scene.lights.count)
+        return (light, probabilityDensity)
+}
+
 final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.scene = scene
                 self.maxDepth = maxDepth
-        }
-
-        //@_semantics("optremark")
-        private func chooseLight(
-                withSampler sampler: Sampler
-        ) throws
-                -> (Light, FloatX)
-        {
-
-                assert(scene.lights.count > 0)
-                //guard scene.lights.count + scene.infiniteLights.count > 0 else {
-                //        throw RenderError.noLights
-                //}
-                let u = sampler.get1D()
-                let lightNum = Int(u * FloatX(scene.lights.count))
-                let light = scene.lights[lightNum]
-                let probabilityDensity: FloatX = 1.0 / FloatX(scene.lights.count)
-                return (light, probabilityDensity)
         }
 
         private func sampleOneLight(
@@ -34,96 +120,13 @@ final class PathIntegrator {
         ) throws -> Spectrum {
 
                 guard scene.lights.count > 0 else { return black }
-                let (light, lightPdf) = try chooseLight(withSampler: sampler)
+                let (light, lightPdf) = try chooseLight(withSampler: sampler, scene: scene)
                 let estimate = try estimateDirect(
                         light: light,
                         atInteraction: interaction,
                         bsdf: bsdf,
                         withSampler: sampler)
                 return estimate / lightPdf
-        }
-
-        private func sampleLightSource(
-                light: Light,
-                interaction: Interaction,
-                sampler: Sampler,
-                bsdf: BSDF
-        ) throws -> (
-                estimate: Spectrum, density: FloatX, sample: Vector
-        ) {
-                let zero = (black, FloatX(0.0), up)
-
-                let (radiance, wi, lightDensity, visibility) = light.sample(
-                        for: interaction, u: sampler.get2D())
-                guard !radiance.isBlack && !lightDensity.isInfinite else {
-                        return zero
-                }
-                guard try visibility.unoccluded(scene: scene) else {
-                        return zero
-                }
-                let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
-                let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
-                let scatter = reflected * dot
-                let estimate = scatter * radiance
-                return (estimate: estimate, density: lightDensity, sample: wi)
-        }
-
-        //@_semantics("optremark")
-        private func sampleBrdf(
-                light: Light,
-                interaction: Interaction,
-                sampler: Sampler,
-                bsdf: BSDF
-        ) throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
-
-                let zero = (black, FloatX(0.0), up)
-
-                var (scatter, wi, bsdfDensity, _) = try bsdf.sample(
-                        wo: interaction.wo, u: sampler.get2D())
-                guard scatter != black && bsdfDensity > 0 else {
-                        return zero
-                }
-                scatter *= absDot(wi, interaction.shadingNormal)
-                let ray = interaction.spawnRay(inDirection: wi)
-                var tHit = FloatX.infinity
-                var brdfInteraction = SurfaceInteraction()
-                try scene.intersect(ray: ray, tHit: &tHit, interaction: &brdfInteraction)
-                if !brdfInteraction.valid {
-                        for light in scene.lights {
-                                if light is InfiniteLight {
-                                        let radiance = light.radianceFromInfinity(for: ray)
-                                        let estimate = scatter * radiance
-                                        return (
-                                                estimate: estimate, density: bsdfDensity,
-                                                sample: wi
-                                        )
-                                }
-                        }
-                        return zero
-                }
-                let radiance = black
-                let estimate = scatter * radiance
-                return (estimate: estimate, density: bsdfDensity, sample: wi)
-        }
-
-        private func lightDensity(
-                light: Light,
-                interaction: Interaction,
-                sample: Vector,
-                bsdf: BSDF
-        ) throws -> FloatX {
-                return try light.probabilityDensityFor(
-                        samplingDirection: sample, from: interaction)
-        }
-
-        private func brdfDensity(
-                light: Light,
-                interaction: Interaction,
-                sample: Vector,
-                bsdf: BSDF
-        ) -> FloatX {
-                let density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
-                return density
         }
 
         //@_semantics("optremark")
@@ -139,7 +142,8 @@ final class PathIntegrator {
                                 light: light,
                                 interaction: interaction,
                                 sampler: sampler,
-                                bsdf: bsdf)
+                                bsdf: bsdf,
+                                scene: scene)
                         if density == 0 {
                                 return black
                         } else {
@@ -176,7 +180,8 @@ final class PathIntegrator {
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
-                        bsdf: bsdf)
+                        bsdf: bsdf,
+                        scene: scene)
                 return try sampler.evaluate()
         }
 
@@ -191,7 +196,7 @@ final class PathIntegrator {
                 }
         }
 
-        @_semantics("optremark")
+        //@_semantics("optremark")
         func intersectOrInfiniteLights(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -286,6 +291,6 @@ final class PathIntegrator {
                 }
         }
 
-        var scene: Scene
+        unowned var scene: Scene
         var maxDepth: Int
 }
