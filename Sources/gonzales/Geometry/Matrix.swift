@@ -154,11 +154,6 @@ public struct Matrix {
                 return invert(m: self)
         }
 
-        public var isAffine: Bool {
-                return backing[3, 0] == 0 && backing[3, 1] == 0 && backing[3, 2] == 0
-                        && backing[3, 3] == 1
-        }
-
         var backing: MatrixBacking
 }
 
