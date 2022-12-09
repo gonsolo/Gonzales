@@ -9,5 +9,5 @@ struct FixedMatrix<MatrixBackingFloat: BinaryFloatingPoint> {
                 set { storage[index(row, column)] = newValue }
         }
 
-        private var storage = FixedArray16<MatrixBackingFloat>()
+        private var storage: [MatrixBackingFloat] = Array(repeating: 0, count: 16)
 }
