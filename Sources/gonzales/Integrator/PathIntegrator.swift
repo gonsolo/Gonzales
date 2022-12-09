@@ -104,6 +104,27 @@ private func chooseLight(
         return (light, probabilityDensity)
 }
 
+@_semantics("optremark")
+func intersectOrInfiniteLights(
+        ray: Ray,
+        tHit: inout FloatX,
+        bounce: Int,
+        l: inout Spectrum,
+        interaction: inout SurfaceInteraction,
+        scene: Scene
+) throws {
+        try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+        if interaction.valid {
+                return
+        }
+        let radiance = scene.infiniteLights.reduce(
+                black,
+                { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
+        )
+        if bounce == 0 { l += radiance }
+}
+
+
 final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
@@ -192,24 +213,6 @@ final class PathIntegrator {
                 }
         }
 
-        func intersectOrInfiniteLights(
-                ray: Ray,
-                tHit: inout FloatX,
-                bounce: Int,
-                l: inout Spectrum,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                try scene.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
-                if interaction.valid {
-                        return
-                }
-                let radiance = scene.infiniteLights.reduce(
-                        black,
-                        { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
-                )
-                if bounce == 0 { l += radiance }
-        }
-
         func getRadianceAndAlbedo(
                 from ray: Ray, tHit: inout FloatX, with sampler: Sampler
         ) throws
@@ -228,7 +231,8 @@ final class PathIntegrator {
                                 tHit: &tHit,
                                 bounce: bounce,
                                 l: &l,
-                                interaction: &interaction)
+                                interaction: &interaction,
+                                scene: scene)
                         if !interaction.valid {
                                 break
                         }
