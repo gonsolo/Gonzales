@@ -2,7 +2,6 @@
 // "James Kajiya: The Rendering Equation"
 // DOI: 10.1145/15922.15902
 
-//@_semantics("optremark")
 private func sampleBrdf(
         light: Light,
         interaction: Interaction,
@@ -87,7 +86,6 @@ private func brdfDensity(
         return density
 }
 
-@_semantics("optremark")
 private func chooseLight(
         withSampler sampler: Sampler,
         scene: Scene
@@ -129,7 +127,6 @@ final class PathIntegrator {
                 return estimate / lightPdf
         }
 
-        //@_semantics("optremark")
         private func estimateDirect(
                 light: Light,
                 atInteraction interaction: SurfaceInteraction,
@@ -180,9 +177,8 @@ final class PathIntegrator {
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
-                        bsdf: bsdf,
-                        scene: scene)
-                return try sampler.evaluate()
+                        bsdf: bsdf)
+                return try sampler.evaluate(scene: scene)
         }
 
         func russianRoulette(beta: inout Spectrum) -> Bool {
@@ -196,7 +192,6 @@ final class PathIntegrator {
                 }
         }
 
-        //@_semantics("optremark")
         func intersectOrInfiniteLights(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -215,7 +210,6 @@ final class PathIntegrator {
                 if bounce == 0 { l += radiance }
         }
 
-        //@_semantics("optremark")
         func getRadianceAndAlbedo(
                 from ray: Ray, tHit: inout FloatX, with sampler: Sampler
         ) throws

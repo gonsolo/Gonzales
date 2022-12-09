@@ -13,8 +13,9 @@ struct MultipleImportanceSampler<Sample> {
                 let density: densityFunc
         }
 
-        func evaluate() throws -> Spectrum {
+        func evaluate(scene: Scene) throws -> Spectrum {
 
+                @_semantics("optremark")
                 func evaluate(first: MISSampler, second: MISSampler) throws -> Spectrum {
                         let (estimate, density, sample) = try first.sample(
                                 light, interaction, sampler, bsdf, scene)
@@ -34,5 +35,4 @@ struct MultipleImportanceSampler<Sample> {
         let interaction: Interaction
         let sampler: Sampler
         let bsdf: BSDF
-        unowned let scene: Scene
 }
