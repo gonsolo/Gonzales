@@ -1,17 +1,20 @@
-public struct MatrixBacking {
+struct MatrixBacking {
 
         public init() {
-                m2 = FixedMatrix()
-                m2[0, 0] = 1.0
-                m2[1, 1] = 1.0
-                m2[2, 2] = 1.0
-                m2[3, 3] = 1.0
+                self[0, 0] = 1.0
+                self[1, 1] = 1.0
+                self[2, 2] = 1.0
+                self[3, 3] = 1.0
         }
 
-        public subscript(row: Int, column: Int) -> FloatX {
-                get { return m2[row, column] }
-                set { m2[row, column] = newValue }
+        private func index(_ row: Int, _ column: Int) -> Int {
+                return 4 * row + column
         }
 
-        var m2: FixedMatrix
+        subscript(row: Int, column: Int) -> FloatX {
+                get { return m2[index(row, column)] }
+                set { m2[index(row, column)] = newValue }
+        }
+
+        private var m2: [FloatX] = Array(repeating: 0, count: 16)
 }

@@ -29,7 +29,7 @@ public struct Matrix {
                 backing[3, 3] = t33
         }
 
-        public init(backing: MatrixBacking) {
+        init(backing: MatrixBacking) {
                 self.backing = backing
         }
 
