@@ -198,15 +198,14 @@ private func estimateDirect(
                 sample: sampleLightSource, density: lightDensity)
         let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
                 sample: sampleBrdf, density: brdfDensity)
-        let misSampler = MultipleImportanceSampler(
-                samplers: (lightSampler, brdfSampler),
-                bsdf: bsdf)
+        let misSampler = MultipleImportanceSampler(samplers: (lightSampler, brdfSampler))
         return try misSampler.evaluate(
                 scene: scene,
                 hierarchy: hierarchy,
                 light: light,
                 interaction: interaction,
-                sampler: sampler)
+                sampler: sampler,
+                bsdf: bsdf)
 }
 
 final class PathIntegrator {
