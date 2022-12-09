@@ -104,7 +104,6 @@ private func chooseLight(
         return (light, probabilityDensity)
 }
 
-@_semantics("optremark")
 func intersectOrInfiniteLights(
         ray: Ray,
         tHit: inout FloatX,
@@ -124,82 +123,85 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
+@_semantics("optremark")
+private func sampleOneLight(
+        at interaction: SurfaceInteraction,
+        bsdf: BSDF,
+        with sampler: Sampler,
+        scene: Scene
+) throws -> Spectrum {
+
+        guard scene.lights.count > 0 else { return black }
+        let (light, lightPdf) = try chooseLight(withSampler: sampler, scene: scene)
+        let estimate = try estimateDirect(
+                light: light,
+                atInteraction: interaction,
+                bsdf: bsdf,
+                withSampler: sampler,
+                scene: scene)
+        return estimate / lightPdf
+}
+
+private func estimateDirect(
+        light: Light,
+        atInteraction interaction: SurfaceInteraction,
+        bsdf: BSDF,
+        withSampler sampler: Sampler,
+        scene: Scene
+) throws -> Spectrum {
+
+        if light.isDelta {
+                let (estimate, density, _) = try sampleLightSource(
+                        light: light,
+                        interaction: interaction,
+                        sampler: sampler,
+                        bsdf: bsdf,
+                        scene: scene)
+                if density == 0 {
+                        return black
+                } else {
+                        return estimate / density
+                }
+        }
+
+        // Light source sampling only
+        //let (estimate, density, _) = try sampleLightSource()
+        //if density == 0 {
+        //        print("light: black")
+        //        return black
+        //} else {
+        //        print("light: ", estimate / density, estimate, density)
+        //        return estimate / density
+        //}
+
+        // BRDF sampling only
+        //let (estimate, density, _) = try sampleBrdf()
+        //print("Brdf: ", estimate, density)
+        //if density == 0 {
+        //        return black
+        //} else {
+        //        return estimate / density
+        //}
+
+        // Light and BRDF sampling with multiple importance sampling
+        let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
+                sample: sampleLightSource, density: lightDensity)
+        let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
+                sample: sampleBrdf, density: brdfDensity)
+        let sampler = MultipleImportanceSampler(
+                samplers: (lightSampler, brdfSampler),
+                light: light,
+                interaction: interaction,
+                sampler: sampler,
+                bsdf: bsdf)
+        return try sampler.evaluate(scene: scene)
+}
 
 final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.scene = scene
                 self.maxDepth = maxDepth
-        }
-
-        private func sampleOneLight(
-                at interaction: SurfaceInteraction,
-                bsdf: BSDF,
-                with sampler: Sampler
-        ) throws -> Spectrum {
-
-                guard scene.lights.count > 0 else { return black }
-                let (light, lightPdf) = try chooseLight(withSampler: sampler, scene: scene)
-                let estimate = try estimateDirect(
-                        light: light,
-                        atInteraction: interaction,
-                        bsdf: bsdf,
-                        withSampler: sampler)
-                return estimate / lightPdf
-        }
-
-        private func estimateDirect(
-                light: Light,
-                atInteraction interaction: SurfaceInteraction,
-                bsdf: BSDF,
-                withSampler sampler: Sampler
-        ) throws -> Spectrum {
-
-                if light.isDelta {
-                        let (estimate, density, _) = try sampleLightSource(
-                                light: light,
-                                interaction: interaction,
-                                sampler: sampler,
-                                bsdf: bsdf,
-                                scene: scene)
-                        if density == 0 {
-                                return black
-                        } else {
-                                return estimate / density
-                        }
-                }
-
-                // Light source sampling only
-                //let (estimate, density, _) = try sampleLightSource()
-                //if density == 0 {
-                //        print("light: black")
-                //        return black
-                //} else {
-                //        print("light: ", estimate / density, estimate, density)
-                //        return estimate / density
-                //}
-
-                // BRDF sampling only
-                //let (estimate, density, _) = try sampleBrdf()
-                //print("Brdf: ", estimate, density)
-                //if density == 0 {
-                //        return black
-                //} else {
-                //        return estimate / density
-                //}
-
-                // Light and BRDF sampling with multiple importance sampling
-                let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
-                        sample: sampleLightSource, density: lightDensity)
-                let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
-                        sample: sampleBrdf, density: brdfDensity)
-                let sampler = MultipleImportanceSampler(
-                        samplers: (lightSampler, brdfSampler),
-                        light: light,
-                        interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
-                return try sampler.evaluate(scene: scene)
         }
 
         func russianRoulette(beta: inout Spectrum) -> Bool {
@@ -263,7 +265,7 @@ final class PathIntegrator {
                         let ld =
                                 try beta
                                 * sampleOneLight(
-                                        at: interaction, bsdf: bsdf, with: sampler)
+                                        at: interaction, bsdf: bsdf, with: sampler, scene: scene)
                         l += ld
                         let (f, wi, pdf, _) = try bsdf.sample(
                                 wo: interaction.wo, u: sampler.get2D())
