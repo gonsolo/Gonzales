@@ -200,10 +200,13 @@ private func estimateDirect(
                 sample: sampleBrdf, density: brdfDensity)
         let sampler = MultipleImportanceSampler(
                 samplers: (lightSampler, brdfSampler),
-                interaction: interaction,
                 sampler: sampler,
                 bsdf: bsdf)
-        return try sampler.evaluate(scene: scene, hierarchy: hierarchy, light: light)
+        return try sampler.evaluate(
+                scene: scene,
+                hierarchy: hierarchy,
+                light: light,
+                interaction: interaction)
 }
 
 final class PathIntegrator {
