@@ -129,14 +129,13 @@ extension Bounds3 where T == FloatX {
         static var intersections = 0
 
         @inline(__always)
-        func intersects(ray: Ray, tHit: inout FloatX) -> Bool {
+        func intersects(ray: Ray, tHit: FloatX) -> Bool {
                 Self.intersections += 1
                 var t0: FloatX = 0.0
                 var t1 = tHit
                 for i in 0..<3 {
-                        let invRayDir = 1 / ray.direction[i]
-                        var tNear = (pMin[i] - ray.origin[i]) * invRayDir
-                        var tFar = (pMax[i] - ray.origin[i]) * invRayDir
+                        var tNear = (pMin[i] - ray.origin[i]) * ray.inverseDirection[i]
+                        var tFar = (pMax[i] - ray.origin[i]) * ray.inverseDirection[i]
                         if tNear > tFar {
                                 swap(&tNear, &tFar)
                         }

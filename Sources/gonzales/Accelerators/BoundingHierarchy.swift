@@ -40,7 +40,7 @@ struct BoundingHierarchy: Boundable, Intersectable {
                 while true {
                         nodesVisited += 1
                         let node = nodes[current]
-                        if node.bounds.intersects(ray: ray, tHit: &tHit) {
+                        if node.bounds.intersects(ray: ray, tHit: tHit) {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
                                                 let primitive = primitives[node.offset + i]

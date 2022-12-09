@@ -36,6 +36,10 @@ func / <T: Three>(v: T, d: T.T) -> T {
         return T.init(x: v.x / d, y: v.y / d, z: v.z / d)
 }
 
+func / <T: Three>(v: T, d: T) -> T {
+        return T.init(x: v.x / d.x, y: v.y / d.y, z: v.z / d.z)
+}
+
 func * <T: Three>(left: T, right: T) -> T {
         return T.init(
                 x: left.x * right.x,

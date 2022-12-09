@@ -6,6 +6,12 @@ public struct Vector3<T: FloatingPoint>: Three {
                 self.z = z
         }
 
+        init(v: T) {
+                self.x = v
+                self.y = v
+                self.z = v
+        }
+
         init() {
                 self.x = 0
                 self.y = 0
