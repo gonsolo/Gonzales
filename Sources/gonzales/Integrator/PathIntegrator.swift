@@ -255,13 +255,13 @@ final class PathIntegrator {
                                 break
                         }
                         if bounce == 0 {
-                                //if let areaLight = interaction.areaLight {
-                                //        l +=
-                                //                beta
-                                //                * areaLight.emittedRadiance(
-                                //                        from: interaction,
-                                //                        inDirection: interaction.wo)
-                                //}
+                                if let areaLight = interaction.areaLight {
+                                        l +=
+                                                beta
+                                                * areaLight.emittedRadiance(
+                                                        from: interaction,
+                                                        inDirection: interaction.wo)
+                                }
                         }
                         guard bounce < maxDepth else {
                                 break

@@ -61,7 +61,7 @@ struct Interaction {
         var dpdu: Vector
         var uv: Point2F
         var faceIndex: Int
-        //var areaLight: AreaLight?
+        var areaLight: AreaLight?
         var material: MaterialIndex
 }
 
