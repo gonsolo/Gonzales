@@ -1,6 +1,7 @@
 import Foundation
 
 func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> BoundingHierarchy {
+        let _ = Embree()
         let builder = BoundingHierarchyBuilder(primitives: primitives)
         return try builder.getBoundingHierarchy()
 }

@@ -11,7 +11,7 @@ let package = Package(
         //.product(name: "png", package: "PNG")
         targets: [
                 .target(name: "gonzales",
-                        dependencies: [.product(name: "PNG", package: "swift-png"), "exr", "ptex"],
+                        dependencies: [.product(name: "PNG", package: "swift-png"), "exr", "embree", "ptex"],
                         linkerSettings: [.unsafeFlags([
                                 "-LExtern/ptex/build/src/ptex",
                                 "-lPtex"
@@ -37,6 +37,9 @@ let package = Package(
                         cxxSettings: [.unsafeFlags([
                                 "-IExtern/ptex/src/ptex"
                         ])]),
+                .target(name: "embree",
+                        dependencies: [],
+                        cxxSettings: []),
         ],
         cxxLanguageStandard: .cxx11
 )
