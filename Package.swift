@@ -39,7 +39,12 @@ let package = Package(
                         ])]),
                 .target(name: "embree",
                         dependencies: [],
-                        cxxSettings: []),
+                        cxxSettings: [],
+                        linkerSettings: [
+                                .unsafeFlags([
+                                        "-lembree3"
+                                ])
+                        ]),
         ],
         cxxLanguageStandard: .cxx11
 )
