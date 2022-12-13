@@ -23,8 +23,6 @@ struct BoundingHierarchy: Boundable, Intersectable {
                 self.primitives = primitives
         }
 
-        //@_noAllocation
-        //@_semantics("optremark")
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -34,6 +32,7 @@ struct BoundingHierarchy: Boundable, Intersectable {
                 var toVisit = 0
                 var current = 0
                 var nodesToVisit = FixedArray16<Int>()
+                //var nodesToVisit = Array(repeating: 0, count: 32)
                 var nodesVisited = 0
 
                 if nodes.isEmpty { return }

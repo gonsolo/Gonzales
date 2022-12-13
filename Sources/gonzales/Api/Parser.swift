@@ -514,15 +514,26 @@ final class Parser {
                 return f
         }
 
+        //struct SampledSpectrum {}
+        //let namedSpectra: [String: SampledSpectrum] = [:]
+
         func parseSpectrum() throws -> [Spectrum] {
                 var spectra = [Spectrum]()
 
                 // Try parsing named spectra first
                 var string = ""
                 if try parseString(string: &string) {
-                        warning("Ignoring named spectrum \(string)!")
-                        let spectrum = Spectrum(rgb: (1, 1, 1))  // TODO: named spectra
-                        spectra.append(spectrum)
+                        switch string {
+                        case "metal-Ag-eta":
+                                //let spectrum = namedSpectra[string]!
+                                //let _ = spectrum
+                                print("Found \(string)")
+                        //spectra.append(spectrum) // TODO
+                        default:
+                                warning("Ignoring unknown named spectrum \(string)!")
+                                let spectrum = Spectrum(rgb: (1, 1, 1))
+                                spectra.append(spectrum)
+                        }
                         return spectra
                 }
                 while let f = try parseThreeFloatXs() {

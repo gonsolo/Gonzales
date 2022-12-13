@@ -7,8 +7,10 @@ VERBOSE = --verbose
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
 
-SCENE = ../../src/bitterli/cornell-box/scene-v4.pbrt
+SCENE = ../../src/bitterli/cornell-box/pbrt/scene-v4.pbrt
 IMAGE =  cornell-box.exr
+#SCENE = ../../src/bitterli/bathroom/pbrt/scene-v4.pbrt
+#IMAGE =  bathroom.png
 #SCENE = ~/src/pbrt-v4-scenes/killeroos/killeroo-coated-gold.pbrt
 #IMAGE = killeroo-coated-gold.exr
 
