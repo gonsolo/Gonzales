@@ -1,4 +1,4 @@
-// swift-tools-version:5.3
+// swift-tools-version:5.4
 
 import PackageDescription
 
@@ -12,7 +12,7 @@ let package = Package(
                         from: "4.0.2")
         ],
         targets: [
-                .target(
+                .executableTarget(
                         name: "gonzales",
                         dependencies: [
                                 .product(
@@ -67,5 +67,5 @@ let package = Package(
                                 ])
                         ]),
         ],
-        cxxLanguageStandard: .cxx14
+        cxxLanguageStandard: .cxx17
 )
