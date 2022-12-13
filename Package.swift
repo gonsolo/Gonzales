@@ -1,4 +1,4 @@
-// swift-tools-version:5.4
+// swift-tools-version:5.6
 
 import PackageDescription
 
@@ -7,7 +7,6 @@ let package = Package(
         platforms: [.macOS(.v10_15)],
         dependencies: [
                 .package(
-                        name: "swift-png",
                         url: "https://github.com/kelvin13/png.git",
                         from: "4.0.2")
         ],
@@ -17,7 +16,7 @@ let package = Package(
                         dependencies: [
                                 .product(
                                         name: "PNG",
-                                        package: "swift-png"),
+                                        package: "png"),
                                 "exr",
                                 "embree",
                                 "ptex",
