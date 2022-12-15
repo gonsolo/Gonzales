@@ -204,6 +204,7 @@ class Options {
                 let sampler = try makeSampler(film: camera.film)
                 let timer = Timer("Build accelerator...", newline: false)
                 let accelerator = try makeAccelerator(primitives: &primitives)
+                let embree = Embree(primitives: &primitives)
                 primitives = []
                 objects = [:]
                 print(timer.elapsed)
@@ -214,7 +215,8 @@ class Options {
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
-                        scene: scene
+                        scene: scene,
+                        embree: embree
                 )
         }
 

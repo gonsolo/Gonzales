@@ -7,13 +7,17 @@ final class Renderer {
                 camera: Camera,
                 integrator: PathIntegrator,
                 sampler: Sampler,
-                scene: Scene
+                scene: Scene,
+                embree: Embree
         ) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
                 self.scene = scene
                 self.hierarchy = hierarchy
+                self.embree = embree
+
+                print("Primitive count: \(options.primitives.count)")
         }
 
         func generateTiles(from bounds: Bounds2i) -> [Tile] {
@@ -123,4 +127,5 @@ final class Renderer {
         var reporter = ProgressReporter()
         let sampler: Sampler
         let scene: Scene
+        let embree: Embree
 }
