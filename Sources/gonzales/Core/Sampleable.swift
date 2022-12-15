@@ -28,20 +28,21 @@ extension Sampleable {
 }
 
 extension Sampleable where Self: Intersectable {
+
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
-                from interaction: Interaction
+                from: Interaction
         )
                 throws -> FloatX
         {
-                let ray = interaction.spawnRay(inDirection: direction)
+                let ray = from.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
                 var interaction = SurfaceInteraction()
                 try intersect(ray: ray, tHit: &tHit, material: -1, interaction: &interaction)
                 if !interaction.valid {
                         return 0
                 }
-                let squaredDistance = distanceSquared(interaction.position, interaction.position)
+                let squaredDistance = distanceSquared(from.position, interaction.position)
                 let angle = absDot(interaction.normal, -direction)
                 let angleTimesArea = angle * area()
                 let density = squaredDistance / angleTimesArea

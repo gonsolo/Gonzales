@@ -8,7 +8,7 @@ private func sampleBrdf(
         sampler: Sampler,
         bsdf: BSDF,
         scene: Scene,
-        hierarchy: BoundingHierarchy
+        hierarchy: Accelerator
 ) throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
 
         let zero = (black, FloatX(0.0), up)
@@ -51,7 +51,7 @@ private func sampleLightSource(
         sampler: Sampler,
         bsdf: BSDF,
         scene: Scene,
-        hierarchy: BoundingHierarchy
+        hierarchy: Accelerator
 ) throws -> (
         estimate: Spectrum, density: FloatX, sample: Vector
 ) {
@@ -117,7 +117,7 @@ func intersectOrInfiniteLights(
         l: inout Spectrum,
         interaction: inout SurfaceInteraction,
         scene: Scene,
-        hierarchy: BoundingHierarchy
+        hierarchy: Accelerator
 ) throws {
         try intersect(ray: ray, tHit: &tHit, interaction: &interaction, hierarchy: hierarchy)
         if interaction.valid {
@@ -130,13 +130,12 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
-//@_semantics("optremark")
 private func sampleOneLight(
         at interaction: SurfaceInteraction,
         bsdf: BSDF,
         with sampler: Sampler,
         scene: Scene,
-        hierarchy: BoundingHierarchy
+        hierarchy: Accelerator
 ) throws -> Spectrum {
 
         guard scene.lights.count > 0 else { return black }
@@ -157,7 +156,7 @@ private func estimateDirect(
         bsdf: BSDF,
         withSampler sampler: Sampler,
         scene: Scene,
-        hierarchy: BoundingHierarchy
+        hierarchy: Accelerator
 ) throws -> Spectrum {
 
         if light.isDelta {
@@ -231,7 +230,7 @@ final class PathIntegrator {
                 tHit: inout FloatX,
                 with sampler: Sampler,
                 scene: Scene,
-                hierarchy: BoundingHierarchy
+                hierarchy: Accelerator
         ) throws
                 -> (radiance: Spectrum, albedo: Spectrum, normal: Normal)
         {

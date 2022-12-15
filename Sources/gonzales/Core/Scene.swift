@@ -4,7 +4,7 @@ func intersect(
         ray: Ray,
         tHit: inout FloatX,
         interaction: inout SurfaceInteraction,
-        hierarchy: BoundingHierarchy
+        hierarchy: Accelerator
 ) throws {
         intersectionTests += 1
         try hierarchy.intersect(
@@ -16,7 +16,7 @@ func intersect(
 
 struct Scene {
 
-        init(aggregate: BoundingHierarchy, lights: [Light]) {
+        init(aggregate: Accelerator, lights: [Light]) {
                 self.primitive = aggregate
                 self.lights = lights
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
@@ -35,7 +35,7 @@ struct Scene {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
-        var primitive: BoundingHierarchy
+        var primitive: Accelerator
         var lights: [Light]
         var infiniteLights: [Light]
 }

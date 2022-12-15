@@ -1,7 +1,7 @@
 struct MultipleImportanceSampler<Sample> {
 
         struct MISSampler {
-                typealias sampleFunc = (Light, Interaction, Sampler, BSDF, Scene, BoundingHierarchy)
+                typealias sampleFunc = (Light, Interaction, Sampler, BSDF, Scene, Accelerator)
                         throws -> (
                                 estimate: Spectrum,
                                 density: FloatX,
@@ -16,7 +16,7 @@ struct MultipleImportanceSampler<Sample> {
 
         func evaluate(
                 scene: Scene,
-                hierarchy: BoundingHierarchy,
+                hierarchy: Accelerator,
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,

@@ -192,5 +192,6 @@ format:
 codespell:
 	codespell -L inout Sources
 lldb:
-	lldb .build/release/gonzales -- $(SINGLERAY) $(SCENE)
+	#lldb .build/release/gonzales -- $(SINGLERAY) $(SCENE)
+	lldb .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
 

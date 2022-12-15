@@ -17,7 +17,18 @@ struct Node {
         let axis: Int
 }
 
-struct BoundingHierarchy: Boundable, Intersectable {
+protocol Accelerator {
+
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction) throws
+
+        func worldBound() -> Bounds3f
+}
+
+struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
 
         init(primitives: [IntersectablePrimitive]) {
                 self.primitives = primitives

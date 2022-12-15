@@ -3,19 +3,17 @@ import Foundation
 final class Renderer {
 
         init(
-                hierarchy: BoundingHierarchy,
+                hierarchy: Accelerator,
                 camera: Camera,
                 integrator: PathIntegrator,
                 sampler: Sampler,
-                scene: Scene,
-                embree: Embree
+                scene: Scene
         ) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
                 self.scene = scene
                 self.hierarchy = hierarchy
-                self.embree = embree
 
                 print("Primitive count: \(options.primitives.count)")
         }
@@ -121,11 +119,10 @@ final class Renderer {
 
         let camera: Camera
         let group = DispatchGroup()
-        let hierarchy: BoundingHierarchy
+        let hierarchy: Accelerator
         let integrator: PathIntegrator
         let queue = DispatchQueue.global()
         var reporter = ProgressReporter()
         let sampler: Sampler
         let scene: Scene
-        let embree: Embree
 }

@@ -203,8 +203,10 @@ class Options {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let timer = Timer("Build accelerator...", newline: false)
-                let accelerator = try makeAccelerator(primitives: &primitives)
-                let embree = Embree(primitives: &primitives)
+
+                //let accelerator = try makeAccelerator(primitives: &primitives)
+                let accelerator = Embree(primitives: &primitives)
+
                 primitives = []
                 objects = [:]
                 print(timer.elapsed)
@@ -215,12 +217,11 @@ class Options {
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
-                        scene: scene,
-                        embree: embree
+                        scene: scene
                 )
         }
 
-        func makeScene(hierarchy: BoundingHierarchy) -> Scene {
+        func makeScene(hierarchy: Accelerator) -> Scene {
                 return Scene(aggregate: hierarchy, lights: lights)
         }
 }

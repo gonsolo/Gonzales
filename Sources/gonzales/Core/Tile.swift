@@ -10,7 +10,7 @@ final class Tile {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                hierarchy: BoundingHierarchy
+                hierarchy: Accelerator
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for pixel in bounds {
@@ -32,7 +32,7 @@ final class Tile {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                hierarchy: BoundingHierarchy
+                hierarchy: Accelerator
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for _ in 0..<sampler.samplesPerPixel {
