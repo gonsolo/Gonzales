@@ -31,7 +31,7 @@ void embreeGeometry(
                 float ax, float ay, float az,
                 float bx, float by, float bz,
                 float cx, float cy, float cz
-) {
+                ) {
         RTCGeometry geom = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
         if (!geom) {
                 embreeError("rtcNewGeometry");
@@ -61,7 +61,7 @@ void embreeGeometry(
                 embreeError("rtcSetNewGeometryBuffer");
         }
         ib[0] = 0; ib[1] = 1; ib[2] = 2;
-        
+
         rtcCommitGeometry(geom);
         rtcAttachGeometry(scene, geom);
         rtcReleaseGeometry(geom);
@@ -76,8 +76,9 @@ bool embreeIntersect(
                 float dx, float dy, float dz,
                 float tnear, float tfar,
                 float& nx, float& ny, float& nz,
-                float& tout
-) {
+                float& tout,
+                int64_t& geomID
+                ) {
         RTCRayHit rayhit; 
         //rayhit.ray.org_x  = 0.f; rayhit.ray.org_y = 0.f; rayhit.ray.org_z = -1.f;
         //rayhit.ray.dir_x  = 0.f; rayhit.ray.dir_y = 0.f; rayhit.ray.dir_z =  1.f;
@@ -88,21 +89,24 @@ bool embreeIntersect(
         rayhit.ray.tnear = tnear;
         rayhit.ray.tfar = tfar;
         rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-        
+
         RTCIntersectContext context;
         rtcInitIntersectContext(&context);
-        
+
         rtcIntersect1(scene, &context, &rayhit);
-        
+
         if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
-          //std::cout << "Intersection at t = " << rayhit.ray.tfar << std::endl;
-          tout = rayhit.ray.tfar;
-          nx = rayhit.hit.Ng_x;
-          ny = rayhit.hit.Ng_y;
-          nz = rayhit.hit.Ng_z;
-          return true;
+                //std::cout << "primID: " << rayhit.hit.primID << std::endl;
+                //std::cout << "geomID: " << rayhit.hit.geomID << std::endl;
+                //std::cout << "Intersection at t = " << rayhit.ray.tfar << std::endl;
+                tout = rayhit.ray.tfar;
+                geomID = rayhit.hit.geomID;
+                nx = rayhit.hit.Ng_x;
+                ny = rayhit.hit.Ng_y;
+                nz = rayhit.hit.Ng_z;
+                return true;
         } else {
-          //std::cout << "No Intersection" << std::endl;
-          return false;
+                //std::cout << "No Intersection" << std::endl;
+                return false;
         }
 }

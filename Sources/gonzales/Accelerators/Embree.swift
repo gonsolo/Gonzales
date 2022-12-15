@@ -8,6 +8,7 @@ class Embree: Accelerator {
                         if let geometricPrimitive = primitive as? GeometricPrimitive {
                                 if let triangle = geometricPrimitive.shape as? Triangle {
                                         geometry(triangle: triangle)
+                                        materials.append(geometricPrimitive.material)
                                 }
                         }
                 }
@@ -40,10 +41,11 @@ class Embree: Accelerator {
                 var ny: FloatX = 0
                 var nz: FloatX = 0
                 var tout: FloatX = 0
+                var geomID: Int64 = 0
                 let intersected = embreeIntersect(
                         ray.origin.x, ray.origin.y, ray.origin.z,
                         ray.direction.x, ray.direction.y, ray.direction.z,
-                        0.0, tHit, &nx, &ny, &nz, &tout)
+                        0.0, tHit, &nx, &ny, &nz, &tout, &geomID)
                 guard intersected else {
                         return
                 }
@@ -55,10 +57,12 @@ class Embree: Accelerator {
                 interaction.wo = -ray.direction
                 interaction.dpdu = up  // TODO
                 interaction.faceIndex = 0  // TODO
-                interaction.material = 0  // TODO
+                interaction.material = materials[geomID]
         }
 
         func worldBound() -> Bounds3f {
                 return Bounds3f()
         }
+
+        var materials = [Int]()
 }

@@ -1,3 +1,5 @@
+#include <cstdint>
+
 void embreeCommit();
 void embreeDeinit();
 void embreeGeometry(
@@ -10,4 +12,5 @@ bool embreeIntersect(
                 float dx, float dy, float dz,
                 float tnear, float tfar,
                 float& nx, float& ny, float& nz,
-                float& tout);
+                float& tout,
+                int64_t& geomID);
