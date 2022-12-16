@@ -42,13 +42,14 @@ final class Renderer {
 
         func renderTile(tile: Tile) throws -> [Sample] {
                 let tileSampler = self.sampler.clone()
-                return try tile.render(
+                let samples = try tile.render(
                         reporter: reporter,
                         sampler: tileSampler,
                         camera: self.camera,
                         scene: scene,
                         hierarchy: hierarchy
                 )
+                return samples
         }
 
         private func renderAndMergeTile(tile: Tile) throws {

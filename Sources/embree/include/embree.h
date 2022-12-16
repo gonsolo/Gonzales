@@ -13,4 +13,4 @@ bool embreeIntersect(
                 float tnear, float tfar,
                 float& nx, float& ny, float& nz,
                 float& tout,
-                int64_t& geomID);
+                uint32_t& geomID);

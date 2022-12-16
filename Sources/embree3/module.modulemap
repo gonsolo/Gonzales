@@ -1,0 +1,5 @@
+module embree3 {
+        umbrella header "embree3.h"
+        link "embree3"
+}
+

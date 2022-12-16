@@ -77,13 +77,9 @@ bool embreeIntersect(
                 float tnear, float tfar,
                 float& nx, float& ny, float& nz,
                 float& tout,
-                int64_t& geomID
+                uint32_t& geomID
                 ) {
         RTCRayHit rayhit; 
-        //rayhit.ray.org_x  = 0.f; rayhit.ray.org_y = 0.f; rayhit.ray.org_z = -1.f;
-        //rayhit.ray.dir_x  = 0.f; rayhit.ray.dir_y = 0.f; rayhit.ray.dir_z =  1.f;
-        //rayhit.ray.tnear  = 0.f;
-        //rayhit.ray.tfar   = std::numeric_limits<float>::infinity();
         rayhit.ray.org_x = ox; rayhit.ray.org_y = oy; rayhit.ray.org_z = oz;
         rayhit.ray.dir_x = dx; rayhit.ray.dir_y = dy; rayhit.ray.dir_z = dz;
         rayhit.ray.tnear = tnear;
@@ -96,9 +92,6 @@ bool embreeIntersect(
         rtcIntersect1(scene, &context, &rayhit);
 
         if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
-                //std::cout << "primID: " << rayhit.hit.primID << std::endl;
-                //std::cout << "geomID: " << rayhit.hit.geomID << std::endl;
-                //std::cout << "Intersection at t = " << rayhit.ray.tfar << std::endl;
                 tout = rayhit.ray.tfar;
                 geomID = rayhit.hit.geomID;
                 nx = rayhit.hit.Ng_x;
@@ -106,7 +99,6 @@ bool embreeIntersect(
                 nz = rayhit.hit.Ng_z;
                 return true;
         } else {
-                //std::cout << "No Intersection" << std::endl;
                 return false;
         }
 }

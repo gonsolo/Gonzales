@@ -19,6 +19,7 @@ let package = Package(
                                         package: "png"),
                                 "exr",
                                 "embree",
+                                "embree3",
                                 "ptex",
                         ],
                         linkerSettings: [
@@ -65,6 +66,7 @@ let package = Package(
                                         "-lembree3"
                                 ])
                         ]),
+                .systemLibrary(name: "embree3")
         ],
         cxxLanguageStandard: .cxx20
 )
