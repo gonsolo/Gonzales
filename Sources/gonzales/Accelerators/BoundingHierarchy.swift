@@ -17,7 +17,7 @@ struct Node {
         let axis: Int
 }
 
-protocol Accelerator {
+protocol Accelerator: Boundable, Intersectable {
 
         func intersect(
                 ray: Ray,

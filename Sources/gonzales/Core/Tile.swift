@@ -12,6 +12,7 @@ final class Tile {
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws -> [Sample] {
+
                 var samples = [Sample]()
                 for pixel in bounds {
                         let pixelSamples = try renderPixel(

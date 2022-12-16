@@ -1,8 +1,15 @@
 import Foundation
 
-func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> BoundingHierarchy {
-        let builder = BoundingHierarchyBuilder(primitives: primitives)
-        return try builder.getBoundingHierarchy()
+func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> Accelerator {
+        switch acceleratorName {
+        case "bvh":
+                let builder = BoundingHierarchyBuilder(primitives: primitives)
+                return try builder.getBoundingHierarchy()
+        case "embree":
+                return Embree(primitives: &primitives)
+        default:
+                throw ApiError.accelerator        
+        }
 }
 
 func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
@@ -141,7 +148,12 @@ struct Api {
         }
 
         func accelerator(name: String, parameters: ParameterDictionary) throws {
-                if name != "bvh" {
+                switch name {
+                case "bvh":
+                        acceleratorName = "bvh"
+                case "embree":
+                        acceleratorName = "embree"
+                default:
                         throw ApiError.accelerator
                 }
         }
@@ -529,3 +541,4 @@ var states = [State]()
 var currentTransform = Transform()
 var transforms = [Transform]()
 var readTimer = Timer("")
+var acceleratorName = "bvh"

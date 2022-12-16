@@ -298,6 +298,7 @@ final class PathIntegrator {
                         }
                 }
                 intelHack(&albedo)
+
                 return (radiance: l, albedo, normal)
         }
 
@@ -309,6 +310,5 @@ final class PathIntegrator {
                 }
         }
 
-        //var scene: Scene
         var maxDepth: Int
 }

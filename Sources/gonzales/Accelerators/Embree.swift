@@ -1,6 +1,6 @@
 import embree
 
-class Embree: Accelerator {
+final class Embree: Accelerator {
 
         init(primitives: inout [Boundable & Intersectable]) {
                 embreeInit()
@@ -61,6 +61,10 @@ class Embree: Accelerator {
         }
 
         func worldBound() -> Bounds3f {
+                return Bounds3f()
+        }
+
+        func objectBound() -> Bounds3f {
                 return Bounds3f()
         }
 

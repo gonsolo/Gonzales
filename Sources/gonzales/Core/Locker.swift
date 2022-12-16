@@ -12,5 +12,11 @@ struct Locker {
                 closure()
         }
 
+        func lockedThrowing(closure: () throws -> Void) throws {
+                lock()
+                defer { unlock() }
+                try closure()
+        }
+
         let semaphore = DispatchSemaphore(value: 1)
 }
