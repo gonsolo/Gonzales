@@ -8,6 +8,7 @@ final class Embree: Accelerator {
                         if let geometricPrimitive = primitive as? GeometricPrimitive {
                                 if let triangle = geometricPrimitive.shape as? Triangle {
                                         geometry(triangle: triangle)
+                                        bounds = union(first: bounds, second: triangle.worldBound())
                                         materials.append(geometricPrimitive.material)
                                 }
                         }
@@ -61,12 +62,13 @@ final class Embree: Accelerator {
         }
 
         func worldBound() -> Bounds3f {
-                return Bounds3f()
+                return bounds
         }
 
         func objectBound() -> Bounds3f {
-                return Bounds3f()
+                return bounds
         }
 
         var materials = [Int]()
+        var bounds = Bounds3f()
 }
