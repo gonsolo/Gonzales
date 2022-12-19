@@ -1,6 +1,6 @@
 import embree
 
-//import embree3
+import embree3
 
 enum Embree3Error: Error {
         case device
@@ -13,17 +13,19 @@ func embreeError() {
         print("embreeError")
 }
 
-//func embreeInit() {
-//        rtcDevice = rtcNewDevice(nil)
-//        if rtcDevice == nil {
-//                embreeError()
-//        }
+func embreeInit() {
+        rtcDevice = rtcNewDevice(nil)
+        if rtcDevice == nil {
+                embreeError()
+        }
+        embreeSetDevice(rtcDevice)
+        embreeInitScene()
 //        rtcScene = rtcNewScene(rtcDevice)
 //        if rtcScene == nil {
 //                embreeError()
 //        }
-//}
-//
+}
+
 //func embreeDeinit() {
 //        rtcReleaseScene(rtcScene);
 //        rtcReleaseDevice(rtcDevice);

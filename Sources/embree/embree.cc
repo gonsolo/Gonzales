@@ -11,11 +11,15 @@ void embreeError(std::string_view message) {
         exit(EXIT_FAILURE);
 }
 
-void embreeInit() {
-        device = rtcNewDevice(NULL);
-        if (!device) {
-                embreeError("rtcNewDevice");
-        }
+void embreeSetDevice(RTCDevice d) {
+        device = d;
+}
+
+void embreeInitScene() {
+        //device = rtcNewDevice(NULL);
+        //if (!device) {
+        //        embreeError("rtcNewDevice");
+        //}
         scene = rtcNewScene(device);
         if (!scene) {
                 embreeError("rtNewScene");
