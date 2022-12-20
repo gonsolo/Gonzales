@@ -117,24 +117,25 @@ final class Embree: Accelerator {
                 let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE);
                 check(geom)
                 let floatSize = MemoryLayout<Float>.size
-                let vb = rtcSetNewGeometryBuffer(
+                guard let vb = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_VERTEX,
                                 0,
                                 RTC_FORMAT_FLOAT3,
                                 3 * floatSize,
-                                3);
-                check(vb)
+                                3) else {
+                        embreeError()
+                                }
 
-                vb?.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
-                vb?.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
-                vb?.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
-                vb?.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
-                vb?.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
-                vb?.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
-                vb?.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
-                vb?.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
-                vb?.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
+                vb.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
+                vb.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
+                vb.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
+                vb.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
+                vb.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
+                vb.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
+                vb.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
+                vb.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
+                vb.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
 
                 let unsignedSize = MemoryLayout<UInt32>.size
 
