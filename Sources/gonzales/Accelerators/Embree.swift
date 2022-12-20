@@ -7,17 +7,6 @@ func embreeError() {
         print("embreeError")
 }
 
-func embreeInit() {
-        rtcDevice = rtcNewDevice(nil)
-        if rtcDevice == nil {
-                embreeError()
-        }
-        rtcScene = rtcNewScene(rtcDevice)
-        if rtcScene == nil {
-                embreeError()
-        }
-}
-
 func embreeDeinit() {
         rtcReleaseScene(rtcScene);
         rtcReleaseDevice(rtcDevice);
@@ -78,18 +67,33 @@ func embreeGeometry(
 final class Embree: Accelerator {
 
          init(primitives: inout [Boundable & Intersectable]) {
-                 embreeInit()
-                 for primitive in primitives {
-                         if let geometricPrimitive = primitive as? GeometricPrimitive {
-                                 if let triangle = geometricPrimitive.shape as? Triangle {
-                                         geometry(triangle: triangle)
-                                         bounds = union(first: bounds, second: triangle.worldBound())
-                                         materials.append(geometricPrimitive.material)
-                                 }
-                         }
-                 }
-                 commit()
-         }
+                embreeInit()
+                addPrimitives(primitives: &primitives)
+                commit()
+        }
+
+        func addPrimitives(primitives: inout [Boundable & Intersectable]) {
+                for primitive in primitives {
+                        if let geometricPrimitive = primitive as? GeometricPrimitive {
+                                if let triangle = geometricPrimitive.shape as? Triangle {
+                                        geometry(triangle: triangle)
+                                        bounds = union(first: bounds, second: triangle.worldBound())
+                                        materials.append(geometricPrimitive.material)
+                                }
+                        }
+                }
+        }
+
+        func embreeInit() {
+                rtcDevice = rtcNewDevice(nil)
+                if rtcDevice == nil {
+                        embreeError()
+                }
+                rtcScene = rtcNewScene(rtcDevice)
+                if rtcScene == nil {
+                        embreeError()
+                }
+        }
 
          deinit {
                  embreeDeinit()
