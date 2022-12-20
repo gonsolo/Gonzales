@@ -113,9 +113,10 @@ final class Embree: Accelerator {
                         ax: FloatX, ay: FloatX, az: FloatX,
                         bx: FloatX, by: FloatX, bz: FloatX,
                         cx: FloatX, cy: FloatX, cz: FloatX
-                        ) {
-                let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE);
-                check(geom)
+        ) {
+                guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
+                        embreeError()
+                }
                 let floatSize = MemoryLayout<Float>.size
                 guard let vb = rtcSetNewGeometryBuffer(
                                 geom,
@@ -140,14 +141,15 @@ final class Embree: Accelerator {
                 let unsignedSize = MemoryLayout<UInt32>.size
 
                 guard let ib = rtcSetNewGeometryBuffer(
-                                geom,
-                                RTC_BUFFER_TYPE_INDEX,
-                                0,
-                                RTC_FORMAT_UINT3,
-                                3 * unsignedSize,
-                                1) else {
+                        geom,
+                        RTC_BUFFER_TYPE_INDEX,
+                        0,
+                        RTC_FORMAT_UINT3,
+                        3 * unsignedSize,
+                        1
+                ) else {
                         embreeError()
-                                }
+                }
                 ib.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
                 ib.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
                 ib.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
