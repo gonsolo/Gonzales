@@ -19,7 +19,6 @@ final class Film {
                 self.crop = Bounds2i(
                         pMin: upperPoint2i(resolution * crop.pMin),
                         pMax: upperPoint2i(resolution * crop.pMax))
-                self.locker = Locker()
         }
 
         func getSampleBounds() -> Bounds2i {
@@ -49,24 +48,22 @@ final class Film {
         }
 
         func add(samples: [Sample]) {
-                locker.locked {
-                        for sample in samples {
-                                add(
-                                        value: sample.light,
-                                        weight: sample.weight,
-                                        location: sample.location,
-                                        image: &image)
-                                add(
-                                        value: sample.albedo,
-                                        weight: sample.weight,
-                                        location: sample.location,
-                                        image: &albedoImage)
-                                add(
-                                        value: Spectrum(from: sample.normal),
-                                        weight: sample.weight,
-                                        location: sample.location,
-                                        image: &normalImage)
-                        }
+                for sample in samples {
+                        add(
+                                value: sample.light,
+                                weight: sample.weight,
+                                location: sample.location,
+                                image: &image)
+                        //add(
+                        //        value: sample.albedo,
+                        //        weight: sample.weight,
+                        //        location: sample.location,
+                        //        image: &albedoImage)
+                        //add(
+                        //        value: Spectrum(from: sample.normal),
+                        //        weight: sample.weight,
+                        //        location: sample.location,
+                        //        image: &normalImage)
                 }
         }
 
@@ -142,5 +139,4 @@ final class Film {
         var albedoImage: Image
         var normalImage: Image
         var crop: Bounds2i
-        let locker: Locker
 }
