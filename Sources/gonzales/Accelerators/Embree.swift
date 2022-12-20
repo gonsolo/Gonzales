@@ -23,10 +23,6 @@ func embreeDeinit() {
         rtcReleaseDevice(rtcDevice);
 }
 
-func embreeCommit() {
-        rtcCommitScene(rtcScene);
-}
-
 func embreeGeometry(
                 ax: FloatX, ay: FloatX, az: FloatX,
                 bx: FloatX, by: FloatX, bz: FloatX,
@@ -92,7 +88,7 @@ final class Embree: Accelerator {
                                  }
                          }
                  }
-                 embreeCommit()
+                 commit()
          }
 
          deinit {
@@ -100,7 +96,7 @@ final class Embree: Accelerator {
          }
 
          func commit() {
-                 embreeCommit()
+                rtcCommitScene(rtcScene);
          }
 
          func geometry(triangle: Triangle) {
