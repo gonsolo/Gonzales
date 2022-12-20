@@ -11,7 +11,6 @@ let package = Package(
                         name: "gonzales",
                         dependencies: [
                                 "exr",
-                                "embree",
                                 "embree3",
                                 "ptex",
                         ],
@@ -48,15 +47,6 @@ let package = Package(
                         cxxSettings: [
                                 .unsafeFlags([
                                         "-IExtern/ptex/src/ptex"
-                                ])
-                        ]),
-                .target(
-                        name: "embree",
-                        dependencies: [],
-                        cxxSettings: [],
-                        linkerSettings: [
-                                .unsafeFlags([
-                                        "-lembree3"
                                 ])
                         ]),
                 .systemLibrary(name: "embree3")

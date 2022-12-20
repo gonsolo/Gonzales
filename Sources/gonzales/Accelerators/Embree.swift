@@ -1,10 +1,4 @@
-//import embree
-
 import embree3
-
-enum Embree3Error: Error {
-        case device
-}
 
 var rtcDevice: OpaquePointer?
 var rtcScene: OpaquePointer?
@@ -18,12 +12,10 @@ func embreeInit() {
         if rtcDevice == nil {
                 embreeError()
         }
-        //embreeSetDevice(rtcDevice)
         rtcScene = rtcNewScene(rtcDevice)
         if rtcScene == nil {
                 embreeError()
         }
-        //embreeSetScene(rtcScene)
 }
 
 func embreeDeinit() {
@@ -56,12 +48,6 @@ func embreeGeometry(
                 embreeError()
         }
 
-        //let error = rtcGetDeviceError(rtcDevice)
-        //print("error \(error)")
-        //vb[0] = ax; vb[1] = ay; vb[2] = az; // 1st vertex
-        //vb[3] = bx; vb[4] = by; vb[5] = bz; // 2nd vertex
-        //vb[6] = cx; vb[7] = cy; vb[8] = cz; // 3rd vertex
-
         vb?.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
         vb?.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
         vb?.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
@@ -84,7 +70,6 @@ func embreeGeometry(
         if ib == nil {
                 embreeError()
         }
-        //ib[0] = 0; ib[1] = 1; ib[2] = 2;
         ib?.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
         ib?.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
         ib?.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
