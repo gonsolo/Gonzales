@@ -5,18 +5,11 @@ import PackageDescription
 let package = Package(
         name: "gonzales",
         platforms: [.macOS(.v10_15)],
-        dependencies: [
-                .package(
-                        url: "https://github.com/kelvin13/png.git",
-                        from: "4.0.2")
-        ],
+        dependencies: [],
         targets: [
                 .executableTarget(
                         name: "gonzales",
                         dependencies: [
-                                .product(
-                                        name: "PNG",
-                                        package: "png"),
                                 "exr",
                                 "embree",
                                 "embree3",

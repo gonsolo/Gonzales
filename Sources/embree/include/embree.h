@@ -1,4 +1,4 @@
-#include <cstdint>
+//#include <cstdint>
 #include <embree3/rtcore.h>
 
 
@@ -10,10 +10,10 @@ void embreeGeometry(
                 float bx, float by, float bz,
                 float cx, float cy, float cz);
 void embreeInitScene();
-bool embreeIntersect(
-                float ox, float oy, float oz,
-                float dx, float dy, float dz,
-                float tnear, float tfar,
-                float& nx, float& ny, float& nz,
-                float& tout,
-                uint32_t& geomID);
+//bool embreeIntersect(
+//                float ox, float oy, float oz,
+//                float dx, float dy, float dz,
+//                float tnear, float tfar,
+//                float& nx, float& ny, float& nz,
+//                float& tout,
+//                uint32_t& geomID);

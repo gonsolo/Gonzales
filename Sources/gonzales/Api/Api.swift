@@ -73,8 +73,6 @@ func getTextureFrom(name: String) throws -> SpectrumTexture {
         switch suffix {
         case ".exr":
                 return ExrTexture(path: absoluteFileName)
-        case ".png":
-                return try PngTexture(path: absoluteFileName)
         case ".ptx":
                 return Ptex(path: absoluteFileName)
         case ".tga":

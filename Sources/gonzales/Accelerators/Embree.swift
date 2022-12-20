@@ -18,8 +18,8 @@ func embreeInit() {
         if rtcDevice == nil {
                 embreeError()
         }
-        embreeSetDevice(rtcDevice)
-        embreeInitScene()
+        //embreeSetDevice(rtcDevice)
+        //embreeInitScene()
 //        rtcScene = rtcNewScene(rtcDevice)
 //        if rtcScene == nil {
 //                embreeError()
@@ -140,23 +140,23 @@ final class Embree: Accelerator {
                                  }
                          }
                  }
-                 embreeCommit()
+                 //embreeCommit()
          }
 
          deinit {
-                 embreeDeinit()
+                 //embreeDeinit()
          }
 
          func commit() {
-                 embreeCommit()
+                 //embreeCommit()
          }
 
          func geometry(triangle: Triangle) {
-                let points = triangle.getLocalPoints()
-                let a = points.0
-                let b = points.1
-                let c = points.2
-                embreeGeometry(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+                //let points = triangle.getLocalPoints()
+                //let a = points.0
+                //let b = points.1
+                //let c = points.2
+                //embreeGeometry(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
                 //embreeGeometry(ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y, cz: c.z)
         }
 
@@ -168,22 +168,22 @@ final class Embree: Accelerator {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) {
-                var nx: FloatX = 0
-                var ny: FloatX = 0
-                var nz: FloatX = 0
-                var tout: FloatX = 0
-                var geomID: UInt32 = 0
+                let nx: FloatX = 0
+                let ny: FloatX = 0
+                let nz: FloatX = 0
+                let tout: FloatX = 0
+                let geomID: UInt32 = 0
                 //let intersected = embreeIntersect(
                 //        ox: ray.origin.x, oy: ray.origin.y, oz: ray.origin.z,
                 //        dx: ray.direction.x, dy: ray.direction.y, dz: ray.direction.z,
                 //        tnear: 0.0, tfar: tHit, nx: &nx, ny: &ny, nz: &nz, tout: &tout, geomID: &geomID)
-                let intersected = embreeIntersect(
-                        ray.origin.x, ray.origin.y, ray.origin.z,
-                        ray.direction.x, ray.direction.y, ray.direction.z,
-                        0.0, tHit, &nx, &ny, &nz, &tout, &geomID)
-                guard intersected else {
-                        return
-                }
+                //let intersected = embreeIntersect(
+                //        ray.origin.x, ray.origin.y, ray.origin.z,
+                //        ray.direction.x, ray.direction.y, ray.direction.z,
+                //        0.0, tHit, &nx, &ny, &nz, &tout, &geomID)
+                //guard intersected else {
+                //        return
+                //}
                 tHit = tout
                 interaction.valid = true
                 interaction.position = ray.origin + tout * ray.direction
