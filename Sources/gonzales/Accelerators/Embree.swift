@@ -19,11 +19,11 @@ func embreeInit() {
                 embreeError()
         }
         embreeSetDevice(rtcDevice)
-        embreeInitScene()
-//        rtcScene = rtcNewScene(rtcDevice)
-//        if rtcScene == nil {
-//                embreeError()
-//        }
+        rtcScene = rtcNewScene(rtcDevice)
+        if rtcScene == nil {
+                embreeError()
+        }
+        embreeSetScene(rtcScene)
 }
 
 //func embreeDeinit() {

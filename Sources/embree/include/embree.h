@@ -4,12 +4,12 @@
 
 void embreeCommit();
 void embreeSetDevice(RTCDevice device);
+void embreeSetScene(RTCScene scene);
 void embreeDeinit();
 void embreeGeometry(
                 float ax, float ay, float az,
                 float bx, float by, float bz,
                 float cx, float cy, float cz);
-void embreeInitScene();
 bool embreeIntersect(
                 float ox, float oy, float oz,
                 float dx, float dy, float dz,

@@ -15,15 +15,8 @@ void embreeSetDevice(RTCDevice d) {
         device = d;
 }
 
-void embreeInitScene() {
-        //device = rtcNewDevice(NULL);
-        //if (!device) {
-        //        embreeError("rtcNewDevice");
-        //}
-        scene = rtcNewScene(device);
-        if (!scene) {
-                embreeError("rtNewScene");
-        }
+void embreeSetScene(RTCScene s) {
+        scene = s;
 }
 
 void embreeDeinit() {
