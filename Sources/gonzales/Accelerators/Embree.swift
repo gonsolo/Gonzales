@@ -138,17 +138,18 @@ final class Embree: Accelerator {
 
                 let unsignedSize = MemoryLayout<UInt32>.size
 
-                let ib = rtcSetNewGeometryBuffer(
+                guard let ib = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_INDEX,
                                 0,
                                 RTC_FORMAT_UINT3,
                                 3 * unsignedSize,
-                                1);
-                check(ib)
-                ib?.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
-                ib?.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
-                ib?.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
+                                1) else {
+                        embreeError()
+                                }
+                ib.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
+                ib.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
+                ib.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
                 rtcCommitGeometry(geom);
                 rtcAttachGeometry(rtcScene, geom);
