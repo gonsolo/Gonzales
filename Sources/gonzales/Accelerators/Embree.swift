@@ -1,11 +1,21 @@
+import Foundation
 import embree3
 
 final class Embree: Accelerator {
 
         init(primitives: inout [Boundable & Intersectable]) {
-                embreeInit()
+                rtcDevice = rtcNewDevice(nil)
+                check(rtcDevice)
+                rtcScene = rtcNewScene(rtcDevice)
+                check(rtcScene)
                 addPrimitives(primitives: &primitives)
-                commit()
+                rtcCommitScene(rtcScene);
+        }
+
+        func check(_ pointer: Any?) {
+                guard pointer != nil else {
+                        embreeError()
+                }
         }
 
         func addPrimitives(primitives: inout [Boundable & Intersectable]) {
@@ -22,24 +32,10 @@ final class Embree: Accelerator {
                 }
         }
 
-        func embreeInit() {
-                rtcDevice = rtcNewDevice(nil)
-                if rtcDevice == nil {
-                        embreeError()
-                }
-                rtcScene = rtcNewScene(rtcDevice)
-                if rtcScene == nil {
-                        embreeError()
-                }
-        }
 
          deinit {
                 rtcReleaseScene(rtcScene);
                 rtcReleaseDevice(rtcDevice);
-         }
-
-         func commit() {
-                rtcCommitScene(rtcScene);
          }
 
          func geometry(triangle: Triangle) {
@@ -119,9 +115,7 @@ final class Embree: Accelerator {
                         cx: FloatX, cy: FloatX, cz: FloatX
                         ) {
                 let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE);
-                if geom == nil {
-                        embreeError()
-                }
+                check(geom)
                 let floatSize = MemoryLayout<Float>.size
                 let vb = rtcSetNewGeometryBuffer(
                                 geom,
@@ -130,9 +124,7 @@ final class Embree: Accelerator {
                                 RTC_FORMAT_FLOAT3,
                                 3 * floatSize,
                                 3);
-                if vb == nil {
-                        embreeError()
-                }
+                check(vb)
 
                 vb?.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
                 vb?.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
@@ -153,9 +145,7 @@ final class Embree: Accelerator {
                                 RTC_FORMAT_UINT3,
                                 3 * unsignedSize,
                                 1);
-                if ib == nil {
-                        embreeError()
-                }
+                check(ib)
                 ib?.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
                 ib?.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
                 ib?.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
@@ -165,8 +155,9 @@ final class Embree: Accelerator {
                 rtcReleaseGeometry(geom);
         }
 
-        func embreeError() {
+        func embreeError() -> Never {
                 print("embreeError")
+                exit(-1)
         }
 
         var rtcDevice: OpaquePointer?
