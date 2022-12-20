@@ -50,3 +50,28 @@ bool embreeIntersect(
                 return false;
         }
 }
+
+bool embreeIntersect2(
+                RTCRayHit rayhit,
+                float& nx, float& ny, float& nz,
+                float& tout,
+                uint32_t& geomID
+) {
+        rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
+
+        RTCIntersectContext context;
+        rtcInitIntersectContext(&context);
+
+        rtcIntersect1(scene, &context, &rayhit);
+
+        if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
+                tout = rayhit.ray.tfar;
+                geomID = rayhit.hit.geomID;
+                nx = rayhit.hit.Ng_x;
+                ny = rayhit.hit.Ng_y;
+                nz = rayhit.hit.Ng_z;
+                return true;
+        } else {
+                return false;
+        }
+}

@@ -103,6 +103,7 @@ func embreeGeometry(
 //                geomID: inout UInt32
 //) -> Bool {
 //        var rayhit =  RTCRayHit()
+//
 //        rayhit.ray.org_x = ox; rayhit.ray.org_y = oy; rayhit.ray.org_z = oz;
 //        rayhit.ray.dir_x = dx; rayhit.ray.dir_y = dy; rayhit.ray.dir_z = dz;
 //        rayhit.ray.tnear = tnear;
@@ -126,6 +127,29 @@ func embreeGeometry(
 //                return false;
 //        }
 //}
+
+func embreeIntersect1(
+                ox: Float, oy: Float, oz: Float,
+                dx: Float, dy: Float, dz: Float,
+                tnear: Float, tfar: Float,
+                nx: inout Float, ny: inout Float, nz: inout Float,
+                tout: inout Float,
+                geomID: inout UInt32
+) -> Bool {
+        //var rayhit =  RTCRayHit()
+        //rayhit.ray.org_x = ox; rayhit.ray.org_y = oy; rayhit.ray.org_z = oz;
+        //rayhit.ray.dir_x = dx; rayhit.ray.dir_y = dy; rayhit.ray.dir_z = dz;
+        //rayhit.ray.tnear = tnear;
+        //rayhit.ray.tfar = tfar;
+
+        //return embreeIntersect2(rayhit, &nx, &ny, &nz, &tout, &geomID);
+
+        return embreeIntersect(
+                ox, oy, oz,
+                dx, dy, dz,
+                tnear, tfar, &nx, &ny, &nz, &tout, &geomID)
+
+}
 
 final class Embree: Accelerator {
 
@@ -172,14 +196,14 @@ final class Embree: Accelerator {
                 var nz: FloatX = 0
                 var tout: FloatX = 0
                 var geomID: UInt32 = 0
+                let intersected = embreeIntersect1(
+                        ox: ray.origin.x, oy: ray.origin.y, oz: ray.origin.z,
+                        dx: ray.direction.x, dy: ray.direction.y, dz: ray.direction.z,
+                        tnear: 0.0, tfar: tHit, nx: &nx, ny: &ny, nz: &nz, tout: &tout, geomID: &geomID)
                 //let intersected = embreeIntersect(
-                //        ox: ray.origin.x, oy: ray.origin.y, oz: ray.origin.z,
-                //        dx: ray.direction.x, dy: ray.direction.y, dz: ray.direction.z,
-                //        tnear: 0.0, tfar: tHit, nx: &nx, ny: &ny, nz: &nz, tout: &tout, geomID: &geomID)
-                let intersected = embreeIntersect(
-                        ray.origin.x, ray.origin.y, ray.origin.z,
-                        ray.direction.x, ray.direction.y, ray.direction.z,
-                        0.0, tHit, &nx, &ny, &nz, &tout, &geomID)
+                //        ray.origin.x, ray.origin.y, ray.origin.z,
+                //        ray.direction.x, ray.direction.y, ray.direction.z,
+                //        0.0, tHit, &nx, &ny, &nz, &tout, &geomID)
                 guard intersected else {
                         return
                 }
