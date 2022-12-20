@@ -34,7 +34,8 @@ final class Embree: Accelerator {
         }
 
          deinit {
-                 embreeDeinit()
+                rtcReleaseScene(rtcScene);
+                rtcReleaseDevice(rtcDevice);
          }
 
          func commit() {
@@ -166,11 +167,6 @@ final class Embree: Accelerator {
 
         func embreeError() {
                 print("embreeError")
-        }
-
-        func embreeDeinit() {
-                rtcReleaseScene(rtcScene);
-                rtcReleaseDevice(rtcDevice);
         }
 
         var rtcDevice: OpaquePointer?
