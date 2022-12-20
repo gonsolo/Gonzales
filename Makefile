@@ -49,11 +49,12 @@ else
 	endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
-	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
+	SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	SWIFT_OPTIMIZE_FLAG	= -Xswiftc -Ounchecked -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
+	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
-	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO)
+	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
 	LINK_PTEX		= -Xlinker -L -Xlinker ../../src/ptex/build/src/ptex/ -Xlinker -lPtex
 	CXX_INTEROP 		= -Xswiftc -enable-experimental-cxx-interop
 	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
