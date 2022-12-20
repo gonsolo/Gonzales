@@ -59,10 +59,6 @@ void embreeGeometry(
         rtcReleaseGeometry(geom);
 }
 
-void embreeCommit() {
-        rtcCommitScene(scene);
-}
-
 bool embreeIntersect(
                 float ox, float oy, float oz,
                 float dx, float dy, float dz,

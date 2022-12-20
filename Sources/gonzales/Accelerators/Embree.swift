@@ -31,10 +31,10 @@ func embreeDeinit() {
         rtcReleaseDevice(rtcDevice);
 }
 
-//func embreeCommit() {
-//        rtcCommitScene(rtcScene);
-//}
-//
+func embreeCommit() {
+        rtcCommitScene(rtcScene);
+}
+
 //func embreeGeometry(
 //                ax: FloatX, ay: FloatX, az: FloatX,
 //                bx: FloatX, by: FloatX, bz: FloatX,

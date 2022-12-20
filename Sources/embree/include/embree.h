@@ -1,8 +1,6 @@
 #include <cstdint>
 #include <embree3/rtcore.h>
 
-
-void embreeCommit();
 void embreeSetDevice(RTCDevice device);
 void embreeSetScene(RTCScene scene);
 void embreeGeometry(
