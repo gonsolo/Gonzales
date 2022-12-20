@@ -19,11 +19,6 @@ void embreeSetScene(RTCScene s) {
         scene = s;
 }
 
-void embreeDeinit() {
-        rtcReleaseScene(scene);
-        rtcReleaseDevice(device);
-}
-
 void embreeGeometry(
                 float ax, float ay, float az,
                 float bx, float by, float bz,

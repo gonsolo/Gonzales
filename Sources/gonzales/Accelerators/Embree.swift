@@ -26,11 +26,11 @@ func embreeInit() {
         embreeSetScene(rtcScene)
 }
 
-//func embreeDeinit() {
-//        rtcReleaseScene(rtcScene);
-//        rtcReleaseDevice(rtcDevice);
-//}
-//
+func embreeDeinit() {
+        rtcReleaseScene(rtcScene);
+        rtcReleaseDevice(rtcDevice);
+}
+
 //func embreeCommit() {
 //        rtcCommitScene(rtcScene);
 //}
