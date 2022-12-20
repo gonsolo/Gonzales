@@ -35,65 +35,65 @@ func embreeCommit() {
         rtcCommitScene(rtcScene);
 }
 
-//func embreeGeometry(
-//                ax: FloatX, ay: FloatX, az: FloatX,
-//                bx: FloatX, by: FloatX, bz: FloatX,
-//                cx: FloatX, cy: FloatX, cz: FloatX
-//                ) {
-//        let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE);
-//        if geom == nil {
-//                embreeError()
-//        }
-//        let floatSize = MemoryLayout<Float>.size
-//        let vb = rtcSetNewGeometryBuffer(
-//                        geom,
-//                        RTC_BUFFER_TYPE_VERTEX,
-//                        0,
-//                        RTC_FORMAT_FLOAT3,
-//                        3 * floatSize,
-//                        3);
-//        if vb == nil {
-//                embreeError()
-//        }
-//
-//        //let error = rtcGetDeviceError(rtcDevice)
-//        //print("error \(error)")
-//        //vb[0] = ax; vb[1] = ay; vb[2] = az; // 1st vertex
-//        //vb[3] = bx; vb[4] = by; vb[5] = bz; // 2nd vertex
-//        //vb[6] = cx; vb[7] = cy; vb[8] = cz; // 3rd vertex
-//
-//        vb?.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
-//        vb?.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
-//
-//        let unsignedSize = MemoryLayout<UInt32>.size
-//
-//        let ib = rtcSetNewGeometryBuffer(
-//                        geom,
-//                        RTC_BUFFER_TYPE_INDEX,
-//                        0,
-//                        RTC_FORMAT_UINT3,
-//                        3 * unsignedSize,
-//                        1);
-//        if ib == nil {
-//                embreeError()
-//        }
-//        //ib[0] = 0; ib[1] = 1; ib[2] = 2;
-//        ib?.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
-//        ib?.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
-//        ib?.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
-//
-//        rtcCommitGeometry(geom);
-//        rtcAttachGeometry(rtcScene, geom);
-//        rtcReleaseGeometry(geom);
-//}
-//
+func embreeGeometry(
+                ax: FloatX, ay: FloatX, az: FloatX,
+                bx: FloatX, by: FloatX, bz: FloatX,
+                cx: FloatX, cy: FloatX, cz: FloatX
+                ) {
+        let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE);
+        if geom == nil {
+                embreeError()
+        }
+        let floatSize = MemoryLayout<Float>.size
+        let vb = rtcSetNewGeometryBuffer(
+                        geom,
+                        RTC_BUFFER_TYPE_VERTEX,
+                        0,
+                        RTC_FORMAT_FLOAT3,
+                        3 * floatSize,
+                        3);
+        if vb == nil {
+                embreeError()
+        }
+
+        //let error = rtcGetDeviceError(rtcDevice)
+        //print("error \(error)")
+        //vb[0] = ax; vb[1] = ay; vb[2] = az; // 1st vertex
+        //vb[3] = bx; vb[4] = by; vb[5] = bz; // 2nd vertex
+        //vb[6] = cx; vb[7] = cy; vb[8] = cz; // 3rd vertex
+
+        vb?.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
+        vb?.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
+        vb?.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
+        vb?.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
+        vb?.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
+        vb?.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
+        vb?.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
+        vb?.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
+        vb?.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
+
+        let unsignedSize = MemoryLayout<UInt32>.size
+
+        let ib = rtcSetNewGeometryBuffer(
+                        geom,
+                        RTC_BUFFER_TYPE_INDEX,
+                        0,
+                        RTC_FORMAT_UINT3,
+                        3 * unsignedSize,
+                        1);
+        if ib == nil {
+                embreeError()
+        }
+        //ib[0] = 0; ib[1] = 1; ib[2] = 2;
+        ib?.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
+        ib?.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
+        ib?.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
+
+        rtcCommitGeometry(geom);
+        rtcAttachGeometry(rtcScene, geom);
+        rtcReleaseGeometry(geom);
+}
+
 //func embreeIntersect(
 //                ox: Float, oy: Float, oz: Float,
 //                dx: Float, dy: Float, dz: Float,
@@ -156,8 +156,7 @@ final class Embree: Accelerator {
                 let a = points.0
                 let b = points.1
                 let c = points.2
-                embreeGeometry(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
-                //embreeGeometry(ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y, cz: c.z)
+                embreeGeometry(ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y, cz: c.z)
         }
 
         var counter = 0

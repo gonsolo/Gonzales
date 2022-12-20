@@ -19,46 +19,6 @@ void embreeSetScene(RTCScene s) {
         scene = s;
 }
 
-void embreeGeometry(
-                float ax, float ay, float az,
-                float bx, float by, float bz,
-                float cx, float cy, float cz
-                ) {
-        RTCGeometry geom = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
-        if (!geom) {
-                embreeError("rtcNewGeometry");
-        }
-        auto vb = (float*) rtcSetNewGeometryBuffer(
-                        geom,
-                        RTC_BUFFER_TYPE_VERTEX,
-                        0,
-                        RTC_FORMAT_FLOAT3,
-                        3 * sizeof(float),
-                        3);
-        if (!vb) {
-                embreeError("rtcSetNewGeometryBuffer");
-        }
-        vb[0] = ax; vb[1] = ay; vb[2] = az; // 1st vertex
-        vb[3] = bx; vb[4] = by; vb[5] = bz; // 2nd vertex
-        vb[6] = cx; vb[7] = cy; vb[8] = cz; // 3rd vertex
-
-        auto ib = (unsigned*) rtcSetNewGeometryBuffer(
-                        geom,
-                        RTC_BUFFER_TYPE_INDEX,
-                        0,
-                        RTC_FORMAT_UINT3,
-                        3 * sizeof(unsigned),
-                        1);
-        if (!ib) {
-                embreeError("rtcSetNewGeometryBuffer");
-        }
-        ib[0] = 0; ib[1] = 1; ib[2] = 2;
-
-        rtcCommitGeometry(geom);
-        rtcAttachGeometry(scene, geom);
-        rtcReleaseGeometry(geom);
-}
-
 bool embreeIntersect(
                 float ox, float oy, float oz,
                 float dx, float dy, float dz,
