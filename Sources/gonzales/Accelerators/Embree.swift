@@ -1,4 +1,4 @@
-import embree
+//import embree
 
 import embree3
 
@@ -18,12 +18,12 @@ func embreeInit() {
         if rtcDevice == nil {
                 embreeError()
         }
-        embreeSetDevice(rtcDevice)
+        //embreeSetDevice(rtcDevice)
         rtcScene = rtcNewScene(rtcDevice)
         if rtcScene == nil {
                 embreeError()
         }
-        embreeSetScene(rtcScene)
+        //embreeSetScene(rtcScene)
 }
 
 func embreeDeinit() {
@@ -94,63 +94,6 @@ func embreeGeometry(
         rtcReleaseGeometry(geom);
 }
 
-//func embreeIntersect(
-//                ox: Float, oy: Float, oz: Float,
-//                dx: Float, dy: Float, dz: Float,
-//                tnear: Float, tfar: Float,
-//                nx: inout Float, ny: inout Float, nz: inout Float,
-//                tout: inout Float,
-//                geomID: inout UInt32
-//) -> Bool {
-//        var rayhit =  RTCRayHit()
-//
-//        rayhit.ray.org_x = ox; rayhit.ray.org_y = oy; rayhit.ray.org_z = oz;
-//        rayhit.ray.dir_x = dx; rayhit.ray.dir_y = dy; rayhit.ray.dir_z = dz;
-//        rayhit.ray.tnear = tnear;
-//        rayhit.ray.tfar = tfar;
-//        let RTC_INVALID_GEOMETRY_ID = UInt32.max
-//        rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-//
-//        var context = RTCIntersectContext()
-//        rtcInitIntersectContext(&context);
-//
-//        rtcIntersect1(rtcScene, &context, &rayhit);
-//
-//        if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
-//                tout = rayhit.ray.tfar;
-//                geomID = rayhit.hit.geomID;
-//                nx = rayhit.hit.Ng_x;
-//                ny = rayhit.hit.Ng_y;
-//                nz = rayhit.hit.Ng_z;
-//                return true;
-//        } else {
-//                return false;
-//        }
-//}
-
-func embreeIntersect1(
-                ox: Float, oy: Float, oz: Float,
-                dx: Float, dy: Float, dz: Float,
-                tnear: Float, tfar: Float,
-                nx: inout Float, ny: inout Float, nz: inout Float,
-                tout: inout Float,
-                geomID: inout UInt32
-) -> Bool {
-        //var rayhit =  RTCRayHit()
-        //rayhit.ray.org_x = ox; rayhit.ray.org_y = oy; rayhit.ray.org_z = oz;
-        //rayhit.ray.dir_x = dx; rayhit.ray.dir_y = dy; rayhit.ray.dir_z = dz;
-        //rayhit.ray.tnear = tnear;
-        //rayhit.ray.tfar = tfar;
-
-        //return embreeIntersect2(rayhit, &nx, &ny, &nz, &tout, &geomID);
-
-        return embreeIntersect(
-                ox, oy, oz,
-                dx, dy, dz,
-                tnear, tfar, &nx, &ny, &nz, &tout, &geomID)
-
-}
-
 final class Embree: Accelerator {
 
          init(primitives: inout [Boundable & Intersectable]) {
@@ -196,14 +139,34 @@ final class Embree: Accelerator {
                 var nz: FloatX = 0
                 var tout: FloatX = 0
                 var geomID: UInt32 = 0
-                let intersected = embreeIntersect1(
-                        ox: ray.origin.x, oy: ray.origin.y, oz: ray.origin.z,
-                        dx: ray.direction.x, dy: ray.direction.y, dz: ray.direction.z,
-                        tnear: 0.0, tfar: tHit, nx: &nx, ny: &ny, nz: &nz, tout: &tout, geomID: &geomID)
-                //let intersected = embreeIntersect(
-                //        ray.origin.x, ray.origin.y, ray.origin.z,
-                //        ray.direction.x, ray.direction.y, ray.direction.z,
-                //        0.0, tHit, &nx, &ny, &nz, &tout, &geomID)
+
+                let RTC_INVALID_GEOMETRY_ID = UInt32.max
+
+                var rayhit = RTCRayHit()
+                rayhit.ray.org_x = ray.origin.x
+                rayhit.ray.org_y = ray.origin.y
+                rayhit.ray.org_z = ray.origin.z
+                rayhit.ray.dir_x = ray.direction.x
+                rayhit.ray.dir_y = ray.direction.y
+                rayhit.ray.dir_z = ray.direction.z
+                rayhit.ray.tnear = 0
+                rayhit.ray.tfar = tHit
+                rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID
+
+                var context = RTCIntersectContext()
+                rtcInitIntersectContext(&context);
+
+                rtcIntersect1(rtcScene, &context, &rayhit);
+
+                var intersected = false
+                if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
+                        tout = rayhit.ray.tfar;
+                        geomID = rayhit.hit.geomID;
+                        nx = rayhit.hit.Ng_x;
+                        ny = rayhit.hit.Ng_y;
+                        nz = rayhit.hit.Ng_z;
+                        intersected = true;
+                }
                 guard intersected else {
                         return
                 }
