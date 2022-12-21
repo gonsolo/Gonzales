@@ -3,9 +3,7 @@ private enum SplitStrategy {
         case middle
         case surfaceArea
 }
-private let splitStrategy = SplitStrategy.surfaceArea  // 21.2s
-//private let splitStrategy = SplitStrategy.equal // 25.2s
-//private let splitStrategy = SplitStrategy.middle //  22.3s
+private let splitStrategy = SplitStrategy.surfaceArea
 
 enum BoundingHierarchyBuilderError: Error {
         case unknown
@@ -209,7 +207,9 @@ final class BoundingHierarchyBuilder {
                         if range.count > primitivesPerNode || minCost < leafCost {
 
                                 mid = cachedPrimitives[range].partition(by: {
-                                        let offset = centroidBounds.offset(point: $0.centroid())[dimension]
+                                        let offsetPoint = centroidBounds.offset(
+                                                point: $0.centroid())
+                                        let offset = offsetPoint[dimension]
                                         var b = Int(FloatX(nBuckets) * offset)
                                         if b == nBuckets {
                                                 b = nBuckets - 1
