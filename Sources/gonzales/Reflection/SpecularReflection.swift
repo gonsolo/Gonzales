@@ -1,10 +1,5 @@
 struct SpecularReflection: BxDF {
 
-        init(reflectance: Spectrum, fresnel: Fresnel) {
-                self.reflectance = reflectance
-                self.fresnel = fresnel
-        }
-
         func evaluate(wo: Vector, wi: Vector) -> Spectrum { return black }
 
         func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {

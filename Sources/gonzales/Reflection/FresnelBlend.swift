@@ -1,15 +1,5 @@
 struct FresnelBlend: BxDF {
 
-        init(
-                diffuseReflection: Spectrum,
-                glossyReflection: Spectrum,
-                distribution: MicrofacetDistribution
-        ) {
-                self.diffuseReflection = diffuseReflection
-                self.glossyReflection = glossyReflection
-                self.distribution = distribution
-        }
-
         private func pow5(_ x: FloatX) -> FloatX {
                 return x * x * x * x * x
         }

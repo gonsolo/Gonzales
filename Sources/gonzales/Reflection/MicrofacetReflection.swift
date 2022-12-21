@@ -1,11 +1,5 @@
 struct MicrofacetReflection: BxDF {
 
-        init(reflectance: Spectrum, distribution: MicrofacetDistribution, fresnel: Fresnel) {
-                self.reflectance = reflectance
-                self.distribution = distribution
-                self.fresnel = fresnel
-        }
-
         func evaluate(wo: Vector, wi: Vector) -> Spectrum {
                 let cosThetaO = absCosTheta(wo)
                 let cosThetaI = absCosTheta(wi)

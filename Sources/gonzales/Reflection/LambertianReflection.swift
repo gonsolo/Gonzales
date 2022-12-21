@@ -1,9 +1,5 @@
 struct LambertianReflection: BxDF {
 
-        init(reflectance: Spectrum) {
-                self.reflectance = reflectance
-        }
-
         func evaluate(wo: Vector, wi: Vector) -> Spectrum {
                 return reflectance / FloatX.pi
         }
