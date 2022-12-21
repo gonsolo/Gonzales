@@ -30,10 +30,6 @@ protocol Accelerator: Boundable, Intersectable {
 
 struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
 
-        init(primitives: [IntersectablePrimitive]) {
-                self.primitives = primitives
-        }
-
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
