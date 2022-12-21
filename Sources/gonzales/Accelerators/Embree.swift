@@ -20,16 +20,29 @@ final class Embree: Accelerator {
 
         func addPrimitives(primitives: inout [Boundable & Intersectable]) {
                 for primitive in primitives {
-                        guard let geometricPrimitive = primitive as? GeometricPrimitive else {
-                                return
+                        switch primitive {
+                        case let geometricPrimitive as GeometricPrimitive:
+                                switch geometricPrimitive.shape {
+                                case let triangle as Triangle:
+                                        geometry(triangle: triangle)
+                                        bounds = union(first: bounds, second: triangle.worldBound())
+                                        materials.append(geometricPrimitive.material)
+                                default:
+                                        embreeError("Unknown shape in GeometricPrimitive.")
+                                }
+                        case let areaLight as AreaLight:
+                                switch areaLight.shape {
+                                case let triangle as Triangle:
+                                        geometry(triangle: triangle)
+                                        bounds = union(first: bounds, second: triangle.worldBound())
+                                default:
+                                        embreeError("Unknown shape in AreaLight.")
+                                }
+                        default:
+                                embreeError("Unknown primitive.")
                         }
-                        guard let triangle = geometricPrimitive.shape as? Triangle else {
-                                return
-                        }
-                        geometry(triangle: triangle)
-                        bounds = union(first: bounds, second: triangle.worldBound())
-                        materials.append(geometricPrimitive.material)
                 }
+                exit(0)
         }
 
 
@@ -38,7 +51,7 @@ final class Embree: Accelerator {
                 rtcReleaseDevice(rtcDevice);
          }
 
-         func geometry(triangle: Triangle) {
+        func geometry(triangle: Triangle) {
                 let points = triangle.getLocalPoints()
                 let a = points.0
                 let b = points.1
@@ -159,8 +172,8 @@ final class Embree: Accelerator {
                 rtcReleaseGeometry(geom);
         }
 
-        func embreeError() -> Never {
-                print("embreeError")
+        func embreeError(_ message: String = "") -> Never {
+                print("embreeError: \(message)")
                 exit(-1)
         }
 
