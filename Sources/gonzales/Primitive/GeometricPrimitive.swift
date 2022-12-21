@@ -1,10 +1,5 @@
 struct GeometricPrimitive: Boundable, Intersectable, Material {
 
-        init(shape: Shape, material: MaterialIndex) {
-                self.shape = shape
-                self.material = material
-        }
-
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
