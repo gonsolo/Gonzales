@@ -19,6 +19,7 @@ final class Embree: Accelerator {
         }
 
         func addPrimitives(primitives: inout [Boundable & Intersectable]) {
+                var geomID: UInt32 = 0
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
@@ -26,7 +27,7 @@ final class Embree: Accelerator {
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle)
                                         bounds = union(first: bounds, second: triangle.worldBound())
-                                        materials.append(geometricPrimitive.material)
+                                        materials[geomID] = geometricPrimitive.material
                                 default:
                                         embreeError("Unknown shape in GeometricPrimitive.")
                                 }
@@ -35,21 +36,21 @@ final class Embree: Accelerator {
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle)
                                         bounds = union(first: bounds, second: triangle.worldBound())
+                                        areaLights[geomID] = areaLight
                                 default:
                                         embreeError("Unknown shape in AreaLight.")
                                 }
                         default:
                                 embreeError("Unknown primitive.")
                         }
+                        geomID += 1
                 }
-                exit(0)
         }
 
-
-         deinit {
+        deinit {
                 rtcReleaseScene(rtcScene);
                 rtcReleaseDevice(rtcDevice);
-         }
+        }
 
         func geometry(triangle: Triangle) {
                 let points = triangle.getLocalPoints()
@@ -111,7 +112,12 @@ final class Embree: Accelerator {
                 interaction.wo = -ray.direction
                 interaction.dpdu = up  // TODO
                 interaction.faceIndex = 0  // TODO
-                interaction.material = materials[geomID]
+                if let material = materials[geomID] {
+                        interaction.material = material
+                }
+                if let areaLight = areaLights[geomID] {
+                        interaction.areaLight = areaLight
+                }
         }
 
         func worldBound() -> Bounds3f {
@@ -179,6 +185,7 @@ final class Embree: Accelerator {
 
         var rtcDevice: OpaquePointer?
         var rtcScene: OpaquePointer?
-        var materials = [Int]()
+        var materials = [UInt32:MaterialIndex]()
+        var areaLights = [UInt32:AreaLight]()
         var bounds = Bounds3f()
 }
