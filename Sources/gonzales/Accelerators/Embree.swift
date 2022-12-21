@@ -9,7 +9,7 @@ final class Embree: Accelerator {
                 rtcScene = rtcNewScene(rtcDevice)
                 check(rtcScene)
                 addPrimitives(primitives: &primitives)
-                rtcCommitScene(rtcScene);
+                rtcCommitScene(rtcScene)
         }
 
         func check(_ pointer: Any?) {
@@ -48,8 +48,8 @@ final class Embree: Accelerator {
         }
 
         deinit {
-                rtcReleaseScene(rtcScene);
-                rtcReleaseDevice(rtcDevice);
+                rtcReleaseScene(rtcScene)
+                rtcReleaseDevice(rtcDevice)
         }
 
         func geometry(triangle: Triangle) {
@@ -57,7 +57,9 @@ final class Embree: Accelerator {
                 let a = points.0
                 let b = points.1
                 let c = points.2
-                embreeGeometry(ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y, cz: c.z)
+                embreeGeometry(
+                        ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y,
+                        cz: c.z)
         }
 
         var counter = 0
@@ -88,18 +90,18 @@ final class Embree: Accelerator {
                 rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID
 
                 var context = RTCIntersectContext()
-                rtcInitIntersectContext(&context);
+                rtcInitIntersectContext(&context)
 
-                rtcIntersect1(rtcScene, &context, &rayhit);
+                rtcIntersect1(rtcScene, &context, &rayhit)
 
                 var intersected = false
-                if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
-                        tout = rayhit.ray.tfar;
-                        geomID = rayhit.hit.geomID;
-                        nx = rayhit.hit.Ng_x;
-                        ny = rayhit.hit.Ng_y;
-                        nz = rayhit.hit.Ng_z;
-                        intersected = true;
+                if rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID {
+                        tout = rayhit.ray.tfar
+                        geomID = rayhit.hit.geomID
+                        nx = rayhit.hit.Ng_x
+                        ny = rayhit.hit.Ng_y
+                        nz = rayhit.hit.Ng_z
+                        intersected = true
                 }
                 guard intersected else {
                         return
@@ -129,23 +131,25 @@ final class Embree: Accelerator {
         }
 
         func embreeGeometry(
-                        ax: FloatX, ay: FloatX, az: FloatX,
-                        bx: FloatX, by: FloatX, bz: FloatX,
-                        cx: FloatX, cy: FloatX, cz: FloatX
+                ax: FloatX, ay: FloatX, az: FloatX,
+                bx: FloatX, by: FloatX, bz: FloatX,
+                cx: FloatX, cy: FloatX, cz: FloatX
         ) {
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
                         embreeError()
                 }
                 let floatSize = MemoryLayout<Float>.size
-                guard let vb = rtcSetNewGeometryBuffer(
+                guard
+                        let vb = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_VERTEX,
                                 0,
                                 RTC_FORMAT_FLOAT3,
                                 3 * floatSize,
-                                3) else {
+                                3)
+                else {
                         embreeError()
-                                }
+                }
 
                 vb.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
                 vb.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
@@ -159,23 +163,25 @@ final class Embree: Accelerator {
 
                 let unsignedSize = MemoryLayout<UInt32>.size
 
-                guard let ib = rtcSetNewGeometryBuffer(
-                        geom,
-                        RTC_BUFFER_TYPE_INDEX,
-                        0,
-                        RTC_FORMAT_UINT3,
-                        3 * unsignedSize,
-                        1
-                ) else {
+                guard
+                        let ib = rtcSetNewGeometryBuffer(
+                                geom,
+                                RTC_BUFFER_TYPE_INDEX,
+                                0,
+                                RTC_FORMAT_UINT3,
+                                3 * unsignedSize,
+                                1
+                        )
+                else {
                         embreeError()
                 }
                 ib.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
                 ib.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
                 ib.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
-                rtcCommitGeometry(geom);
-                rtcAttachGeometry(rtcScene, geom);
-                rtcReleaseGeometry(geom);
+                rtcCommitGeometry(geom)
+                rtcAttachGeometry(rtcScene, geom)
+                rtcReleaseGeometry(geom)
         }
 
         func embreeError(_ message: String = "") -> Never {
@@ -185,7 +191,7 @@ final class Embree: Accelerator {
 
         var rtcDevice: OpaquePointer?
         var rtcScene: OpaquePointer?
-        var materials = [UInt32:MaterialIndex]()
-        var areaLights = [UInt32:AreaLight]()
+        var materials = [UInt32: MaterialIndex]()
+        var areaLights = [UInt32: AreaLight]()
         var bounds = Bounds3f()
 }
