@@ -76,7 +76,7 @@ final class Embree: Accelerator {
                 var tout: FloatX = 0
                 var geomID: UInt32 = 0
 
-                let RTC_INVALID_GEOMETRY_ID = UInt32.max
+                let rtcInvalidGeometryId = UInt32.max
 
                 var rayhit = RTCRayHit()
                 rayhit.ray.org_x = ray.origin.x
@@ -87,7 +87,7 @@ final class Embree: Accelerator {
                 rayhit.ray.dir_z = ray.direction.z
                 rayhit.ray.tnear = 0
                 rayhit.ray.tfar = tHit
-                rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID
+                rayhit.hit.geomID = rtcInvalidGeometryId
 
                 var context = RTCIntersectContext()
                 rtcInitIntersectContext(&context)
@@ -95,7 +95,7 @@ final class Embree: Accelerator {
                 rtcIntersect1(rtcScene, &context, &rayhit)
 
                 var intersected = false
-                if rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID {
+                if rayhit.hit.geomID != rtcInvalidGeometryId {
                         tout = rayhit.ray.tfar
                         geomID = rayhit.hit.geomID
                         nx = rayhit.hit.Ng_x
