@@ -165,8 +165,17 @@ struct Triangle: Shape {
                 return objectToWorld * objectBound()
         }
 
-        //@_noAllocation
-        //@_semantics("optremark")
+        @inline(__always)
+        func computeUVHit(b0: FloatX, b1: FloatX, b2: FloatX, uv: (Vector2F, Vector2F, Vector2F))
+                -> Point2F
+        {
+                let uvHit0: Point2F = b0 * Point2F(from: uv.0)
+                let uvHit1: Point2F = b1 * Point2F(from: uv.1)
+                let uvHit2: Point2F = b2 * Point2F(from: uv.2)
+                let uvHit: Point2F = uvHit0 + uvHit1 + uvHit2
+                return uvHit
+        }
+
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
@@ -246,10 +255,7 @@ struct Triangle: Shape {
                         meshIndex: meshIndex,
                         indices: (vertexIndex0, vertexIndex1, vertexIndex2))
 
-                let uvHit0: Point2F = b0 * Point2F(from: uv.0)
-                let uvHit1: Point2F = b1 * Point2F(from: uv.1)
-                let uvHit2: Point2F = b2 * Point2F(from: uv.2)
-                let uvHit: Point2F = uvHit0 + uvHit1 + uvHit2
+                let uvHit = computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
 
                 let duv02: Vector2F = uv.0 - uv.2
                 let duv12: Vector2F = uv.1 - uv.2

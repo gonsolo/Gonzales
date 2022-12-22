@@ -7,7 +7,7 @@ struct Transform {
                 self.inverseMatrix = inverseMatrix
         }
 
-        public init(matrix: Matrix) throws {
+        public init(matrix: Matrix) {
                 self.init(matrix: matrix, inverseMatrix: matrix.inverse)
         }
 

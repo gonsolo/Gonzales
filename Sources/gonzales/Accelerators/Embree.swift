@@ -25,7 +25,7 @@ final class Embree: Accelerator {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
-                                        geometry(triangle: triangle)
+                                        geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         materials[geomID] = geometricPrimitive.material
                                 default:
@@ -34,7 +34,7 @@ final class Embree: Accelerator {
                         case let areaLight as AreaLight:
                                 switch areaLight.shape {
                                 case let triangle as Triangle:
-                                        geometry(triangle: triangle)
+                                        geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         areaLights[geomID] = areaLight
                                 default:
@@ -52,7 +52,7 @@ final class Embree: Accelerator {
                 rtcReleaseDevice(rtcDevice)
         }
 
-        func geometry(triangle: Triangle) {
+        func geometry(triangle: Triangle, geomID: UInt32) {
                 let points = triangle.getLocalPoints()
                 let a = points.0
                 let b = points.1
@@ -60,6 +60,7 @@ final class Embree: Accelerator {
                 embreeGeometry(
                         ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y,
                         cz: c.z)
+                meshIndices[geomID] = triangle.meshIndex
         }
 
         var counter = 0
@@ -69,7 +70,7 @@ final class Embree: Accelerator {
                 tHit: inout FloatX,
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
-        ) {
+        ) throws {
                 var nx: FloatX = 0
                 var ny: FloatX = 0
                 var nz: FloatX = 0
@@ -112,13 +113,28 @@ final class Embree: Accelerator {
                 interaction.normal = normalized(Normal(x: nx, y: ny, z: nz))
                 interaction.shadingNormal = interaction.normal
                 interaction.wo = -ray.direction
-                interaction.dpdu = up  // TODO
+
+                //let triangle = try Triangle(
+                //        meshIndex: meshIndices[geomID]!,
+                //        number: triangleNumbers[geomID]!)
+                //let uv = triangleMeshes.getUVFor(
+                //        meshIndex: triangle.meshIndex,
+                //        indices: (
+                //                triangle.vertexIndex0,
+                //                triangle.vertexIndex1,
+                //                triangle.vertexIndex2
+                //        )
+                //)
+                let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
+                interaction.dpdu = dpdu
+
+                interaction.uv = Point2F()  // TODO
                 interaction.faceIndex = 0  // TODO
-                if let material = materials[geomID] {
-                        interaction.material = material
-                }
                 if let areaLight = areaLights[geomID] {
                         interaction.areaLight = areaLight
+                }
+                if let material = materials[geomID] {
+                        interaction.material = material
                 }
         }
 
@@ -193,5 +209,7 @@ final class Embree: Accelerator {
         var rtcScene: OpaquePointer?
         var materials = [UInt32: MaterialIndex]()
         var areaLights = [UInt32: AreaLight]()
+        var meshIndices = [UInt32: Int]()
+        var triangleNumbers = [UInt32: Int]()
         var bounds = Bounds3f()
 }

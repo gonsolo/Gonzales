@@ -8,7 +8,7 @@ func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> Ac
         case "embree":
                 return Embree(primitives: &primitives)
         default:
-                throw ApiError.accelerator        
+                throw ApiError.accelerator
         }
 }
 
@@ -24,7 +24,7 @@ func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
                 t20: right.z, t21: up.z, t22: dir.z, t23: eye.z,
                 t30: 0, t31: 0, t32: 0, t33: 1
         )
-        let transform = try Transform(matrix: matrix.inverse)
+        let transform = Transform(matrix: matrix.inverse)
         return transform
 }
 
@@ -295,7 +295,7 @@ struct Api {
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
                         t20: values[2], t21: values[6], t22: values[10], t23: values[14],
                         t30: values[3], t31: values[7], t32: values[11], t33: values[15])
-                currentTransform = try Transform(matrix: matrix)
+                currentTransform = Transform(matrix: matrix)
         }
 
         func transformBegin() throws {
@@ -381,7 +381,7 @@ struct Api {
                         t10: 0, t11: 1, t12: 0, t13: by.y,
                         t20: 0, t21: 0, t22: 1, t23: by.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                let translation = try Transform(matrix: matrix)
+                let translation = Transform(matrix: matrix)
                 try currentTransform *= translation
         }
 
