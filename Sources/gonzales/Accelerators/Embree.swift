@@ -78,9 +78,6 @@ final class Embree: Accelerator {
                         return
                 }
 
-                var nx: FloatX = 0
-                var ny: FloatX = 0
-                var nz: FloatX = 0
                 var tout: FloatX = 0
                 var geomID: UInt32 = 0
 
@@ -106,9 +103,6 @@ final class Embree: Accelerator {
                 if rayhit.hit.geomID != rtcInvalidGeometryId {
                         tout = rayhit.ray.tfar
                         geomID = rayhit.hit.geomID
-                        nx = rayhit.hit.Ng_x
-                        ny = rayhit.hit.Ng_y
-                        nz = rayhit.hit.Ng_z
                         intersected = true
                 }
                 guard intersected else {
@@ -119,7 +113,11 @@ final class Embree: Accelerator {
 
                 interaction.valid = true
                 interaction.position = ray.origin + tout * ray.direction
-                interaction.normal = normalized(Normal(x: nx, y: ny, z: nz))
+                interaction.normal = normalized(
+                        Normal(
+                                x: rayhit.hit.Ng_x,
+                                y: rayhit.hit.Ng_y,
+                                z: rayhit.hit.Ng_z))
                 interaction.shadingNormal = interaction.normal
                 interaction.wo = -ray.direction
 
@@ -166,7 +164,7 @@ final class Embree: Accelerator {
                 p2t.z *= sz
                 let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
                 if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
-                        print(det, tScaled, tHit, tHit * det)
+                        //print(det, tScaled, tHit, tHit * det)
                         return empty(#line)
                 } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
                         return empty(#line)
