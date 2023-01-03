@@ -230,6 +230,7 @@ struct Triangle: Shape {
                 p1t.z *= sz
                 p2t.z *= sz
                 let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
+                //print(det, tScaled, tHit, tHit * det)
                 if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
                         return empty(#line)
                 } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {

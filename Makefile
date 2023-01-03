@@ -1,6 +1,6 @@
 all: vd
 
-#SINGLERAY = --single 36 58
+#SINGLERAY = --single 20 20
 SYNC = --sync
 VERBOSE = --verbose
 #QUICK = --quick
