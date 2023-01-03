@@ -864,7 +864,7 @@ final class Parser {
                 guard let statement = RenderStatement(rawValue: input) else {
                         var message = "Unknown RenderStatement: |\(input)|"
                         message += " in file \(fileName)"
-                        message += " at \(scanner.scanLocation)"
+                        message += " at location \(scanner.scanLocation)"
                         try bail(message: message)
                 }
                 switch statement {
