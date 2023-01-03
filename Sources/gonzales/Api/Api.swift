@@ -539,4 +539,4 @@ var states = [State]()
 var currentTransform = Transform()
 var transforms = [Transform]()
 var readTimer = Timer("")
-var acceleratorName = "bvh"
+var acceleratorName = "embree"
