@@ -21,7 +21,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 .PHONY: all c clean e edit es editScene em editMakefile lldb p perf tags t test \
 	test_unchecked test_debug test_release v view wc openexr
 
-PBRT_OPTIONS = --stats #--nthreads 1 #--quiet --v 2
+PBRT_OPTIONS = --stats #--gpu #--nthreads 1 #--quiet --v 2
 
 OS = $(shell uname)
 HOSTNAME = $(shell hostname)
