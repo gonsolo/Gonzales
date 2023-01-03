@@ -61,7 +61,7 @@ extension Transform {
         }
 
         public static func * (left: Transform, right: Transform) throws -> Transform {
-                return try Transform(matrix: left.matrix * right.matrix)
+                return Transform(matrix: left.matrix * right.matrix)
         }
 }
 
@@ -90,7 +90,7 @@ extension Transform {
                         t10: 0, t11: y, t12: 0, t13: 0,
                         t20: 0, t21: 0, t22: z, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                return try Transform(matrix: m)
+                return Transform(matrix: m)
         }
 
         static func makeTranslation(from delta: Vector) throws -> Transform {
@@ -99,6 +99,6 @@ extension Transform {
                         t10: 0, t11: 1, t12: 0, t13: delta.y,
                         t20: 0, t21: 0, t22: 1, t23: delta.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                return try Transform(matrix: m)
+                return Transform(matrix: m)
         }
 }
