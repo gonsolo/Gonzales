@@ -1,6 +1,8 @@
 import Foundation
 
-public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Three {
+protocol Spectrum {}
+
+public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Spectrum, Three {
 
         init() {
                 self.init(r: 0, g: 0, b: 0)
