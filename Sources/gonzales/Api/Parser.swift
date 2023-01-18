@@ -522,9 +522,10 @@ final class Parser {
                 if try parseString(string: &string) {
                         switch string {
                         case "metal-Ag-eta":
-                                //let spectrum = namedSpectra[string]!
-                                //let _ = spectrum
-                                print("Found \(string)")
+                                if let spectrum = namedSpectra[string] {
+                                        _ = spectrum
+                                        print("Found \(string)")
+                                }
                         //spectra.append(spectrum) // TODO
                         default:
                                 warning("Ignoring unknown named spectrum \(string)!")
