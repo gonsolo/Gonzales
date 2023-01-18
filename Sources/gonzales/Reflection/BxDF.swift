@@ -2,10 +2,10 @@
 ///        Distribution Functions) and BTDFs (Bidirectional Transmission
 ///        Distribution Functions).
 protocol BxDF {
-        func evaluate(wo: Vector, wi: Vector) -> Spectrum
-        func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX)
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum
+        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX)
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX
-        func albedo() -> Spectrum
+        func albedo() -> RGBSpectrum
 
         var isReflective: Bool { get }
         var isTransmissive: Bool { get }
@@ -13,8 +13,8 @@ protocol BxDF {
 
 extension BxDF {
 
-        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> Spectrum) -> (
-                Spectrum, Vector, FloatX
+        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
+                RGBSpectrum, Vector, FloatX
         ) {
                 var wi = cosineSampleHemisphere(u: u)
                 if wo.z < 0 { wi.z = -wi.z }
@@ -23,7 +23,7 @@ extension BxDF {
                 return (radiance, wi, density)
         }
 
-        func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
                 return sample(wo: wo, u: u, evaluate: self.evaluate)
         }
 

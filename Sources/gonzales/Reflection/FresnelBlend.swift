@@ -4,17 +4,17 @@ struct FresnelBlend: BxDF {
                 return x * x * x * x * x
         }
 
-        private func schlickFresnel(_ cosTheta: FloatX) -> Spectrum {
+        private func schlickFresnel(_ cosTheta: FloatX) -> RGBSpectrum {
                 return glossyReflection + pow5(1 - cosTheta) * (white - glossyReflection)
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> Spectrum {
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
 
                 func weight(_ vector: Vector) -> FloatX {
                         return 1.0 - pow5(1.0 - 0.5 * absCosTheta(vector))
                 }
 
-                func diffuse() -> Spectrum {
+                func diffuse() -> RGBSpectrum {
                         let constant = 28.0 / (23.0 * FloatX.pi)
                         let result =
                                 constant * diffuseReflection * (white - glossyReflection)
@@ -22,7 +22,7 @@ struct FresnelBlend: BxDF {
                         return result
                 }
 
-                func specular() -> Spectrum {
+                func specular() -> RGBSpectrum {
                         let wh = normalized(wi + wo)
                         if wh.isZero { return black }
                         let dist = distribution.differentialArea(withNormal: wh)
@@ -38,11 +38,11 @@ struct FresnelBlend: BxDF {
                 return scattered
         }
 
-        func albedo() -> Spectrum {
+        func albedo() -> RGBSpectrum {
                 return evaluate(wo: Vector(x: 0, y: 0, z: 1), wi: Vector(x: 0, y: 0, z: 1))
         }
 
-        func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
 
                 func diffuse(u: Point2F) -> Vector {
                         var u = u
@@ -89,7 +89,7 @@ struct FresnelBlend: BxDF {
                 return 0.5 * (diffuse + specular)
         }
 
-        let diffuseReflection: Spectrum
-        let glossyReflection: Spectrum
+        let diffuseReflection: RGBSpectrum
+        let glossyReflection: RGBSpectrum
         let distribution: MicrofacetDistribution
 }

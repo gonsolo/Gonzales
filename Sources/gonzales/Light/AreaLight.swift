@@ -1,18 +1,18 @@
 struct AreaLight: Light, Boundable, Intersectable, Material {
 
-        init(brightness: Spectrum, shape: Shape) {
+        init(brightness: RGBSpectrum, shape: Shape) {
                 self.brightness = brightness
                 self.shape = shape
         }
 
         func emittedRadiance(from interaction: Interaction, inDirection direction: Vector)
-                -> Spectrum
+                -> RGBSpectrum
         {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
         func sample(for ref: Interaction, u: Point2F) -> (
-                radiance: Spectrum, direction: Vector, pdf: FloatX, visibility: Visibility
+                radiance: RGBSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - ref.position)
@@ -29,7 +29,7 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
                         samplingDirection: direction, from: reference)
         }
 
-        func radianceFromInfinity(for ray: Ray) -> Spectrum { return black }
+        func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
 
         var isDelta: Bool { return false }
 
@@ -61,5 +61,5 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
         }
 
         let shape: Shape
-        let brightness: Spectrum
+        let brightness: RGBSpectrum
 }

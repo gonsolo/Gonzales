@@ -22,8 +22,8 @@ func frDielectric(cosThetaI: FloatX, etaI: FloatX, etaT: FloatX) -> FloatX {
 
 struct FresnelDielectric: Fresnel {
 
-        func evaluate(cosTheta: FloatX) -> Spectrum {
-                return Spectrum(
+        func evaluate(cosTheta: FloatX) -> RGBSpectrum {
+                return RGBSpectrum(
                         intensity: frDielectric(cosThetaI: cosTheta, etaI: etaI, etaT: etaT))
         }
 

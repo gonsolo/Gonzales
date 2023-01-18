@@ -1,12 +1,12 @@
 struct PointLight: Light {
 
-        init(lightToWorld: Transform, intensity: Spectrum) {
+        init(lightToWorld: Transform, intensity: RGBSpectrum) {
                 position = lightToWorld * origin
                 self.intensity = intensity
         }
 
         func sample(for reference: Interaction, u: Point2F) -> (
-                radiance: Spectrum, direction: Vector, pdf: FloatX, visibility: Visibility
+                radiance: RGBSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let direction: Vector = normalized(position - reference.position)
                 let pdf: FloatX = 1.0
@@ -23,20 +23,20 @@ struct PointLight: Light {
                 return 0
         }
 
-        func radianceFromInfinity(for ray: Ray) -> Spectrum { return black }
+        func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
 
         var isDelta: Bool { return true }
 
         let position: Point
-        let intensity: Spectrum
+        let intensity: RGBSpectrum
 }
 
 func createPointLight(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight
 {
-        guard let intensity = try parameters.findSpectrum(name: "I") else {
+        guard let intensity = try parameters.findRGBSpectrum(name: "I") else {
                 throw ParameterError.missing(parameter: "I")
         }
-        guard let scale = try parameters.findSpectrum(name: "scale", else: white) else {
+        guard let scale = try parameters.findRGBSpectrum(name: "scale", else: white) else {
                 throw ParameterError.missing(parameter: "scale")
         }
         return PointLight(lightToWorld: lightToWorld, intensity: scale * intensity)

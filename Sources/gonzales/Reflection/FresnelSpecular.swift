@@ -1,24 +1,24 @@
 struct FresnelSpecular: BxDF {
 
-        init(reflectance: Spectrum, transmittance: Spectrum, etaA: FloatX, etaB: FloatX) {
+        init(reflectance: RGBSpectrum, transmittance: RGBSpectrum, etaA: FloatX, etaB: FloatX) {
                 self.reflectance = reflectance
                 self.transmittance = transmittance
                 self.etaA = etaA
                 self.etaB = etaB
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> Spectrum { return black }
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum { return black }
 
-        func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
 
-                func reflective(fresnel: FloatX) -> (Spectrum, Vector, FloatX) {
+                func reflective(fresnel: FloatX) -> (RGBSpectrum, Vector, FloatX) {
                         let wi = Vector(x: -wo.x, y: -wo.y, z: wo.z)
                         let radiance = dielectric * reflectance * absCosTheta(wi)
                         let pdf = dielectric
                         return (radiance, wi, pdf)
                 }
 
-                func transmittive(fresnel: FloatX) -> (Spectrum, Vector, FloatX) {
+                func transmittive(fresnel: FloatX) -> (RGBSpectrum, Vector, FloatX) {
                         var etaI = etaA
                         var etaT = etaB
                         let entering = cosTheta(wo) > 0
@@ -46,13 +46,13 @@ struct FresnelSpecular: BxDF {
                 return 1
         }
 
-        func albedo() -> Spectrum { return white }
+        func albedo() -> RGBSpectrum { return white }
 
         var isReflective: Bool { return true }
         var isTransmissive: Bool { return true }
 
-        var reflectance: Spectrum
-        var transmittance: Spectrum
+        var reflectance: RGBSpectrum
+        var transmittance: RGBSpectrum
         var etaA: FloatX
         var etaB: FloatX
 }

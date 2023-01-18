@@ -11,9 +11,9 @@ final class ConstantTexture<T: TextureEvaluation>: Texture {
         var value: T
 }
 
-extension ConstantTexture: SpectrumTexture where T == Spectrum {
-        func evaluateSpectrum(at interaction: Interaction) -> Spectrum {
-                return evaluate(at: interaction) as! Spectrum
+extension ConstantTexture: RGBSpectrumTexture where T == RGBSpectrum {
+        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
+                return evaluate(at: interaction) as! RGBSpectrum
         }
 }
 

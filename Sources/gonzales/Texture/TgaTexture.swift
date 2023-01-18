@@ -1,6 +1,6 @@
 import Foundation
 
-final class TgaTexture: SpectrumTexture {
+final class TgaTexture: RGBSpectrumTexture {
 
         init(width: Int, height: Int, channels: Int, data: [UInt8]) {
                 self.width = width
@@ -73,11 +73,11 @@ final class TgaTexture: SpectrumTexture {
                 }
         }
 
-        func inverseGamma(_ s: Spectrum) -> Spectrum {
-                return Spectrum(r: inverseGamma(s.r), g: inverseGamma(s.g), b: inverseGamma(s.b))
+        func inverseGamma(_ s: RGBSpectrum) -> RGBSpectrum {
+                return RGBSpectrum(r: inverseGamma(s.r), g: inverseGamma(s.g), b: inverseGamma(s.b))
         }
 
-        func evaluateSpectrum(at interaction: Interaction) -> Spectrum {
+        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
 
                 func getRGB(from index: Int) -> (UInt8, UInt8, UInt8) {
                         let b = data[index + 0]
@@ -86,14 +86,14 @@ final class TgaTexture: SpectrumTexture {
                         return (r, g, b)
                 }
 
-                func getSpectrum(from ints: (UInt8, UInt8, UInt8)) -> Spectrum {
+                func getRGBSpectrum(from ints: (UInt8, UInt8, UInt8)) -> RGBSpectrum {
 
                         func toFloatX(_ x: UInt8) -> FloatX { return FloatX(x) / 255 }
 
                         let r = toFloatX(ints.0)
                         let g = toFloatX(ints.1)
                         let b = toFloatX(ints.2)
-                        return Spectrum(r: r, g: g, b: b)
+                        return RGBSpectrum(r: r, g: g, b: b)
                 }
 
                 func getImageCoordinates(from uv: Point2F) -> (Int, Int) {
@@ -111,7 +111,7 @@ final class TgaTexture: SpectrumTexture {
                 let index = x * width * channels + y * channels
                 guard index < width * height * channels else { return black }
                 let ints = getRGB(from: index)
-                let srgb = getSpectrum(from: ints)
+                let srgb = getRGBSpectrum(from: ints)
                 return inverseGamma(srgb)
         }
 

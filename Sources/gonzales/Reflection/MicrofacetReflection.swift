@@ -1,10 +1,10 @@
 struct MicrofacetReflection: BxDF {
 
-        func evaluate(wo: Vector, wi: Vector) -> Spectrum {
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
                 let cosThetaO = absCosTheta(wo)
                 let cosThetaI = absCosTheta(wi)
                 var half = wo + wi
-                if cosThetaO == 0 || cosThetaI == 0 { return Spectrum() }
+                if cosThetaO == 0 || cosThetaI == 0 { return RGBSpectrum() }
                 guard !half.isZero else { return black }
                 half.normalize()
                 let f = fresnel.evaluate(cosTheta: dot(wi, half))
@@ -13,7 +13,7 @@ struct MicrofacetReflection: BxDF {
                 return reflectance * area * visible * f / (4 * cosThetaI * cosThetaO)
         }
 
-        func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
                 guard !wo.z.isZero else {
                         return (black, nullVector, 0.0)
                 }
@@ -30,9 +30,9 @@ struct MicrofacetReflection: BxDF {
                 return distribution.pdf(wo: wo, half: half) / (4 * dot(wo, half))
         }
 
-        func albedo() -> Spectrum { return white }
+        func albedo() -> RGBSpectrum { return white }
 
-        var reflectance: Spectrum
+        var reflectance: RGBSpectrum
         var distribution: MicrofacetDistribution
         var fresnel: Fresnel
 }

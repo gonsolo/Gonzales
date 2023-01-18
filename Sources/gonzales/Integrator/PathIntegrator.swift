@@ -9,7 +9,7 @@ private func sampleBrdf(
         bsdf: BSDF,
         scene: Scene,
         hierarchy: Accelerator
-) throws -> (estimate: Spectrum, density: FloatX, sample: Vector) {
+) throws -> (estimate: RGBSpectrum, density: FloatX, sample: Vector) {
 
         let zero = (black, FloatX(0.0), up)
 
@@ -53,7 +53,7 @@ private func sampleLightSource(
         scene: Scene,
         hierarchy: Accelerator
 ) throws -> (
-        estimate: Spectrum, density: FloatX, sample: Vector
+        estimate: RGBSpectrum, density: FloatX, sample: Vector
 ) {
         let zero = (black, FloatX(0.0), up)
 
@@ -114,7 +114,7 @@ func intersectOrInfiniteLights(
         ray: Ray,
         tHit: inout FloatX,
         bounce: Int,
-        l: inout Spectrum,
+        l: inout RGBSpectrum,
         interaction: inout SurfaceInteraction,
         scene: Scene,
         hierarchy: Accelerator
@@ -136,7 +136,7 @@ private func sampleOneLight(
         with sampler: Sampler,
         scene: Scene,
         hierarchy: Accelerator
-) throws -> Spectrum {
+) throws -> RGBSpectrum {
 
         guard scene.lights.count > 0 else { return black }
         let (light, lightPdf) = try chooseLight(withSampler: sampler, scene: scene)
@@ -157,7 +157,7 @@ private func estimateDirect(
         withSampler sampler: Sampler,
         scene: Scene,
         hierarchy: Accelerator
-) throws -> Spectrum {
+) throws -> RGBSpectrum {
 
         if light.isDelta {
                 let (estimate, density, _) = try sampleLightSource(
@@ -214,7 +214,7 @@ final class PathIntegrator {
                 self.maxDepth = maxDepth
         }
 
-        func russianRoulette(beta: inout Spectrum) -> Bool {
+        func russianRoulette(beta: inout RGBSpectrum) -> Bool {
                 let roulette = FloatX.random(in: 0..<1)
                 let probability: FloatX = 0.5
                 if roulette < probability {
@@ -232,7 +232,7 @@ final class PathIntegrator {
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws
-                -> (radiance: Spectrum, albedo: Spectrum, normal: Normal)
+                -> (radiance: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
         {
                 var l = black
                 var beta = white
@@ -304,7 +304,7 @@ final class PathIntegrator {
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
         // denoiser can't read. Make white a little colorful
-        private func intelHack(_ albedo: inout Spectrum) {
+        private func intelHack(_ albedo: inout RGBSpectrum) {
                 if albedo.r == albedo.g && albedo.r == albedo.b {
                         albedo.r += 0.01
                 }

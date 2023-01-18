@@ -1,6 +1,6 @@
 final class Metal: Material {
 
-        init(eta: Spectrum, k: Spectrum, roughness: (FloatX, FloatX)) {
+        init(eta: RGBSpectrum, k: RGBSpectrum, roughness: (FloatX, FloatX)) {
 
                 self.eta = eta
                 self.k = k
@@ -22,16 +22,16 @@ final class Metal: Material {
                 return bsdf
         }
 
-        var eta: Spectrum
-        var k: Spectrum
+        var eta: RGBSpectrum
+        var k: RGBSpectrum
         var roughness: (FloatX, FloatX)
 }
 
 func createMetal(parameters: ParameterDictionary) throws -> Metal {
-        guard let eta = try parameters.findSpectrum(name: "eta") else {
+        guard let eta = try parameters.findRGBSpectrum(name: "eta") else {
                 throw ParameterError.missing(parameter: "eta")
         }
-        guard let k = try parameters.findSpectrum(name: "k") else {
+        guard let k = try parameters.findRGBSpectrum(name: "k") else {
                 throw ParameterError.missing(parameter: "k")
         }
         // ignored let remapRoughness = try findOneBool(called : "remaproughness", else: false)

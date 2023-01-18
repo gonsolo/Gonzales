@@ -64,7 +64,7 @@ func lerp(with t: FloatX, between first: FloatX, and second: FloatX) -> FloatX {
         return (1 - t) * first + t * second
 }
 
-func lerp(with t: Spectrum, between first: Spectrum, and second: Spectrum) -> Spectrum {
+func lerp(with t: RGBSpectrum, between first: RGBSpectrum, and second: RGBSpectrum) -> RGBSpectrum {
         return (white - t) * first + t * second
 }
 

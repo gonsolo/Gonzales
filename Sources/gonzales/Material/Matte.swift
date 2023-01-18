@@ -1,22 +1,22 @@
 final class Matte: Material {
 
-        init(kd: SpectrumTexture) { self.kd = kd }
+        init(kd: RGBSpectrumTexture) { self.kd = kd }
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
-                let kde = kd.evaluateSpectrum(at: interaction)
+                let kde = kd.evaluateRGBSpectrum(at: interaction)
                 bsdf.set(bxdf: LambertianReflection(reflectance: kde))
                 return bsdf
         }
 
-        var kd: SpectrumTexture
+        var kd: RGBSpectrumTexture
 }
 
 func createMatte(parameters: ParameterDictionary) throws -> Matte {
-        if let reflectance = try parameters.findSpectrum(name: "reflectance", else: nil) {
-                let kd = ConstantTexture<Spectrum>(value: reflectance)
+        if let reflectance = try parameters.findRGBSpectrum(name: "reflectance", else: nil) {
+                let kd = ConstantTexture<RGBSpectrum>(value: reflectance)
                 return Matte(kd: kd)
         }
-        let kd: SpectrumTexture = try parameters.findSpectrumTexture(name: "Kd", else: gray)
+        let kd: RGBSpectrumTexture = try parameters.findRGBSpectrumTexture(name: "Kd", else: gray)
         return Matte(kd: kd)
 }

@@ -1,6 +1,6 @@
 final class Substrate: Material {
 
-        init(kd: SpectrumTexture, ks: SpectrumTexture, roughness: (FloatX, FloatX)) {
+        init(kd: RGBSpectrumTexture, ks: RGBSpectrumTexture, roughness: (FloatX, FloatX)) {
                 self.kd = kd
                 self.ks = ks
                 self.roughness = roughness
@@ -8,8 +8,8 @@ final class Substrate: Material {
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
-                let kd = self.kd.evaluateSpectrum(at: interaction)
-                let ks = self.ks.evaluateSpectrum(at: interaction)
+                let kd = self.kd.evaluateRGBSpectrum(at: interaction)
+                let ks = self.ks.evaluateRGBSpectrum(at: interaction)
                 let alpha = TrowbridgeReitzDistribution.getAlpha(from: roughness)
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnelBlend = FresnelBlend(
@@ -20,15 +20,15 @@ final class Substrate: Material {
                 return bsdf
         }
 
-        var kd: SpectrumTexture
-        var ks: SpectrumTexture
+        var kd: RGBSpectrumTexture
+        var ks: RGBSpectrumTexture
         var roughness: (FloatX, FloatX)
         let remapRoughness = true
 }
 
 func createSubstrate(parameters: ParameterDictionary) throws -> Substrate {
-        let kd: SpectrumTexture = try parameters.findSpectrumTexture(name: "Kd", else: gray)
-        let ks: SpectrumTexture = try parameters.findSpectrumTexture(name: "Ks", else: gray)
+        let kd: RGBSpectrumTexture = try parameters.findRGBSpectrumTexture(name: "Kd", else: gray)
+        let ks: RGBSpectrumTexture = try parameters.findRGBSpectrumTexture(name: "Ks", else: gray)
         let uroughness = try parameters.findOneFloatX(called: "uroughness", else: 0.1)
         let vroughness = try parameters.findOneFloatX(called: "vroughness", else: 0.1)
         let roughness = (uroughness, vroughness)

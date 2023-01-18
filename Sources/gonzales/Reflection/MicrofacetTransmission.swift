@@ -1,6 +1,6 @@
 struct MicrofacetTransmission: BxDF {
 
-        init(t: Spectrum, distribution: MicrofacetDistribution, eta: (FloatX, FloatX)) {
+        init(t: RGBSpectrum, distribution: MicrofacetDistribution, eta: (FloatX, FloatX)) {
                 self.t = t
                 self.distribution = distribution
                 self.eta = eta
@@ -15,7 +15,7 @@ struct MicrofacetTransmission: BxDF {
                 }
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> Spectrum {
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
 
                 if sameHemisphere(wo, wi) {
                         return black
@@ -33,17 +33,17 @@ struct MicrofacetTransmission: BxDF {
                 let factor = 1 / eta  // TODO: Transport mode or always radiance with path tracing?
                 let d = distribution.differentialArea(withNormal: half)
                 let g = distribution.visibleFraction(from: wo, and: wi)
-                let termA: Spectrum = (white - f) * t
+                let termA: RGBSpectrum = (white - f) * t
                 let termB: FloatX = d * g * eta * eta
                 let termC: FloatX = absDot(wi, half) * absDot(wo, half) * factor * factor
                 let termD: FloatX = cosThetaI * cosThetaO * sqrtDenom * sqrtDenom
                 let gonzoabs: FloatX = abs(termB * termC / (termD))
-                let radiance: Spectrum = termA * gonzoabs
+                let radiance: RGBSpectrum = termA * gonzoabs
                 //print("MicrofacetTransmission D G eta doti doto factor cosThetaI cosThetaO sqrtDenom: ", d, g, eta, absDot(wi, half), absDot(wo, half), factor, cosThetaI, cosThetaO, sqrtDenom)
                 return radiance
         }
 
-        func sample(wo: Vector, u: Point2F) -> (Spectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
                 if wo.z == 0 {
                         return (black, nullVector, 0)
                 }
@@ -71,13 +71,13 @@ struct MicrofacetTransmission: BxDF {
                 return distribution.pdf(wo: wo, half: half) * dwhDwi
         }
 
-        func albedo() -> Spectrum {
+        func albedo() -> RGBSpectrum {
                 return t
         }
 
         var isTransmissive: Bool { return true }
 
-        var t: Spectrum
+        var t: RGBSpectrum
         var distribution: MicrofacetDistribution
         var eta: (FloatX, FloatX)
         var fresnel: FresnelDielectric

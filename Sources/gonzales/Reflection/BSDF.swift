@@ -22,7 +22,7 @@ struct BSDF {
                 self.bxdf = bxdf
         }
 
-        func evaluate(wo woWorld: Vector, wi wiWorld: Vector) -> Spectrum {
+        func evaluate(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
                 var totalLightScattered = black
                 let woLocal = worldToLocal(world: woWorld)
                 let wiLocal = worldToLocal(world: wiWorld)
@@ -38,7 +38,7 @@ struct BSDF {
                 return totalLightScattered
         }
 
-        func albedo() -> Spectrum {
+        func albedo() -> RGBSpectrum {
                 return bxdf.albedo()
         }
 
@@ -55,7 +55,7 @@ struct BSDF {
         }
 
         func sample(wo woWorld: Vector, u: Point2F) throws -> (
-                L: Spectrum, wi: Vector, pdf: FloatX, isTransmissive: Bool
+                L: RGBSpectrum, wi: Vector, pdf: FloatX, isTransmissive: Bool
         ) {
                 let woLocal = worldToLocal(world: woWorld)
                 let (estimate, wiLocal, density) = bxdf.sample(wo: woLocal, u: u)

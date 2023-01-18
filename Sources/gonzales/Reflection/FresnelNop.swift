@@ -1,4 +1,4 @@
 struct FresnelNop: Fresnel {
 
-        func evaluate(cosTheta: FloatX) -> Spectrum { return white }
+        func evaluate(cosTheta: FloatX) -> RGBSpectrum { return white }
 }

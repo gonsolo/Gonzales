@@ -62,7 +62,7 @@ extension TimeInterval {
         }
 }
 
-func getTextureFrom(name: String) throws -> SpectrumTexture {
+func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
@@ -252,7 +252,7 @@ struct Api {
                                 }
                                 guard
                                         let brightness =
-                                                try state.areaLightParameters.findSpectrum(
+                                                try state.areaLightParameters.findRGBSpectrum(
                                                         name: "L")
                                 else {
                                         throw ParameterError.missing(parameter: "L")
@@ -358,10 +358,10 @@ struct Api {
                         warning("Unimplemented texture type: \(type)")
                         return
                 }
-                var texture: SpectrumTexture
+                var texture: RGBSpectrumTexture
                 switch textureClass {
                 case "constant":
-                        texture = try parameters.findSpectrumTexture(name: "value")
+                        texture = try parameters.findRGBSpectrumTexture(name: "value")
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName)

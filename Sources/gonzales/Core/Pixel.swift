@@ -4,7 +4,7 @@ enum PixelError: Error {
 
 struct Pixel {
 
-        init(light: Spectrum = Spectrum(), weight: FloatX = 0) {
+        init(light: RGBSpectrum = RGBSpectrum(), weight: FloatX = 0) {
                 self.light = light
                 self.weight = weight
         }
@@ -19,7 +19,7 @@ struct Pixel {
                 return (light.r + light.g + light.b) / 3.0
         }
 
-        var light: Spectrum
+        var light: RGBSpectrum
         private var weight: FloatX
 }
 

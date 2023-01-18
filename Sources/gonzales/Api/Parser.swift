@@ -514,11 +514,8 @@ final class Parser {
                 return f
         }
 
-        //struct SampledSpectrum {}
-        //let namedSpectra: [String: SampledSpectrum] = [:]
-
-        func parseSpectrum() throws -> [Spectrum] {
-                var spectra = [Spectrum]()
+        func parseRGBSpectrum() throws -> [RGBSpectrum] {
+                var spectra = [RGBSpectrum]()
 
                 // Try parsing named spectra first
                 var string = ""
@@ -531,13 +528,13 @@ final class Parser {
                         //spectra.append(spectrum) // TODO
                         default:
                                 warning("Ignoring unknown named spectrum \(string)!")
-                                let spectrum = Spectrum(rgb: (1, 1, 1))
+                                let spectrum = RGBSpectrum(rgb: (1, 1, 1))
                                 spectra.append(spectrum)
                         }
                         return spectra
                 }
                 while let f = try parseThreeFloatXs() {
-                        let spectrum = Spectrum(rgb: f)
+                        let spectrum = RGBSpectrum(rgb: f)
                         spectra.append(spectrum)
                 }
                 return spectra
@@ -619,7 +616,7 @@ final class Parser {
                         let doubles = try parseFloatXs()
                         parameter = doubles
                 case "rgb", "color", "spectrum":
-                        let rgbs = try parseSpectrum()
+                        let rgbs = try parseRGBSpectrum()
                         parameter = rgbs
                 case "string":
                         // TODO: Only one string supported

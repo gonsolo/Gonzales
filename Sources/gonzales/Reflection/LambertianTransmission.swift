@@ -1,6 +1,6 @@
 struct LambertianTransmission: BxDF {
 
-        func evaluate(wo: Vector, wi: Vector) -> Spectrum {
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
                 return reflectance / FloatX.pi
         }
 
@@ -12,7 +12,7 @@ struct LambertianTransmission: BxDF {
                 }
         }
 
-        func albedo() -> Spectrum { return reflectance }
+        func albedo() -> RGBSpectrum { return reflectance }
 
-        var reflectance: Spectrum
+        var reflectance: RGBSpectrum
 }

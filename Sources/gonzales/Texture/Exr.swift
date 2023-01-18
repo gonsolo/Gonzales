@@ -1,6 +1,6 @@
 import exr
 
-final class ExrTexture: SpectrumTexture {
+final class ExrTexture: RGBSpectrumTexture {
 
         init(width: Int, height: Int, channels: Int, data: [Float]) {
                 self.width = width
@@ -31,7 +31,7 @@ final class ExrTexture: SpectrumTexture {
                 return (r, g, b)
         }
 
-        func evaluateSpectrum(at interaction: Interaction) -> Spectrum {
+        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
 
                 func getImageCoordinates(from uv: Point2F) -> (Int, Int) {
                         var uv = uv
@@ -49,7 +49,7 @@ final class ExrTexture: SpectrumTexture {
                 let index = x * width * channels + y * channels
                 guard index < width * height * channels else { return black }
                 let rgb = getRGB(from: index)
-                let spectrum = Spectrum(r: rgb.0, g: rgb.1, b: rgb.2)
+                let spectrum = RGBSpectrum(r: rgb.0, g: rgb.1, b: rgb.2)
                 return spectrum
         }
 

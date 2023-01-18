@@ -1,9 +1,9 @@
-protocol SpectrumTexture: Texture {
-        func evaluateSpectrum(at interaction: Interaction) -> Spectrum
+protocol RGBSpectrumTexture: Texture {
+        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum
 }
 
-extension SpectrumTexture {
+extension RGBSpectrumTexture {
         func evaluate(at interaction: Interaction) -> TextureEvaluation {
-                return evaluateSpectrum(at: interaction)
+                return evaluateRGBSpectrum(at: interaction)
         }
 }

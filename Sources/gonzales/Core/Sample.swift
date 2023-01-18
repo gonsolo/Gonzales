@@ -1,6 +1,6 @@
 struct Sample {
-        var light: Spectrum
-        var albedo: Spectrum
+        var light: RGBSpectrum
+        var albedo: RGBSpectrum
         var normal: Normal
         var weight: FloatX
         var location: Point2F
