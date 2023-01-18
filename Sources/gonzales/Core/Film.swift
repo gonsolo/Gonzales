@@ -50,23 +50,23 @@ final class Film {
 
         func add(samples: [Sample]) {
                 locker.locked {
-                for sample in samples {
-                        add(
-                                value: sample.light,
-                                weight: sample.weight,
-                                location: sample.location,
-                                image: &image)
-                        //add(
-                        //        value: sample.albedo,
-                        //        weight: sample.weight,
-                        //        location: sample.location,
-                        //        image: &albedoImage)
-                        //add(
-                        //        value: RGBSpectrum(from: sample.normal),
-                        //        weight: sample.weight,
-                        //        location: sample.location,
-                        //        image: &normalImage)
-                }
+                        for sample in samples {
+                                add(
+                                        value: sample.light,
+                                        weight: sample.weight,
+                                        location: sample.location,
+                                        image: &image)
+                                //add(
+                                //        value: sample.albedo,
+                                //        weight: sample.weight,
+                                //        location: sample.location,
+                                //        image: &albedoImage)
+                                //add(
+                                //        value: RGBSpectrum(from: sample.normal),
+                                //        weight: sample.weight,
+                                //        location: sample.location,
+                                //        image: &normalImage)
+                        }
                 }
         }
 
