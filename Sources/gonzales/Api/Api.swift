@@ -109,7 +109,7 @@ struct Api {
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
                         t20: values[2], t21: values[6], t22: values[10], t23: values[14],
                         t30: values[3], t31: values[7], t32: values[11], t33: values[15])
-                try currentTransform *= Transform(matrix: matrix)
+                currentTransform *= Transform(matrix: matrix)
         }
 
         func film(name: String, parameters: ParameterDictionary) throws {
@@ -171,7 +171,7 @@ struct Api {
 
         func lookAt(eye: Point, at: Point, up: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, at: at, up: up)
-                try currentTransform *= transform
+                currentTransform *= transform
         }
 
         func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
@@ -315,7 +315,7 @@ struct Api {
                         t10: 0, t11: y, t12: 0, t13: 0,
                         t20: 0, t21: 0, t22: z, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                try currentTransform *= Transform(matrix: matrix)
+                currentTransform *= Transform(matrix: matrix)
         }
 
         // Not really part of PBRT API
@@ -343,7 +343,7 @@ struct Api {
                         t10: t10, t11: t11, t12: t12, t13: 0,
                         t20: t20, t21: t21, t22: t22, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                try currentTransform *= Transform(matrix: matrix)
+                currentTransform *= Transform(matrix: matrix)
         }
 
         func texture(
@@ -382,7 +382,7 @@ struct Api {
                         t20: 0, t21: 0, t22: 1, t23: by.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
                 let translation = Transform(matrix: matrix)
-                try currentTransform *= translation
+                currentTransform *= translation
         }
 
         public func worldBegin() {

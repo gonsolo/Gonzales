@@ -1,7 +1,8 @@
 struct FresnelConductor: Fresnel {
 
         // https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations
-        func frConductor(cosTheta: FloatX, etaI: RGBSpectrum, etaT: RGBSpectrum, k: RGBSpectrum) -> RGBSpectrum
+        func frConductor(cosTheta: FloatX, etaI: RGBSpectrum, etaT: RGBSpectrum, k: RGBSpectrum)
+                -> RGBSpectrum
         {
                 let cosThetaClamped = clamp(value: cosTheta, low: -1, high: 1)
                 let eta = etaT / etaI

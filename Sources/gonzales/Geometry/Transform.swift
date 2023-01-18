@@ -56,11 +56,11 @@ extension Transform {
                 return point / wp
         }
 
-        public static func *= (left: inout Transform, right: Transform) throws {
-                left = try left * right
+        public static func *= (left: inout Transform, right: Transform) {
+                left = left * right
         }
 
-        public static func * (left: Transform, right: Transform) throws -> Transform {
+        public static func * (left: Transform, right: Transform) -> Transform {
                 return Transform(matrix: left.matrix * right.matrix)
         }
 }

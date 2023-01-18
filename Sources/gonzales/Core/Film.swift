@@ -19,6 +19,7 @@ final class Film {
                 self.crop = Bounds2i(
                         pMin: upperPoint2i(resolution * crop.pMin),
                         pMax: upperPoint2i(resolution * crop.pMax))
+                self.locker = Locker()
         }
 
         func getSampleBounds() -> Bounds2i {
@@ -48,6 +49,7 @@ final class Film {
         }
 
         func add(samples: [Sample]) {
+                locker.locked {
                 for sample in samples {
                         add(
                                 value: sample.light,
@@ -64,6 +66,7 @@ final class Film {
                         //        weight: sample.weight,
                         //        location: sample.location,
                         //        image: &normalImage)
+                }
                 }
         }
 
@@ -117,7 +120,8 @@ final class Film {
                 }
         }
 
-        private func add(value: RGBSpectrum, weight: FloatX, location: Point2F, image: inout Image) {
+        private func add(value: RGBSpectrum, weight: FloatX, location: Point2F, image: inout Image)
+        {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
@@ -139,4 +143,5 @@ final class Film {
         var albedoImage: Image
         var normalImage: Image
         var crop: Bounds2i
+        let locker: Locker
 }
