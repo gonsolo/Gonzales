@@ -13,7 +13,9 @@ final class Matte: Material {
 }
 
 func createMatte(parameters: ParameterDictionary) throws -> Matte {
-        if let reflectance = try parameters.findRGBSpectrum(name: "reflectance", else: nil) {
+        if let reflectance = try parameters.findSpectrum(name: "reflectance", else: nil)
+                as? RGBSpectrum
+        {
                 let kd = ConstantTexture<RGBSpectrum>(value: reflectance)
                 return Matte(kd: kd)
         }

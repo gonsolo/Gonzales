@@ -252,8 +252,8 @@ struct Api {
                                 }
                                 guard
                                         let brightness =
-                                                try state.areaLightParameters.findRGBSpectrum(
-                                                        name: "L")
+                                                try state.areaLightParameters.findSpectrum(
+                                                        name: "L") as? RGBSpectrum
                                 else {
                                         throw ParameterError.missing(parameter: "L")
                                 }
@@ -476,6 +476,8 @@ struct Api {
 
                 var material: Material
                 switch name {
+                case "conductor":
+                        material = try createConductor(parameters: parameters)
                 case "diffuse":
                         material = try createMatte(parameters: parameters)
                 case "glass":

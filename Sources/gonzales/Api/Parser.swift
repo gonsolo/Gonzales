@@ -514,7 +514,7 @@ final class Parser {
                 return f
         }
 
-        func parseNamedSpectrum() throws -> Spectrum? {
+        func parseNamedSpectrum() throws -> (any Spectrum)? {
                 var string = ""
                 if try parseString(string: &string) {
                         if let namedSpectrum = namedSpectra[string] {
@@ -529,7 +529,7 @@ final class Parser {
                 return nil
         }
 
-        func parseRGBSpectrum() throws -> [Spectrum] {
+        func parseRGBSpectrum() throws -> [any Spectrum] {
                 var spectra = [RGBSpectrum]()
                 if let namedSpectrum = try parseNamedSpectrum() {
                         return [namedSpectrum]

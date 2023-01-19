@@ -91,7 +91,7 @@ func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionar
         -> InfiniteLight
 {
         guard let mapname = try parameters.findString(called: "mapname") else {
-                let brightness = try parameters.findRGBSpectrum(name: "L") ?? white
+                let brightness = try parameters.findSpectrum(name: "L") as? RGBSpectrum ?? white
                 let texture = ConstantTexture(value: brightness)
                 return InfiniteLight(
                         lightToWorld: lightToWorld,

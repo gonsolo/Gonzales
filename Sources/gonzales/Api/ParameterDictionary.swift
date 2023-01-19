@@ -6,7 +6,9 @@ typealias ParameterDictionary = [String: Parameter]
 
 extension ParameterDictionary {
 
-        func findRGBSpectrum(name: String, else spectrum: RGBSpectrum? = nil) throws -> RGBSpectrum? {
+        func findSpectrum(name: String, else spectrum: (any Spectrum)? = nil)
+                throws -> (any Spectrum)?
+        {
                 let spectra = try findSpectra(name: name)
                 if spectra.isEmpty {
                         return spectrum
@@ -37,22 +39,28 @@ extension ParameterDictionary {
                 return try findString(called: name) ?? ""
         }
 
-        func findRGBSpectrumTexture(name: String, else spectrum: RGBSpectrum = RGBSpectrum(intensity: 1))
+        func findRGBSpectrumTexture(
+                name: String,
+                else spectrum: RGBSpectrum = RGBSpectrum(intensity: 1)
+        )
                 throws -> RGBSpectrumTexture
         {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        //guard let texture = state.spectrumTextures[textureName] else {
-                        guard let texture = state.textures[textureName] as? RGBSpectrumTexture else {
+                        guard let texture = state.textures[textureName] as? RGBSpectrumTexture
+                        else {
                                 warning("Could not find texture \(textureName)")
                                 return ConstantTexture<RGBSpectrum>(value: red)
                         }
                         return texture
                 } else {
-                        guard let spectrum = try findRGBSpectrum(name: name, else: spectrum) else {
+                        guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
                                 fatalError()
                         }
-                        return ConstantTexture<RGBSpectrum>(value: spectrum)
+                        guard let rgbSpectrum = spectrum as? RGBSpectrum else {
+                                fatalError()
+                        }
+                        return ConstantTexture(value: rgbSpectrum)
                 }
         }
 
@@ -125,8 +133,8 @@ extension ParameterDictionary {
                 return normals
         }
 
-        func findSpectra(name: String) throws -> [RGBSpectrum] {
-                guard let spectra = self[name] as? [RGBSpectrum] else {
+        func findSpectra(name: String) throws -> [any Spectrum] {
+                guard let spectra = self[name] as? [any Spectrum] else {
                         return []
                 }
                 return spectra

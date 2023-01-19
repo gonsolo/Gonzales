@@ -1,11 +1,19 @@
 import Foundation
 
-protocol Spectrum {}
+protocol Spectrum {
+        static func * (lhs: Self, rhs: Self) -> Self
+}
 
 struct PiecewiseLinearSpectrum: Spectrum {
 
         let lambdas: [FloatX]
         let values: [FloatX]
+}
+
+extension PiecewiseLinearSpectrum {
+        static func * (lhs: Self, rhs: Self) -> Self {
+                fatalError()
+        }
 }
 
 let metalAgLambdas: [FloatX] = [
@@ -45,7 +53,7 @@ let metalAgKSpectrum = PiecewiseLinearSpectrum(
                 4.740000, 4.908125, 5.090000, 5.288750, 5.500000, 5.720624, 5.950000,
         ])
 
-var namedSpectra: [String: Spectrum] = [
+var namedSpectra: [String: any Spectrum] = [
         "metal-Ag-eta": metalAgEtaSpectrum,
         "metal-Ag-k": metalAgKSpectrum,
 ]
