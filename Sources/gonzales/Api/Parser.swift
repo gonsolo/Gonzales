@@ -581,6 +581,7 @@ final class Parser {
         }
 
         func parseParameter() throws -> (String, Parameter)? {
+                parseComments()
                 guard let _ = scanner.scanString("\"") else { return nil }
                 guard let type = scanner.scanUpToCharactersList(from: ["\n", " "]) else {
                         try bail()
