@@ -476,8 +476,12 @@ struct Api {
 
                 var material: Material
                 switch name {
+                case "coateddiffuse":
+                        material = try createCoatedDiffuse(parameters: parameters)
                 case "conductor":
                         material = try createConductor(parameters: parameters)
+                case "dielectric":
+                        material = try createDielectric(parameters: parameters)
                 case "diffuse":
                         material = try createMatte(parameters: parameters)
                 case "glass":
