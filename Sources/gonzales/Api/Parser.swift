@@ -586,9 +586,6 @@ final class Parser {
                 guard let type = scanner.scanUpToCharactersList(from: ["\n", " "]) else {
                         try bail()
                 }
-                //guard Parameter.isType(type) else {
-                //        try bail(message: "Unknown type: |\(type)|")
-                //}
                 guard let name = scanner.scanUpToCharactersList(from: ["\""]) else {
                         try bail()
                 }
