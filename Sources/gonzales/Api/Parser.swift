@@ -518,7 +518,6 @@ final class Parser {
                 var string = ""
                 if try parseString(string: &string) {
                         if let namedSpectrum = namedSpectra[string] {
-                                print("Found named spectrum \(string)")
                                 return namedSpectrum
                         } else {
                                 warning("Unknown named spectrum \(string)!")
