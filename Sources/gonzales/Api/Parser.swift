@@ -514,25 +514,25 @@ final class Parser {
                 return f
         }
 
-        func parseRGBSpectrum() throws -> [RGBSpectrum] {
-                var spectra = [RGBSpectrum]()
-
-                // Try parsing named spectra first
+        func parseNamedSpectrum() throws -> Spectrum? {
                 var string = ""
                 if try parseString(string: &string) {
-                        switch string {
-                        case "metal-Ag-eta":
-                                if let spectrum = namedSpectra[string] {
-                                        _ = spectrum
-                                        print("Found \(string)")
-                                }
-                        //spectra.append(spectrum) // TODO
-                        default:
-                                warning("Ignoring unknown named spectrum \(string)!")
-                                let spectrum = RGBSpectrum(rgb: (1, 1, 1))
-                                spectra.append(spectrum)
+                        if let namedSpectrum = namedSpectra[string] {
+                                print("Found named spectrum \(string)")
+                                return namedSpectrum
+                        } else {
+                                warning("Unknown named spectrum \(string)!")
+                                warning("Returning default spectrum!")
+                                return RGBSpectrum(rgb: (1, 1, 1))
                         }
-                        return spectra
+                }
+                return nil
+        }
+
+        func parseRGBSpectrum() throws -> [Spectrum] {
+                var spectra = [RGBSpectrum]()
+                if let namedSpectrum = try parseNamedSpectrum() {
+                        return [namedSpectrum]
                 }
                 while let f = try parseThreeFloatXs() {
                         let spectrum = RGBSpectrum(rgb: f)
