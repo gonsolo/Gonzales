@@ -1,7 +1,6 @@
 final class Conductor: Material {
 
         init(eta: RGBSpectrum, k: RGBSpectrum, roughness: (FloatX, FloatX)) {
-
                 self.eta = eta
                 self.k = k
                 self.roughness = roughness
@@ -9,7 +8,8 @@ final class Conductor: Material {
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
-                let trowbridge = TrowbridgeReitzDistribution(alpha: roughness)
+                let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
+                let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnel = FresnelConductor(
                         etaI: white,
                         etaT: eta,

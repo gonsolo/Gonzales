@@ -1,7 +1,6 @@
 final class Metal: Material {
 
         init(eta: RGBSpectrum, k: RGBSpectrum, roughness: (FloatX, FloatX)) {
-
                 self.eta = eta
                 self.k = k
                 self.roughness = roughness

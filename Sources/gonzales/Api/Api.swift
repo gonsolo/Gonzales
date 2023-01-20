@@ -495,7 +495,7 @@ struct Api {
                 case "substrate":
                         material = try createSubstrate(parameters: parameters)
                 default:
-                        try material = makeDefault(insteadOf: name)
+                        material = try makeDefault(insteadOf: name)
                 }
                 return material
         }
