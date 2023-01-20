@@ -467,9 +467,7 @@ struct Api {
 
                 func makeDefault(insteadOf material: String) throws -> Material {
                         warning("Unknown material \"\(material)\". Creating default.")
-                        //let parameter = Parameter(name: "Kd", value: 0.5)
                         var parameterList = ParameterDictionary()
-                        //parameterList.append(parameter)
                         parameterList["Kd"] = [0.5]
                         return try createMatte(parameters: parameters)
                 }

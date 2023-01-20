@@ -10,6 +10,6 @@ final class Dielectric: Material {
         }
 }
 
-func createDielectric(parameters: ParameterDictionary) throws -> Conductor {
-        return Conductor()
+func createDielectric(parameters: ParameterDictionary) throws -> Dielectric {
+        return Dielectric()
 }

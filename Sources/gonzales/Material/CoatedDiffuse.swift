@@ -10,6 +10,6 @@ final class CoatedDiffuse: Material {
         }
 }
 
-func createCoatedDiffuse(parameters: ParameterDictionary) throws -> Conductor {
-        return Conductor()
+func createCoatedDiffuse(parameters: ParameterDictionary) throws -> CoatedDiffuse {
+        return CoatedDiffuse()
 }

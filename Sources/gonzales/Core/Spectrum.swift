@@ -2,9 +2,32 @@ import Foundation
 
 protocol Spectrum {
         static func * (lhs: Self, rhs: Self) -> Self
+
+        // Temporary: We adopt a step-by-step strategy to convert the renderer to spectral
+        // rendering; first, convert the old Spectrum class to RGBSpectrum (done), then make
+        // Spectrum a protocol (done), add additional classes like PiecewiseLinearSpectrum
+        // (done) and facilities to convert to RGBSpectrum (here). After that a SampledSpectrum
+        // class can be added and all computation converted to this one.
+        func asRgb() -> RGBSpectrum
 }
 
 struct PiecewiseLinearSpectrum: Spectrum {
+
+        private func findIndex(wavelength: FloatX) -> Int {
+                for (index, lambda) in lambdas.enumerated() {
+                        if wavelength < lambda {
+                                return index
+                        }
+                }
+                return lambdas.count - 1
+        }
+
+        func asRgb() -> RGBSpectrum {
+                let red = values[findIndex(wavelength: 630)]
+                let green = values[findIndex(wavelength: 532)]
+                let blue = values[findIndex(wavelength: 465)]
+                return RGBSpectrum(r: red, g: green, b: blue)
+        }
 
         let lambdas: [FloatX]
         let values: [FloatX]
@@ -58,7 +81,7 @@ var namedSpectra: [String: any Spectrum] = [
         "metal-Ag-k": metalAgKSpectrum,
 ]
 
-public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Spectrum, Three {
+public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Three {
 
         init() {
                 self.init(r: 0, g: 0, b: 0)
@@ -185,9 +208,14 @@ extension BaseRGBSpectrum where T: FloatingPoint {
         func average() -> T {
                 return (r + g + b) / 3
         }
+
 }
 
 extension BaseRGBSpectrum where T: BinaryFloatingPoint {
+
+        func asRgb() -> RGBSpectrum {
+                return RGBSpectrum(r: FloatX(r), g: FloatX(g), b: FloatX(b))
+        }
 
         var luminance: T {
                 let rw: T = 0.212671 * r
@@ -206,6 +234,8 @@ extension BaseRGBSpectrum where T: FloatingPoint {
 }
 
 typealias RGBSpectrum = BaseRGBSpectrum<FloatX>
+
+extension RGBSpectrum: Spectrum {}
 
 let black = RGBSpectrum(intensity: 0)
 let gray = RGBSpectrum(intensity: 0.5)

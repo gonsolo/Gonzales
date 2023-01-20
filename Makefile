@@ -1,4 +1,4 @@
-all: d
+all: td
 
 #SINGLERAY = --single 20 20
 #SYNC = --sync

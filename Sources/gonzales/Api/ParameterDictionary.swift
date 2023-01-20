@@ -87,6 +87,15 @@ extension ParameterDictionary {
                 }
         }
 
+        func findOneFloatXOptional(called name: String) throws -> FloatX? {
+                let floats = try findFloatXs(called: name)
+                if floats.isEmpty {
+                        return nil
+                } else {
+                        return floats[0]
+                }
+        }
+
         func findOneFloatX(called name: String, else preset: FloatX) throws -> FloatX {
                 let floats = try findFloatXs(called: name)
                 if floats.isEmpty {

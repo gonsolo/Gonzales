@@ -1,15 +1,48 @@
 final class Conductor: Material {
 
-        init() {}
+        init(eta: RGBSpectrum, k: RGBSpectrum, roughness: (FloatX, FloatX)) {
+
+                self.eta = eta
+                self.k = k
+                self.roughness = roughness
+        }
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
-                // TODO
                 var bsdf = BSDF(interaction: interaction)
-                bsdf.set(bxdf: LambertianReflection(reflectance: white))
+                let trowbridge = TrowbridgeReitzDistribution(alpha: roughness)
+                let fresnel = FresnelConductor(
+                        etaI: white,
+                        etaT: eta,
+                        k: k)
+                let reflection = MicrofacetReflection(
+                        reflectance: white,
+                        distribution: trowbridge,
+                        fresnel: fresnel)
+                bsdf.set(bxdf: reflection)
                 return bsdf
         }
+
+        var eta: RGBSpectrum
+        var k: RGBSpectrum
+        var roughness: (FloatX, FloatX)
 }
 
 func createConductor(parameters: ParameterDictionary) throws -> Conductor {
-        return Conductor()
+        guard let eta = try parameters.findSpectrum(name: "eta") else {
+                throw ParameterError.missing(parameter: "eta")
+        }
+        guard let k = try parameters.findSpectrum(name: "k") else {
+                throw ParameterError.missing(parameter: "k")
+        }
+        //let remapRoughness = try findOneBool(called: "remaproughness", else: false)
+        let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
+        let uRoughness =
+                try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
+        let vRoughness =
+                try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
+        let roughness = (uRoughness, vRoughness)
+
+        let etaRgb = eta.asRgb()
+        let kRgb = k.asRgb()
+        return Conductor(eta: etaRgb, k: kRgb, roughness: roughness)
 }
