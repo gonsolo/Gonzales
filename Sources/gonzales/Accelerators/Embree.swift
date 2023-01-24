@@ -24,12 +24,15 @@ final class Embree: Accelerator {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
+                                case let curve as Curve:
+                                        _ = curve
+                                        warnOnce("Ignoring curve in geometric primitive.")
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         materials[geomID] = geometricPrimitive.material
                                 default:
-                                        embreeError("Unknown shape in GeometricPrimitive.")
+                                        embreeError("Unknown shape in geometric primitive.")
                                 }
                         case let areaLight as AreaLight:
                                 switch areaLight.shape {
@@ -40,6 +43,9 @@ final class Embree: Accelerator {
                                 case let disk as Disk:
                                         _ = disk
                                         warnOnce("Ignoring disk in area light!")
+                                case let sphere as Sphere:
+                                        _ = sphere
+                                        warnOnce("Ignoring sphere in area light!")
                                 default:
                                         embreeError("Unknown shape in AreaLight.")
                                 }

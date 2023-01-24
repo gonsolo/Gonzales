@@ -8,15 +8,9 @@ all: td
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-#SCENE_NAME = cornellb-x
-#SCENE_NAME = bathroom
-#SCENE_NAME = living-room
-#SCENE_NAME = bedroom
-#SCENE_NAME = kitchen
-#SCENE_NAME = staircase2
-#SCENE_NAME = staircase
-#SCENE_NAME = bathroom2
-SCENE_NAME = living-room-2
+# Successfully rendered Bitterli scenes:
+# cornell-box bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2
+SCENE_NAME = living-room-3
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 
