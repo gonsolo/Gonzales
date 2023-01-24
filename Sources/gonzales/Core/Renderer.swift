@@ -14,8 +14,6 @@ final class Renderer {
                 self.sampler = sampler
                 self.scene = scene
                 self.hierarchy = hierarchy
-
-                print("Primitive count: \(options.primitives.count)")
         }
 
         func generateTiles(from bounds: Bounds2i) -> [Tile] {
