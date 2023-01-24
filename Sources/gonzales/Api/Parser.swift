@@ -296,8 +296,12 @@ final class PbrtScanner {
                         isNegative = true
                 }
 
-                if !scanInt(&i) { return false }
-                var f = Double(i)
+                var f = 0.0
+                var intSeen = false
+                if scanInt(&i) {
+                        f = Double(i)
+                        intSeen = true
+                }
                 peekOne()
                 if c == dot {
                         scanOne()
@@ -312,6 +316,11 @@ final class PbrtScanner {
                                 }
                                 tenth *= 0.1
                                 peekOne()
+                        }
+                } else {
+                        // If neither a number not a dot is seen this is not a floating point number
+                        if !intSeen {
+                                return false
                         }
                 }
                 peekOne()
@@ -635,14 +644,8 @@ final class Parser {
                 var parameters = ParameterDictionary()
                 var nameAndParameter = try parseParameter()
                 while nameAndParameter != nil {
-                        //parameters.append(parameter!)
                         let name = nameAndParameter!.0
                         let parameter = nameAndParameter!.1
-
-                        //if name == "Kd" {
-                        //        print("set \(name) to \(type(of: parameter))")
-                        //}
-
                         parameters[name] = parameter
                         parseComments()  // TODO: This does not belong here!
                         nameAndParameter = try parseParameter()

@@ -9,8 +9,10 @@ PTEXMEM = --ptexmem 1 # GB
 
 #SCENE = ../../src/bitterli/cornell-box/pbrt/scene-v4.pbrt
 #IMAGE =  cornell-box.exr
-SCENE = ../../src/bitterli/bathroom/pbrt/scene-v4.pbrt
-IMAGE =  bathroom.exr
+#SCENE = ../../src/bitterli/bathroom/pbrt/scene-v4.pbrt
+#IMAGE =  bathroom.exr
+SCENE = ../../src/bitterli/living-room/pbrt/scene-v4.pbrt
+IMAGE =  living-room.exr
 #SCENE = ~/src/pbrt-v4-scenes/killeroos/killeroo-coated-gold.pbrt
 #IMAGE = killeroo-coated-gold.exr
 
