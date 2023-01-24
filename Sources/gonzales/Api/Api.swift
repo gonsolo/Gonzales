@@ -124,10 +124,10 @@ struct Api {
         }
 
         mutating func importFile(file sceneName: String) throws {
-                try include(file: sceneName)
+                try include(file: sceneName, render: false)
         }
 
-        mutating func include(file sceneName: String) throws {
+        mutating func include(file sceneName: String, render: Bool) throws {
                 do {
                         let fileManager = FileManager.default
                         let absoluteSceneName = sceneDirectory + "/" + sceneName
@@ -137,7 +137,7 @@ struct Api {
                                 throw RenderError.fileNotExisting(name: absoluteSceneName)
                         }
                         if #available(OSX 10.15, *) {
-                                let parser = try Parser(fileName: absoluteSceneName)
+                                let parser = try Parser(fileName: absoluteSceneName, render: render)
                                 try parser.parse()
                         } else {
                                 // Fallback on earlier versions

@@ -397,11 +397,13 @@ final class Parser {
 
         var scanner: PbrtScanner
         let fileName: String
+        var render = true
         var worldEndSeen = false
 
-        init(fileName: String, function: String = #function) throws {
+        init(fileName: String, render: Bool = true, function: String = #function) throws {
                 self.scanner = try PbrtScanner(path: fileName)
                 self.fileName = fileName
+                self.render = render
         }
 
         func bail(
@@ -754,7 +756,7 @@ final class Parser {
 
         func parseInclude() throws {
                 let name = try parseString()
-                try api.include(file: name)
+                try api.include(file: name, render: false)
         }
 
         func parseCamera() throws {
@@ -933,7 +935,7 @@ final class Parser {
                         else {
                                 if scanner.isAtEnd {
                                         // PBRT v4 does not use WorldEnd
-                                        if !worldEndSeen {
+                                        if render && !worldEndSeen {
                                                 try api.worldEnd()
                                         }
                                         return

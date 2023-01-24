@@ -102,7 +102,7 @@ func main() {
                 let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
                 sceneDirectory = url.path
                 api.start()
-                try api.include(file: sceneNameLast)
+                try api.include(file: sceneNameLast, render: true)
         } catch let error {
                 handle(error)
         }
