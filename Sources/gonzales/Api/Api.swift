@@ -179,6 +179,10 @@ struct Api {
                 state.namedMaterials[name] = UninstancedMaterial(type: type, parameters: parameters)
         }
 
+        func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
+                // TODO
+        }
+
         func material(type: String, parameters: ParameterDictionary) throws {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }

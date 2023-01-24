@@ -12,7 +12,8 @@ BITTERLI = ~/src/bitterli
 #SCENE_NAME = bathroom
 #SCENE_NAME = living-room
 #SCENE_NAME = bedroom
-SCENE_NAME = kitchen
+#SCENE_NAME = kitchen
+SCENE_NAME = staircase2
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 
