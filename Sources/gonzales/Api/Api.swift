@@ -482,6 +482,8 @@ struct Api {
                         material = try createDielectric(parameters: parameters)
                 case "diffuse":
                         material = try createMatte(parameters: parameters)
+                case "diffusetransmission":
+                        material = try createDiffuseTransmission(parameters: parameters)
                 case "glass":
                         material = try createGlass(parameters: parameters)
                 case "matte":
