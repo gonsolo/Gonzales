@@ -187,6 +187,10 @@ struct Api {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }
 
+        func mediumInterface(interior: String, exterior: String) {
+                // TODO
+        }
+
         func namedMaterial(name: String) throws {
                 state.currentNamedMaterial = name
         }
@@ -514,6 +518,18 @@ struct Api {
                 throws -> [Shape]
         {
                 switch name {
+                case "curve":
+                        return try createCurveShape(
+                                objectToWorld: objectToWorld,
+                                parameters: parameters)
+                case "disk":
+                        return try createDiskShape(
+                                objectToWorld: objectToWorld,
+                                parameters: parameters)
+                case "loopsubdiv":
+                        return try createTriangleMeshShape(
+                                objectToWorld: objectToWorld,
+                                parameters: parameters)  // TODO
                 case "plymesh":
                         return try createPlyMesh(
                                 objectToWorld: objectToWorld,
@@ -526,14 +542,6 @@ struct Api {
                         ]
                 case "trianglemesh":
                         return try createTriangleMeshShape(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters)
-                case "loopsubdiv":
-                        return try createTriangleMeshShape(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters)  // TODO
-                case "curve":
-                        return try createCurveShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
                 default:

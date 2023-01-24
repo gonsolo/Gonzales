@@ -15,6 +15,7 @@ enum RenderStatement: String {
         case makeNamedMaterial = "MakeNamedMaterial"
         case makeNamedMedium = "MakeNamedMedium"
         case material = "Material"
+        case mediumInterface = "MediumInterface"
         case namedMaterial = "NamedMaterial"
         case objectBegin = "ObjectBegin"
         case objectEnd = "ObjectEnd"
@@ -791,6 +792,12 @@ final class Parser {
                 try api.material(type: type, parameters: parameters)
         }
 
+        func parseMediumInterface() throws {
+                let interior = try parseString()
+                let exterior = try parseString()
+                api.mediumInterface(interior: interior, exterior: exterior)
+        }
+
         func parseNamedMaterial() throws {
                 let name = try parseString()
                 try api.namedMaterial(name: name)
@@ -887,6 +894,7 @@ final class Parser {
                 case .makeNamedMaterial: try parseMakeNamedMaterial()
                 case .makeNamedMedium: try parseMakeNamedMedium()
                 case .material: try parseMaterial()
+                case .mediumInterface: try parseMediumInterface()
                 case .namedMaterial: try parseNamedMaterial()
                 case .objectBegin: try parseObjectBegin()
                 case .objectEnd: try parseObjectEnd()

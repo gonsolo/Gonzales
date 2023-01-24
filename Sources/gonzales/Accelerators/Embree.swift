@@ -37,6 +37,9 @@ final class Embree: Accelerator {
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         areaLights[geomID] = areaLight
+                                case let disk as Disk:
+                                        _ = disk
+                                        warnOnce("Ignoring disk in area light!")
                                 default:
                                         embreeError("Unknown shape in AreaLight.")
                                 }
@@ -120,6 +123,11 @@ final class Embree: Accelerator {
                                 z: rayhit.hit.Ng_z))
                 interaction.shadingNormal = interaction.normal
                 interaction.wo = -ray.direction
+
+                // Disks in area lights trigger this
+                if triangleMeshIndices[geomID] == nil {
+                        return empty(#line)
+                }
 
                 let triangle = try Triangle(
                         meshIndex: triangleMeshIndices[geomID]!,
