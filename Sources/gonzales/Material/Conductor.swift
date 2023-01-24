@@ -28,12 +28,8 @@ final class Conductor: Material {
 }
 
 func createConductor(parameters: ParameterDictionary) throws -> Conductor {
-        guard let eta = try parameters.findSpectrum(name: "eta") else {
-                throw ParameterError.missing(parameter: "eta")
-        }
-        guard let k = try parameters.findSpectrum(name: "k") else {
-                throw ParameterError.missing(parameter: "k")
-        }
+        let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
+        let k = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
         //let remapRoughness = try findOneBool(called: "remaproughness", else: false)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
         let uRoughness =

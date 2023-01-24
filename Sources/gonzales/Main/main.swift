@@ -26,8 +26,8 @@ func handle(_ error: Error) {
                 print("ImageError \(error)")
         case is ParameterError:
                 switch error {
-                case ParameterError.missing(let parameter):
-                        print("Missing Parameter: \(parameter)")
+                case ParameterError.missing(let parameter, let function):
+                        print("Missing parameter: \(parameter) in function \(function)")
                 case ParameterError.isNil:
                         print("isNil")
                 default:

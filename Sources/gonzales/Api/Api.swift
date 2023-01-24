@@ -269,7 +269,7 @@ struct Api {
                                                 try state.areaLightParameters.findSpectrum(
                                                         name: "L") as? RGBSpectrum
                                 else {
-                                        throw ParameterError.missing(parameter: "L")
+                                        throw ParameterError.missing(parameter: "L", function: #function)
                                 }
                                 let areaLight = AreaLight(brightness: brightness, shape: shape)
                                 areaLights.append(areaLight)

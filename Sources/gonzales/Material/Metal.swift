@@ -28,10 +28,10 @@ final class Metal: Material {
 
 func createMetal(parameters: ParameterDictionary) throws -> Metal {
         guard let eta = try parameters.findSpectrum(name: "eta") as? RGBSpectrum else {
-                throw ParameterError.missing(parameter: "eta")
+                throw ParameterError.missing(parameter: "eta", function: #function)
         }
         guard let k = try parameters.findSpectrum(name: "k") as? RGBSpectrum else {
-                throw ParameterError.missing(parameter: "k")
+                throw ParameterError.missing(parameter: "k", function: #function)
         }
         // ignored let remapRoughness = try findOneBool(called : "remaproughness", else: false)
         let uRoughness = try parameters.findOneFloatX(called: "uroughness", else: 0.5)

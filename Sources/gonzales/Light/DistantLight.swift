@@ -35,7 +35,7 @@ func createDistantLight(lightToWorld: Transform, parameters: ParameterDictionary
         let from = try parameters.findOnePoint(name: "from", else: origin)
         let to = try parameters.findOnePoint(name: "to", else: origin)
         guard let brightness = try parameters.findSpectrum(name: "L") as? RGBSpectrum else {
-                throw ParameterError.missing(parameter: "L")
+                throw ParameterError.missing(parameter: "L", function: #function)
         }
         let direction: Vector = from - to
         return DistantLight(
