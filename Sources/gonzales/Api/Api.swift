@@ -123,6 +123,10 @@ struct Api {
                 options.filmParameters = parameters
         }
 
+        mutating func importFile(file sceneName: String) throws {
+                try include(file: sceneName)
+        }
+
         mutating func include(file sceneName: String) throws {
                 do {
                         let fileManager = FileManager.default
@@ -480,7 +484,7 @@ struct Api {
         func makeMaterial(name: String, parameters: ParameterDictionary) throws -> Material {
 
                 func makeDefault(insteadOf material: String) throws -> Material {
-                        warning("Unknown material \"\(material)\". Creating default.")
+                        warnOnce("Unknown material \"\(material)\". Creating default.")
                         var parameterList = ParameterDictionary()
                         parameterList["Kd"] = [0.5]
                         return try createMatte(parameters: parameters)
@@ -500,6 +504,8 @@ struct Api {
                         material = try createDiffuseTransmission(parameters: parameters)
                 case "glass":
                         material = try createGlass(parameters: parameters)
+                case "hair":
+                        material = try createHair(parameters: parameters)
                 case "matte":
                         material = try createMatte(parameters: parameters)
                 case "metal":

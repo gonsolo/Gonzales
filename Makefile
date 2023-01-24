@@ -8,10 +8,10 @@ all: td
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-# Successfully rendered Bitterli scenes:
+# Successfully (somewhat) rendered Bitterli scenes:
 # cornell-box bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2
-# living-room-3 dining-room glass-of-water car2 car
-SCENE_NAME = coffee
+# living-room-3 dining-room glass-of-water car2 car coffee lamp
+SCENE_NAME = hair-curl
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 

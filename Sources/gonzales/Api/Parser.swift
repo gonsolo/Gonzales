@@ -8,6 +8,7 @@ enum RenderStatement: String {
         case camera = "Camera"
         case concatTransform = "ConcatTransform"
         case film = "Film"
+        case importFile = "Import"  // import is a keyword in Swift
         case include = "Include"
         case integrator = "Integrator"
         case lightSource = "LightSource"
@@ -746,6 +747,11 @@ final class Parser {
                 try api.film(name: name, parameters: parameters)
         }
 
+        func parseImport() throws {
+                let name = try parseString()
+                try api.importFile(file: name)
+        }
+
         func parseInclude() throws {
                 let name = try parseString()
                 try api.include(file: name)
@@ -888,6 +894,7 @@ final class Parser {
                 case .concatTransform: try parseConcatTransform()
                 case .film: try parseFilm()
                 case .include: try parseInclude()
+                case .importFile: try parseImport()
                 case .integrator: try parseIntegrator()
                 case .lightSource: try parseLightSource()
                 case .lookAt: try parseLookAt()
@@ -921,7 +928,8 @@ final class Parser {
                         if scanner.isAtEnd {
                                 return
                         }
-                        guard let buffer = scanner.scanUpToCharactersList(from: ["\n", " ", "\t"])
+                        guard
+                                let buffer = scanner.scanUpToCharactersList(from: ["\n", " ", "\t"])
                         else {
                                 if scanner.isAtEnd {
                                         // PBRT v4 does not use WorldEnd
