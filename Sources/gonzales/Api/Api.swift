@@ -113,6 +113,12 @@ struct Api {
         }
 
         func film(name: String, parameters: ParameterDictionary) throws {
+                guard let fileName = try parameters.findString(called: "filename") else {
+                        abort("Missing filename")
+                }
+                guard fileName.hasSuffix("exr") else {
+                        abort("Only exr output supported!")
+                }
                 options.filmName = name
                 options.filmParameters = parameters
         }
