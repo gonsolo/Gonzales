@@ -63,12 +63,37 @@ struct InfiniteLight: Light {
         }
 
         private func directionToUV(direction: Vector) -> Point2F {
-                let w = normalized(worldToLight * direction)
-                let u = sphericalPhi(w) * inv2Pi
-                var v = sphericalTheta(w) * inv2Pi
-                v = 2 * (1 - v)  // PBRT compatibility. Where does this come from?
-                let uv = Point2F(x: u, y: v)
+                let directionLight = normalized(worldToLight * direction)
+                let uv = equalAreaSphereToSquare(direction: directionLight)
                 return uv
+        }
+
+        private func equalAreaSphereToSquare(direction: Vector) -> Point2F {
+                let x = abs(direction.x)
+                let y = abs(direction.y)
+                let z = abs(direction.z)
+                let r = sqrt(1 - z)
+                let a = max(x, y)
+                var b = min(x, y)
+                if a == 0 {
+                        b = 0
+                } else {
+                        b = b / a
+                }
+                var phi = atan(b) * 2 / FloatX.pi
+                if x < y {
+                        phi = 1 - phi
+                }
+                var v: FloatX = phi * r
+                var u: FloatX = r - v
+                if direction.z < 0 {
+                        swap(&u, &v)
+                        u = 1 - u
+                        v = 1 - v
+                }
+                u = copysign(u, direction.x)
+                v = copysign(v, direction.y)
+                return Point2F(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
         }
 
         func radianceFromInfinity(for ray: Ray) -> RGBSpectrum {
