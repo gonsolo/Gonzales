@@ -1,0 +1,4 @@
+module openimageio {
+	umbrella header "openimageio.h"
+	requires cplusplus
+}

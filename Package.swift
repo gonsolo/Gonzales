@@ -12,6 +12,7 @@ let package = Package(
                         dependencies: [
                                 "exr",
                                 "embree3",
+                                "openimageio",
                                 "ptex",
                         ],
                         linkerSettings: [
@@ -49,7 +50,8 @@ let package = Package(
                                         "-IExtern/ptex/src/ptex"
                                 ])
                         ]),
-                .systemLibrary(name: "embree3")
+                .systemLibrary(name: "embree3"),
+                .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
         ],
         cxxLanguageStandard: .cxx20
 )
