@@ -11,6 +11,10 @@ void createTextureSystem() {
 }
 
 void destroyTextureSystem() {
+	OIIO::TextureSystem::destroy(textureSystem);
+}
+
+void texture() {
 	OIIO::ustring filename("bla.exr");
         OIIO::TextureOpt options;
         float s = 0.5;
@@ -27,10 +31,6 @@ void destroyTextureSystem() {
         } else {
                 printf("Not successful.\n");
         }
-}
-
-void texture() {
-	OIIO::TextureSystem::destroy(textureSystem);
 }
 
 #ifdef __cplusplus
