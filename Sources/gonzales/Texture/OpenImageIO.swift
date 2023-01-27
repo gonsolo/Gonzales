@@ -4,7 +4,7 @@ import oiio
 
 func bla() {
         createTextureSystem()
-        texture()
+        texture("bla.exr", 0.5, 0.5)
         destroyTextureSystem()
 }
 

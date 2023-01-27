@@ -14,11 +14,9 @@ void destroyTextureSystem() {
 	OIIO::TextureSystem::destroy(textureSystem);
 }
 
-void texture() {
-	OIIO::ustring filename("bla.exr");
+void texture(const char* filename_c, float s, float t) {
+	OIIO::ustring filename(filename_c);
         OIIO::TextureOpt options;
-        float s = 0.5;
-        float t = 0.5;
         float dsdx = 0;
         float dtdx = 0;
         float dsdy = 0;
