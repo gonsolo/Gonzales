@@ -4,7 +4,7 @@ extern "C" {
 
 void createTextureSystem();
 void destroyTextureSystem();
-void texture(const char* filename_c, float s, float t);
+bool texture(const char* filename_c, float s, float t, float result[3]);
 
 #ifdef __cplusplus
 }
