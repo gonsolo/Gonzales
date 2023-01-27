@@ -1,3 +1,4 @@
+import Foundation
 import oiio
 
 final class OiioTextureSystem {
@@ -33,8 +34,14 @@ final class OiioTexture: RGBSpectrumTexture {
         let filename: String
 
         func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
-                let s = interaction.uv.x
-                let t = interaction.uv.y
+                var (_, s) = modf(interaction.uv.x)
+                var (_, t) = modf(interaction.uv.y)
+                if s < 0 {
+                        s = 1 + s
+                }
+                if t < 0 {
+                        t = 1 + t
+                }
                 return OiioTextureSystem.shared.oiioTexture(filename: filename, s: s, t: t)
         }
 

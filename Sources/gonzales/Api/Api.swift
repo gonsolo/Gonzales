@@ -71,13 +71,9 @@ func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
         }
         let suffix = absoluteFileName.suffix(4)
         switch suffix {
-        case ".exr":
-                return ExrTexture(path: absoluteFileName)
         case ".ptx":
                 return Ptex(path: absoluteFileName)
-        case ".tga":
-                return try TgaTexture(path: absoluteFileName)
-        case ".pfm":
+        case ".exr", ".tga", ".pfm":
                 return OiioTexture(path: absoluteFileName)
         default:
                 throw ApiError.unknownTextureFormat(suffix: String(suffix))
