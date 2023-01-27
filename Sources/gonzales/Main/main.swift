@@ -85,6 +85,8 @@ func parseArguments() throws -> String {
 }
 
 func main() {
+        bla()
+        exit(0)
         do {
                 let sceneName = try parseArguments()
                 guard let sceneNameURL = URL(string: sceneName) else {

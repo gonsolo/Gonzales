@@ -1,10 +1,17 @@
 import Foundation
-import openimageio
+//import openimageio
+import oiio
 
 func bla() {
-        guard let textureSystem = OIIO.TextureSystem.create(true, nil) else {
-                exit(0)
-        }
+        createTextureSystem()
+        texture()
+        destroyTextureSystem()
+}
+
+//func bla() {
+        //guard let textureSystem = OIIO.TextureSystem.create(true, nil) else {
+        //        exit(0)
+        //}
         //let filename = OIIO.ustring("Skydome.pfm")
         //let filename = OIIO.ustring("bla.exr")
         //var options = OIIO.TextureOpt()
@@ -36,5 +43,5 @@ func bla() {
         //} else {
         //        print("Not successful.")
         //}
-        OIIO.TextureSystem.destroy(textureSystem, true)
-}
+        //OIIO.TextureSystem.destroy(textureSystem, true)
+//}
