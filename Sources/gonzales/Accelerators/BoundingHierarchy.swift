@@ -38,8 +38,8 @@ struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
         ) throws {
                 var toVisit = 0
                 var current = 0
-                var nodesToVisit = FixedArray16<Int>()
-                //var nodesToVisit = Array(repeating: 0, count: 32)
+                //var nodesToVisit = FixedArray16<Int>()
+                var nodesToVisit = Array(repeating: 0, count: 32)
                 var nodesVisited = 0
 
                 if nodes.isEmpty { return }

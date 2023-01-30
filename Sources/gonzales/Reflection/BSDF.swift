@@ -28,11 +28,9 @@ struct BSDF {
                 let wiLocal = worldToLocal(world: wiWorld)
                 let reflect = dot(wiWorld, ng) * dot(woWorld, ng) > 0
                 if reflect && bxdf.isReflective {
-                        //print("reflect and reflective")
                         totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
                 }
                 if !reflect && bxdf.isTransmissive {
-                        //print("not reflect and transmissive")
                         totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
                 }
                 return totalLightScattered

@@ -337,6 +337,7 @@ final class Curve: Shape {
                         depth: maxDepth)
                 tHit = interactionAndT.1
                 interaction = interactionAndT.0
+                interaction.material = material
         }
 
         func area() -> FloatX {

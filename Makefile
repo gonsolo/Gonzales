@@ -11,8 +11,7 @@ BITTERLI = ~/src/bitterli
 # Successfully (somewhat) rendered Bitterli scenes:
 # cornell-box bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2
 # living-room-3 dining-room glass-of-water car2 car coffee lamp
-SCENE_NAME = bathroom
-#SCENE_NAME = hair-curl
+SCENE_NAME = hair-curl
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 
@@ -195,6 +194,6 @@ format:
 codespell:
 	codespell -L inout Sources
 lldb:
-	#lldb .build/release/gonzales -- $(SINGLERAY) $(SCENE)
-	lldb .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
+	lldb .build/release/gonzales -- $(SINGLERAY) $(SCENE)
+	#lldb .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
 
