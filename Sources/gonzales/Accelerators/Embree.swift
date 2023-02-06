@@ -25,8 +25,10 @@ final class Embree: Accelerator {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let curve as Curve:
-                                        _ = curve
-                                        warnOnce("Ignoring curve in geometric primitive.")
+                                        geometry(curve: curve, geomID: geomID)
+                                        bounds = union(first: bounds, second: curve.worldBound())
+                                        materials[geomID] = geometricPrimitive.material
+                                //warnOnce("Ignoring curve in geometric primitive.")
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
@@ -61,12 +63,17 @@ final class Embree: Accelerator {
                 rtcReleaseDevice(rtcDevice)
         }
 
+        func geometry(curve: Curve, geomID: UInt32) {
+                let points = curve.common.points
+                embreeCurve(points: points)
+        }
+
         func geometry(triangle: Triangle, geomID: UInt32) {
                 let points = triangle.getLocalPoints()
                 let a = points.0
                 let b = points.1
                 let c = points.2
-                embreeGeometry(
+                embreeTriangle(
                         ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y,
                         cz: c.z)
                 triangleMeshIndices[geomID] = triangle.meshIndex
@@ -222,7 +229,49 @@ final class Embree: Accelerator {
                 return bounds
         }
 
-        func embreeGeometry(
+        func embreeCurve(points: FourPoints) {
+                guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
+                else {
+                        embreeError()
+                }
+                let numCurves = 1
+                let hairIndices: [UInt32] = [0]
+                rtcSetSharedGeometryBuffer(
+                        geom,
+                        RTC_BUFFER_TYPE_INDEX,
+                        0,
+                        RTC_FORMAT_UINT,
+                        hairIndices,
+                        0,
+                        unsignedIntSize,
+                        numCurves)
+                let numVertices = 4
+                let vertices = rtcSetNewGeometryBuffer(
+                        geom,
+                        RTC_BUFFER_TYPE_VERTEX,
+                        0,
+                        RTC_FORMAT_FLOAT4,
+                        vec4fSize,
+                        numVertices)
+                vertices?.storeBytes(of: points.0.x, toByteOffset: 00 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.0.y, toByteOffset: 01 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.0.z, toByteOffset: 02 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.1.x, toByteOffset: 03 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.1.y, toByteOffset: 04 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.1.z, toByteOffset: 05 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.2.x, toByteOffset: 06 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.2.y, toByteOffset: 07 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.2.z, toByteOffset: 08 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.3.x, toByteOffset: 09 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.3.y, toByteOffset: 10 * floatSize, as: Float.self)
+                vertices?.storeBytes(of: points.3.z, toByteOffset: 11 * floatSize, as: Float.self)
+
+                rtcCommitGeometry(geom)
+                rtcAttachGeometry(rtcScene, geom)
+                rtcReleaseGeometry(geom)
+        }
+
+        func embreeTriangle(
                 ax: FloatX, ay: FloatX, az: FloatX,
                 bx: FloatX, by: FloatX, bz: FloatX,
                 cx: FloatX, cy: FloatX, cz: FloatX
@@ -230,7 +279,6 @@ final class Embree: Accelerator {
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
                         embreeError()
                 }
-                let floatSize = MemoryLayout<Float>.size
                 guard
                         let vb = rtcSetNewGeometryBuffer(
                                 geom,
@@ -288,4 +336,9 @@ final class Embree: Accelerator {
         var triangleMeshIndices = [UInt32: Int]()
         var triangleIndices = [UInt32: Int]()
         var bounds = Bounds3f()
+
+        let floatSize = MemoryLayout<Float>.size
+        let unsignedIntSize = MemoryLayout<UInt32>.size
+        let vec4fSize = 4 * MemoryLayout<Float>.size
+        let vec3faSize = 16 * MemoryLayout<Float>.size
 }
