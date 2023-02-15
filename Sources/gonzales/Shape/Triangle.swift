@@ -284,7 +284,7 @@ struct Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if triangleMeshes.hasNormals(meshIndex: meshIndex) {
+                if !triangleMeshes.hasNormals(meshIndex: meshIndex) {
                         shadingNormal = normal
                 } else {
                         let n0 = triangleMeshes.getNormal(

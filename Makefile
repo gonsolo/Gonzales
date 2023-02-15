@@ -12,8 +12,10 @@ BITTERLI = ~/src/bitterli
 # cornell-box bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2
 # living-room-3 dining-room glass-of-water car2 car coffee lamp
 SCENE_NAME = hair-curl
-SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-IMAGE =  $(SCENE_NAME).exr
+#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#IMAGE =  $(SCENE_NAME).exr
+SCENE = ~/tmp/ptex_scene/scene.pbrt
+IMAGE = ptex.exr
 
 PFM = $(IMAGE:.exr=.pfm)
 
