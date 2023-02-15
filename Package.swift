@@ -13,7 +13,6 @@ let package = Package(
                                 "exr",
                                 "embree3",
                                 "oiio",
-                                "openimageio",
                                 "ptexBridge",
                         ],
                         linkerSettings: [
@@ -41,7 +40,8 @@ let package = Package(
                         ]
                 ),
                 .target(
-                        name: "oiio"
+                        name: "oiio",
+                        dependencies: ["openimageio"]
                 ),
                 .target(
                         name: "ptexBridge",
