@@ -58,10 +58,9 @@ else
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
 	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
-	LINK_PTEX		= -Xlinker -L -Xlinker ../../src/ptex/build/src/ptex/ -Xlinker -lPtex
 	CXX_INTEROP 		= -Xswiftc -enable-experimental-cxx-interop
-	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
-	RELEASE_OPTIONS 	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(LINK_PTEX) $(SWIFT_OPTIMIZE) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
+	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
+	RELEASE_OPTIONS 	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_OPTIMIZE) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
 	BUILD			= $(SWIFT) build
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
 	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)
@@ -72,7 +71,7 @@ else
 	GONZALES_RELEASE 	= $(RELEASE_DIRECTORY)/gonzales
 	GONZALES_DEBUG		= $(DEBUG_DIRECTORY)/gonzales
 endif
-LD_LIB = LD_LIBRARY_PATH=Extern/openexr/build/_deps/imath-build/src/Imath:Extern/openexr/build/src/lib/OpenEXR:Extern/ptex/build/src/ptex
+LD_LIB = LD_LIBRARY_PATH=Extern/openexr/build/_deps/imath-build/src/Imath:Extern/openexr/build/src/lib/OpenEXR
 RUN_DEBUG	= @ $(LD_LIB) $(GONZALES_DEBUG) $(OPTIONS) $(SCENE)
 RUN_RELEASE	= @ $(LD_LIB) $(GONZALES_RELEASE) $(OPTIONS) $(SCENE)
 
@@ -93,16 +92,12 @@ openexr: Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_2.so
 Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_2.so:
 	@mkdir -p Extern/openexr/build
 	@cd Extern/openexr/build; cmake ..; make -j8 -s
-ptex: Extern/ptex/build/src/ptex/libPtex.so
-Extern/ptex/build/src/ptex/libPtex.so:
-	@mkdir -p Extern/ptex/build
-	@cd Extern/ptex/build; cmake ..; make -j8 -s
 
 r: release
-release: ptex openexr
+release: openexr
 	@$(BUILD_RELEASE)
 d: debug
-debug: ptex openexr
+debug: openexr
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug

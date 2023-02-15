@@ -7,29 +7,29 @@ struct GonzalesPtexHandler : public PtexErrorHandler {
         void reportError(const char *error) { std::cerr << "Ptex error: " << error << std::endl; }
 } handler;
 
-namespace ptex {
+namespace ptexBridge {
 void initCache(long int memory);
 void initTexture(const char *filename);
 void evaluate(const char *filename, long int faceIndex, float u, float v, float rgb[3]);
-} // namespace ptex
+}
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void initPtexCache(long int memory) { ptex::initCache(memory); }
+void initPtexCache(long int memory) { ptexBridge::initCache(memory); }
 
-void initPtexTexture(const char *filename) { ptex::initTexture(filename); }
+void initPtexTexture(const char *filename) { ptexBridge::initTexture(filename); }
 
 void evaluatePtex(const char *filename, long int faceIndex, float u, float v, float rgb[3]) {
-        ptex::evaluate(filename, faceIndex, u, v, rgb);
+        ptexBridge::evaluate(filename, faceIndex, u, v, rgb);
 }
 
 #ifdef __cplusplus
 }
 #endif
 
-namespace ptex {
+namespace ptexBridge {
 
 using namespace Ptex;
 
@@ -79,4 +79,4 @@ void evaluate(const char *filename, long int faceIndex, float u, float v, float 
         texture->release();
 #endif
 }
-} // namespace ptex
+}

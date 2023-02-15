@@ -1,0 +1,4 @@
+module ptex {
+	umbrella header "ptex.h"
+	requires cplusplus
+}

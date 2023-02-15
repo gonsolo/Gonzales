@@ -1,5 +1,5 @@
 import Foundation
-import ptex
+import ptexBridge
 
 struct PtexCache {
         init() {

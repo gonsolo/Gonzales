@@ -14,13 +14,10 @@ let package = Package(
                                 "embree3",
                                 "oiio",
                                 "openimageio",
-                                "ptex",
+                                "ptexBridge",
                         ],
                         linkerSettings: [
-                                .unsafeFlags([
-                                        "-LExtern/ptex/build/src/ptex",
-                                        "-lPtex",
-                                ])
+                                .unsafeFlags([])
                         ]
                 ),
                 .target(
@@ -44,18 +41,15 @@ let package = Package(
                         ]
                 ),
                 .target(
-                        name: "ptex",
-                        dependencies: [],
-                        cxxSettings: [
-                                .unsafeFlags([
-                                        "-IExtern/ptex/src/ptex"
-                                ])
-                        ]),
-                .target(
                         name: "oiio"
+                ),
+                .target(
+                        name: "ptexBridge",
+                        dependencies: ["ptex"]
                 ),
                 .systemLibrary(name: "embree3"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
+                .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
         cxxLanguageStandard: .cxx20
 )
