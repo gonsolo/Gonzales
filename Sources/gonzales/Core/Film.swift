@@ -28,7 +28,7 @@ final class Film {
 
         private func chooseWriter(name: String) throws -> ImageWriter {
                 if name.hasSuffix(".exr") {
-                        return ExrWriter()
+                        return OpenImageIOWriter()
                 } else if name.hasSuffix(".ascii") {
                         return AsciiWriter()
                 } else {

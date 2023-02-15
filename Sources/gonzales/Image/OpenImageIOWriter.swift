@@ -1,6 +1,6 @@
-import exr
+import oiio
 
-final class ExrWriter: ImageWriter {
+final class OpenImageIOWriter: ImageWriter {
 
         func write(fileName: String, crop: Bounds2i, image: Image) throws {
 
@@ -23,7 +23,8 @@ final class ExrWriter: ImageWriter {
                                 write(pixel: pixel, at: index)
                         }
                 }
-                writeRgba(fileName, buffer, Int32(resolution.x), Int32(resolution.y))
+                writeImage(fileName, buffer, Int32(resolution.x), Int32(resolution.y))
+                //writeRgba(fileName, buffer, Int32(resolution.x), Int32(resolution.y))
         }
 
         var buffer = [Float]()

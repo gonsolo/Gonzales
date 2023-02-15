@@ -10,33 +10,12 @@ let package = Package(
                 .executableTarget(
                         name: "gonzales",
                         dependencies: [
-                                "exr",
                                 "embree3",
                                 "oiio",
                                 "ptexBridge",
                         ],
                         linkerSettings: [
                                 .unsafeFlags([])
-                        ]
-                ),
-                .target(
-                        name: "exr",
-                        cxxSettings: [
-                                .unsafeFlags([
-                                        "-IExtern/openexr/src/lib/OpenEXR",
-                                        "-IExtern/openexr/build/cmake",
-                                        "-IExtern/openexr/build/_deps/imath-src/src/Imath",
-                                        "-IExtern/openexr/build/_deps/imath-build/config",
-                                        "-IExtern/openexr/src/lib/Iex",
-                                ])
-                        ],
-                        linkerSettings: [
-                                .unsafeFlags([
-                                        "-LExtern/openexr/build/src/lib/OpenEXR",
-                                        "-lOpenEXR-3_2",
-                                        "-LExtern/openexr/build/_deps/imath-build/src/Imath",
-                                        "-lImath-3_2",
-                                ])
                         ]
                 ),
                 .target(
