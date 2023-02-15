@@ -4,8 +4,6 @@ import PackageDescription
 
 let package = Package(
         name: "gonzales",
-        platforms: [.macOS(.v10_15)],
-        dependencies: [],
         targets: [
                 .executableTarget(
                         name: "gonzales",
@@ -13,9 +11,6 @@ let package = Package(
                                 "embree3",
                                 "oiio",
                                 "ptexBridge",
-                        ],
-                        linkerSettings: [
-                                .unsafeFlags([])
                         ]
                 ),
                 .target(
