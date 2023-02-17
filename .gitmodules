@@ -1,6 +1,0 @@
-[submodule "Extern/openexr"]
-	path = Extern/openexr
-	url = https://github.com/AcademySoftwareFoundation/openexr.git
-[submodule "Extern/Imath"]
-	path = Extern/Imath
-	url = https://github.com/AcademySoftwareFoundation/Imath

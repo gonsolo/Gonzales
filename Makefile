@@ -22,7 +22,7 @@ PFM = $(IMAGE:.exr=.pfm)
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
 .PHONY: all c clean e edit es editScene em editMakefile lldb p perf tags t test \
-	test_unchecked test_debug test_release v view wc openexr
+	test_unchecked test_debug test_release v view wc
 
 PBRT_OPTIONS = --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -71,9 +71,8 @@ else
 	GONZALES_RELEASE 	= $(RELEASE_DIRECTORY)/gonzales
 	GONZALES_DEBUG		= $(DEBUG_DIRECTORY)/gonzales
 endif
-LD_LIB = LD_LIBRARY_PATH=Extern/openexr/build/_deps/imath-build/src/Imath:Extern/openexr/build/src/lib/OpenEXR
-RUN_DEBUG	= @ $(LD_LIB) $(GONZALES_DEBUG) $(OPTIONS) $(SCENE)
-RUN_RELEASE	= @ $(LD_LIB) $(GONZALES_RELEASE) $(OPTIONS) $(SCENE)
+RUN_DEBUG	= @ $(GONZALES_DEBUG) $(OPTIONS) $(SCENE)
+RUN_RELEASE	= @ $(GONZALES_RELEASE) $(OPTIONS) $(SCENE)
 
 test: test_debug
 v: view
@@ -88,16 +87,11 @@ editScene:
 em: editMakefile
 editMakefile:
 	@vi Makefile
-openexr: Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_2.so
-Extern/openexr/build/src/lib/OpenEXR/libOpenEXR-3_2.so:
-	@mkdir -p Extern/openexr/build
-	@cd Extern/openexr/build; cmake ..; make -j8 -s
-
 r: release
-release: openexr
+release:
 	@$(BUILD_RELEASE)
 d: debug
-debug: openexr
+debug:
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug
