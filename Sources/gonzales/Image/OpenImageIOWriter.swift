@@ -1,4 +1,4 @@
-import oiio
+import openImageIOBridge
 
 final class OpenImageIOWriter: ImageWriter {
 

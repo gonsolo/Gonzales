@@ -74,7 +74,7 @@ func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
         case ".ptx":
                 return Ptex(path: absoluteFileName)
         case ".exr", ".tga", ".pfm":
-                return OiioTexture(path: absoluteFileName)
+                return OpenImageIOTexture(path: absoluteFileName)
         default:
                 throw ApiError.unknownTextureFormat(suffix: String(suffix))
         }

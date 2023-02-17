@@ -9,12 +9,12 @@ let package = Package(
                         name: "gonzales",
                         dependencies: [
                                 "embree3",
-                                "oiio",
+                                "openImageIOBridge",
                                 "ptexBridge",
                         ]
                 ),
                 .target(
-                        name: "oiio",
+                        name: "openImageIOBridge",
                         dependencies: ["openimageio"]
                 ),
                 .target(

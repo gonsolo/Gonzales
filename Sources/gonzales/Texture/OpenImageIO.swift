@@ -1,11 +1,11 @@
 import Foundation
-import oiio
+import openImageIOBridge
 
-final class OiioTextureSystem {
+final class OpenImageIOTextureSystem {
 
-        static let shared = OiioTextureSystem()
+        static let shared = OpenImageIOTextureSystem()
 
-        func oiioTexture(filename: String, s: Float, t: Float) -> RGBSpectrum {
+        func evaluate(filename: String, s: Float, t: Float) -> RGBSpectrum {
                 let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 let successful = texture(filename, s, t, pointer)
                 if !successful {
@@ -25,7 +25,7 @@ final class OiioTextureSystem {
         }
 }
 
-final class OiioTexture: RGBSpectrumTexture {
+final class OpenImageIOTexture: RGBSpectrumTexture {
 
         init(path: String) {
                 filename = path
@@ -42,7 +42,7 @@ final class OiioTexture: RGBSpectrumTexture {
                 if t < 0 {
                         t = 1 + t
                 }
-                return OiioTextureSystem.shared.oiioTexture(filename: filename, s: s, t: t)
+                return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
 
 }
