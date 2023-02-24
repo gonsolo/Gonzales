@@ -6,6 +6,7 @@ enum CurveError: Error {
         case index
         case numberControlPoints
         case todo
+        case accelerator
 }
 
 typealias TwoPoints = (Point, Point)
@@ -383,16 +384,19 @@ func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats)
         return segments
 }
 
-func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {
-        let degree = 3
-        let controlPoints = try parameters.findPoints(name: "P")
-        let width0 = try parameters.findOneFloatX(called: "width0", else: 0.5)
-        let width1 = try parameters.findOneFloatX(called: "width1", else: 0.5)
-        guard controlPoints.count >= degree + 1 else {
-                throw CurveError.numberControlPoints
-        }
-        let numberOfSegments = controlPoints.count - degree
+func createEmbreeCurveShape() -> [Shape] {
+
+        return []
+}
+
+func createBVHCurveShape(
+        controlPoints: [Point],
+        widths: (Float, Float),
+        objectToWorld: Transform,
+        degree: Int
+) -> [Shape] {
         var curves = [Shape]()
+        let numberOfSegments = controlPoints.count - degree
         for segment in 0..<numberOfSegments {
                 var bezierPoints: FourPoints
                 let p012 = controlPoints[segment + 0]
@@ -410,17 +414,41 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary)
                 bezierPoints.2 = p233
                 bezierPoints.3 = p333
                 let w0 = lerp(
-                        with: FloatX(segment) / FloatX(numberOfSegments), between: width0,
-                        and: width1)
+                        with: FloatX(segment) / FloatX(numberOfSegments), between: widths.0,
+                        and: widths.1)
                 let w1 = lerp(
-                        with: FloatX(segment + 1) / FloatX(numberOfSegments), between: width0,
-                        and: width1)
+                        with: FloatX(segment + 1) / FloatX(numberOfSegments), between: widths.0,
+                        and: widths.1)
                 let curve = createCurve(
                         objectToWorld: objectToWorld,
                         points: bezierPoints,
                         width: (w0, w1))
 
                 curves.append(contentsOf: curve)
+        }
+        return curves
+}
+
+func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {
+        let degree = 3
+        let controlPoints = try parameters.findPoints(name: "P")
+        let width0 = try parameters.findOneFloatX(called: "width0", else: 0.5)
+        let width1 = try parameters.findOneFloatX(called: "width1", else: 0.5)
+        guard controlPoints.count >= degree + 1 else {
+                throw CurveError.numberControlPoints
+        }
+        var curves = [Shape]()
+        switch acceleratorName {
+        case "bvh":
+                curves = createBVHCurveShape(
+                        controlPoints: controlPoints,
+                        widths: (width0, width1),
+                        objectToWorld: objectToWorld,
+                        degree: degree)
+        case "embree":
+                curves = createEmbreeCurveShape()
+        default:
+                throw CurveError.accelerator
         }
         return curves
 }
