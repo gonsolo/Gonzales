@@ -517,7 +517,6 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary)
                         objectToWorld: objectToWorld,
                         degree: degree)
         case "embree":
-                print(width0)
                 curves = createEmbreeCurveShape(
                         controlPoints: controlPoints,
                         widths: (width0, width1),
