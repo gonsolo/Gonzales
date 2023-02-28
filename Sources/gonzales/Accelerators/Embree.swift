@@ -63,9 +63,8 @@ final class Embree: Accelerator {
         }
 
         func geometry(curve: EmbreeCurve, geomID: UInt32) {
-                //let points = curve.controlPoints.map { curve.objectToWorld * $0 }
                 let points = curve.controlPoints
-                embreeCurve(points: points)
+                embreeCurve(points: points, widths: curve.widths)
         }
 
         func geometry(triangle: Triangle, geomID: UInt32) {
@@ -223,7 +222,9 @@ final class Embree: Accelerator {
                 return bounds
         }
 
-        func embreeCurve(points: [Point]) {
+        func embreeCurve(points: [Point], widths: (Float, Float)) {
+
+                // TODO: Just width.0 used
 
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
                 else {
@@ -256,7 +257,6 @@ final class Embree: Accelerator {
                 else {
                         embreeError()
                 }
-                let width: Float = 0.1
                 for (counter, point) in points.enumerated() {
                         let xIndex = 4 * counter * floatSize
                         let yIndex = xIndex + floatSize
@@ -265,7 +265,7 @@ final class Embree: Accelerator {
                         vertices.storeBytes(of: point.x, toByteOffset: xIndex, as: Float.self)
                         vertices.storeBytes(of: point.y, toByteOffset: yIndex, as: Float.self)
                         vertices.storeBytes(of: point.z, toByteOffset: zIndex, as: Float.self)
-                        vertices.storeBytes(of: width, toByteOffset: wIndex, as: Float.self)
+                        vertices.storeBytes(of: widths.0, toByteOffset: wIndex, as: Float.self)
                 }
                 rtcCommitGeometry(geom)
                 rtcAttachGeometry(rtcScene, geom)

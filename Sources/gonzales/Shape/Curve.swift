@@ -502,8 +502,9 @@ func createBVHCurveShape(
 func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")
-        let width0 = try parameters.findOneFloatX(called: "width0", else: 0.5)
-        let width1 = try parameters.findOneFloatX(called: "width1", else: 0.5)
+        let width = try parameters.findOneFloatX(called: "width", else: 0.5)
+        let width0 = try parameters.findOneFloatX(called: "width0", else: width)
+        let width1 = try parameters.findOneFloatX(called: "width1", else: width)
         guard controlPoints.count >= degree + 1 else {
                 throw CurveError.numberControlPoints
         }
@@ -516,6 +517,7 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary)
                         objectToWorld: objectToWorld,
                         degree: degree)
         case "embree":
+                print(width0)
                 curves = createEmbreeCurveShape(
                         controlPoints: controlPoints,
                         widths: (width0, width1),
