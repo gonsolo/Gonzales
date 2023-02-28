@@ -24,11 +24,10 @@ final class Embree: Accelerator {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
-                                case let curve as Curve:
+                                case let curve as EmbreeCurve:
                                         geometry(curve: curve, geomID: geomID)
                                         bounds = union(first: bounds, second: curve.worldBound())
                                         materials[geomID] = geometricPrimitive.material
-                                //warnOnce("Ignoring curve in geometric primitive.")
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
@@ -63,8 +62,9 @@ final class Embree: Accelerator {
                 rtcReleaseDevice(rtcDevice)
         }
 
-        func geometry(curve: Curve, geomID: UInt32) {
-                let points = curve.common.points
+        func geometry(curve: EmbreeCurve, geomID: UInt32) {
+                //let points = curve.controlPoints.map { curve.objectToWorld * $0 }
+                let points = curve.controlPoints
                 embreeCurve(points: points)
         }
 
@@ -124,9 +124,6 @@ final class Embree: Accelerator {
                 guard intersected else {
                         return empty(#line)
                 }
-
-                //tHit = tout
-
                 interaction.valid = true
                 interaction.position = ray.origin + tout * ray.direction
                 interaction.normal = normalized(
@@ -137,79 +134,76 @@ final class Embree: Accelerator {
                 interaction.shadingNormal = interaction.normal
                 interaction.wo = -ray.direction
 
-                // Disks in area lights trigger this
-                if triangleMeshIndices[geomID] == nil {
-                        return empty(#line)
-                }
+                if triangleMeshIndices[geomID] != nil {
+                        let triangle = try Triangle(
+                                meshIndex: triangleMeshIndices[geomID]!,
+                                number: triangleIndices[geomID]! / 3)
 
-                let triangle = try Triangle(
-                        meshIndex: triangleMeshIndices[geomID]!,
-                        number: triangleIndices[geomID]! / 3)
+                        var p0t: Point = triangle.point0 - ray.origin
+                        var p1t: Point = triangle.point1 - ray.origin
+                        var p2t: Point = triangle.point2 - ray.origin
 
-                var p0t: Point = triangle.point0 - ray.origin
-                var p1t: Point = triangle.point1 - ray.origin
-                var p2t: Point = triangle.point2 - ray.origin
+                        let kz = maxDimension(abs(ray.direction))
+                        let kx = (kz + 1) % 3
+                        let ky = (kx + 1) % 3
+                        let d: Vector = permute(vector: ray.direction, x: kx, y: ky, z: kz)
+                        p0t = permute(point: p0t, x: kx, y: ky, z: kz)
+                        p1t = permute(point: p1t, x: kx, y: ky, z: kz)
+                        p2t = permute(point: p2t, x: kx, y: ky, z: kz)
 
-                let kz = maxDimension(abs(ray.direction))
-                let kx = (kz + 1) % 3
-                let ky = (kx + 1) % 3
-                let d: Vector = permute(vector: ray.direction, x: kx, y: ky, z: kz)
-                p0t = permute(point: p0t, x: kx, y: ky, z: kz)
-                p1t = permute(point: p1t, x: kx, y: ky, z: kz)
-                p2t = permute(point: p2t, x: kx, y: ky, z: kz)
+                        let sx: FloatX = -d.x / d.z
+                        let sy: FloatX = -d.y / d.z
+                        let sz: FloatX = 1.0 / d.z
+                        p0t.x += sx * p0t.z
+                        p0t.y += sy * p0t.z
+                        p1t.x += sx * p1t.z
+                        p1t.y += sy * p1t.z
+                        p2t.x += sx * p2t.z
+                        p2t.y += sy * p2t.z
 
-                let sx: FloatX = -d.x / d.z
-                let sy: FloatX = -d.y / d.z
-                let sz: FloatX = 1.0 / d.z
-                p0t.x += sx * p0t.z
-                p0t.y += sy * p0t.z
-                p1t.x += sx * p1t.z
-                p1t.y += sy * p1t.z
-                p2t.x += sx * p2t.z
-                p2t.y += sy * p2t.z
+                        let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
+                        let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
+                        let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
 
-                let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
-                let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
-                let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
+                        if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
+                                return empty(#line)
+                        }
+                        let det: FloatX = e0 + e1 + e2
+                        if det == 0 {
+                                return empty(#line)
+                        }
 
-                if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
-                        return empty(#line)
-                }
-                let det: FloatX = e0 + e1 + e2
-                if det == 0 {
-                        return empty(#line)
-                }
+                        p0t.z *= sz
+                        p1t.z *= sz
+                        p2t.z *= sz
+                        let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
+                        if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
+                                //print(det, tScaled, tHit, tHit * det)
+                                return empty(#line)
+                        } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
+                                return empty(#line)
+                        }
 
-                p0t.z *= sz
-                p1t.z *= sz
-                p2t.z *= sz
-                let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
-                if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
-                        //print(det, tScaled, tHit, tHit * det)
-                        return empty(#line)
-                } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
-                        return empty(#line)
-                }
+                        let invDet: FloatX = 1 / det
+                        let b0: FloatX = e0 * invDet
+                        let b1: FloatX = e1 * invDet
+                        let b2: FloatX = e2 * invDet
 
-                let invDet: FloatX = 1 / det
-                let b0: FloatX = e0 * invDet
-                let b1: FloatX = e1 * invDet
-                let b2: FloatX = e2 * invDet
-
-                let uv = triangleMeshes.getUVFor(
-                        meshIndex: triangle.meshIndex,
-                        indices: (
-                                triangle.vertexIndex0,
-                                triangle.vertexIndex1,
-                                triangle.vertexIndex2
+                        let uv = triangleMeshes.getUVFor(
+                                meshIndex: triangle.meshIndex,
+                                indices: (
+                                        triangle.vertexIndex0,
+                                        triangle.vertexIndex1,
+                                        triangle.vertexIndex2
+                                )
                         )
-                )
-                let uvHit = triangle.computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
-
+                        let uvHit = triangle.computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
+                        interaction.uv = uvHit
+                }
+                // TODO: uv for curves
                 let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
                 interaction.dpdu = dpdu
 
-                interaction.uv = uvHit
                 interaction.faceIndex = 0  // TODO
                 if let areaLight = areaLights[geomID] {
                         interaction.areaLight = areaLight
@@ -229,43 +223,48 @@ final class Embree: Accelerator {
                 return bounds
         }
 
-        func embreeCurve(points: FourPoints) {
+        func embreeCurve(points: [Point]) {
+
+
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
                 else {
                         embreeError()
                 }
                 let numCurves = 1
-                let hairIndices: [UInt32] = [0]
+                let indices: [UInt32] = [0]
                 rtcSetSharedGeometryBuffer(
                         geom,
                         RTC_BUFFER_TYPE_INDEX,
                         0,
                         RTC_FORMAT_UINT,
-                        hairIndices,
+                        indices,
                         0,
                         unsignedIntSize,
                         numCurves)
-                let numVertices = 4
-                let vertices = rtcSetNewGeometryBuffer(
-                        geom,
-                        RTC_BUFFER_TYPE_VERTEX,
-                        0,
-                        RTC_FORMAT_FLOAT4,
-                        vec4fSize,
-                        numVertices)
-                vertices?.storeBytes(of: points.0.x, toByteOffset: 00 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.0.y, toByteOffset: 01 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.0.z, toByteOffset: 02 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.1.x, toByteOffset: 03 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.1.y, toByteOffset: 04 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.1.z, toByteOffset: 05 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.2.x, toByteOffset: 06 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.2.y, toByteOffset: 07 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.2.z, toByteOffset: 08 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.3.x, toByteOffset: 09 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.3.y, toByteOffset: 10 * floatSize, as: Float.self)
-                vertices?.storeBytes(of: points.3.z, toByteOffset: 11 * floatSize, as: Float.self)
 
+                let numVertices = points.count
+                guard
+                        let vertices = rtcSetNewGeometryBuffer(
+                                geom,
+                                RTC_BUFFER_TYPE_VERTEX,
+                                0,
+                                RTC_FORMAT_FLOAT4,
+                                vec4fSize,
+                                numVertices)
+                else {
+                        embreeError()
+                }
+                let width: Float = 1.1
+                for (counter, point) in points.enumerated() {
+                        let xIndex = 4 * counter * floatSize
+                        let yIndex = xIndex + floatSize
+                        let zIndex = yIndex + floatSize
+                        let wIndex = zIndex + floatSize
+                        vertices.storeBytes(of: point.x, toByteOffset: xIndex, as: Float.self)
+                        vertices.storeBytes(of: point.y, toByteOffset: yIndex, as: Float.self)
+                        vertices.storeBytes(of: point.z, toByteOffset: zIndex, as: Float.self)
+                        vertices.storeBytes(of: width, toByteOffset: wIndex, as: Float.self)
+                }
                 rtcCommitGeometry(geom)
                 rtcAttachGeometry(rtcScene, geom)
                 rtcReleaseGeometry(geom)

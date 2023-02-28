@@ -411,7 +411,13 @@ final class EmbreeCurve: Shape {
         }
 
         func objectBound() -> Bounds3f {
-                unimplemented()
+                var bounds = Bounds3f()
+                for point in controlPoints {
+                        bounds.add(point: point)
+                }
+                let width = max(widths.0, widths.1)
+                bounds = expand(bounds: bounds, by: width)
+                return bounds
         }
 
         func sample(u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
