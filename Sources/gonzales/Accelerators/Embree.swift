@@ -225,13 +225,15 @@ final class Embree: Accelerator {
 
         func embreeCurve(points: [Point]) {
 
-
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
                 else {
                         embreeError()
                 }
-                let numCurves = 1
-                let indices: [UInt32] = [0]
+                let numCurves = points.count - 4
+                var indices: [UInt32] = []
+                for i in 0..<numCurves {
+                        indices.append(UInt32(i))
+                }
                 rtcSetSharedGeometryBuffer(
                         geom,
                         RTC_BUFFER_TYPE_INDEX,
@@ -254,7 +256,7 @@ final class Embree: Accelerator {
                 else {
                         embreeError()
                 }
-                let width: Float = 1.1
+                let width: Float = 0.1
                 for (counter, point) in points.enumerated() {
                         let xIndex = 4 * counter * floatSize
                         let yIndex = xIndex + floatSize
