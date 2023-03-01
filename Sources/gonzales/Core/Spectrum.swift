@@ -279,6 +279,13 @@ func pow(base: RGBSpectrum, exp: FloatX) -> RGBSpectrum {
                 b: pow(base.b, exp))
 }
 
+func exp(_ x: RGBSpectrum) -> RGBSpectrum {
+        return RGBSpectrum(
+                r: exp(x.r),
+                g: exp(x.g),
+                b: exp(x.b))
+}
+
 func gammaLinearToSrgb(light: RGBSpectrum) -> RGBSpectrum {
         var converted = RGBSpectrum()
         converted.r = gammaLinearToSrgb(value: light.r)
