@@ -8,10 +8,40 @@ all: d
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-# Successfully (somewhat) rendered Bitterli scenes:
-# cornell-box bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2
-# living-room-3 dining-room glass-of-water car2 car coffee lamp hair-curl
-SCENE_NAME = curly-hair
+# 6 of 32 rendered successfully:
+# bathroom
+# living-room
+# bedroom
+# kitchen
+# staircase2
+# staircase
+# bathroom2
+# living-room-2
+# living-room-3
+# dining-room
+# glass-of-water
+# car2
+# car
+# coffee
+# lamp
+# hair-curl
+# curly-hair
+# straight-hair (crashing in Embree)
+# house
+# spaceship (rendered incorrectly)
+# classroom
+# dragon
+# teapot-full (no volpath)
+# teapot
+# cornell-box
+# volumetric-caustic (no sphere shape)
+# water-caustic
+# veach-ajar (completely black)
+# veach-bidir
+# veach-mis
+# material-testball (not rendered correctly)
+# furball
+SCENE_NAME = veach-bidir
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 #SCENE = ~/tmp/ptex_scene/scene.pbrt
