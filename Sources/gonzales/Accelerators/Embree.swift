@@ -81,6 +81,79 @@ final class Embree: Accelerator {
 
         var counter = 0
 
+        private func computeTriangleUV(geomID: UInt32, ray: Ray, tHit: FloatX)
+                throws -> (Bool, Point2F)
+        {
+
+                let empty = { (line: Int) in
+                        return (false, Point2F())
+                }
+
+                let triangle = try Triangle(
+                        meshIndex: triangleMeshIndices[geomID]!,
+                        number: triangleIndices[geomID]! / 3)
+
+                var p0t: Point = triangle.point0 - ray.origin
+                var p1t: Point = triangle.point1 - ray.origin
+                var p2t: Point = triangle.point2 - ray.origin
+
+                let kz = maxDimension(abs(ray.direction))
+                let kx = (kz + 1) % 3
+                let ky = (kx + 1) % 3
+                let d: Vector = permute(vector: ray.direction, x: kx, y: ky, z: kz)
+                p0t = permute(point: p0t, x: kx, y: ky, z: kz)
+                p1t = permute(point: p1t, x: kx, y: ky, z: kz)
+                p2t = permute(point: p2t, x: kx, y: ky, z: kz)
+
+                let sx: FloatX = -d.x / d.z
+                let sy: FloatX = -d.y / d.z
+                let sz: FloatX = 1.0 / d.z
+                p0t.x += sx * p0t.z
+                p0t.y += sy * p0t.z
+                p1t.x += sx * p1t.z
+                p1t.y += sy * p1t.z
+                p2t.x += sx * p2t.z
+                p2t.y += sy * p2t.z
+
+                let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
+                let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
+                let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
+
+                if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
+                        return empty(#line)
+                }
+                let det: FloatX = e0 + e1 + e2
+                if det == 0 {
+                        return empty(#line)
+                }
+
+                p0t.z *= sz
+                p1t.z *= sz
+                p2t.z *= sz
+                let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
+                if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
+                        return empty(#line)
+                } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
+                        return empty(#line)
+                }
+
+                let invDet: FloatX = 1 / det
+                let b0: FloatX = e0 * invDet
+                let b1: FloatX = e1 * invDet
+                let b2: FloatX = e2 * invDet
+
+                let uv = triangleMeshes.getUVFor(
+                        meshIndex: triangle.meshIndex,
+                        indices: (
+                                triangle.vertexIndex0,
+                                triangle.vertexIndex1,
+                                triangle.vertexIndex2
+                        )
+                )
+                let uvHit = triangle.computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
+                return (true, uvHit)
+        }
+
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -134,69 +207,13 @@ final class Embree: Accelerator {
                 interaction.wo = -ray.direction
 
                 if triangleMeshIndices[geomID] != nil {
-                        let triangle = try Triangle(
-                                meshIndex: triangleMeshIndices[geomID]!,
-                                number: triangleIndices[geomID]! / 3)
-
-                        var p0t: Point = triangle.point0 - ray.origin
-                        var p1t: Point = triangle.point1 - ray.origin
-                        var p2t: Point = triangle.point2 - ray.origin
-
-                        let kz = maxDimension(abs(ray.direction))
-                        let kx = (kz + 1) % 3
-                        let ky = (kx + 1) % 3
-                        let d: Vector = permute(vector: ray.direction, x: kx, y: ky, z: kz)
-                        p0t = permute(point: p0t, x: kx, y: ky, z: kz)
-                        p1t = permute(point: p1t, x: kx, y: ky, z: kz)
-                        p2t = permute(point: p2t, x: kx, y: ky, z: kz)
-
-                        let sx: FloatX = -d.x / d.z
-                        let sy: FloatX = -d.y / d.z
-                        let sz: FloatX = 1.0 / d.z
-                        p0t.x += sx * p0t.z
-                        p0t.y += sy * p0t.z
-                        p1t.x += sx * p1t.z
-                        p1t.y += sy * p1t.z
-                        p2t.x += sx * p2t.z
-                        p2t.y += sy * p2t.z
-
-                        let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
-                        let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
-                        let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
-
-                        if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
+                        let (intersected, uvHit) = try computeTriangleUV(
+                                geomID: geomID,
+                                ray: ray,
+                                tHit: tHit)
+                        if !intersected {
                                 return empty(#line)
                         }
-                        let det: FloatX = e0 + e1 + e2
-                        if det == 0 {
-                                return empty(#line)
-                        }
-
-                        p0t.z *= sz
-                        p1t.z *= sz
-                        p2t.z *= sz
-                        let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
-                        if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
-                                //print(det, tScaled, tHit, tHit * det)
-                                return empty(#line)
-                        } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
-                                return empty(#line)
-                        }
-
-                        let invDet: FloatX = 1 / det
-                        let b0: FloatX = e0 * invDet
-                        let b1: FloatX = e1 * invDet
-                        let b2: FloatX = e2 * invDet
-
-                        let uv = triangleMeshes.getUVFor(
-                                meshIndex: triangle.meshIndex,
-                                indices: (
-                                        triangle.vertexIndex0,
-                                        triangle.vertexIndex1,
-                                        triangle.vertexIndex2
-                                )
-                        )
-                        let uvHit = triangle.computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
                         interaction.uv = uvHit
                 }
                 // TODO: uv for curves

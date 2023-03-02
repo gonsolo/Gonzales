@@ -1,4 +1,4 @@
-all: d
+all: vd
 
 #SINGLERAY = --single 462 432
 #SYNC = --sync

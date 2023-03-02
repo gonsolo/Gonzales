@@ -17,6 +17,7 @@ final class Hair: Material {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
                 let sigmaA = sigmaAFromConcentration(eumelanin: eumelanin)
                 let h = -1 + 2 * interaction.uv[1]
+                print("Hair uv: ", interaction.uv[1])
                 var bsdf = BSDF(interaction: interaction)
                 let alpha: FloatX = 2
                 bsdf.set(bxdf: HairBsdf(alpha: alpha, h: h, sigmaA: sigmaA))
