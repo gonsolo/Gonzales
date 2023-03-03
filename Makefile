@@ -8,7 +8,7 @@ all: d
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-# 26 of 32 rendered successfully:
+# 27 of 32 rendered successfully:
 # bathroom
 # living-room
 # bedroom
@@ -26,7 +26,7 @@ BITTERLI = ~/src/bitterli
 # lamp
 # hair-curl
 # curly-hair
-# straight-hair (crashing in Embree)
+# straight-hair
 # house
 # spaceship (rendered incorrectly)
 # classroom
