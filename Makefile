@@ -8,7 +8,7 @@ all: d
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-# 6 of 32 rendered successfully:
+# 26 of 32 rendered successfully:
 # bathroom
 # living-room
 # bedroom
@@ -41,7 +41,7 @@ BITTERLI = ~/src/bitterli
 # veach-mis
 # material-testball (not rendered correctly)
 # furball
-SCENE_NAME = veach-bidir
+SCENE_NAME = straight-hair
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 #SCENE = ~/tmp/ptex_scene/scene.pbrt
@@ -215,6 +215,6 @@ format:
 codespell:
 	codespell -L inout Sources
 lldb:
-	lldb .build/release/gonzales -- $(SINGLERAY) $(SCENE)
-	#lldb .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
+	#lldb .build/release/gonzales -- $(SINGLERAY) $(SCENE)
+	lldb .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
 

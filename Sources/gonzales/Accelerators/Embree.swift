@@ -169,7 +169,7 @@ final class Embree: Accelerator {
                 else {
                         embreeError()
                 }
-                let numCurves = points.count - 4
+                let numCurves = points.count - 5
                 var indices: [UInt32] = []
                 for i in 0..<numCurves {
                         indices.append(UInt32(i))
