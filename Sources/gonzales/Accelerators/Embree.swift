@@ -169,20 +169,22 @@ final class Embree: Accelerator {
                 else {
                         embreeError()
                 }
-                let numCurves = points.count - 5
-                var indices: [UInt32] = []
-                for i in 0..<numCurves {
-                        indices.append(UInt32(i))
+                let numIndices = points.count - 3
+                guard
+                        let indices = rtcSetNewGeometryBuffer(
+                                geom,
+                                RTC_BUFFER_TYPE_INDEX,
+                                0,
+                                RTC_FORMAT_UINT,
+                                unsignedIntSize,
+                                numIndices)
+                else {
+                        embreeError()
                 }
-                rtcSetSharedGeometryBuffer(
-                        geom,
-                        RTC_BUFFER_TYPE_INDEX,
-                        0,
-                        RTC_FORMAT_UINT,
-                        indices,
-                        0,
-                        unsignedIntSize,
-                        numCurves)
+                for index in 0..<numIndices {
+                        let offset = unsignedIntSize * index
+                        indices.storeBytes(of: UInt32(index), toByteOffset: offset, as: UInt32.self)
+                }
 
                 let numVertices = points.count
                 guard

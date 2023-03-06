@@ -41,7 +41,9 @@ BITTERLI = ~/src/bitterli
 # veach-mis
 # material-testball (not rendered correctly)
 # furball
-SCENE_NAME = straight-hair
+#SCENE_NAME = straight-hair
+#SCENE_NAME = hair-curl
+SCENE_NAME = curly-hair
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 #SCENE = ~/tmp/ptex_scene/scene.pbrt
