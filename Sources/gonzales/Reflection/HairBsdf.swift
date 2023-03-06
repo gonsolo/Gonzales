@@ -186,6 +186,68 @@ struct HairBsdf: BxDF {
                 return fsum
         }
 
+        private func computeApPdf(cosThetaO: FloatX) -> [FloatX] {
+                let sinThetaO = (1 - cosThetaO * cosThetaO).squareRoot()
+                let sinThetaT = sinThetaO / eta
+                let cosThetaT = (1 - square(sinThetaT)).squareRoot()
+                let etap = (eta * eta - square(sinThetaO)).squareRoot() / cosThetaO
+                let sinGammaT = h / etap
+                let cosGammaT = (1 - square(sinGammaT)).squareRoot()
+                let transmittance = exp(-sigmaA * (2 * cosGammaT / cosThetaT))
+                let ap = computeAp(
+                        cosThetaO: cosThetaO,
+                        eta: eta,
+                        h: h,
+                        transmittance: transmittance)
+                let sumY = ap.reduce(
+                        0,
+                        { s, ap in
+                                s + ap.average()
+                        })
+                let apPdf = ap.map { $0.average() / sumY }
+                return apPdf
+        }
+
+        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+                let sinThetaO = wo.x
+                let cosThetaO = (1 - square(sinThetaO)).squareRoot()
+                let phiO = atan2(wo.z, wo.y)
+                let sinThetaI = wi.x
+                let cosThetaI = (1 - square(sinThetaI)).squareRoot()
+                let phiI = atan2(wi.z, wi.y)
+                let etap = sqrt(eta * eta - square(sinThetaO)) / cosThetaO
+                let sinGammaT = h / etap
+                let gammaT = asin(sinGammaT)
+                let apPdf = computeApPdf(cosThetaO: cosThetaO)
+
+                let phi = phiI - phiO
+                var pdf: FloatX = 0
+                for p in 0..<pMax {
+                        var sinThetaOp: FloatX
+                        var cosThetaOp: FloatX
+                        if p == 0 {
+                                sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
+                                cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
+                        } else if p == 1 {
+                                sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
+                                cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
+                        } else if p == 2 {
+                                sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
+                                cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
+                        } else {
+                                sinThetaOp = sinThetaO
+                                cosThetaOp = cosThetaO
+                        }
+                        cosThetaOp = abs(cosThetaOp)
+                        let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
+                        let np = computeNp(phi, p, s, gammaO, gammaT)
+                        pdf += mp * apPdf[p] * np
+                }
+                let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                pdf += mp * apPdf[pMax] * (1 / (2 * FloatX.pi))
+                return pdf
+        }
+
         func albedo() -> RGBSpectrum {
                 // TODO
                 return white
