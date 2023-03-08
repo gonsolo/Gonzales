@@ -198,6 +198,7 @@ final class Embree: Accelerator {
                 else {
                         embreeError()
                 }
+                let curveRadius = widths.0 / 2
                 for (counter, point) in points.enumerated() {
                         let xIndex = 4 * counter * floatSize
                         let yIndex = xIndex + floatSize
@@ -206,7 +207,7 @@ final class Embree: Accelerator {
                         vertices.storeBytes(of: point.x, toByteOffset: xIndex, as: Float.self)
                         vertices.storeBytes(of: point.y, toByteOffset: yIndex, as: Float.self)
                         vertices.storeBytes(of: point.z, toByteOffset: zIndex, as: Float.self)
-                        vertices.storeBytes(of: widths.0, toByteOffset: wIndex, as: Float.self)
+                        vertices.storeBytes(of: curveRadius, toByteOffset: wIndex, as: Float.self)
                 }
                 rtcCommitGeometry(geom)
                 rtcAttachGeometry(rtcScene, geom)

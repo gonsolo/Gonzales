@@ -248,6 +248,117 @@ struct HairBsdf: BxDF {
                 return pdf
         }
 
+        //private func demux(_ f: FloatX) -> (FloatX, FloatX) {
+        //        let v = f * (UInt(1) << 32)
+        //        // TODOuint32_t bits[2] = {Compact1By1(v), Compact1By1(v >> 1)};
+        //        // TODOreturn {bits[0] / Float(1 << 16), bits[1] / Float(1 << 16)};
+        //        return (0, 0)
+        //}
+
+        //private func demux(_ u: Point2F) -> (FloatX, FloatX, FloatX, FloatX) {
+        //        let a = demux(u[0])
+        //        let b = demus(u[1])
+        //        return (a, b)
+        //}
+
+        //func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
+        //        RGBSpectrum, Vector, FloatX
+        //) {
+        //        let sinThetaO = wo.x
+        //        let cosThetaO = (1 - square(sinThetaO)).squareRoot()
+        //        let phiO = atan2(wo.z, wo.y)
+        //        // TODO let fourU = demux(u)
+
+        //        //    Point2f u[2] = {DemuxFloat(u2[0]), DemuxFloat(u2[1])};
+        //        //
+        //        //    // Determine which term $p$ to sample for hair scattering
+        //        //    std::array<Float, pMax + 1> apPdf = ComputeApPdf(cosThetaO);
+        //        //    int p;
+        //        //    for (p = 0; p < pMax; ++p) {
+        //        //        if (u[0][0] < apPdf[p]) break;
+        //        //        u[0][0] -= apPdf[p];
+        //        //    }
+        //        //
+        //        //    // Rotate $\sin \thetao$ and $\cos \thetao$ to account for hair scale tilt
+        //        //    Float sinThetaOp, cosThetaOp;
+        //        //    if (p == 0) {
+        //        //        sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1];
+        //        //        cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1];
+        //        //    }
+        //        //    else if (p == 1) {
+        //        //        sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0];
+        //        //        cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0];
+        //        //    } else if (p == 2) {
+        //        //        sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2];
+        //        //        cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2];
+        //        //    } else {
+        //        //        sinThetaOp = sinThetaO;
+        //        //        cosThetaOp = cosThetaO;
+        //        //    }
+        //        //
+        //        //   // Sample $M_p$ to compute $\thetai$
+        //        //    u[1][0] = std::max(u[1][0], Float(1e-5));
+        //        //    Float cosTheta =
+        //        //        1 + v[p] * std::log(u[1][0] + (1 - u[1][0]) * std::exp(-2 / v[p]));
+        //        //    Float sinTheta = SafeSqrt(1 - Sqr(cosTheta));
+        //        //    Float cosPhi = std::cos(2 * Pi * u[1][1]);
+        //        //    Float sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp;
+        //        //    Float cosThetaI = SafeSqrt(1 - Sqr(sinThetaI));
+        //        //
+        //        //    // Sample $N_p$ to compute $\Delta\phi$
+        //        //
+        //        //    // Compute $\gammat$ for refracted ray
+        //        //    Float etap = std::sqrt(eta * eta - Sqr(sinThetaO)) / cosThetaO;
+        //        //    Float sinGammaT = h / etap;
+        //        //    Float gammaT = SafeASin(sinGammaT);
+        //        //    Float dphi;
+        //        //    if (p < pMax)
+        //        //        dphi =
+        //        //            Phi(p, gammaO, gammaT) + SampleTrimmedLogistic(u[0][1], s, -Pi, Pi);
+        //        //    else
+        //        //        dphi = 2 * Pi * u[0][1];
+        //        //
+        //        //    // Compute _wi_ from sampled hair scattering angles
+        //        //    Float phiI = phiO + dphi;
+        //        //    *wi = Vector3f(sinThetaI, cosThetaI * std::cos(phiI),
+        //        //                   cosThetaI * std::sin(phiI));
+        //        //
+        //        //
+        //        //   // Compute PDF for sampled hair scattering direction _wi_
+        //        //    *pdf = 0;
+        //        //    for (int p = 0; p < pMax; ++p) {
+        //        //        // Compute $\sin \thetao$ and $\cos \thetao$ terms accounting for scales
+        //        //        Float sinThetaOp, cosThetaOp;
+        //        //        if (p == 0) {
+        //        //            sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1];
+        //        //            cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1];
+        //        //        }
+        //        //
+        //        //        // Handle remainder of $p$ values for hair scale tilt
+        //        //        else if (p == 1) {
+        //        //            sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0];
+        //        //            cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0];
+        //        //        } else if (p == 2) {
+        //        //            sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2];
+        //        //            cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2];
+        //        //        } else {
+        //        //            sinThetaOp = sinThetaO;
+        //        //            cosThetaOp = cosThetaO;
+        //        //        }
+        //        //
+        //        //        // Handle out-of-range $\cos \thetao$ from scale adjustment
+        //        //        cosThetaOp = std::abs(cosThetaOp);
+        //        //        *pdf += Mp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p]) *
+        //        //                apPdf[p] * Np(dphi, p, s, gammaO, gammaT);
+        //        //    }
+        //        //    *pdf += Mp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax]) *
+        //        //            apPdf[pMax] * (1 / (2 * Pi));
+        //        //    // if (std::abs(wi->x) < .9999) CHECK_NEAR(*pdf, Pdf(wo, *wi), .01);
+        //        //    return f(wo, *wi);
+
+        //        return (black, up, 0)
+        //}
+
         func albedo() -> RGBSpectrum {
                 // TODO
                 return white
