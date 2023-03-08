@@ -165,7 +165,7 @@ final class Embree: Accelerator {
                 guard
                         let geom = rtcNewGeometry(
                                 rtcDevice,
-                                RTC_GEOMETRY_TYPE_FLAT_BSPLINE_CURVE)
+                                RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
                 else {
                         embreeError()
                 }
