@@ -360,8 +360,8 @@ struct HairBsdf: BxDF {
         }
 
         func albedo() -> RGBSpectrum {
-                // TODO
-                return white
+                // Not correct but should be ok
+                return sigmaA
         }
 
         var sigmaA: RGBSpectrum
