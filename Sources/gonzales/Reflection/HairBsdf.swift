@@ -248,116 +248,116 @@ struct HairBsdf: BxDF {
                 return pdf
         }
 
-        //private func demux(_ f: FloatX) -> (FloatX, FloatX) {
-        //        let v = f * (UInt(1) << 32)
-        //        // TODOuint32_t bits[2] = {Compact1By1(v), Compact1By1(v >> 1)};
-        //        // TODOreturn {bits[0] / Float(1 << 16), bits[1] / Float(1 << 16)};
-        //        return (0, 0)
-        //}
+        private func compact1by1(_ x: UInt32) -> UInt32 {
+                var x = x
+                x &= 0x5555_5555
+                x = (x ^ (x >> 1)) & 0x3333_3333
+                x = (x ^ (x >> 2)) & 0x0f0f_0f0f
+                x = (x ^ (x >> 4)) & 0x00ff_00ff
+                x = (x ^ (x >> 8)) & 0x0000_ffff
+                return x
+        }
 
-        //private func demux(_ u: Point2F) -> (FloatX, FloatX, FloatX, FloatX) {
-        //        let a = demux(u[0])
-        //        let b = demus(u[1])
-        //        return (a, b)
-        //}
+        private func demux(_ f: FloatX) -> (FloatX, FloatX) {
+                let v = UInt(f * FloatX((UInt(1) << 32)))
+                let bits: (UInt32, UInt32) = (compact1by1(UInt32(v)), compact1by1(UInt32(v >> 1)))
+                return (FloatX(bits.0) / FloatX(1 << 16), FloatX(bits.1) / FloatX(1 << 16))
+        }
 
-        //func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
-        //        RGBSpectrum, Vector, FloatX
-        //) {
-        //        let sinThetaO = wo.x
-        //        let cosThetaO = (1 - square(sinThetaO)).squareRoot()
-        //        let phiO = atan2(wo.z, wo.y)
-        //        // TODO let fourU = demux(u)
+        private func demux(_ u: Point2F) -> (FloatX, FloatX, FloatX, FloatX) {
+                let a = demux(u[0])
+                let b = demux(u[1])
+                return (a.0, a.1, b.0, b.1)
+        }
 
-        //        //    Point2f u[2] = {DemuxFloat(u2[0]), DemuxFloat(u2[1])};
-        //        //
-        //        //    // Determine which term $p$ to sample for hair scattering
-        //        //    std::array<Float, pMax + 1> apPdf = ComputeApPdf(cosThetaO);
-        //        //    int p;
-        //        //    for (p = 0; p < pMax; ++p) {
-        //        //        if (u[0][0] < apPdf[p]) break;
-        //        //        u[0][0] -= apPdf[p];
-        //        //    }
-        //        //
-        //        //    // Rotate $\sin \thetao$ and $\cos \thetao$ to account for hair scale tilt
-        //        //    Float sinThetaOp, cosThetaOp;
-        //        //    if (p == 0) {
-        //        //        sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1];
-        //        //        cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1];
-        //        //    }
-        //        //    else if (p == 1) {
-        //        //        sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0];
-        //        //        cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0];
-        //        //    } else if (p == 2) {
-        //        //        sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2];
-        //        //        cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2];
-        //        //    } else {
-        //        //        sinThetaOp = sinThetaO;
-        //        //        cosThetaOp = cosThetaO;
-        //        //    }
-        //        //
-        //        //   // Sample $M_p$ to compute $\thetai$
-        //        //    u[1][0] = std::max(u[1][0], Float(1e-5));
-        //        //    Float cosTheta =
-        //        //        1 + v[p] * std::log(u[1][0] + (1 - u[1][0]) * std::exp(-2 / v[p]));
-        //        //    Float sinTheta = SafeSqrt(1 - Sqr(cosTheta));
-        //        //    Float cosPhi = std::cos(2 * Pi * u[1][1]);
-        //        //    Float sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp;
-        //        //    Float cosThetaI = SafeSqrt(1 - Sqr(sinThetaI));
-        //        //
-        //        //    // Sample $N_p$ to compute $\Delta\phi$
-        //        //
-        //        //    // Compute $\gammat$ for refracted ray
-        //        //    Float etap = std::sqrt(eta * eta - Sqr(sinThetaO)) / cosThetaO;
-        //        //    Float sinGammaT = h / etap;
-        //        //    Float gammaT = SafeASin(sinGammaT);
-        //        //    Float dphi;
-        //        //    if (p < pMax)
-        //        //        dphi =
-        //        //            Phi(p, gammaO, gammaT) + SampleTrimmedLogistic(u[0][1], s, -Pi, Pi);
-        //        //    else
-        //        //        dphi = 2 * Pi * u[0][1];
-        //        //
-        //        //    // Compute _wi_ from sampled hair scattering angles
-        //        //    Float phiI = phiO + dphi;
-        //        //    *wi = Vector3f(sinThetaI, cosThetaI * std::cos(phiI),
-        //        //                   cosThetaI * std::sin(phiI));
-        //        //
-        //        //
-        //        //   // Compute PDF for sampled hair scattering direction _wi_
-        //        //    *pdf = 0;
-        //        //    for (int p = 0; p < pMax; ++p) {
-        //        //        // Compute $\sin \thetao$ and $\cos \thetao$ terms accounting for scales
-        //        //        Float sinThetaOp, cosThetaOp;
-        //        //        if (p == 0) {
-        //        //            sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1];
-        //        //            cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1];
-        //        //        }
-        //        //
-        //        //        // Handle remainder of $p$ values for hair scale tilt
-        //        //        else if (p == 1) {
-        //        //            sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0];
-        //        //            cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0];
-        //        //        } else if (p == 2) {
-        //        //            sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2];
-        //        //            cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2];
-        //        //        } else {
-        //        //            sinThetaOp = sinThetaO;
-        //        //            cosThetaOp = cosThetaO;
-        //        //        }
-        //        //
-        //        //        // Handle out-of-range $\cos \thetao$ from scale adjustment
-        //        //        cosThetaOp = std::abs(cosThetaOp);
-        //        //        *pdf += Mp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p]) *
-        //        //                apPdf[p] * Np(dphi, p, s, gammaO, gammaT);
-        //        //    }
-        //        //    *pdf += Mp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax]) *
-        //        //            apPdf[pMax] * (1 / (2 * Pi));
-        //        //    // if (std::abs(wi->x) < .9999) CHECK_NEAR(*pdf, Pdf(wo, *wi), .01);
-        //        //    return f(wo, *wi);
+        private func sampleTrimmedLogistic(u: FloatX, s: FloatX, a: FloatX, b: FloatX) -> FloatX {
+                let k = logisticCDF(b, s) - logisticCDF(a, s)
+                let x = -s * log(1 / (u * k + logisticCDF(a, s)) - 1)
+                return clamp(value: x, low: a, high: b)
+        }
 
-        //        return (black, up, 0)
-        //}
+        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
+                RGBSpectrum, Vector, FloatX
+        ) {
+                let sinThetaO = wo.x
+                let cosThetaO = (1 - square(sinThetaO)).squareRoot()
+                let phiO = atan2(wo.z, wo.y)
+                var fourU = demux(u)
+
+                let apPdf = computeApPdf(cosThetaO: cosThetaO)
+                var p = 0
+                for i in 0..<pMax {
+                        p = i
+                        if fourU.0 < apPdf[p] {
+                                break
+                        }
+                        fourU.0 -= apPdf[p]
+                }
+                var sinThetaOp: FloatX
+                var cosThetaOp: FloatX
+                if p == 0 {
+                        sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
+                        cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
+                } else if p == 1 {
+                        sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
+                        cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
+                } else if p == 2 {
+                        sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
+                        cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
+                } else {
+                        sinThetaOp = sinThetaO
+                        cosThetaOp = cosThetaO
+                }
+                fourU.1 = max(fourU.1, FloatX(1e-5))
+                let cosTheta = 1 + v[p] * log(fourU.1 + (1 - fourU.1) * exp(-2 / v[p]))
+                let sinTheta = (1 - square(cosTheta)).squareRoot()
+                let cosPhi = cos(2 * FloatX.pi * fourU.2)
+                let sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp
+                let cosThetaI = (1 - square(sinThetaI)).squareRoot()
+                let etap = (eta * eta - square(sinThetaO)).squareRoot() / cosThetaO
+                let sinGammaT = h / etap
+                let gammaT = asin(sinGammaT)
+                var dphi: FloatX
+                if p < pMax {
+                        let phi = computePhi(p: p, gammaO: gammaO, gammaT: gammaT)
+                        let sampled = sampleTrimmedLogistic(
+                                u: fourU.3,
+                                s: s,
+                                a: -FloatX.pi,
+                                b: FloatX.pi)
+                        dphi = phi + sampled
+                } else {
+                        dphi = 2 * FloatX.pi * fourU.3
+                }
+                let phiI = phiO + dphi
+                let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
+                var pdf: FloatX = 0
+                for p in 0..<pMax {
+                        var sinThetaOp: FloatX
+                        var cosThetaOp: FloatX
+                        if p == 0 {
+                                sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
+                                cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
+                        } else if p == 1 {
+                                sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
+                                cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
+                        } else if p == 2 {
+                                sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
+                                cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
+                        } else {
+                                sinThetaOp = sinThetaO
+                                cosThetaOp = cosThetaO
+                        }
+                        cosThetaOp = abs(cosThetaOp)
+                        let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
+                        let np = computeNp(dphi, p, s, gammaO, gammaT)
+                        pdf += mp * apPdf[p] * np
+                }
+                let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                pdf += mp * apPdf[pMax] * (1 / (2 * FloatX.pi))
+                let radiance = evaluate(wo, wi)
+                return (radiance, wi, pdf)
+        }
 
         func albedo() -> RGBSpectrum {
                 // TODO
