@@ -121,6 +121,37 @@ struct HairBsdf: BxDF {
                 }
         }
 
+        private func computeMpNp(
+                p: Int,
+                sinThetaI: FloatX,
+                cosThetaI: FloatX,
+                sinThetaO: FloatX,
+                cosThetaO: FloatX,
+                phi: FloatX,
+                gammaT: FloatX
+        ) -> (FloatX, FloatX) {
+                var sinThetaOp: FloatX
+                var cosThetaOp: FloatX
+                if p == 0 {
+                        sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
+                        cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
+                } else if p == 1 {
+                        sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
+                        cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
+                } else if p == 2 {
+                        sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
+                        cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
+                } else {
+                        sinThetaOp = sinThetaO
+                        cosThetaOp = cosThetaO
+                }
+                cosThetaOp = abs(cosThetaOp)
+
+                let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
+                let np = computeNp(phi, p, s, gammaO, gammaT)
+                return (mp, np)
+        }
+
         func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
 
                 let sinThetaO = wo.x
@@ -152,25 +183,14 @@ struct HairBsdf: BxDF {
                 var fsum = black
 
                 for p in 0..<pMax {
-                        var sinThetaOp: FloatX
-                        var cosThetaOp: FloatX
-                        if p == 0 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
-                                cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
-                        } else if p == 1 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
-                                cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
-                        } else if p == 2 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
-                                cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
-                        } else {
-                                sinThetaOp = sinThetaO
-                                cosThetaOp = cosThetaO
-                        }
-                        cosThetaOp = abs(cosThetaOp)
-
-                        let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
-                        let np = computeNp(phi, p, s, gammaO, gammaT)
+                        let (mp, np) = computeMpNp(
+                                p: p,
+                                sinThetaI: sinThetaI,
+                                cosThetaI: cosThetaI,
+                                sinThetaO: sinThetaO,
+                                cosThetaO: cosThetaO,
+                                phi: phi,
+                                gammaT: gammaT)
                         fsum += mp * ap[p] * np
                 }
                 let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
@@ -218,24 +238,14 @@ struct HairBsdf: BxDF {
                 let phi = phiI - phiO
                 var pdf: FloatX = 0
                 for p in 0..<pMax {
-                        var sinThetaOp: FloatX
-                        var cosThetaOp: FloatX
-                        if p == 0 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
-                                cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
-                        } else if p == 1 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
-                                cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
-                        } else if p == 2 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
-                                cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
-                        } else {
-                                sinThetaOp = sinThetaO
-                                cosThetaOp = cosThetaO
-                        }
-                        cosThetaOp = abs(cosThetaOp)
-                        let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
-                        let np = computeNp(phi, p, s, gammaO, gammaT)
+                        let (mp, np) = computeMpNp(
+                                p: p,
+                                sinThetaI: sinThetaI,
+                                cosThetaI: cosThetaI,
+                                sinThetaO: sinThetaO,
+                                cosThetaO: cosThetaO,
+                                phi: phi,
+                                gammaT: gammaT)
                         pdf += mp * apPdf[p] * np
                 }
                 let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
@@ -328,24 +338,14 @@ struct HairBsdf: BxDF {
                 let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
                 var pdf: FloatX = 0
                 for p in 0..<pMax {
-                        var sinThetaOp: FloatX
-                        var cosThetaOp: FloatX
-                        if p == 0 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
-                                cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
-                        } else if p == 1 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
-                                cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
-                        } else if p == 2 {
-                                sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
-                                cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
-                        } else {
-                                sinThetaOp = sinThetaO
-                                cosThetaOp = cosThetaO
-                        }
-                        cosThetaOp = abs(cosThetaOp)
-                        let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
-                        let np = computeNp(dphi, p, s, gammaO, gammaT)
+                        let (mp, np) = computeMpNp(
+                                p: p,
+                                sinThetaI: sinThetaI,
+                                cosThetaI: cosThetaI,
+                                sinThetaO: sinThetaO,
+                                cosThetaO: cosThetaO,
+                                phi: dphi,
+                                gammaT: gammaT)
                         pdf += mp * apPdf[p] * np
                 }
                 let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
