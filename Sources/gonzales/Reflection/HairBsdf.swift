@@ -153,7 +153,11 @@ struct HairBsdf: BxDF {
                         sinThetaO: sinThetaO,
                         cosThetaO: cosThetaO)
                 cosThetaOp = abs(cosThetaOp)
-                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
+                let longitudinalScattering = computeLongitudinalScattering(
+                        cosThetaI,
+                        cosThetaOp,
+                        sinThetaI,
+                        sinThetaOp, v[p])
                 let np = computeNp(phi, p, s, gammaO, gammaT)
                 return (longitudinalScattering, np)
         }
@@ -199,7 +203,12 @@ struct HairBsdf: BxDF {
                                 gammaT: gammaT)
                         fsum += longitudinalScattering * attenuation[p] * np
                 }
-                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                let longitudinalScattering = computeLongitudinalScattering(
+                        cosThetaI,
+                        cosThetaO,
+                        sinThetaI,
+                        sinThetaO,
+                        v[pMax])
                 fsum += longitudinalScattering * attenuation[pMax] / (2 * FloatX.pi)
                 if absCosTheta(wi) > 0 {
                         fsum /= absCosTheta(wi)
@@ -253,7 +262,12 @@ struct HairBsdf: BxDF {
                                 gammaT: gammaT)
                         pdf += longitudinalScattering * attenuationPdf[p] * np
                 }
-                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                let longitudinalScattering = computeLongitudinalScattering(
+                        cosThetaI,
+                        cosThetaO,
+                        sinThetaI,
+                        sinThetaO,
+                        v[pMax])
                 pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 return pdf
         }
@@ -342,7 +356,12 @@ struct HairBsdf: BxDF {
                                 gammaT: gammaT)
                         pdf += longitudinalScattering * attenuationPdf[p] * np
                 }
-                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                let longitudinalScattering = computeLongitudinalScattering(
+                        cosThetaI,
+                        cosThetaO,
+                        sinThetaI,
+                        sinThetaO,
+                        v[pMax])
                 pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 let radiance = evaluate(wo, wi)
                 return (radiance, wi, pdf)
