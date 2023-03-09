@@ -53,13 +53,13 @@ struct HairBsdf: BxDF {
         ) -> FloatX {
                 let a = cosThetaI * cosThetaO / v
                 let b = sinThetaI * sinThetaO / v
-                var mp: FloatX
+                var longitudinalScattering: FloatX
                 if v <= 0.1 {
-                        mp = exp(logI0(a) - b - 1 / v + 0.6931 + log(1 / (2 * v)))
+                        longitudinalScattering = exp(logI0(a) - b - 1 / v + 0.6931 + log(1 / (2 * v)))
                 } else {
-                        mp = (exp(-b) * i0(a)) / (sinh(1 / v) * 2 * v)
+                        longitudinalScattering = (exp(-b) * i0(a)) / (sinh(1 / v) * 2 * v)
                 }
-                return mp
+                return longitudinalScattering
         }
 
         private func computePhi(p: Int, gammaO: FloatX, gammaT: FloatX) -> FloatX {
@@ -153,9 +153,9 @@ struct HairBsdf: BxDF {
                         sinThetaO: sinThetaO,
                         cosThetaO: cosThetaO)
                 cosThetaOp = abs(cosThetaOp)
-                let mp = computeLongitudinalScattering(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
+                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
                 let np = computeNp(phi, p, s, gammaO, gammaT)
-                return (mp, np)
+                return (longitudinalScattering, np)
         }
 
         func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
@@ -189,7 +189,7 @@ struct HairBsdf: BxDF {
                 var fsum = black
 
                 for p in 0..<pMax {
-                        let (mp, np) = computeMpNp(
+                        let (longitudinalScattering, np) = computeMpNp(
                                 p: p,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -197,10 +197,10 @@ struct HairBsdf: BxDF {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        fsum += mp * attenuation[p] * np
+                        fsum += longitudinalScattering * attenuation[p] * np
                 }
-                let mp = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
-                fsum += mp * attenuation[pMax] / (2 * FloatX.pi)
+                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                fsum += longitudinalScattering * attenuation[pMax] / (2 * FloatX.pi)
                 if absCosTheta(wi) > 0 {
                         fsum /= absCosTheta(wi)
                 }
@@ -243,7 +243,7 @@ struct HairBsdf: BxDF {
                 let phi = phiI - phiO
                 var pdf: FloatX = 0
                 for p in 0..<pMax {
-                        let (mp, np) = computeMpNp(
+                        let (longitudinalScattering, np) = computeMpNp(
                                 p: p,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -251,10 +251,10 @@ struct HairBsdf: BxDF {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        pdf += mp * attenuationPdf[p] * np
+                        pdf += longitudinalScattering * attenuationPdf[p] * np
                 }
-                let mp = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
-                pdf += mp * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
+                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 return pdf
         }
 
@@ -332,7 +332,7 @@ struct HairBsdf: BxDF {
                 let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
                 var pdf: FloatX = 0
                 for p in 0..<pMax {
-                        let (mp, np) = computeMpNp(
+                        let (longitudinalScattering, np) = computeMpNp(
                                 p: p,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -340,10 +340,10 @@ struct HairBsdf: BxDF {
                                 cosThetaO: cosThetaO,
                                 phi: dphi,
                                 gammaT: gammaT)
-                        pdf += mp * attenuationPdf[p] * np
+                        pdf += longitudinalScattering * attenuationPdf[p] * np
                 }
-                let mp = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
-                pdf += mp * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
+                let longitudinalScattering = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 let radiance = evaluate(wo, wi)
                 return (radiance, wi, pdf)
         }
