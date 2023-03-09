@@ -182,7 +182,7 @@ struct HairBsdf: BxDF {
         }
 
         private func computeApPdf(cosThetaO: FloatX) -> [FloatX] {
-                let sinThetaO = (1 - cosThetaO * cosThetaO).squareRoot()
+                let sinThetaO = (1 - square(cosThetaO)).squareRoot()
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
                 let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
