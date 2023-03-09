@@ -10,8 +10,10 @@ struct HairBsdf: BxDF {
                 let betaN: FloatX = 0.3
                 s = sqrtPiOver8 * (0.265 * betaN + 1.194 * square(betaN) + 5.372 * pow(betaN, 2))
                 v = Array(repeating: 0, count: pMax + 1)
-                let betaM: FloatX = 0.3
-                v[0] = square(0.726 * betaM + 0.812 * square(betaM) + 3.7 * pow(betaM, 20))
+                let longitudinalRoughness: FloatX = 0.3
+                v[0] = square(
+                        0.726 * longitudinalRoughness + 0.812 * square(longitudinalRoughness) + 3.7
+                                * pow(longitudinalRoughness, 20))
                 v[1] = 0.25 * v[0]
                 v[2] = 4 * v[0]
                 for p in 3...pMax {
