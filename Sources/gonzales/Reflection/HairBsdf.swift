@@ -121,15 +121,7 @@ struct HairBsdf: BxDF {
                 }
         }
 
-        private func computeMpNp(
-                p: Int,
-                sinThetaI: FloatX,
-                cosThetaI: FloatX,
-                sinThetaO: FloatX,
-                cosThetaO: FloatX,
-                phi: FloatX,
-                gammaT: FloatX
-        ) -> (FloatX, FloatX) {
+        private func computeThetaOp(p: Int, sinThetaO: FloatX, cosThetaO: FloatX) -> (FloatX, FloatX) {
                 var sinThetaOp: FloatX
                 var cosThetaOp: FloatX
                 if p == 0 {
@@ -145,8 +137,23 @@ struct HairBsdf: BxDF {
                         sinThetaOp = sinThetaO
                         cosThetaOp = cosThetaO
                 }
-                cosThetaOp = abs(cosThetaOp)
+                return (sinThetaOp, cosThetaOp)
+        }
 
+        private func computeMpNp(
+                p: Int,
+                sinThetaI: FloatX,
+                cosThetaI: FloatX,
+                sinThetaO: FloatX,
+                cosThetaO: FloatX,
+                phi: FloatX,
+                gammaT: FloatX
+        ) -> (FloatX, FloatX) {
+                var (sinThetaOp, cosThetaOp) = computeThetaOp(
+                        p: p,
+                        sinThetaO: sinThetaO,
+                        cosThetaO: cosThetaO)
+                cosThetaOp = abs(cosThetaOp)
                 let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
                 let np = computeNp(phi, p, s, gammaO, gammaT)
                 return (mp, np)
@@ -298,21 +305,10 @@ struct HairBsdf: BxDF {
                         }
                         fourU.0 -= apPdf[p]
                 }
-                var sinThetaOp: FloatX
-                var cosThetaOp: FloatX
-                if p == 0 {
-                        sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
-                        cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
-                } else if p == 1 {
-                        sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
-                        cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
-                } else if p == 2 {
-                        sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
-                        cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
-                } else {
-                        sinThetaOp = sinThetaO
-                        cosThetaOp = cosThetaO
-                }
+                let (sinThetaOp, cosThetaOp) = computeThetaOp(
+                        p: p,
+                        sinThetaO: sinThetaO,
+                        cosThetaO: cosThetaO)
                 fourU.1 = max(fourU.1, FloatX(1e-5))
                 let cosTheta = 1 + v[p] * log(fourU.1 + (1 - fourU.1) * exp(-2 / v[p]))
                 let sinTheta = (1 - square(cosTheta)).squareRoot()
