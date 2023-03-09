@@ -44,7 +44,7 @@ struct HairBsdf: BxDF {
                 return attenuation
         }
 
-        private func computeMp(
+        private func computeLongitudinalScattering(
                 _ cosThetaI: FloatX,
                 _ cosThetaO: FloatX,
                 _ sinThetaI: FloatX,
@@ -153,7 +153,7 @@ struct HairBsdf: BxDF {
                         sinThetaO: sinThetaO,
                         cosThetaO: cosThetaO)
                 cosThetaOp = abs(cosThetaOp)
-                let mp = computeMp(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
+                let mp = computeLongitudinalScattering(cosThetaI, cosThetaOp, sinThetaI, sinThetaOp, v[p])
                 let np = computeNp(phi, p, s, gammaO, gammaT)
                 return (mp, np)
         }
@@ -199,7 +199,7 @@ struct HairBsdf: BxDF {
                                 gammaT: gammaT)
                         fsum += mp * attenuation[p] * np
                 }
-                let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                let mp = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
                 fsum += mp * attenuation[pMax] / (2 * FloatX.pi)
                 if absCosTheta(wi) > 0 {
                         fsum /= absCosTheta(wi)
@@ -253,7 +253,7 @@ struct HairBsdf: BxDF {
                                 gammaT: gammaT)
                         pdf += mp * attenuationPdf[p] * np
                 }
-                let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                let mp = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
                 pdf += mp * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 return pdf
         }
@@ -342,7 +342,7 @@ struct HairBsdf: BxDF {
                                 gammaT: gammaT)
                         pdf += mp * attenuationPdf[p] * np
                 }
-                let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
+                let mp = computeLongitudinalScattering(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
                 pdf += mp * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 let radiance = evaluate(wo, wi)
                 return (radiance, wi, pdf)
