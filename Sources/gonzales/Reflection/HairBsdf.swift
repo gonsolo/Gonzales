@@ -1,7 +1,5 @@
 import Foundation  // atan2
 
-let pMax = 3
-
 struct HairBsdf: BxDF {
 
         init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum) {
@@ -11,6 +9,7 @@ struct HairBsdf: BxDF {
                 gammaO = asin(h)
                 let betaN: FloatX = 0.3
                 s = sqrtPiOver8 * (0.265 * betaN + 1.194 * square(betaN) + 5.372 * pow(betaN, 2))
+                v = Array(repeating: 0, count: pMax + 1)
                 let betaM: FloatX = 0.3
                 v[0] = square(0.726 * betaM + 0.812 * square(betaM) + 3.7 * pow(betaM, 20))
                 v[1] = 0.25 * v[0]
@@ -355,12 +354,13 @@ struct HairBsdf: BxDF {
                 return absorption
         }
 
+        let pMax = 3
         var absorption: RGBSpectrum
         let indexRefraction: FloatX = 1.55
         let gammaO: FloatX
         let h: FloatX
         let s: FloatX
-        var v: [FloatX] = Array(repeating: 0, count: pMax + 1)
+        var v: [FloatX]
         var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
         var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
 }
