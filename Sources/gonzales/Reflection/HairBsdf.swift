@@ -139,7 +139,7 @@ struct HairBsdf: BxDF {
                 return (sinThetaOp, cosThetaOp)
         }
 
-        private func computeMpNp(
+        private func computeScattering(
                 p: Int,
                 sinThetaI: FloatX,
                 cosThetaI: FloatX,
@@ -193,7 +193,7 @@ struct HairBsdf: BxDF {
                 var fsum = black
 
                 for p in 0..<pMax {
-                        let (longitudinalScattering, azimuthalScattering) = computeMpNp(
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
                                 p: p,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -252,7 +252,7 @@ struct HairBsdf: BxDF {
                 let phi = phiI - phiO
                 var pdf: FloatX = 0
                 for p in 0..<pMax {
-                        let (longitudinalScattering, azimuthalScattering) = computeMpNp(
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
                                 p: p,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -346,7 +346,7 @@ struct HairBsdf: BxDF {
                 let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
                 var pdf: FloatX = 0
                 for p in 0..<pMax {
-                        let (longitudinalScattering, azimuthalScattering) = computeMpNp(
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
                                 p: p,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
