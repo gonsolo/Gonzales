@@ -28,14 +28,14 @@ struct HairBsdf: BxDF {
 
         private func computeAp(
                 cosThetaO: FloatX,
-                eta: FloatX,
+                indexRefraction: FloatX,
                 h: FloatX,
                 transmittance: RGBSpectrum
         ) -> [RGBSpectrum] {
                 var ap = Array(repeating: black, count: pMax + 1)
                 let cosGammaO = (1 - h * h).squareRoot()
                 let cosTheta = cosThetaO * cosGammaO
-                let f = frDielectric(cosThetaI: cosTheta, etaI: 1, etaT: eta)
+                let f = frDielectric(cosThetaI: cosTheta, etaI: 1, etaT: indexRefraction)
                 ap[0] = RGBSpectrum(intensity: f)
                 ap[1] = square(1 - f) * transmittance
                 for p in 2..<pMax {
@@ -131,10 +131,10 @@ struct HairBsdf: BxDF {
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
                 let phiI = atan2(wi.z, wi.y)
 
-                let sinThetaT = sinThetaO / eta
+                let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
 
-                let etap = (eta * eta - square(sinThetaO)).squareRoot() / cosThetaO
+                let etap = (indexRefraction * indexRefraction - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let gammaT = asin(sinGammaT)
@@ -146,7 +146,7 @@ struct HairBsdf: BxDF {
                 let phi = phiI - phiO
                 let ap = computeAp(
                         cosThetaO: cosThetaO,
-                        eta: eta,
+                        indexRefraction: indexRefraction,
                         h: h,
                         transmittance: transmittance)
                 var fsum = black
@@ -183,15 +183,15 @@ struct HairBsdf: BxDF {
 
         private func computeApPdf(cosThetaO: FloatX) -> [FloatX] {
                 let sinThetaO = (1 - cosThetaO * cosThetaO).squareRoot()
-                let sinThetaT = sinThetaO / eta
+                let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
-                let etap = (eta * eta - square(sinThetaO)).squareRoot() / cosThetaO
+                let etap = (indexRefraction * indexRefraction - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
                 let ap = computeAp(
                         cosThetaO: cosThetaO,
-                        eta: eta,
+                        indexRefraction: indexRefraction,
                         h: h,
                         transmittance: transmittance)
                 let sumY = ap.reduce(
@@ -210,7 +210,7 @@ struct HairBsdf: BxDF {
                 let sinThetaI = wi.x
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
                 let phiI = atan2(wi.z, wi.y)
-                let etap = sqrt(eta * eta - square(sinThetaO)) / cosThetaO
+                let etap = sqrt(indexRefraction * indexRefraction - square(sinThetaO)) / cosThetaO
                 let sinGammaT = h / etap
                 let gammaT = asin(sinGammaT)
                 let apPdf = computeApPdf(cosThetaO: cosThetaO)
@@ -309,7 +309,7 @@ struct HairBsdf: BxDF {
                 let cosPhi = cos(2 * FloatX.pi * fourU.2)
                 let sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
-                let etap = (eta * eta - square(sinThetaO)).squareRoot() / cosThetaO
+                let etap = (indexRefraction * indexRefraction - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let gammaT = asin(sinGammaT)
                 var dphi: FloatX
@@ -360,7 +360,7 @@ struct HairBsdf: BxDF {
         }
 
         var absorption: RGBSpectrum
-        let eta: FloatX = 1.55
+        let indexRefraction: FloatX = 1.55
         let gammaO: FloatX
         let h: FloatX
         let s: FloatX
