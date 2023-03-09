@@ -17,15 +17,12 @@ final class Hair: Material {
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
-                let sigmaA = absorptionFrom(eumelaninConcentration: eumelanin)
-
-                //let h = -1 + 2 * interaction.uv[1]
+                let absorption = absorptionFrom(eumelaninConcentration: eumelanin)
                 // Embree already provides values from -1 to 1 for flat bspline curves
                 let h = interaction.uv[1]
-
                 var bsdf = BSDF(interaction: interaction)
                 let alpha: FloatX = 2
-                bsdf.set(bxdf: HairBsdf(alpha: alpha, h: h, sigmaA: sigmaA))
+                bsdf.set(bxdf: HairBsdf(alpha: alpha, h: h, absorption: absorption))
                 return bsdf
         }
 

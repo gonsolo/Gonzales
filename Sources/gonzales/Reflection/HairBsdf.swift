@@ -4,17 +4,13 @@ let pMax = 3
 
 struct HairBsdf: BxDF {
 
-        init(alpha: FloatX, h: FloatX, sigmaA: RGBSpectrum) {
+        init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum) {
                 self.h = h
-                self.sigmaA = sigmaA
-
+                self.absorption = absorption
                 let sqrtPiOver8: FloatX = 0.626657069
-
                 gammaO = asin(h)
-
                 let betaN: FloatX = 0.3
                 s = sqrtPiOver8 * (0.265 * betaN + 1.194 * square(betaN) + 5.372 * pow(betaN, 2))
-
                 let betaM: FloatX = 0.3
                 v[0] = square(0.726 * betaM + 0.812 * square(betaM) + 3.7 * pow(betaM, 20))
                 v[1] = 0.25 * v[0]
@@ -22,7 +18,6 @@ struct HairBsdf: BxDF {
                 for p in 3...pMax {
                         v[p] = v[2]
                 }
-
                 sin2kAlpha[0] = sin(radians(deg: alpha))
                 cos2kAlpha[0] = (1 - square(sin2kAlpha[0])).squareRoot()
                 for i in 1..<3 {
@@ -145,7 +140,7 @@ struct HairBsdf: BxDF {
                 let gammaT = asin(sinGammaT)
 
                 // Compute the transmittance _T_ of a single path through the cylinder
-                let transmittance = exp(-sigmaA * (2 * cosGammaT / cosThetaT))
+                let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
 
                 // Evaluate hair BSDF
                 let phi = phiI - phiO
@@ -193,7 +188,7 @@ struct HairBsdf: BxDF {
                 let etap = (eta * eta - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
-                let transmittance = exp(-sigmaA * (2 * cosGammaT / cosThetaT))
+                let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
                 let ap = computeAp(
                         cosThetaO: cosThetaO,
                         eta: eta,
@@ -361,10 +356,10 @@ struct HairBsdf: BxDF {
 
         func albedo() -> RGBSpectrum {
                 // Not correct but should be ok
-                return sigmaA
+                return absorption
         }
 
-        var sigmaA: RGBSpectrum
+        var absorption: RGBSpectrum
         let eta: FloatX = 1.55
         let gammaO: FloatX
         let h: FloatX
