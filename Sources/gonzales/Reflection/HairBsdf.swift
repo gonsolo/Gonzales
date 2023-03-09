@@ -25,23 +25,23 @@ struct HairBsdf: BxDF {
                 }
         }
 
-        private func computeAp(
+        private func computeAttenutation(
                 cosThetaO: FloatX,
                 indexRefraction: FloatX,
                 h: FloatX,
                 transmittance: RGBSpectrum
         ) -> [RGBSpectrum] {
-                var ap = Array(repeating: black, count: pMax + 1)
+                var attenuation = Array(repeating: black, count: pMax + 1)
                 let cosGammaO = (1 - h * h).squareRoot()
                 let cosTheta = cosThetaO * cosGammaO
                 let f = frDielectric(cosThetaI: cosTheta, etaI: 1, etaT: indexRefraction)
-                ap[0] = RGBSpectrum(intensity: f)
-                ap[1] = square(1 - f) * transmittance
+                attenuation[0] = RGBSpectrum(intensity: f)
+                attenuation[1] = square(1 - f) * transmittance
                 for p in 2..<pMax {
-                        ap[p] = ap[p - 1] * transmittance * f
+                        attenuation[p] = attenuation[p - 1] * transmittance * f
                 }
-                ap[pMax] = ap[pMax - 1] * f * transmittance / (white - transmittance * f)
-                return ap
+                attenuation[pMax] = attenuation[pMax - 1] * f * transmittance / (white - transmittance * f)
+                return attenuation
         }
 
         private func computeMp(
@@ -181,7 +181,7 @@ struct HairBsdf: BxDF {
 
                 // Evaluate hair BSDF
                 let phi = phiI - phiO
-                let ap = computeAp(
+                let attenuation = computeAttenutation(
                         cosThetaO: cosThetaO,
                         indexRefraction: indexRefraction,
                         h: h,
@@ -197,17 +197,17 @@ struct HairBsdf: BxDF {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        fsum += mp * ap[p] * np
+                        fsum += mp * attenuation[p] * np
                 }
                 let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
-                fsum += mp * ap[pMax] / (2 * FloatX.pi)
+                fsum += mp * attenuation[pMax] / (2 * FloatX.pi)
                 if absCosTheta(wi) > 0 {
                         fsum /= absCosTheta(wi)
                 }
                 return fsum
         }
 
-        private func computeApPdf(cosThetaO: FloatX) -> [FloatX] {
+        private func computeAttenuationPdf(cosThetaO: FloatX) -> [FloatX] {
                 let sinThetaO = (1 - square(cosThetaO)).squareRoot()
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
@@ -215,18 +215,17 @@ struct HairBsdf: BxDF {
                 let sinGammaT = h / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
-                let ap = computeAp(
+                let attenuation = computeAttenutation(
                         cosThetaO: cosThetaO,
                         indexRefraction: indexRefraction,
                         h: h,
                         transmittance: transmittance)
-                let sumY = ap.reduce(
+                let sumY = attenuation.reduce(
                         0,
-                        { s, ap in
-                                s + ap.average()
+                        { s, attenuation in
+                                s + attenuation.average()
                         })
-                let apPdf = ap.map { $0.average() / sumY }
-                return apPdf
+                return attenuation.map { $0.average() / sumY }
         }
 
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
@@ -239,7 +238,7 @@ struct HairBsdf: BxDF {
                 let etap = sqrt(square(indexRefraction) - square(sinThetaO)) / cosThetaO
                 let sinGammaT = h / etap
                 let gammaT = asin(sinGammaT)
-                let apPdf = computeApPdf(cosThetaO: cosThetaO)
+                let attenuationPdf = computeAttenuationPdf(cosThetaO: cosThetaO)
 
                 let phi = phiI - phiO
                 var pdf: FloatX = 0
@@ -252,10 +251,10 @@ struct HairBsdf: BxDF {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        pdf += mp * apPdf[p] * np
+                        pdf += mp * attenuationPdf[p] * np
                 }
                 let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
-                pdf += mp * apPdf[pMax] * (1 / (2 * FloatX.pi))
+                pdf += mp * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 return pdf
         }
 
@@ -295,14 +294,14 @@ struct HairBsdf: BxDF {
                 let phiO = atan2(wo.z, wo.y)
                 var fourU = demux(u)
 
-                let apPdf = computeApPdf(cosThetaO: cosThetaO)
+                let attenuationPdf = computeAttenuationPdf(cosThetaO: cosThetaO)
                 var p = 0
                 for i in 0..<pMax {
                         p = i
-                        if fourU.0 < apPdf[p] {
+                        if fourU.0 < attenuationPdf[p] {
                                 break
                         }
-                        fourU.0 -= apPdf[p]
+                        fourU.0 -= attenuationPdf[p]
                 }
                 let (sinThetaOp, cosThetaOp) = computeThetaOp(
                         p: p,
@@ -341,10 +340,10 @@ struct HairBsdf: BxDF {
                                 cosThetaO: cosThetaO,
                                 phi: dphi,
                                 gammaT: gammaT)
-                        pdf += mp * apPdf[p] * np
+                        pdf += mp * attenuationPdf[p] * np
                 }
                 let mp = computeMp(cosThetaI, cosThetaO, sinThetaI, sinThetaO, v[pMax])
-                pdf += mp * apPdf[pMax] * (1 / (2 * FloatX.pi))
+                pdf += mp * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
                 let radiance = evaluate(wo, wi)
                 return (radiance, wi, pdf)
         }
