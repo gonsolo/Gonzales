@@ -7,8 +7,11 @@ struct HairBsdf: BxDF {
                 self.absorption = absorption
                 let sqrtPiOver8: FloatX = 0.626657069
                 gammaO = asin(h)
-                let betaN: FloatX = 0.3
-                s = sqrtPiOver8 * (0.265 * betaN + 1.194 * square(betaN) + 5.372 * pow(betaN, 2))
+                let azimuthalRoughness: FloatX = 0.3
+                s =
+                        sqrtPiOver8
+                        * (0.265 * azimuthalRoughness + 1.194 * square(azimuthalRoughness) + 5.372
+                                * pow(azimuthalRoughness, 2))
                 v = Array(repeating: 0, count: pMax + 1)
                 let longitudinalRoughness: FloatX = 0.3
                 v[0] = square(
