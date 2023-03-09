@@ -4,18 +4,20 @@ final class Hair: Material {
                 self.eumelanin = eumelanin
         }
 
-        private func sigmaAFromConcentration(eumelanin: FloatX, pheomelanin: FloatX = 0)
-                -> RGBSpectrum
-        {
-                let eumelaninSigmaA = RGBSpectrum(r: 0.419, g: 0.697, b: 1.37)
-                let pheomelaninSigmaA = RGBSpectrum(r: 0.187, g: 0.4, b: 1.05)
-                let sigmaA = eumelanin * eumelaninSigmaA + pheomelanin * pheomelaninSigmaA
-                return sigmaA
+        private func absorptionFrom(
+                eumelaninConcentration: FloatX,
+                pheomelaninConcentration: FloatX = 0
+        ) -> RGBSpectrum {
+                let eumelaninAbsorptionCoefficient = RGBSpectrum(r: 0.419, g: 0.697, b: 1.37)
+                let pheomelaninAbsorptionCoefficient = RGBSpectrum(r: 0.187, g: 0.4, b: 1.05)
+                let eumelaninAbsorption = eumelaninConcentration * eumelaninAbsorptionCoefficient
+                let pheomelaninAbsorption = pheomelaninConcentration * pheomelaninAbsorptionCoefficient
+                return eumelaninAbsorption + pheomelaninAbsorption
         }
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
-                let sigmaA = sigmaAFromConcentration(eumelanin: eumelanin)
+                let sigmaA = absorptionFrom(eumelaninConcentration: eumelanin)
 
                 //let h = -1 + 2 * interaction.uv[1]
                 // Embree already provides values from -1 to 1 for flat bspline curves
