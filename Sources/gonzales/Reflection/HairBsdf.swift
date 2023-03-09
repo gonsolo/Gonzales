@@ -134,7 +134,7 @@ struct HairBsdf: BxDF {
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
 
-                let etap = (indexRefraction * indexRefraction - square(sinThetaO)).squareRoot() / cosThetaO
+                let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let gammaT = asin(sinGammaT)
@@ -185,7 +185,7 @@ struct HairBsdf: BxDF {
                 let sinThetaO = (1 - cosThetaO * cosThetaO).squareRoot()
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
-                let etap = (indexRefraction * indexRefraction - square(sinThetaO)).squareRoot() / cosThetaO
+                let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
@@ -210,7 +210,7 @@ struct HairBsdf: BxDF {
                 let sinThetaI = wi.x
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
                 let phiI = atan2(wi.z, wi.y)
-                let etap = sqrt(indexRefraction * indexRefraction - square(sinThetaO)) / cosThetaO
+                let etap = sqrt(square(indexRefraction) - square(sinThetaO)) / cosThetaO
                 let sinGammaT = h / etap
                 let gammaT = asin(sinGammaT)
                 let apPdf = computeApPdf(cosThetaO: cosThetaO)
@@ -309,7 +309,7 @@ struct HairBsdf: BxDF {
                 let cosPhi = cos(2 * FloatX.pi * fourU.2)
                 let sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
-                let etap = (indexRefraction * indexRefraction - square(sinThetaO)).squareRoot() / cosThetaO
+                let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
                 let sinGammaT = h / etap
                 let gammaT = asin(sinGammaT)
                 var dphi: FloatX
