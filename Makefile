@@ -1,6 +1,6 @@
 all: d
 
-#SINGLERAY = --single 462 432
+#SINGLERAY = --single 526 221
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick
@@ -41,7 +41,7 @@ BITTERLI = ~/src/bitterli
 # veach-mis
 # material-testball (not rendered correctly)
 # furball
-SCENE_NAME = hair-curl
+SCENE_NAME = spaceship
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 #SCENE = ~/tmp/ptex_scene/scene.pbrt

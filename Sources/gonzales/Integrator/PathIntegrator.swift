@@ -2,6 +2,8 @@
 // "James Kajiya: The Rendering Equation"
 // DOI: 10.1145/15922.15902
 
+import Foundation  // exit
+
 private func sampleBrdf(
         light: Light,
         interaction: Interaction,
@@ -92,22 +94,29 @@ private func brdfDensity(
         return density
 }
 
+struct UniformLightSampler {
+
+        func chooseLight() -> (Light, FloatX) {
+                assert(lights.count > 0)
+                let u = sampler.get1D()
+                let lightNum = Int(u * FloatX(lights.count))
+                let light = lights[lightNum]
+                let probabilityDensity: FloatX = 1.0 / FloatX(lights.count)
+                return (light, probabilityDensity)
+        }
+
+        let sampler: Sampler
+        let lights: [Light]
+}
+
 private func chooseLight(
         withSampler sampler: Sampler,
         scene: Scene
 ) throws
         -> (Light, FloatX)
 {
-
-        assert(scene.lights.count > 0)
-        //guard scene.lights.count + scene.infiniteLights.count > 0 else {
-        //        throw RenderError.noLights
-        //}
-        let u = sampler.get1D()
-        let lightNum = Int(u * FloatX(scene.lights.count))
-        let light = scene.lights[lightNum]
-        let probabilityDensity: FloatX = 1.0 / FloatX(scene.lights.count)
-        return (light, probabilityDensity)
+        let lightSampler = UniformLightSampler(sampler: sampler, lights: scene.lights)
+        return lightSampler.chooseLight()
 }
 
 func intersectOrInfiniteLights(
@@ -298,7 +307,6 @@ final class PathIntegrator {
                         }
                 }
                 intelHack(&albedo)
-
                 return (radiance: l, albedo, normal)
         }
 
