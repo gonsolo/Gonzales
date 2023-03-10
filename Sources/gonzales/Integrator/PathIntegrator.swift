@@ -94,7 +94,12 @@ private func brdfDensity(
         return density
 }
 
-struct UniformLightSampler {
+final class UniformLightSampler {
+
+        init(sampler: Sampler, lights: [Light]) {
+                self.sampler = sampler
+                self.lights = lights
+        }
 
         func chooseLight() -> (Light, FloatX) {
                 assert(lights.count > 0)
@@ -111,11 +116,11 @@ struct UniformLightSampler {
 
 private func chooseLight(
         withSampler sampler: Sampler,
-        scene: Scene
+        scene: Scene,
+        lightSampler: UniformLightSampler
 ) throws
         -> (Light, FloatX)
 {
-        let lightSampler = UniformLightSampler(sampler: sampler, lights: scene.lights)
         return lightSampler.chooseLight()
 }
 
@@ -144,11 +149,15 @@ private func sampleOneLight(
         bsdf: BSDF,
         with sampler: Sampler,
         scene: Scene,
-        hierarchy: Accelerator
+        hierarchy: Accelerator,
+        lightSampler: UniformLightSampler
 ) throws -> RGBSpectrum {
 
         guard scene.lights.count > 0 else { return black }
-        let (light, lightPdf) = try chooseLight(withSampler: sampler, scene: scene)
+        let (light, lightPdf) = try chooseLight(
+                withSampler: sampler,
+                scene: scene,
+                lightSampler: lightSampler)
         let estimate = try estimateDirect(
                 light: light,
                 atInteraction: interaction,
@@ -239,7 +248,8 @@ final class PathIntegrator {
                 tHit: inout FloatX,
                 with sampler: Sampler,
                 scene: Scene,
-                hierarchy: Accelerator
+                hierarchy: Accelerator,
+                lightSampler: UniformLightSampler
         ) throws
                 -> (radiance: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
         {
@@ -292,7 +302,8 @@ final class PathIntegrator {
                                         bsdf: bsdf,
                                         with: sampler,
                                         scene: scene,
-                                        hierarchy: hierarchy)
+                                        hierarchy: hierarchy,
+                                        lightSampler: lightSampler)
                         l += ld
                         let (f, wi, pdf, _) = try bsdf.sample(
                                 wo: interaction.wo, u: sampler.get2D())

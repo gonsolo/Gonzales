@@ -211,12 +211,14 @@ class Options {
                 print(timer.elapsed)
                 let scene = makeScene(hierarchy: accelerator)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
+                let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 return Renderer(
                         hierarchy: accelerator,
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
-                        scene: scene
+                        scene: scene,
+                        lightSampler: lightSampler
                 )
         }
 

@@ -10,7 +10,8 @@ final class Tile {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                hierarchy: Accelerator
+                hierarchy: Accelerator,
+                lightSampler: UniformLightSampler
         ) throws -> [Sample] {
 
                 var samples = [Sample]()
@@ -21,7 +22,8 @@ final class Tile {
                                 sampler: sampler,
                                 camera: camera,
                                 scene: scene,
-                                hierarchy: hierarchy)
+                                hierarchy: hierarchy,
+                                lightSampler: lightSampler)
                         samples.append(contentsOf: pixelSamples)
                 }
                 return samples
@@ -33,7 +35,8 @@ final class Tile {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                hierarchy: Accelerator
+                hierarchy: Accelerator,
+                lightSampler: UniformLightSampler
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for _ in 0..<sampler.samplesPerPixel {
@@ -45,7 +48,8 @@ final class Tile {
                                 tHit: &tHit,
                                 with: sampler,
                                 scene: scene,
-                                hierarchy: hierarchy)
+                                hierarchy: hierarchy,
+                                lightSampler: lightSampler)
                         let rayWeight: FloatX = 1.0
                         let sample = Sample(
                                 light: L,

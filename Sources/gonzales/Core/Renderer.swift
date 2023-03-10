@@ -7,13 +7,15 @@ final class Renderer {
                 camera: Camera,
                 integrator: PathIntegrator,
                 sampler: Sampler,
-                scene: Scene
+                scene: Scene,
+                lightSampler: UniformLightSampler
         ) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
                 self.scene = scene
                 self.hierarchy = hierarchy
+                self.lightSampler = lightSampler
         }
 
         func generateTiles(from bounds: Bounds2i) -> [Tile] {
@@ -45,7 +47,8 @@ final class Renderer {
                         sampler: tileSampler,
                         camera: self.camera,
                         scene: scene,
-                        hierarchy: hierarchy
+                        hierarchy: hierarchy,
+                        lightSampler: lightSampler
                 )
                 return samples
         }
@@ -120,6 +123,7 @@ final class Renderer {
         let group = DispatchGroup()
         let hierarchy: Accelerator
         let integrator: PathIntegrator
+        let lightSampler: UniformLightSampler
         let queue = DispatchQueue.global()
         var reporter = ProgressReporter()
         let sampler: Sampler
