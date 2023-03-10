@@ -11,7 +11,7 @@ final class Tile {
                 camera: Camera,
                 scene: Scene,
                 hierarchy: Accelerator,
-                lightSampler: UniformLightSampler
+                lightSampler: LightSampler
         ) throws -> [Sample] {
 
                 var samples = [Sample]()
@@ -36,7 +36,7 @@ final class Tile {
                 camera: Camera,
                 scene: Scene,
                 hierarchy: Accelerator,
-                lightSampler: UniformLightSampler
+                lightSampler: LightSampler
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for _ in 0..<sampler.samplesPerPixel {

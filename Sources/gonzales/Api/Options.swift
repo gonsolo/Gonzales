@@ -203,9 +203,7 @@ class Options {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let timer = Timer("Build accelerator...", newline: false)
-
                 let accelerator = try makeAccelerator(primitives: &primitives)
-
                 primitives = []
                 objects = [:]
                 print(timer.elapsed)
