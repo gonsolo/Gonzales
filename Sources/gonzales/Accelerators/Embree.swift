@@ -173,7 +173,7 @@ final class Embree: Accelerator {
                 // TODO: Just width.0 used
 
                 guard
-                        let geom = rtcNewGeometry(
+                        let geometry = rtcNewGeometry(
                                 rtcDevice,
                                 RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
                 else {
@@ -183,7 +183,7 @@ final class Embree: Accelerator {
                 let indexSlot: UInt32 = 0
                 guard
                         let indices = rtcSetNewGeometryBuffer(
-                                geom,
+                                geometry,
                                 RTC_BUFFER_TYPE_INDEX,
                                 indexSlot,
                                 RTC_FORMAT_UINT,
@@ -201,7 +201,7 @@ final class Embree: Accelerator {
                 let vertexSlot: UInt32 = 0
                 guard
                         let vertices = rtcSetNewGeometryBuffer(
-                                geom,
+                                geometry,
                                 RTC_BUFFER_TYPE_VERTEX,
                                 vertexSlot,
                                 RTC_FORMAT_FLOAT4,
@@ -221,20 +221,20 @@ final class Embree: Accelerator {
                         vertices.storeBytes(of: point.z, toByteOffset: zIndex, as: Float.self)
                         vertices.storeBytes(of: curveRadius, toByteOffset: wIndex, as: Float.self)
                 }
-                rtcCommitGeometry(geom)
-                rtcAttachGeometry(rtcScene, geom)
-                rtcReleaseGeometry(geom)
+                rtcCommitGeometry(geometry)
+                rtcAttachGeometry(rtcScene, geometry)
+                rtcReleaseGeometry(geometry)
         }
 
         func embreeSphere(center: Point, radius: FloatX) {
-                guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
+                guard let geometry = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
                         embreeError()
                 }
                 let numberPoints = 1
                 let slot: UInt32 = 0
                 guard
                         let vertices = rtcSetNewGeometryBuffer(
-                                geom,
+                                geometry,
                                 RTC_BUFFER_TYPE_VERTEX,
                                 slot,
                                 RTC_FORMAT_FLOAT4,
@@ -247,9 +247,9 @@ final class Embree: Accelerator {
                 vertices.storeBytes(of: center.y, toByteOffset: 1 * floatSize, as: Float.self)
                 vertices.storeBytes(of: center.z, toByteOffset: 2 * floatSize, as: Float.self)
                 vertices.storeBytes(of: radius, toByteOffset: 3 * floatSize, as: Float.self)
-                rtcCommitGeometry(geom)
-                rtcAttachGeometry(rtcScene, geom)
-                rtcReleaseGeometry(geom)
+                rtcCommitGeometry(geometry)
+                rtcAttachGeometry(rtcScene, geometry)
+                rtcReleaseGeometry(geometry)
         }
 
         func embreeTriangle(
@@ -257,14 +257,14 @@ final class Embree: Accelerator {
                 bx: FloatX, by: FloatX, bz: FloatX,
                 cx: FloatX, cy: FloatX, cz: FloatX
         ) {
-                guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
+                guard let geometry = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
                         embreeError()
                 }
                 let indexSlot: UInt32 = 0
                 let numberVertices = 3
                 guard
-                        let vb = rtcSetNewGeometryBuffer(
-                                geom,
+                        let vertices = rtcSetNewGeometryBuffer(
+                                geometry,
                                 RTC_BUFFER_TYPE_VERTEX,
                                 indexSlot,
                                 RTC_FORMAT_FLOAT3,
@@ -274,15 +274,15 @@ final class Embree: Accelerator {
                         embreeError()
                 }
 
-                vb.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
-                vb.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
-                vb.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
-                vb.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
-                vb.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
-                vb.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
-                vb.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
-                vb.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
-                vb.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
+                vertices.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
+                vertices.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
+                vertices.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
+                vertices.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
+                vertices.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
+                vertices.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
+                vertices.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
+                vertices.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
+                vertices.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
 
                 let unsignedSize = MemoryLayout<UInt32>.size
                 let indicesSize = 3 * unsignedSize
@@ -290,7 +290,7 @@ final class Embree: Accelerator {
                 let numberIndices = 1
                 guard
                         let ib = rtcSetNewGeometryBuffer(
-                                geom,
+                                geometry,
                                 RTC_BUFFER_TYPE_INDEX,
                                 slot,
                                 RTC_FORMAT_UINT3,
@@ -304,9 +304,9 @@ final class Embree: Accelerator {
                 ib.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
                 ib.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
-                rtcCommitGeometry(geom)
-                rtcAttachGeometry(rtcScene, geom)
-                rtcReleaseGeometry(geom)
+                rtcCommitGeometry(geometry)
+                rtcAttachGeometry(rtcScene, geometry)
+                rtcReleaseGeometry(geometry)
         }
 
         func embreeError(_ message: String = "") -> Never {
