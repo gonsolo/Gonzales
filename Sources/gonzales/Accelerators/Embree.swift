@@ -180,11 +180,12 @@ final class Embree: Accelerator {
                         embreeError()
                 }
                 let numIndices = points.count - 3
+                let indexSlot: UInt32 = 0
                 guard
                         let indices = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_INDEX,
-                                0,
+                                indexSlot,
                                 RTC_FORMAT_UINT,
                                 unsignedIntSize,
                                 numIndices)
@@ -197,11 +198,12 @@ final class Embree: Accelerator {
                 }
 
                 let numVertices = points.count
+                let vertexSlot: UInt32 = 0
                 guard
                         let vertices = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_VERTEX,
-                                0,
+                                vertexSlot,
                                 RTC_FORMAT_FLOAT4,
                                 vec4fSize,
                                 numVertices)
@@ -229,11 +231,12 @@ final class Embree: Accelerator {
                         embreeError()
                 }
                 let numberPoints = 1
+                let slot: UInt32 = 0
                 guard
                         let vertices = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_VERTEX,
-                                0,
+                                slot,
                                 RTC_FORMAT_FLOAT4,
                                 vec4fSize,
                                 numberPoints)
@@ -257,14 +260,16 @@ final class Embree: Accelerator {
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
                         embreeError()
                 }
+                let indexSlot: UInt32 = 0
+                let numberVertices = 3
                 guard
                         let vb = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_VERTEX,
-                                0,
+                                indexSlot,
                                 RTC_FORMAT_FLOAT3,
-                                3 * floatSize,
-                                3)
+                                vec3fSize,
+                                numberVertices)
                 else {
                         embreeError()
                 }
@@ -280,15 +285,17 @@ final class Embree: Accelerator {
                 vb.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
 
                 let unsignedSize = MemoryLayout<UInt32>.size
-
+                let indicesSize = 3 * unsignedSize
+                let slot: UInt32 = 0
+                let numberIndices = 1
                 guard
                         let ib = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_INDEX,
-                                0,
+                                slot,
                                 RTC_FORMAT_UINT3,
-                                3 * unsignedSize,
-                                1
+                                indicesSize,
+                                numberIndices
                         )
                 else {
                         embreeError()
@@ -318,5 +325,6 @@ final class Embree: Accelerator {
         let floatSize = MemoryLayout<Float>.size
         let unsignedIntSize = MemoryLayout<UInt32>.size
         let vec4fSize = 4 * MemoryLayout<Float>.size
+        let vec3fSize = 3 * MemoryLayout<Float>.size
         let vec3faSize = 16 * MemoryLayout<Float>.size
 }
