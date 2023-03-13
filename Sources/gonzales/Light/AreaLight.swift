@@ -1,3 +1,5 @@
+import Foundation
+
 struct AreaLight: Light, Boundable, Intersectable, Material {
 
         init(brightness: RGBSpectrum, shape: Shape) {
@@ -30,6 +32,12 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
         }
 
         func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
+
+        func power() -> Measurement<UnitPower> {
+                return Measurement(
+                        value: Double(brightness.average() * shape.area() * FloatX.pi),
+                        unit: UnitPower.watts)
+        }
 
         var isDelta: Bool { return false }
 

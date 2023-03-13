@@ -103,6 +103,10 @@ struct InfiniteLight: Light {
                 return radiance
         }
 
+        func power() -> Measurement<UnitPower> {
+                unimplemented()
+        }
+
         var isDelta: Bool { return false }
 
         var worldToLight: Transform { return lightToWorld.inverse }

@@ -1,3 +1,5 @@
+import Foundation
+
 struct PointLight: Light {
 
         init(lightToWorld: Transform, intensity: RGBSpectrum) {
@@ -25,14 +27,17 @@ struct PointLight: Light {
 
         func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
 
+        func power() -> Measurement<UnitPower> {
+                return Measurement(value: Double(intensity.average() * 4 * FloatX.pi), unit: UnitPower.watts)
+        }
+
         var isDelta: Bool { return true }
 
         let position: Point
         let intensity: RGBSpectrum
 }
 
-func createPointLight(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight
-{
+func createPointLight(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight {
         guard let intensity = try parameters.findSpectrum(name: "I") as? RGBSpectrum else {
                 throw ParameterError.missing(parameter: "I", function: #function)
         }

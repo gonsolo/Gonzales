@@ -1,3 +1,5 @@
+import Foundation
+
 struct DistantLight: Light {
 
         init(lightToWorld: Transform, brightness: RGBSpectrum, direction: Vector) {
@@ -21,6 +23,10 @@ struct DistantLight: Light {
         }
 
         func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
+
+        func power() -> Measurement<UnitPower> {
+                unimplemented()
+        }
 
         var isDelta: Bool { return true }
 
