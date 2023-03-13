@@ -289,7 +289,7 @@ final class Embree: Accelerator {
                 let slot: UInt32 = 0
                 let numberIndices = 1
                 guard
-                        let ib = rtcSetNewGeometryBuffer(
+                        let indices = rtcSetNewGeometryBuffer(
                                 geometry,
                                 RTC_BUFFER_TYPE_INDEX,
                                 slot,
@@ -300,9 +300,9 @@ final class Embree: Accelerator {
                 else {
                         embreeError()
                 }
-                ib.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
-                ib.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
-                ib.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
+                indices.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
+                indices.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
+                indices.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
                 rtcCommitGeometry(geometry)
                 rtcAttachGeometry(rtcScene, geometry)
