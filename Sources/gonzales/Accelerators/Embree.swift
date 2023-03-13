@@ -32,6 +32,10 @@ final class Embree: Accelerator {
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         materials[geomID] = geometricPrimitive.material
+                                case let sphere as Sphere:
+                                        geometry(sphere: sphere, geomID: geomID)
+                                        bounds = union(first: bounds, second: sphere.worldBound())
+                                        materials[geomID] = geometricPrimitive.material
                                 default:
                                         embreeError("Unknown shape in geometric primitive.")
                                 }
@@ -77,6 +81,12 @@ final class Embree: Accelerator {
                         cz: c.z)
                 triangleMeshIndices[geomID] = triangle.meshIndex
                 triangleIndices[geomID] = triangle.idx
+        }
+
+        func geometry(sphere: Sphere, geomID: UInt32) {
+                let center = sphere.objectToWorld * Point()
+                let radius = sphere.radius
+                embreeSphere(center: center, radius: radius)
         }
 
         func intersect(
@@ -209,6 +219,30 @@ final class Embree: Accelerator {
                         vertices.storeBytes(of: point.z, toByteOffset: zIndex, as: Float.self)
                         vertices.storeBytes(of: curveRadius, toByteOffset: wIndex, as: Float.self)
                 }
+                rtcCommitGeometry(geom)
+                rtcAttachGeometry(rtcScene, geom)
+                rtcReleaseGeometry(geom)
+        }
+
+        func embreeSphere(center: Point, radius: FloatX) {
+                guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
+                        embreeError()
+                }
+                guard
+                        let vertices = rtcSetNewGeometryBuffer(
+                                geom,
+                                RTC_BUFFER_TYPE_VERTEX,
+                                0,
+                                RTC_FORMAT_FLOAT4,
+                                4 * floatSize,
+                                1)
+                else {
+                        embreeError()
+                }
+                vertices.storeBytes(of: center.x, toByteOffset: 0 * floatSize, as: Float.self)
+                vertices.storeBytes(of: center.y, toByteOffset: 1 * floatSize, as: Float.self)
+                vertices.storeBytes(of: center.z, toByteOffset: 2 * floatSize, as: Float.self)
+                vertices.storeBytes(of: radius, toByteOffset: 3 * floatSize, as: Float.self)
                 rtcCommitGeometry(geom)
                 rtcAttachGeometry(rtcScene, geom)
                 rtcReleaseGeometry(geom)

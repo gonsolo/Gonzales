@@ -41,7 +41,7 @@ BITTERLI = ~/src/bitterli
 # veach-mis
 # material-testball (not rendered correctly)
 # furball
-SCENE_NAME = spaceship
+SCENE_NAME = volumetric-caustic
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 #SCENE = ~/tmp/ptex_scene/scene.pbrt
