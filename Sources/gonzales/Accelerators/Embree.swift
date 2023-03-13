@@ -228,14 +228,15 @@ final class Embree: Accelerator {
                 guard let geom = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
                         embreeError()
                 }
+                let numberPoints = 1
                 guard
                         let vertices = rtcSetNewGeometryBuffer(
                                 geom,
                                 RTC_BUFFER_TYPE_VERTEX,
                                 0,
                                 RTC_FORMAT_FLOAT4,
-                                4 * floatSize,
-                                1)
+                                vec4fSize,
+                                numberPoints)
                 else {
                         embreeError()
                 }
