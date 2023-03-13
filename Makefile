@@ -34,7 +34,7 @@ BITTERLI = ~/src/bitterli
 # teapot-full (no volpath)
 # teapot
 # cornell-box
-# volumetric-caustic (no sphere shape)
+# volumetric-caustic (interface material, volumetric rendering)
 # water-caustic
 # veach-ajar (completely black)
 # veach-bidir
