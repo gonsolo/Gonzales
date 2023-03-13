@@ -1,5 +1,7 @@
 import Foundation  // sin, cos
 
+// Is initialized in Scene.init.
+// TODO: Move somewhere reasonable.
 var sceneDiameter: FloatX = 100.0
 
 struct InfiniteLight: Light {
@@ -104,7 +106,10 @@ struct InfiniteLight: Light {
         }
 
         func power() -> Measurement<UnitPower> {
-                unimplemented()
+                let worldRadius = sceneDiameter / 2
+                return Measurement(
+                        value: Double(FloatX.pi * square(worldRadius) * brightness.average()),
+                        unit: UnitPower.watts)
         }
 
         var isDelta: Bool { return false }
