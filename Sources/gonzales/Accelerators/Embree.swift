@@ -28,14 +28,17 @@ final class Embree: Accelerator {
                                         geometry(curve: curve, geomID: geomID)
                                         bounds = union(first: bounds, second: curve.worldBound())
                                         materials[geomID] = geometricPrimitive.material
+                                        mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         materials[geomID] = geometricPrimitive.material
+                                        mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
                                 case let sphere as Sphere:
                                         geometry(sphere: sphere, geomID: geomID)
                                         bounds = union(first: bounds, second: sphere.worldBound())
                                         materials[geomID] = geometricPrimitive.material
+                                        mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
                                 default:
                                         embreeError("Unknown shape in geometric primitive.")
                                 }
@@ -155,6 +158,9 @@ final class Embree: Accelerator {
                 }
                 if let material = materials[geomID] {
                         interaction.material = material
+                }
+                if let mediumInterface = mediumInterfaces[geomID] {
+                        interaction.mediumInterface = mediumInterface
                 }
 
                 tHit = tout
@@ -317,6 +323,7 @@ final class Embree: Accelerator {
         var rtcDevice: OpaquePointer?
         var rtcScene: OpaquePointer?
         var materials = [UInt32: MaterialIndex]()
+        var mediumInterfaces = [UInt32: MediumInterface?]()
         var areaLights = [UInt32: AreaLight]()
         var triangleMeshIndices = [UInt32: Int]()
         var triangleIndices = [UInt32: Int]()

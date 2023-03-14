@@ -6,6 +6,11 @@ final class Homogeneous: Medium {
                 self.scattering = scattering
         }
 
+        func sample() -> (RGBSpectrum, MediumInteraction) {
+                //unimplemented()
+                return (white, MediumInteraction())
+        }
+
         let scale: FloatX
         let absorption: RGBSpectrum
         let scattering: RGBSpectrum

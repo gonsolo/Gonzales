@@ -252,6 +252,11 @@ final class PathIntegrator {
                         if !interaction.valid {
                                 break
                         }
+                        if let medium = ray.medium {
+                                let (mediumL, mediumInteraction) = medium.sample()
+                                beta *= mediumL
+                                _ = mediumInteraction
+                        }
                         if bounce == 0 {
                                 if let areaLight = interaction.areaLight {
                                         l +=
@@ -272,6 +277,9 @@ final class PathIntegrator {
                         }
                         if material is Interface {
                                 ray = interaction.spawnRay(inDirection: ray.direction)
+                                if let interface = interaction.mediumInterface {
+                                        ray.medium = state.namedMedia[interface.interior]
+                                }
                                 continue
                         }
                         let bsdf = material.computeScatteringFunctions(interaction: interaction)

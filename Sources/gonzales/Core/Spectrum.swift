@@ -194,6 +194,12 @@ extension BaseRGBSpectrum where T: FloatingPoint {
                 return mul * spectrum
         }
 
+        public static func *= (left: inout BaseRGBSpectrum<T>, right: BaseRGBSpectrum<T>) {
+                left.x *= right.x
+                left.y *= right.y
+                left.z *= right.z
+        }
+
         public static func + (spectrum: BaseRGBSpectrum<T>, value: T) -> BaseRGBSpectrum {
                 return BaseRGBSpectrum(
                         r: spectrum.r + value,

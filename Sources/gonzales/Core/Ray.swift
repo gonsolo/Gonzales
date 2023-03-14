@@ -8,6 +8,7 @@ struct Ray {
                 self.origin = origin
                 self.direction = direction
                 self.inverseDirection = Vector(v: 1) / direction
+                self.medium = nil
         }
 
         func getPointFor(parameter t: FloatX) -> Point {
@@ -17,6 +18,7 @@ struct Ray {
         let origin: Point
         let direction: Vector
         let inverseDirection: Vector
+        var medium: Medium?
 }
 
 extension Ray: CustomStringConvertible {

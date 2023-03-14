@@ -12,6 +12,9 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
                         tHit: &tHit,
                         material: self.material,
                         interaction: &interaction)
+                if interaction.valid {
+                        interaction.mediumInterface = mediumInterface
+                }
         }
 
         func worldBound() -> Bounds3f {

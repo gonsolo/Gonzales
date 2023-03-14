@@ -12,7 +12,8 @@ struct Interaction {
                 uv: Point2F = Point2F(),
                 faceIndex: Int = 0,
                 areaLight: AreaLight? = nil,
-                material: MaterialIndex = -1
+                material: MaterialIndex = -1,
+                mediumInterface: MediumInterface? = nil
         ) {
                 self.valid = valid
                 self.position = position
@@ -23,6 +24,7 @@ struct Interaction {
                 self.uv = uv
                 self.faceIndex = faceIndex
                 self.material = material
+                self.mediumInterface = mediumInterface
         }
 
         init(_ other: Interaction) {
@@ -35,6 +37,7 @@ struct Interaction {
                 self.uv = other.uv
                 self.faceIndex = other.faceIndex
                 self.material = other.material
+                self.mediumInterface = other.mediumInterface
         }
 
         func spawnRay(inDirection direction: Vector) -> Ray {
@@ -63,6 +66,7 @@ struct Interaction {
         var faceIndex: Int
         var areaLight: AreaLight?
         var material: MaterialIndex
+        var mediumInterface: MediumInterface?
 }
 
 extension Interaction: CustomStringConvertible {
