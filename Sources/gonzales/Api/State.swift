@@ -34,13 +34,19 @@ struct State {
                 return try api.makeMaterial(name: material.type, parameters: merged)
         }
 
-        var namedMaterials: [String: UninstancedMaterial]
-        var namedMedia: [String: Medium]
-        var currentNamedMaterial: String
-        var currentMaterial: UninstancedMaterial?
         var areaLight = ""
         var areaLightParameters = ParameterDictionary()
+
+        var currentMediumInterface: MediumInterface? = nil
+        var currentNamedMaterial: String
+        var currentMaterial: UninstancedMaterial?
+
+        var namedMaterials: [String: UninstancedMaterial]
+        var namedMedia: [String: Medium]
+
         var objectName: String? = nil
+
         var textures: [String: Texture]
+
         let ptexCache: PtexCache
 }

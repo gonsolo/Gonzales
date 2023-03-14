@@ -213,7 +213,7 @@ struct Api {
         }
 
         func mediumInterface(interior: String, exterior: String) {
-                // TODO
+                state.currentMediumInterface = MediumInterface(interior: interior, exterior: exterior)
         }
 
         func namedMaterial(name: String) throws {
