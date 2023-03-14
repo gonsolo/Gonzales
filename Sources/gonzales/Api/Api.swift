@@ -504,6 +504,8 @@ struct Api {
                         material = try createGlass(parameters: parameters)
                 case "hair":
                         material = try createHair(parameters: parameters)
+                case "interface":
+                        material = try createInterface(parameters: parameters)
                 case "matte":
                         material = try createMatte(parameters: parameters)
                 case "metal":

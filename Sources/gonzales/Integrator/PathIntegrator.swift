@@ -270,6 +270,10 @@ final class PathIntegrator {
                         guard let material = materials[interaction.material] else {
                                 break
                         }
+                        if material is Interface {
+                                ray = interaction.spawnRay(inDirection: ray.direction)
+                                continue
+                        }
                         let bsdf = material.computeScatteringFunctions(interaction: interaction)
                         if bounce == 0 {
                                 albedo = bsdf.albedo()
