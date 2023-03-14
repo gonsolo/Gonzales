@@ -28,6 +28,7 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
 
         var shape: Shape
         var material: MaterialIndex
+        var mediumInterface: MediumInterface?
 }
 
 typealias MaterialIndex = Int

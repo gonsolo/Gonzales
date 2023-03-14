@@ -300,7 +300,8 @@ struct Api {
                                 for shape in shapes {
                                         let geometricPrimitive = GeometricPrimitive(
                                                 shape: shape,
-                                                material: materialCounter)
+                                                material: materialCounter,
+                                                mediumInterface: state.currentMediumInterface)
                                         prims.append(geometricPrimitive)
                                 }
                                 materialCounter = materialCounter + 1
