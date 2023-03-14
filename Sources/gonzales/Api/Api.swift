@@ -35,6 +35,7 @@ enum ApiError: Error {
         case makeLight(message: String)
         case makeSampler
         case makeShapes(message: String)
+        case namedMedium
         case namedMaterial
         case objectInstance
         case parseAttributeEnd
@@ -188,7 +189,23 @@ struct Api {
         }
 
         func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
-                // TODO
+                guard let type = try parameters.findString(called: "type") else {
+                        throw ApiError.namedMedium
+                }
+                switch type {
+                case "homogeneous":
+                        let scale = try parameters.findOneFloatX(called: "scale", else: 1)
+                        let absorption =
+                                try parameters.findSpectrum(name: "sigma_a", else: white) as! RGBSpectrum
+                        let scattering =
+                                try parameters.findSpectrum(name: "sigma_s", else: white) as! RGBSpectrum
+                        state.namedMedia[name] = Homogeneous(
+                                scale: scale,
+                                absorption: absorption,
+                                scattering: scattering)
+                default:
+                        throw ApiError.namedMedium
+                }
         }
 
         func material(type: String, parameters: ParameterDictionary) throws {

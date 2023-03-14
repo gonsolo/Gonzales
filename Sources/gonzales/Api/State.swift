@@ -12,6 +12,7 @@ struct State {
                         type: "matte",
                         parameters: ParameterDictionary()
                 )
+                namedMedia = [String: Medium]()
                 textures = [String: Texture]()
                 ptexCache = PtexCache()
         }
@@ -34,6 +35,7 @@ struct State {
         }
 
         var namedMaterials: [String: UninstancedMaterial]
+        var namedMedia: [String: Medium]
         var currentNamedMaterial: String
         var currentMaterial: UninstancedMaterial?
         var areaLight = ""
