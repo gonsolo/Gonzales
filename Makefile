@@ -44,8 +44,6 @@ BITTERLI = ~/src/bitterli
 SCENE_NAME = volumetric-caustic
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
-#SCENE = ~/tmp/ptex_scene/scene.pbrt
-#IMAGE = ptex.exr
 
 PFM = $(IMAGE:.exr=.pfm)
 

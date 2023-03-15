@@ -252,64 +252,70 @@ final class PathIntegrator {
                         if !interaction.valid {
                                 break
                         }
+
+                        var mediumL: RGBSpectrum
+                        var mediumInteraction: MediumInteraction? = nil
                         if let medium = ray.medium {
-                                let (mediumL, mediumInteraction) = medium.sample(
+                                (mediumL, mediumInteraction) = medium.sample(
                                         ray: ray,
                                         tHit: tHit,
                                         sampler: sampler)
                                 beta *= mediumL
-                                _ = mediumInteraction
                         }
                         if beta.isBlack {
                                 break
                         }
-                        if bounce == 0 {
-                                if let areaLight = interaction.areaLight {
-                                        l +=
-                                                beta
-                                                * areaLight.emittedRadiance(
-                                                        from: interaction,
-                                                        inDirection: interaction.wo)
+                        if mediumInteraction != nil {
+                                print("TODO: interaction")
+                        } else {
+                                if bounce == 0 {
+                                        if let areaLight = interaction.areaLight {
+                                                l +=
+                                                        beta
+                                                        * areaLight.emittedRadiance(
+                                                                from: interaction,
+                                                                inDirection: interaction.wo)
+                                        }
                                 }
-                        }
-                        guard bounce < maxDepth else {
-                                break
-                        }
-                        if interaction.material == -1 {
-                                break
-                        }
-                        guard let material = materials[interaction.material] else {
-                                break
-                        }
-                        if material is Interface {
-                                ray = interaction.spawnRay(inDirection: ray.direction)
-                                if let interface = interaction.mediumInterface {
-                                        ray.medium = state.namedMedia[interface.interior]
+                                guard bounce < maxDepth else {
+                                        break
                                 }
-                                continue
+                                if interaction.material == -1 {
+                                        break
+                                }
+                                guard let material = materials[interaction.material] else {
+                                        break
+                                }
+                                if material is Interface {
+                                        ray = interaction.spawnRay(inDirection: ray.direction)
+                                        if let interface = interaction.mediumInterface {
+                                                ray.medium = state.namedMedia[interface.interior]
+                                        }
+                                        continue
+                                }
+                                let bsdf = material.computeScatteringFunctions(interaction: interaction)
+                                if bounce == 0 {
+                                        albedo = bsdf.albedo()
+                                        normal = interaction.normal
+                                }
+                                let ld =
+                                        try beta
+                                        * sampleOneLight(
+                                                at: interaction,
+                                                bsdf: bsdf,
+                                                with: sampler,
+                                                scene: scene,
+                                                hierarchy: hierarchy,
+                                                lightSampler: lightSampler)
+                                l += ld
+                                let (f, wi, pdf, _) = try bsdf.sample(
+                                        wo: interaction.wo, u: sampler.get2D())
+                                guard pdf != 0 && !pdf.isNaN else {
+                                        return (l, white, Normal())
+                                }
+                                beta = beta * f * absDot(wi, interaction.normal) / pdf
+                                ray = interaction.spawnRay(inDirection: wi)
                         }
-                        let bsdf = material.computeScatteringFunctions(interaction: interaction)
-                        if bounce == 0 {
-                                albedo = bsdf.albedo()
-                                normal = interaction.normal
-                        }
-                        let ld =
-                                try beta
-                                * sampleOneLight(
-                                        at: interaction,
-                                        bsdf: bsdf,
-                                        with: sampler,
-                                        scene: scene,
-                                        hierarchy: hierarchy,
-                                        lightSampler: lightSampler)
-                        l += ld
-                        let (f, wi, pdf, _) = try bsdf.sample(
-                                wo: interaction.wo, u: sampler.get2D())
-                        guard pdf != 0 && !pdf.isNaN else {
-                                return (l, white, Normal())
-                        }
-                        beta = beta * f * absDot(wi, interaction.normal) / pdf
-                        ray = interaction.spawnRay(inDirection: wi)
                         tHit = FloatX.infinity
                         if bounce > 3 && russianRoulette(beta: &beta) {
                                 break
