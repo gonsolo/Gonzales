@@ -253,9 +253,15 @@ final class PathIntegrator {
                                 break
                         }
                         if let medium = ray.medium {
-                                let (mediumL, mediumInteraction) = medium.sample()
+                                let (mediumL, mediumInteraction) = medium.sample(
+                                        ray: ray,
+                                        tHit: tHit,
+                                        sampler: sampler)
                                 beta *= mediumL
                                 _ = mediumInteraction
+                        }
+                        if beta.isBlack {
+                                break
                         }
                         if bounce == 0 {
                                 if let areaLight = interaction.areaLight {

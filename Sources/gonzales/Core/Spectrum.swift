@@ -243,6 +243,25 @@ extension BaseRGBSpectrum where T: FloatingPoint {
                 return (r + g + b) / 3
         }
 
+        subscript(index: Int) -> T {
+                get {
+                        switch index {
+                        case 0: return r
+                        case 1: return g
+                        case 2: return b
+                        default: return r
+                        }
+                }
+                set(newValue) {
+                        switch index {
+                        case 0: r = newValue
+                        case 1: g = newValue
+                        case 2: b = newValue
+                        default: r = newValue
+                        }
+                }
+        }
+
 }
 
 extension BaseRGBSpectrum where T: BinaryFloatingPoint {
