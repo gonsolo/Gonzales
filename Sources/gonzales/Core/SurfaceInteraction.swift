@@ -12,6 +12,25 @@ protocol Interaction {
         var wo: Vector { get }
 }
 
+extension Interaction {
+
+        func spawnRay(inDirection direction: Vector) -> Ray {
+                let origin = offsetRayOrigin(point: position, direction: direction)
+                return Ray(origin: origin, direction: direction)
+        }
+
+        func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX) {
+                let origin = offsetRayOrigin(point: position, direction: to - position)
+                let direction: Vector = to - origin
+                return (Ray(origin: origin, direction: direction), FloatX(1.0) - shadowEpsilon)
+        }
+
+        func offsetRayOrigin(point: Point, direction: Vector) -> Point {
+                let epsilon: FloatX = 0.0001
+                return Point(point + epsilon * direction)
+        }
+}
+
 struct SurfaceInteraction: Interaction {
 
         init(
@@ -50,22 +69,6 @@ struct SurfaceInteraction: Interaction {
                 self.faceIndex = other.faceIndex
                 self.material = other.material
                 self.mediumInterface = other.mediumInterface
-        }
-
-        func spawnRay(inDirection direction: Vector) -> Ray {
-                let origin = offsetRayOrigin(point: position, direction: direction)
-                return Ray(origin: origin, direction: direction)
-        }
-
-        func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX) {
-                let origin = offsetRayOrigin(point: position, direction: to - position)
-                let direction: Vector = to - origin
-                return (Ray(origin: origin, direction: direction), FloatX(1.0) - shadowEpsilon)
-        }
-
-        func offsetRayOrigin(point: Point, direction: Vector) -> Point {
-                let epsilon: FloatX = 0.0001
-                return Point(point + epsilon * direction)
         }
 
         var valid: Bool
