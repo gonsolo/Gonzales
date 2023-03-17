@@ -1,8 +1,13 @@
-struct PhaseFunction {
+protocol PhaseFunction {
 
-        func samplePhase(wo: Vector, sampler: Sampler) -> Vector {
-                // TODO
-                return Vector()
+        func samplePhase(wo: Vector, sampler: Sampler) -> (FloatX, Vector)
+}
+
+final class HenyeyGreenstein: PhaseFunction {
+
+        func samplePhase(wo: Vector, sampler: Sampler) -> (FloatX, Vector) {
+
+                return (1, up)
         }
 }
 
@@ -16,5 +21,5 @@ struct MediumInteraction: Interaction {
         var uv = Point2F()
         var wo = Vector()
 
-        var phase = PhaseFunction()
+        var phase = HenyeyGreenstein()
 }

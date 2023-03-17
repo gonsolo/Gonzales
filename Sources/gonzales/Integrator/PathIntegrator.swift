@@ -15,12 +15,22 @@ private func sampleBrdf(
 
         let zero = (black, FloatX(0.0), up)
 
-        var (scatter, wi, bsdfDensity, _) = try bsdf.sample(
-                wo: interaction.wo, u: sampler.get2D())
-        guard scatter != black && bsdfDensity > 0 else {
-                return zero
+        var scatter = RGBSpectrum()
+        var wi = Vector()
+        var bsdfDensity: FloatX = 1
+        if interaction is SurfaceInteraction {
+                (scatter, wi, bsdfDensity, _) = try bsdf.sample(
+                        wo: interaction.wo, u: sampler.get2D())
+                guard scatter != black && bsdfDensity > 0 else {
+                        return zero
+                }
+                scatter *= absDot(wi, interaction.shadingNormal)
         }
-        scatter *= absDot(wi, interaction.shadingNormal)
+        if let mediumInteraction = interaction as? MediumInteraction {
+                let (value, _) = mediumInteraction.phase.samplePhase(wo: interaction.wo, sampler: sampler)
+                scatter = RGBSpectrum(intensity: value)
+                bsdfDensity = value
+        }
         let ray = interaction.spawnRay(inDirection: wi)
         var tHit = FloatX.infinity
         var brdfInteraction = SurfaceInteraction()
@@ -279,7 +289,7 @@ final class PathIntegrator {
                                                 scene: scene,
                                                 hierarchy: hierarchy,
                                                 lightSampler: lightSampler)
-                                let wi = mediumInteraction.phase.samplePhase(
+                                let (_, wi) = mediumInteraction.phase.samplePhase(
                                         wo: -ray.direction,
                                         sampler: sampler)
                                 ray = mediumInteraction.spawnRay(inDirection: wi)

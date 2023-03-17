@@ -15,7 +15,9 @@ final class Homogeneous: Medium {
                 let distance = -log(1 - sampler.get1D()) / transmissionChannel
                 let rayParameter = min(distance / length(ray.direction), tHit)
                 let sampledMedium = rayParameter < tHit
-                let interaction: MediumInteraction? = sampledMedium ? MediumInteraction() : nil
+                let position = ray.origin + rayParameter * ray.direction
+                let interaction: MediumInteraction? =
+                        sampledMedium ? MediumInteraction(position: position, wo: -ray.direction) : nil
                 let transmittance = exp(-transmission * rayParameter * length(ray.direction))
                 let density = sampledMedium ? transmission * transmittance : transmittance
                 let probabilityDensity = density.average()
