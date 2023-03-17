@@ -279,8 +279,10 @@ final class PathIntegrator {
                                                 scene: scene,
                                                 hierarchy: hierarchy,
                                                 lightSampler: lightSampler)
-                                //let wi = interaction.phase.samplePhase(wo: -ray.direction, sampler: sampler)
-                                //ray = mediumInteraction.spawnRay(inDirection: wi)
+                                let wi = mediumInteraction.phase.samplePhase(
+                                        wo: -ray.direction,
+                                        sampler: sampler)
+                                ray = mediumInteraction.spawnRay(inDirection: wi)
                         } else {
                                 if bounce == 0 {
                                         if let areaLight = interaction.areaLight {

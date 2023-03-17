@@ -1,3 +1,11 @@
+struct PhaseFunction {
+
+        func samplePhase(wo: Vector, sampler: Sampler) -> Vector {
+                // TODO
+                return Vector()
+        }
+}
+
 struct MediumInteraction: Interaction {
 
         func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX) {
@@ -17,4 +25,6 @@ struct MediumInteraction: Interaction {
         var shadingNormal = Normal()
         var uv = Point2F()
         var wo = Vector()
+
+        var phase = PhaseFunction()
 }
