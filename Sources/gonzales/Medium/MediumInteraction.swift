@@ -1,11 +1,13 @@
 struct MediumInteraction: Interaction {
 
         func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX) {
-                unimplemented()
+                // TODO
+                return (Ray(), 0)
         }
 
         func spawnRay(inDirection direction: Vector) -> Ray {
-                unimplemented()
+                // TODO
+                return (Ray())
         }
 
         var dpdu = Vector()

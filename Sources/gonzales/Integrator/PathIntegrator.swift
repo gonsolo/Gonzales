@@ -125,7 +125,7 @@ func intersectOrInfiniteLights(
 }
 
 private func sampleOneLight(
-        at interaction: SurfaceInteraction,
+        at interaction: Interaction,
         bsdf: BSDF,
         with sampler: Sampler,
         scene: Scene,
@@ -150,7 +150,7 @@ private func sampleOneLight(
 
 private func estimateDirect(
         light: Light,
-        atInteraction interaction: SurfaceInteraction,
+        atInteraction interaction: Interaction,
         bsdf: BSDF,
         withSampler sampler: Sampler,
         scene: Scene,
@@ -265,19 +265,20 @@ final class PathIntegrator {
                         if beta.isBlack {
                                 break
                         }
-                        if mediumInteraction != nil {
+                        if let mediumInteraction {
                                 guard bounce < maxDepth else {
                                         break
                                 }
-                                //l +=
-                                //        try beta
-                                //        * sampleOneLight(
-                                //                at: mediumInteraction,
-                                //                bsdf: bsdf,
-                                //                with: sampler,
-                                //                scene: scene,
-                                //                hierarchy: hierarchy,
-                                //                lightSampler: lightSampler)
+                                let dummy = BSDF()
+                                l +=
+                                        try beta
+                                        * sampleOneLight(
+                                                at: mediumInteraction,
+                                                bsdf: dummy,
+                                                with: sampler,
+                                                scene: scene,
+                                                hierarchy: hierarchy,
+                                                lightSampler: lightSampler)
                                 //let wi = interaction.phase.samplePhase(wo: -ray.direction, sampler: sampler)
                                 //ray = mediumInteraction.spawnRay(inDirection: wi)
                         } else {
