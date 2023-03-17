@@ -30,7 +30,7 @@ final class Disk: Shape {
 
         func sample(u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
                 // TODO
-                return (Interaction(), 0)
+                return (SurfaceInteraction(), 0)
         }
 
         public var description: String {

@@ -1,6 +1,18 @@
-typealias SurfaceInteraction = Interaction
+protocol Interaction {
 
-struct Interaction {
+        func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX)
+        func spawnRay(inDirection direction: Vector) -> Ray
+
+        var dpdu: Vector { get }
+        var faceIndex: Int { get }
+        var normal: Normal { get }
+        var position: Point { get }
+        var shadingNormal: Normal { get }
+        var uv: Point2F { get }
+        var wo: Vector { get }
+}
+
+struct SurfaceInteraction: Interaction {
 
         init(
                 valid: Bool = false,
@@ -27,7 +39,7 @@ struct Interaction {
                 self.mediumInterface = mediumInterface
         }
 
-        init(_ other: Interaction) {
+        init(_ other: SurfaceInteraction) {
                 self.valid = other.valid
                 self.position = other.position
                 self.normal = other.normal
@@ -69,7 +81,7 @@ struct Interaction {
         var mediumInterface: MediumInterface?
 }
 
-extension Interaction: CustomStringConvertible {
+extension SurfaceInteraction: CustomStringConvertible {
         var description: String {
                 return "[pos: \(position) n: \(normal) wo: \(wo) ]"
         }

@@ -266,7 +266,20 @@ final class PathIntegrator {
                                 break
                         }
                         if mediumInteraction != nil {
-                                print("TODO: interaction")
+                                guard bounce < maxDepth else {
+                                        break
+                                }
+                                //l +=
+                                //        try beta
+                                //        * sampleOneLight(
+                                //                at: mediumInteraction,
+                                //                bsdf: bsdf,
+                                //                with: sampler,
+                                //                scene: scene,
+                                //                hierarchy: hierarchy,
+                                //                lightSampler: lightSampler)
+                                //let wi = interaction.phase.samplePhase(wo: -ray.direction, sampler: sampler)
+                                //ray = mediumInteraction.spawnRay(inDirection: wi)
                         } else {
                                 if bounce == 0 {
                                         if let areaLight = interaction.areaLight {
