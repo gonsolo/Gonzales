@@ -9,40 +9,20 @@ PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
 # 30 of 32 rendered successfully:
-# bathroom
-# living-room
-# bedroom
-# kitchen
-# staircase2
-# staircase
-# bathroom2
-# living-room-2
-# living-room-3
-# dining-room
-# glass-of-water
-# car2
-# car
-# coffee
-# lamp
-# hair-curl
-# curly-hair
-# straight-hair
-# house
-# spaceship
-# classroom
-# dragon
-# teapot-full
-# teapot
-# cornell-box
-# volumetric-caustic
-# water-caustic
+# bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2 living-room-3
+# dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
+# classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-bidir
+# veach-mis furball
+# 2 of 32 not perfect:
 # veach-ajar (completely black)
-# veach-bidir
-# veach-mis
-# material-testball (not rendered correctly)
-# furball
-SCENE_NAME = veach-ajar
-SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#material-testball (not rendered correctly)
+#SCENE_NAME = veach-ajar
+#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+
+PBRT_SCENES = /home/gonsolo/src/pbrt-v4-scenes
+SCENE_DIR = barcelona-pavilion
+SCENE_NAME = pavilion-day.pbrt
+SCENE = $(PBRT_SCENES)/$(SCENE_DIR)/$(SCENE_NAME)
 IMAGE =  $(SCENE_NAME).exr
 
 PFM = $(IMAGE:.exr=.pfm)
