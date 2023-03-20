@@ -176,7 +176,10 @@ class Options {
         }
 
         func makeIntegrator(scene: Scene, sampler: Sampler) throws -> PathIntegrator {
-                if options.integratorName != "path" {
+                switch options.integratorName {
+                case "path": break
+                case "volpath": break
+                default:
                         var message = "Integrator \(options.integratorName) not implemented, "
                         message += "using path integrator!"
                         warning(message)
