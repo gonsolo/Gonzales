@@ -1,5 +1,6 @@
 protocol PhaseFunction {
 
+        func evaluate(wo: Vector, wi: Vector) -> FloatX
         func samplePhase(wo: Vector, sampler: Sampler) -> (value: FloatX, wi: Vector)
 }
 
@@ -40,6 +41,10 @@ final class HenyeyGreenstein: PhaseFunction {
                 return (value, wi)
         }
 
+        func evaluate(wo: Vector, wi: Vector) -> FloatX {
+                return phase(cosTheta: dot(wo, wi), g: g)
+        }
+
         let g: FloatX
 }
 
@@ -53,5 +58,5 @@ struct MediumInteraction: Interaction {
         var uv = Point2F()
         var wo = Vector()
 
-        var phase = HenyeyGreenstein()
+        var phase: PhaseFunction = HenyeyGreenstein()
 }

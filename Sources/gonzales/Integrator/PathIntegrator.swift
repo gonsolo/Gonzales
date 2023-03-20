@@ -18,13 +18,13 @@ private func sampleBrdf(
         var scatter = RGBSpectrum()
         var wi = Vector()
         var bsdfDensity: FloatX = 1
-        if interaction is SurfaceInteraction {
+        if let surfaceInteraction = interaction as? SurfaceInteraction {
                 (scatter, wi, bsdfDensity, _) = try bsdf.sample(
-                        wo: interaction.wo, u: sampler.get2D())
+                        wo: surfaceInteraction.wo, u: sampler.get2D())
                 guard scatter != black && bsdfDensity > 0 else {
                         return zero
                 }
-                scatter *= absDot(wi, interaction.shadingNormal)
+                scatter *= absDot(wi, surfaceInteraction.shadingNormal)
         }
         if let mediumInteraction = interaction as? MediumInteraction {
                 let (value, _) = mediumInteraction.phase.samplePhase(wo: interaction.wo, sampler: sampler)
@@ -77,9 +77,15 @@ private func sampleLightSource(
         guard try visibility.unoccluded(hierarchy: hierarchy) else {
                 return zero
         }
-        let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
-        let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
-        let scatter = reflected * dot
+        var scatter: RGBSpectrum
+        if let mediumInteraction = interaction as? MediumInteraction {
+                let phase = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: wi)
+                scatter = RGBSpectrum(intensity: phase)
+        } else {
+                let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
+                let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
+                scatter = reflected * dot
+        }
         let estimate = scatter * radiance
         return (estimate: estimate, density: lightDensity, sample: wi)
 }
@@ -183,17 +189,29 @@ private func estimateDirect(
         }
 
         // Light source sampling only
-        //let (estimate, density, _) = try sampleLightSource()
+        //let (estimate, density, _) = try sampleLightSource(
+        //        light: light,
+        //        interaction: interaction,
+        //        sampler: sampler,
+        //        bsdf: bsdf,
+        //        scene: scene,
+        //        hierarchy: hierarchy)
         //if density == 0 {
-        //        print("light: black")
+        //        //print("light: black")
         //        return black
         //} else {
-        //        print("light: ", estimate / density, estimate, density)
+        //        //print("light: ", estimate / density, estimate, density)
         //        return estimate / density
         //}
 
         // BRDF sampling only
-        //let (estimate, density, _) = try sampleBrdf()
+        //let (estimate, density, _) = try sampleBrdf(
+        //        light: light,
+        //        interaction: interaction,
+        //        sampler: sampler,
+        //        bsdf: bsdf,
+        //        scene: scene,
+        //        hierarchy: hierarchy)
         //print("Brdf: ", estimate, density)
         //if density == 0 {
         //        return black
