@@ -106,7 +106,13 @@ private func brdfDensity(
         sample: Vector,
         bsdf: BSDF
 ) -> FloatX {
-        let density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
+        var density: FloatX = 0
+        if interaction is SurfaceInteraction {
+                density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
+        }
+        if let mediumInteraction = interaction as? MediumInteraction {
+                density = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: sample)
+        }
         return density
 }
 
