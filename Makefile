@@ -8,7 +8,7 @@ all: d
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-# 28 of 32 rendered successfully:
+# 30 of 32 rendered successfully:
 # bathroom
 # living-room
 # bedroom
@@ -31,17 +31,17 @@ BITTERLI = ~/src/bitterli
 # spaceship
 # classroom
 # dragon
-# teapot-full (no volpath)
+# teapot-full
 # teapot
 # cornell-box
-# volumetric-caustic (interface material, volumetric rendering)
+# volumetric-caustic
 # water-caustic
 # veach-ajar (completely black)
 # veach-bidir
 # veach-mis
 # material-testball (not rendered correctly)
 # furball
-SCENE_NAME = volumetric-caustic
+SCENE_NAME = veach-ajar
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 
