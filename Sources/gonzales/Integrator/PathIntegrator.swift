@@ -324,6 +324,70 @@ final class PathIntegrator {
                 return (l, ray)
         }
 
+        private func sampleSurface(
+                bounce: Int,
+                surfaceInteraction: SurfaceInteraction,
+                beta: inout RGBSpectrum,
+                ray: Ray,
+                albedo: inout RGBSpectrum,
+                firstNormal: inout Normal,
+                sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator,
+                lightSampler: LightSampler
+        ) throws -> (RGBSpectrum, Ray, shouldBreak: Bool, shouldContinue: Bool, shouldReturn: Bool) {
+                var ray = ray
+                var l = black
+                if bounce == 0 {
+                        if let areaLight = surfaceInteraction.areaLight {
+                                l +=
+                                        beta
+                                        * areaLight.emittedRadiance(
+                                                from: surfaceInteraction,
+                                                inDirection: surfaceInteraction.wo)
+                        }
+                }
+                guard bounce < maxDepth else {
+                        return (black, ray, true, false, false)
+                }
+                if surfaceInteraction.material == -1 {
+                        return (black, ray, true, false, false)
+                }
+                guard let material = materials[surfaceInteraction.material] else {
+                        return (black, ray, true, false, false)
+                }
+                if material is Interface {
+                        ray = surfaceInteraction.spawnRay(inDirection: ray.direction)
+                        if let interface = surfaceInteraction.mediumInterface {
+                                ray.medium = state.namedMedia[interface.interior]
+                        }
+                        return (black, ray, false, true, false)
+                }
+                let bsdf = material.computeScatteringFunctions(interaction: surfaceInteraction)
+                if bounce == 0 {
+                        albedo = bsdf.albedo()
+                        firstNormal = surfaceInteraction.normal
+                }
+                let ld =
+                        try beta
+                        * sampleOneLight(
+                                at: surfaceInteraction,
+                                bsdf: bsdf,
+                                with: sampler,
+                                scene: scene,
+                                hierarchy: hierarchy,
+                                lightSampler: lightSampler)
+                l += ld
+                let (f, wi, pdf, _) = try bsdf.sample(
+                        wo: surfaceInteraction.wo, u: sampler.get2D())
+                guard pdf != 0 && !pdf.isNaN else {
+                        return (l, ray, false, false, true)
+                }
+                beta = beta * f * absDot(wi, surfaceInteraction.normal) / pdf
+                ray = surfaceInteraction.spawnRay(inDirection: wi)
+                return (l, ray, false, false, false)
+        }
+
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
@@ -338,7 +402,7 @@ final class PathIntegrator {
                 var beta = white
                 var ray = ray
                 var albedo = black
-                var normal = Normal()
+                var firstNormal = Normal()
                 var interaction = SurfaceInteraction()
                 for bounce in 0...maxDepth {
                         interaction.valid = false
@@ -369,7 +433,8 @@ final class PathIntegrator {
                                 guard bounce < maxDepth else {
                                         break
                                 }
-                                (l, ray) = try sampleMedium(
+                                var mediumRadiance = black
+                                (mediumRadiance, ray) = try sampleMedium(
                                         beta: beta,
                                         mediumInteraction: mediumInteraction,
                                         sampler: sampler,
@@ -377,54 +442,35 @@ final class PathIntegrator {
                                         hierarchy: hierarchy,
                                         lightSampler: lightSampler,
                                         ray: ray)
+                                l += mediumRadiance
                         } else {
-                                if bounce == 0 {
-                                        if let areaLight = interaction.areaLight {
-                                                l +=
-                                                        beta
-                                                        * areaLight.emittedRadiance(
-                                                                from: interaction,
-                                                                inDirection: interaction.wo)
-                                        }
-                                }
-                                guard bounce < maxDepth else {
-                                        break
-                                }
-                                if interaction.material == -1 {
-                                        break
-                                }
-                                guard let material = materials[interaction.material] else {
-                                        break
-                                }
-                                if material is Interface {
-                                        ray = interaction.spawnRay(inDirection: ray.direction)
-                                        if let interface = interaction.mediumInterface {
-                                                ray.medium = state.namedMedia[interface.interior]
-                                        }
-                                        continue
-                                }
-                                let bsdf = material.computeScatteringFunctions(interaction: interaction)
-                                if bounce == 0 {
-                                        albedo = bsdf.albedo()
-                                        normal = interaction.normal
-                                }
-                                let ld =
-                                        try beta
-                                        * sampleOneLight(
-                                                at: interaction,
-                                                bsdf: bsdf,
-                                                with: sampler,
+                                var surfaceRadiance = black
+                                var shouldBreak = false
+                                var shouldContinue = false
+                                var shouldReturn = false
+                                (surfaceRadiance, ray, shouldBreak, shouldContinue, shouldReturn) =
+                                        try sampleSurface(
+                                                bounce: bounce,
+                                                surfaceInteraction: interaction,
+                                                beta: &beta,
+                                                ray: ray,
+                                                albedo: &albedo,
+                                                firstNormal: &firstNormal,
+                                                sampler: sampler,
                                                 scene: scene,
                                                 hierarchy: hierarchy,
                                                 lightSampler: lightSampler)
-                                l += ld
-                                let (f, wi, pdf, _) = try bsdf.sample(
-                                        wo: interaction.wo, u: sampler.get2D())
-                                guard pdf != 0 && !pdf.isNaN else {
+                                if shouldReturn {
+                                        l += surfaceRadiance
                                         return (l, white, Normal())
                                 }
-                                beta = beta * f * absDot(wi, interaction.normal) / pdf
-                                ray = interaction.spawnRay(inDirection: wi)
+                                if shouldBreak {
+                                        break
+                                }
+                                if shouldContinue {
+                                        continue
+                                }
+                                l += surfaceRadiance
                         }
                         tHit = FloatX.infinity
                         if bounce > 3 && russianRoulette(beta: &beta) {
@@ -432,7 +478,7 @@ final class PathIntegrator {
                         }
                 }
                 intelHack(&albedo)
-                return (radiance: l, albedo, normal)
+                return (radiance: l, albedo, firstNormal)
         }
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
