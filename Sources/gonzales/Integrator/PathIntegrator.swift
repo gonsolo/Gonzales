@@ -4,99 +4,99 @@
 
 import Foundation  // exit
 
-private func sampleLightSource(
-        light: Light,
-        interaction: Interaction,
-        sampler: Sampler,
-        bsdf: BSDF,
-        scene: Scene,
-        hierarchy: Accelerator
-) throws -> (
-        estimate: RGBSpectrum, density: FloatX, sample: Vector
-) {
-        let zero = (black, FloatX(0.0), up)
-
-        let (radiance, wi, lightDensity, visibility) = light.sample(
-                for: interaction, u: sampler.get2D())
-        guard !radiance.isBlack && !lightDensity.isInfinite else {
-                return zero
-        }
-        guard try visibility.unoccluded(hierarchy: hierarchy) else {
-                return zero
-        }
-        var scatter: RGBSpectrum
-        if let mediumInteraction = interaction as? MediumInteraction {
-                let phase = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: wi)
-                scatter = RGBSpectrum(intensity: phase)
-        } else {
-                let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
-                let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
-                scatter = reflected * dot
-        }
-        let estimate = scatter * radiance
-        return (estimate: estimate, density: lightDensity, sample: wi)
-}
-
-private func lightDensity(
-        light: Light,
-        interaction: Interaction,
-        sample: Vector,
-        bsdf: BSDF
-) throws -> FloatX {
-        return try light.probabilityDensityFor(
-                samplingDirection: sample, from: interaction)
-}
-
-private func brdfDensity(
-        light: Light,
-        interaction: Interaction,
-        sample: Vector,
-        bsdf: BSDF
-) -> FloatX {
-        var density: FloatX = 0
-        if interaction is SurfaceInteraction {
-                density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
-        }
-        if let mediumInteraction = interaction as? MediumInteraction {
-                density = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: sample)
-        }
-        return density
-}
-
-private func chooseLight(
-        withSampler sampler: Sampler,
-        scene: Scene,
-        lightSampler: LightSampler
-) throws
-        -> (Light, FloatX)
-{
-        return lightSampler.chooseLight()
-}
-
-func intersectOrInfiniteLights(
-        ray: Ray,
-        tHit: inout FloatX,
-        bounce: Int,
-        l: inout RGBSpectrum,
-        interaction: inout SurfaceInteraction,
-        scene: Scene,
-        hierarchy: Accelerator
-) throws {
-        try intersect(ray: ray, tHit: &tHit, interaction: &interaction, hierarchy: hierarchy)
-        if interaction.valid {
-                return
-        }
-        let radiance = scene.infiniteLights.reduce(
-                black,
-                { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
-        )
-        if bounce == 0 { l += radiance }
-}
-
 final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.maxDepth = maxDepth
+        }
+
+        private func lightDensity(
+                light: Light,
+                interaction: Interaction,
+                sample: Vector,
+                bsdf: BSDF
+        ) throws -> FloatX {
+                return try light.probabilityDensityFor(
+                        samplingDirection: sample, from: interaction)
+        }
+
+        private func brdfDensity(
+                light: Light,
+                interaction: Interaction,
+                sample: Vector,
+                bsdf: BSDF
+        ) -> FloatX {
+                var density: FloatX = 0
+                if interaction is SurfaceInteraction {
+                        density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
+                }
+                if let mediumInteraction = interaction as? MediumInteraction {
+                        density = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: sample)
+                }
+                return density
+        }
+
+        private func chooseLight(
+                withSampler sampler: Sampler,
+                scene: Scene,
+                lightSampler: LightSampler
+        ) throws
+                -> (Light, FloatX)
+        {
+                return lightSampler.chooseLight()
+        }
+
+        func intersectOrInfiniteLights(
+                ray: Ray,
+                tHit: inout FloatX,
+                bounce: Int,
+                l: inout RGBSpectrum,
+                interaction: inout SurfaceInteraction,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws {
+                try intersect(ray: ray, tHit: &tHit, interaction: &interaction, hierarchy: hierarchy)
+                if interaction.valid {
+                        return
+                }
+                let radiance = scene.infiniteLights.reduce(
+                        black,
+                        { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
+                )
+                if bounce == 0 { l += radiance }
+        }
+
+        private func sampleLightSource(
+                light: Light,
+                interaction: Interaction,
+                sampler: Sampler,
+                bsdf: BSDF,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws -> (
+                estimate: RGBSpectrum, density: FloatX, sample: Vector
+        ) {
+                let zero = (black, FloatX(0.0), up)
+
+                let (radiance, wi, lightDensity, visibility) = light.sample(
+                        for: interaction, u: sampler.get2D())
+                guard !radiance.isBlack && !lightDensity.isInfinite else {
+                        return zero
+                }
+                guard try visibility.unoccluded(hierarchy: hierarchy) else {
+                        return zero
+                }
+                var scatter: RGBSpectrum
+                if let mediumInteraction = interaction as? MediumInteraction {
+                        let phase = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: wi)
+                        scatter = RGBSpectrum(intensity: phase)
+                } else {
+                        let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
+                        let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
+                        scatter = reflected * dot
+                }
+                let estimate = scatter * radiance
+                return (estimate: estimate, density: lightDensity, sample: wi)
         }
 
         private func sampleBrdf(
@@ -154,7 +154,7 @@ final class PathIntegrator {
                 return (estimate: estimate, density: bsdfDensity, sample: wi)
         }
 
-private func estimateDirect(
+        private func estimateDirect(
                 light: Light,
                 atInteraction interaction: Interaction,
                 bsdf: BSDF,
