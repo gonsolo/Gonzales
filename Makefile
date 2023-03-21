@@ -8,15 +8,12 @@ all: td
 PTEXMEM = --ptexmem 1 # GB
 
 BITTERLI = ~/src/bitterli
-# 30 of 32 rendered successfully:
+# 32 of 32 rendered successfully:
 # bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2 living-room-3
 # dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
-# classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-bidir
-# veach-mis furball
-# 2 of 32 not perfect:
-# veach-ajar (completely black)
-#material-testball (not rendered correctly)
-SCENE_NAME = veach-ajar
+# classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
+# veach-bidir veach-mis material-testball furball
+SCENE_NAME = material-testball
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 
 #PBRT_SCENES = /home/gonsolo/src/pbrt-v4-scenes
