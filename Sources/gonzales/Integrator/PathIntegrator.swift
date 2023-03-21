@@ -297,6 +297,33 @@ final class PathIntegrator {
                 }
         }
 
+        private func sampleMedium(
+                beta: RGBSpectrum,
+                mediumInteraction: MediumInteraction,
+                sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator,
+                lightSampler: LightSampler,
+                ray: Ray
+        ) throws -> (RGBSpectrum, Ray) {
+                var ray = ray
+                let dummy = BSDF()
+                let l =
+                        try beta
+                        * sampleOneLight(
+                                at: mediumInteraction,
+                                bsdf: dummy,
+                                with: sampler,
+                                scene: scene,
+                                hierarchy: hierarchy,
+                                lightSampler: lightSampler)
+                let (_, wi) = mediumInteraction.phase.samplePhase(
+                        wo: -ray.direction,
+                        sampler: sampler)
+                ray = mediumInteraction.spawnRay(inDirection: wi)
+                return (l, ray)
+        }
+
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
@@ -342,20 +369,14 @@ final class PathIntegrator {
                                 guard bounce < maxDepth else {
                                         break
                                 }
-                                let dummy = BSDF()
-                                l +=
-                                        try beta
-                                        * sampleOneLight(
-                                                at: mediumInteraction,
-                                                bsdf: dummy,
-                                                with: sampler,
-                                                scene: scene,
-                                                hierarchy: hierarchy,
-                                                lightSampler: lightSampler)
-                                let (_, wi) = mediumInteraction.phase.samplePhase(
-                                        wo: -ray.direction,
-                                        sampler: sampler)
-                                ray = mediumInteraction.spawnRay(inDirection: wi)
+                                (l, ray) = try sampleMedium(
+                                        beta: beta,
+                                        mediumInteraction: mediumInteraction,
+                                        sampler: sampler,
+                                        scene: scene,
+                                        hierarchy: hierarchy,
+                                        lightSampler: lightSampler,
+                                        ray: ray)
                         } else {
                                 if bounce == 0 {
                                         if let areaLight = interaction.areaLight {
