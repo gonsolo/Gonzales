@@ -1,2 +1,2 @@
-#include <OpenImageIO/texture.h>
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/texture.h>
