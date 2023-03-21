@@ -37,7 +37,7 @@ final class PathIntegrator {
         }
 
         private func chooseLight(
-                withSampler sampler: Sampler,
+                sampler: Sampler,
                 scene: Scene,
                 lightSampler: LightSampler
         ) throws
@@ -225,9 +225,9 @@ final class PathIntegrator {
 
         private func estimateDirect(
                 light: Light,
-                atInteraction interaction: Interaction,
+                interaction: Interaction,
                 bsdf: BSDF,
-                withSampler sampler: Sampler,
+                sampler: Sampler,
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws -> RGBSpectrum {
@@ -273,14 +273,14 @@ final class PathIntegrator {
         ) throws -> RGBSpectrum {
                 guard scene.lights.count > 0 else { return black }
                 let (light, lightPdf) = try chooseLight(
-                        withSampler: sampler,
+                        sampler: sampler,
                         scene: scene,
                         lightSampler: lightSampler)
                 let estimate = try estimateDirect(
                         light: light,
-                        atInteraction: interaction,
+                        interaction: interaction,
                         bsdf: bsdf,
-                        withSampler: sampler,
+                        sampler: sampler,
                         scene: scene,
                         hierarchy: hierarchy)
                 return estimate / lightPdf
