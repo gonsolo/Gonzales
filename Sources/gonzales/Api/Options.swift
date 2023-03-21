@@ -104,8 +104,7 @@ class Options {
 
         func makeFilter(name: String, parameters: ParameterDictionary) throws -> Filter {
 
-                func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F
-                {
+                func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F {
                         let xwidth = try parameters.findOneFloatX(called: "xwidth", else: support.0)
                         let ywidth = try parameters.findOneFloatX(called: "ywidth", else: support.1)
                         return Vector2F(x: xwidth, y: ywidth)

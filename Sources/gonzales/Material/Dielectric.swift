@@ -1,7 +1,6 @@
 final class Dielectric: Material {
 
-        init(reflectance: RGBSpectrumTexture, transmittance: RGBSpectrumTexture, eta: FloatTexture)
-        {
+        init(reflectance: RGBSpectrumTexture, transmittance: RGBSpectrumTexture, eta: FloatTexture) {
                 self.reflectance = reflectance
                 self.transmittance = transmittance
                 self.eta = eta

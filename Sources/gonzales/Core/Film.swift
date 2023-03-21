@@ -120,8 +120,7 @@ final class Film {
                 }
         }
 
-        private func add(value: RGBSpectrum, weight: FloatX, location: Point2F, image: inout Image)
-        {
+        private func add(value: RGBSpectrum, weight: FloatX, location: Point2F, image: inout Image) {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
