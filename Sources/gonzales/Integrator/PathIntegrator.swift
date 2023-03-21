@@ -154,61 +154,61 @@ final class PathIntegrator {
                 return (estimate: estimate, density: bsdfDensity, sample: wi)
         }
 
-        private func estimateDirect(
+        private func sampleLight(
                 light: Light,
-                atInteraction interaction: Interaction,
+                interaction: Interaction,
                 bsdf: BSDF,
-                withSampler sampler: Sampler,
+                sampler: Sampler,
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws -> RGBSpectrum {
-                if light.isDelta {
-                        let (estimate, density, _) = try sampleLightSource(
-                                light: light,
-                                interaction: interaction,
-                                sampler: sampler,
-                                bsdf: bsdf,
-                                scene: scene,
-                                hierarchy: hierarchy)
-                        if density == 0 {
-                                return black
-                        } else {
-                                return estimate / density
-                        }
+                let (estimate, density, _) = try sampleLightSource(
+                        light: light,
+                        interaction: interaction,
+                        sampler: sampler,
+                        bsdf: bsdf,
+                        scene: scene,
+                        hierarchy: hierarchy)
+                if density == 0 {
+                        print("light: black")
+                        return black
+                } else {
+                        print("light: ", estimate / density, estimate, density)
+                        return estimate / density
                 }
+        }
 
-                // Light source sampling only
-                //let (estimate, density, _) = try sampleLightSource(
-                //        light: light,
-                //        interaction: interaction,
-                //        sampler: sampler,
-                //        bsdf: bsdf,
-                //        scene: scene,
-                //        hierarchy: hierarchy)
-                //if density == 0 {
-                //        print("light: black")
-                //        return black
-                //} else {
-                //        print("light: ", estimate / density, estimate, density)
-                //        return estimate / density
-                //}
+        private func sampleBSDF(
+                light: Light,
+                interaction: Interaction,
+                bsdf: BSDF,
+                sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws -> RGBSpectrum {
+                let (estimate, density, _) = try sampleBrdf(
+                        light: light,
+                        interaction: interaction,
+                        sampler: sampler,
+                        bsdf: bsdf,
+                        scene: scene,
+                        hierarchy: hierarchy)
+                print("Brdf: ", estimate, density)
+                if density == 0 {
+                        return black
+                } else {
+                        return estimate / density
+                }
+        }
 
-                // BRDF sampling only
-                //let (estimate, density, _) = try sampleBrdf(
-                //        light: light,
-                //        interaction: interaction,
-                //        sampler: sampler,
-                //        bsdf: bsdf,
-                //        scene: scene,
-                //        hierarchy: hierarchy)
-                //print("Brdf: ", estimate, density)
-                //if density == 0 {
-                //        return black
-                //} else {
-                //        return estimate / density
-                //}
-
-                // Light and BRDF sampling with multiple importance sampling
+        private func sampleMultipleImportance(
+                light: Light,
+                interaction: Interaction,
+                bsdf: BSDF,
+                sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws -> RGBSpectrum {
                 let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
                 let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
@@ -221,6 +221,46 @@ final class PathIntegrator {
                         interaction: interaction,
                         sampler: sampler,
                         bsdf: bsdf)
+        }
+
+        private func estimateDirect(
+                light: Light,
+                atInteraction interaction: Interaction,
+                bsdf: BSDF,
+                withSampler sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws -> RGBSpectrum {
+                if light.isDelta {
+                        return try sampleLight(
+                                light: light,
+                                interaction: interaction,
+                                bsdf: bsdf,
+                                sampler: sampler,
+                                scene: scene,
+                                hierarchy: hierarchy)
+                }
+                //return try sampleLight(
+                //        light: light,
+                //        interaction: interaction,
+                //        bsdf: bsdf,
+                //        sampler: sampler,
+                //        scene: scene,
+                //        hierarchy: hierarchy)
+                //return try sampleBSDF(
+                //        light: light,
+                //        interaction: interaction,
+                //        bsdf: bsdf,
+                //        sampler: sampler,
+                //        scene: scene,
+                //        hierarchy: hierarchy)
+                return try sampleMultipleImportance(
+                        light: light,
+                        interaction: interaction,
+                        bsdf: bsdf,
+                        sampler: sampler,
+                        scene: scene,
+                        hierarchy: hierarchy)
         }
 
         private func sampleOneLight(
