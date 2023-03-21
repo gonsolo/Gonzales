@@ -146,30 +146,6 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
-private func sampleOneLight(
-        at interaction: Interaction,
-        bsdf: BSDF,
-        with sampler: Sampler,
-        scene: Scene,
-        hierarchy: Accelerator,
-        lightSampler: LightSampler
-) throws -> RGBSpectrum {
-
-        guard scene.lights.count > 0 else { return black }
-        let (light, lightPdf) = try chooseLight(
-                withSampler: sampler,
-                scene: scene,
-                lightSampler: lightSampler)
-        let estimate = try estimateDirect(
-                light: light,
-                atInteraction: interaction,
-                bsdf: bsdf,
-                withSampler: sampler,
-                scene: scene,
-                hierarchy: hierarchy)
-        return estimate / lightPdf
-}
-
 private func estimateDirect(
         light: Light,
         atInteraction interaction: Interaction,
@@ -244,6 +220,29 @@ final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.maxDepth = maxDepth
+        }
+
+        private func sampleOneLight(
+                at interaction: Interaction,
+                bsdf: BSDF,
+                with sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator,
+                lightSampler: LightSampler
+        ) throws -> RGBSpectrum {
+                guard scene.lights.count > 0 else { return black }
+                let (light, lightPdf) = try chooseLight(
+                        withSampler: sampler,
+                        scene: scene,
+                        lightSampler: lightSampler)
+                let estimate = try estimateDirect(
+                        light: light,
+                        atInteraction: interaction,
+                        bsdf: bsdf,
+                        withSampler: sampler,
+                        scene: scene,
+                        hierarchy: hierarchy)
+                return estimate / lightPdf
         }
 
         func russianRoulette(beta: inout RGBSpectrum) -> Bool {
