@@ -4,59 +4,6 @@
 
 import Foundation  // exit
 
-private func sampleBrdf(
-        light: Light,
-        interaction: Interaction,
-        sampler: Sampler,
-        bsdf: BSDF,
-        scene: Scene,
-        hierarchy: Accelerator
-) throws -> (estimate: RGBSpectrum, density: FloatX, sample: Vector) {
-
-        let zero = (black, FloatX(0.0), up)
-
-        var scatter = RGBSpectrum()
-        var wi = Vector()
-        var bsdfDensity: FloatX = 1
-        if let surfaceInteraction = interaction as? SurfaceInteraction {
-                (scatter, wi, bsdfDensity, _) = try bsdf.sample(
-                        wo: surfaceInteraction.wo, u: sampler.get2D())
-                guard scatter != black && bsdfDensity > 0 else {
-                        return zero
-                }
-                scatter *= absDot(wi, surfaceInteraction.shadingNormal)
-        }
-        if let mediumInteraction = interaction as? MediumInteraction {
-                let (value, _) = mediumInteraction.phase.samplePhase(wo: interaction.wo, sampler: sampler)
-                scatter = RGBSpectrum(intensity: value)
-                bsdfDensity = value
-        }
-        let ray = interaction.spawnRay(inDirection: wi)
-        var tHit = FloatX.infinity
-        var brdfInteraction = SurfaceInteraction()
-        try intersect(
-                ray: ray,
-                tHit: &tHit,
-                interaction: &brdfInteraction,
-                hierarchy: hierarchy)
-        if !brdfInteraction.valid {
-                for light in scene.lights {
-                        if light is InfiniteLight {
-                                let radiance = light.radianceFromInfinity(for: ray)
-                                let estimate = scatter * radiance
-                                return (
-                                        estimate: estimate, density: bsdfDensity,
-                                        sample: wi
-                                )
-                        }
-                }
-                return zero
-        }
-        let radiance = black
-        let estimate = scatter * radiance
-        return (estimate: estimate, density: bsdfDensity, sample: wi)
-}
-
 private func sampleLightSource(
         light: Light,
         interaction: Interaction,
@@ -152,7 +99,62 @@ final class PathIntegrator {
                 self.maxDepth = maxDepth
         }
 
-        private func estimateDirect(
+        private func sampleBrdf(
+                light: Light,
+                interaction: Interaction,
+                sampler: Sampler,
+                bsdf: BSDF,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws -> (estimate: RGBSpectrum, density: FloatX, sample: Vector) {
+
+                let zero = (black, FloatX(0.0), up)
+
+                var scatter = RGBSpectrum()
+                var wi = Vector()
+                var bsdfDensity: FloatX = 1
+                if let surfaceInteraction = interaction as? SurfaceInteraction {
+                        (scatter, wi, bsdfDensity, _) = try bsdf.sample(
+                                wo: surfaceInteraction.wo, u: sampler.get2D())
+                        guard scatter != black && bsdfDensity > 0 else {
+                                return zero
+                        }
+                        scatter *= absDot(wi, surfaceInteraction.shadingNormal)
+                }
+                if let mediumInteraction = interaction as? MediumInteraction {
+                        let (value, _) = mediumInteraction.phase.samplePhase(
+                                wo: interaction.wo,
+                                sampler: sampler)
+                        scatter = RGBSpectrum(intensity: value)
+                        bsdfDensity = value
+                }
+                let ray = interaction.spawnRay(inDirection: wi)
+                var tHit = FloatX.infinity
+                var brdfInteraction = SurfaceInteraction()
+                try intersect(
+                        ray: ray,
+                        tHit: &tHit,
+                        interaction: &brdfInteraction,
+                        hierarchy: hierarchy)
+                if !brdfInteraction.valid {
+                        for light in scene.lights {
+                                if light is InfiniteLight {
+                                        let radiance = light.radianceFromInfinity(for: ray)
+                                        let estimate = scatter * radiance
+                                        return (
+                                                estimate: estimate, density: bsdfDensity,
+                                                sample: wi
+                                        )
+                                }
+                        }
+                        return zero
+                }
+                let radiance = black
+                let estimate = scatter * radiance
+                return (estimate: estimate, density: bsdfDensity, sample: wi)
+        }
+
+private func estimateDirect(
                 light: Light,
                 atInteraction interaction: Interaction,
                 bsdf: BSDF,
