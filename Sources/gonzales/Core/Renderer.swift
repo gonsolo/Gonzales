@@ -5,7 +5,7 @@ final class Renderer {
         init(
                 hierarchy: Accelerator,
                 camera: Camera,
-                integrator: PathIntegrator,
+                integrator: VolumePathIntegrator,
                 sampler: Sampler,
                 scene: Scene,
                 lightSampler: LightSampler
@@ -122,7 +122,7 @@ final class Renderer {
         let camera: Camera
         let group = DispatchGroup()
         let hierarchy: Accelerator
-        let integrator: PathIntegrator
+        let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
         let queue = DispatchQueue.global()
         var reporter = ProgressReporter()

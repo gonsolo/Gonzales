@@ -4,7 +4,7 @@
 
 import Foundation  // exit
 
-final class PathIntegrator {
+final class VolumePathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.maxDepth = maxDepth

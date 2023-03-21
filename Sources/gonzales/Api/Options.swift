@@ -174,7 +174,7 @@ class Options {
                 )
         }
 
-        func makeIntegrator(scene: Scene, sampler: Sampler) throws -> PathIntegrator {
+        func makeIntegrator(scene: Scene, sampler: Sampler) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -187,7 +187,7 @@ class Options {
                         called: "maxdepth",
                         else: 1
                 )
-                return PathIntegrator(scene: scene, maxDepth: maxDepth)
+                return VolumePathIntegrator(scene: scene, maxDepth: maxDepth)
         }
 
         func makeSampler(film: Film) throws -> Sampler {
