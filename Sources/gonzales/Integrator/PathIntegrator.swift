@@ -146,80 +146,79 @@ func intersectOrInfiniteLights(
         if bounce == 0 { l += radiance }
 }
 
-private func estimateDirect(
-        light: Light,
-        atInteraction interaction: Interaction,
-        bsdf: BSDF,
-        withSampler sampler: Sampler,
-        scene: Scene,
-        hierarchy: Accelerator
-) throws -> RGBSpectrum {
-
-        if light.isDelta {
-                let (estimate, density, _) = try sampleLightSource(
-                        light: light,
-                        interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf,
-                        scene: scene,
-                        hierarchy: hierarchy)
-                if density == 0 {
-                        return black
-                } else {
-                        return estimate / density
-                }
-        }
-
-        // Light source sampling only
-        //let (estimate, density, _) = try sampleLightSource(
-        //        light: light,
-        //        interaction: interaction,
-        //        sampler: sampler,
-        //        bsdf: bsdf,
-        //        scene: scene,
-        //        hierarchy: hierarchy)
-        //if density == 0 {
-        //        print("light: black")
-        //        return black
-        //} else {
-        //        print("light: ", estimate / density, estimate, density)
-        //        return estimate / density
-        //}
-
-        // BRDF sampling only
-        //let (estimate, density, _) = try sampleBrdf(
-        //        light: light,
-        //        interaction: interaction,
-        //        sampler: sampler,
-        //        bsdf: bsdf,
-        //        scene: scene,
-        //        hierarchy: hierarchy)
-        //print("Brdf: ", estimate, density)
-        //if density == 0 {
-        //        return black
-        //} else {
-        //        return estimate / density
-        //}
-
-        // Light and BRDF sampling with multiple importance sampling
-        let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
-                sample: sampleLightSource, density: lightDensity)
-        let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
-                sample: sampleBrdf, density: brdfDensity)
-        let misSampler = MultipleImportanceSampler(samplers: (lightSampler, brdfSampler))
-        return try misSampler.evaluate(
-                scene: scene,
-                hierarchy: hierarchy,
-                light: light,
-                interaction: interaction,
-                sampler: sampler,
-                bsdf: bsdf)
-}
-
 final class PathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.maxDepth = maxDepth
+        }
+
+        private func estimateDirect(
+                light: Light,
+                atInteraction interaction: Interaction,
+                bsdf: BSDF,
+                withSampler sampler: Sampler,
+                scene: Scene,
+                hierarchy: Accelerator
+        ) throws -> RGBSpectrum {
+                if light.isDelta {
+                        let (estimate, density, _) = try sampleLightSource(
+                                light: light,
+                                interaction: interaction,
+                                sampler: sampler,
+                                bsdf: bsdf,
+                                scene: scene,
+                                hierarchy: hierarchy)
+                        if density == 0 {
+                                return black
+                        } else {
+                                return estimate / density
+                        }
+                }
+
+                // Light source sampling only
+                //let (estimate, density, _) = try sampleLightSource(
+                //        light: light,
+                //        interaction: interaction,
+                //        sampler: sampler,
+                //        bsdf: bsdf,
+                //        scene: scene,
+                //        hierarchy: hierarchy)
+                //if density == 0 {
+                //        print("light: black")
+                //        return black
+                //} else {
+                //        print("light: ", estimate / density, estimate, density)
+                //        return estimate / density
+                //}
+
+                // BRDF sampling only
+                //let (estimate, density, _) = try sampleBrdf(
+                //        light: light,
+                //        interaction: interaction,
+                //        sampler: sampler,
+                //        bsdf: bsdf,
+                //        scene: scene,
+                //        hierarchy: hierarchy)
+                //print("Brdf: ", estimate, density)
+                //if density == 0 {
+                //        return black
+                //} else {
+                //        return estimate / density
+                //}
+
+                // Light and BRDF sampling with multiple importance sampling
+                let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
+                        sample: sampleLightSource, density: lightDensity)
+                let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
+                        sample: sampleBrdf, density: brdfDensity)
+                let misSampler = MultipleImportanceSampler(samplers: (lightSampler, brdfSampler))
+                return try misSampler.evaluate(
+                        scene: scene,
+                        hierarchy: hierarchy,
+                        light: light,
+                        interaction: interaction,
+                        sampler: sampler,
+                        bsdf: bsdf)
         }
 
         private func sampleOneLight(
