@@ -1,4 +1,4 @@
-all: td
+all: d
 
 #SINGLERAY = --single 1119 575
 #SYNC = --sync
@@ -185,8 +185,7 @@ flame:
 
 f: format
 format:
-	clang-format --dry-run Sources/exr/include/exr.h Sources/exr/exr.cpp
-	clang-format --dry-run Sources/ptex/include/ptex.h Sources/ptex/ptex.cpp
+	clang-format --dry-run $(shell find -name \*.h -o -name \*.cc)
 	swift-format lint -r Sources/gonzales/
 
 codespell:
