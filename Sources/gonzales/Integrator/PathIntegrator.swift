@@ -203,10 +203,10 @@ private func estimateDirect(
         //        scene: scene,
         //        hierarchy: hierarchy)
         //if density == 0 {
-        //        //print("light: black")
+        //        print("light: black")
         //        return black
         //} else {
-        //        //print("light: ", estimate / density, estimate, density)
+        //        print("light: ", estimate / density, estimate, density)
         //        return estimate / density
         //}
 
@@ -286,7 +286,6 @@ final class PathIntegrator {
                         if !interaction.valid {
                                 break
                         }
-
                         var mediumL: RGBSpectrum
                         var mediumInteraction: MediumInteraction? = nil
                         if let medium = ray.medium {

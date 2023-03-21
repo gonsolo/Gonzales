@@ -75,7 +75,7 @@ final class Embree: Accelerator {
         }
 
         func geometry(triangle: Triangle, geomID: UInt32) {
-                let points = triangle.getLocalPoints()
+                let points = triangle.getWorldPoints()
                 let a = points.0
                 let b = points.1
                 let c = points.2

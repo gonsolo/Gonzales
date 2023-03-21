@@ -341,10 +341,21 @@ struct Triangle: Shape {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)
         }
 
+        private func getWorldPoint(index: Int) -> Point {
+                return objectToWorld * getLocalPoint(index: index)
+        }
+
         public func getLocalPoints() -> (Point, Point, Point) {
                 let p0 = getLocalPoint(index: vertexIndex0)
                 let p1 = getLocalPoint(index: vertexIndex1)
                 let p2 = getLocalPoint(index: vertexIndex2)
+                return (p0, p1, p2)
+        }
+
+        public func getWorldPoints() -> (Point, Point, Point) {
+                let p0 = getWorldPoint(index: vertexIndex0)
+                let p1 = getWorldPoint(index: vertexIndex1)
+                let p2 = getWorldPoint(index: vertexIndex2)
                 return (p0, p1, p2)
         }
 
