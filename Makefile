@@ -7,21 +7,21 @@ all: d
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
 
-BITTERLI = ~/src/bitterli
+#BITTERLI = ~/src/bitterli
 # 32 of 32 rendered successfully:
 # bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2 living-room-3
 # dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
-SCENE_NAME = material-testball
-SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#SCENE_NAME = bathroom
+#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#IMAGE =  $(SCENE_NAME).exr
 
-#PBRT_SCENES = /home/gonsolo/src/pbrt-v4-scenes
-#SCENE_DIR = barcelona-pavilion
-#SCENE_NAME = pavilion-day.pbrt
-#SCENE = $(PBRT_SCENES)/$(SCENE_DIR)/$(SCENE_NAME)
-
-IMAGE =  $(SCENE_NAME).exr
+PBRT_SCENES = /home/gonsolo/src/pbrt-v4-scenes
+SCENE_DIR = barcelona-pavilion
+SCENE_NAME = pavilion-day.pbrt
+SCENE = $(PBRT_SCENES)/$(SCENE_DIR)/$(SCENE_NAME)
+IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 
 PFM = $(IMAGE:.exr=.pfm)
 
