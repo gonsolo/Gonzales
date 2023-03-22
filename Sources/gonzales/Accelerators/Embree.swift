@@ -79,11 +79,16 @@ final class Embree: Accelerator {
                 let a = points.0
                 let b = points.1
                 let c = points.2
+
+                let uv = triangleMeshes.getUVFor(
+                        meshIndex: triangle.meshIndex,
+                        indices: (triangle.vertexIndex0, triangle.vertexIndex1, triangle.vertexIndex2))
                 embreeTriangle(
                         ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y,
                         cz: c.z)
                 triangleMeshIndices[geomID] = triangle.meshIndex
                 triangleIndices[geomID] = triangle.idx
+                triangleUVs[geomID] = uv
         }
 
         func geometry(sphere: Sphere, geomID: UInt32) {
@@ -126,14 +131,20 @@ final class Embree: Accelerator {
                 rtcIntersect1(rtcScene, &context, &rayhit)
 
                 var intersected = false
+                var uvTriangle = Point2F()
                 var uv = Point2F()
 
                 if rayhit.hit.geomID != rtcInvalidGeometryId {
                         tout = rayhit.ray.tfar
                         geomID = rayhit.hit.geomID
                         intersected = true
-                        uv[0] = rayhit.hit.u
-                        uv[1] = rayhit.hit.v
+                        uvTriangle[0] = rayhit.hit.u
+                        uvTriangle[1] = rayhit.hit.v
+                        let uvs = triangleUVs[geomID]!
+                        uv[0] = (lerp(with: uvTriangle[0], between: uvs.0.x, and: uvs.1.x) +
+                                lerp(with: uvTriangle[1], between: uvs.0.x, and: uvs.2.x)) / 2
+                        uv[1] = (lerp(with: uvTriangle[0], between: uvs.0.y, and: uvs.1.y) +
+                                lerp(with: uvTriangle[1], between: uvs.0.y, and: uvs.2.y)) / 2
                 }
                 guard intersected else {
                         return empty(#line)
@@ -327,6 +338,7 @@ final class Embree: Accelerator {
         var areaLights = [UInt32: AreaLight]()
         var triangleMeshIndices = [UInt32: Int]()
         var triangleIndices = [UInt32: Int]()
+        var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
         var bounds = Bounds3f()
 
         let floatSize = MemoryLayout<Float>.size

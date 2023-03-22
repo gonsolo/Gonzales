@@ -255,7 +255,6 @@ struct Triangle: Shape {
                 let uv = triangleMeshes.getUVFor(
                         meshIndex: meshIndex,
                         indices: (vertexIndex0, vertexIndex1, vertexIndex2))
-
                 let uvHit = computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
 
                 let duv02: Vector2F = uv.0 - uv.2
