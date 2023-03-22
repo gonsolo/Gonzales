@@ -63,24 +63,6 @@ extension TimeInterval {
         }
 }
 
-func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
-        let fileManager = FileManager.default
-        let absoluteFileName = sceneDirectory + "/" + name
-        guard fileManager.fileExists(atPath: absoluteFileName) else {
-                warning("Can't find texture file: \(absoluteFileName)")
-                return ConstantTexture(value: gray)
-        }
-        let suffix = absoluteFileName.suffix(4)
-        switch suffix {
-        case ".ptx":
-                return Ptex(path: absoluteFileName)
-        case ".exr", ".pfm", ".png", ".tga":
-                return OpenImageIOTexture(path: absoluteFileName)
-        default:
-                throw ApiError.unknownTextureFormat(suffix: String(suffix))
-        }
-}
-
 struct Api {
 
         func attributeBegin() throws {
@@ -394,6 +376,14 @@ struct Api {
                 }
                 var texture: RGBSpectrumTexture
                 switch textureClass {
+                case "checkerboard":
+                        let textureEven = try parameters.findRGBSpectrumTexture(name: "tex1")
+                        let textureOdd = try parameters.findRGBSpectrumTexture(name: "tex2")
+                        let textures = (textureEven, textureOdd)
+                        let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
+                        let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
+                        let scale = (uscale, vscale)
+                        texture = Checkerboard(textures: textures, scale: scale)
                 case "constant":
                         texture = try parameters.findRGBSpectrumTexture(name: "value")
                 case "imagemap":
@@ -503,7 +493,7 @@ struct Api {
                         warnOnce("Unknown material \"\(material)\". Creating default.")
                         var parameterList = ParameterDictionary()
                         parameterList["Kd"] = [0.5]
-                        return try createMatte(parameters: parameters)
+                        return try createDiffuse(parameters: parameters)
                 }
 
                 var material: Material
@@ -515,7 +505,7 @@ struct Api {
                 case "dielectric":
                         material = try createDielectric(parameters: parameters)
                 case "diffuse":
-                        material = try createMatte(parameters: parameters)
+                        material = try createDiffuse(parameters: parameters)
                 case "diffusetransmission":
                         material = try createDiffuseTransmission(parameters: parameters)
                 case "glass":
@@ -524,8 +514,6 @@ struct Api {
                         material = try createHair(parameters: parameters)
                 case "interface":
                         material = try createInterface(parameters: parameters)
-                case "matte":
-                        material = try createMatte(parameters: parameters)
                 case "metal":
                         material = try createMetal(parameters: parameters)
                 case "mirror":
@@ -577,6 +565,24 @@ struct Api {
                 default:
                         throw ApiError.makeShapes(message: name)
                 }
+        }
+}
+
+func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
+        let fileManager = FileManager.default
+        let absoluteFileName = sceneDirectory + "/" + name
+        guard fileManager.fileExists(atPath: absoluteFileName) else {
+                warning("Can't find texture file: \(absoluteFileName)")
+                return ConstantTexture(value: gray)
+        }
+        let suffix = absoluteFileName.suffix(4)
+        switch suffix {
+        case ".ptx":
+                return Ptex(path: absoluteFileName)
+        case ".exr", ".pfm", ".png", ".tga":
+                return OpenImageIOTexture(path: absoluteFileName)
+        default:
+                throw ApiError.unknownTextureFormat(suffix: String(suffix))
         }
 }
 
