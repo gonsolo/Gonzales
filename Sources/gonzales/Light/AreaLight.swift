@@ -64,7 +64,7 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
         }
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
-                let diffuse = Diffuse(kd: ConstantTexture(value: white))
+                let diffuse = Diffuse(reflectance: ConstantTexture(value: white))
                 return diffuse.computeScatteringFunctions(interaction: interaction)
         }
 

@@ -1,24 +1,37 @@
+enum DiffuseError: Error {
+        case noReflectance
+        case noTexture
+}
+
 final class Diffuse: Material {
 
-        init(kd: RGBSpectrumTexture) { self.kd = kd }
+        init(reflectance: RGBSpectrumTexture) {
+                self.reflectance = reflectance
+        }
 
         func computeScatteringFunctions(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
-                let kde = kd.evaluateRGBSpectrum(at: interaction)
-                bsdf.set(bxdf: LambertianReflection(reflectance: kde))
+                let reflectance = reflectance.evaluateRGBSpectrum(at: interaction)
+                bsdf.set(bxdf: LambertianReflection(reflectance: reflectance))
                 return bsdf
         }
 
-        var kd: RGBSpectrumTexture
+        let reflectance: RGBSpectrumTexture
 }
 
 func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
-        if let reflectance = try parameters.findSpectrum(name: "reflectance", else: nil)
+        let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
+        if !reflectanceTextureName.isEmpty {
+                guard let texture = state.textures[reflectanceTextureName] as? RGBSpectrumTexture else {
+                        throw DiffuseError.noTexture
+                }
+                return Diffuse(reflectance: texture)
+        }
+        if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: nil)
                 as? RGBSpectrum
         {
-                let kd = ConstantTexture<RGBSpectrum>(value: reflectance)
-                return Diffuse(kd: kd)
+                let reflectanceConstant = ConstantTexture<RGBSpectrum>(value: reflectanceSpectrum)
+                return Diffuse(reflectance: reflectanceConstant)
         }
-        let kd: RGBSpectrumTexture = try parameters.findRGBSpectrumTexture(name: "Kd", else: gray)
-        return Diffuse(kd: kd)
+        throw DiffuseError.noReflectance
 }

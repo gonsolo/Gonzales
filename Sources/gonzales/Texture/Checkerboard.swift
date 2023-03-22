@@ -16,8 +16,7 @@ final class Checkerboard: RGBSpectrumTexture {
                 }
                 let u = Int(floor(interaction.uv[0] * scale.0))
                 let v = Int(floor(interaction.uv[1] * scale.1))
-                print("checkerboard uv: ", u, v)
-                if u + v % 2 == 0 {
+                if (u + v) % 2 == 0 {
                         return textureEven
                 } else {
                         return textureOdd
