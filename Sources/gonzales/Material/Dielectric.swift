@@ -9,7 +9,6 @@ final class Dielectric: Material {
         func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let eta = self.eta.evaluateFloat(at: interaction)
-                bsdf.eta = eta
                 let reflectance = self.reflectance.evaluateRGBSpectrum(at: interaction)
                 let transmittance = self.transmittance.evaluateRGBSpectrum(at: interaction)
                 if reflectance.isBlack && transmittance.isBlack { return bsdf }

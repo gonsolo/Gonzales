@@ -73,5 +73,4 @@ struct BSDF {
         var ns = Normal()
         var ss = up
         var ts = up
-        var eta: FloatX = 1.0
 }
