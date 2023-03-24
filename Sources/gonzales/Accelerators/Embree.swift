@@ -127,10 +127,7 @@ final class Embree: Accelerator {
 
                 var context = RTCIntersectContext()
                 rtcInitIntersectContext(&context)
-
                 rtcIntersect1(rtcScene, &context, &rayhit)
-
-                var uv = Point2F()
 
                 guard rayhit.hit.geomID != rtcInvalidGeometryId else {
                         return empty(#line)
@@ -141,9 +138,10 @@ final class Embree: Accelerator {
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
                 let uvs = triangleUVs[geomID]!
-                uv[0] = bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x
-                uv[1] = bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
-
+                let uv = Point2F(
+                        x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
+                        y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
+                )
                 interaction.valid = true
                 interaction.position = ray.origin + tout * ray.direction
                 interaction.normal = normalized(
