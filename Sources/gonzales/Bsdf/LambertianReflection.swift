@@ -6,5 +6,5 @@ struct LambertianReflection: BxDF {
 
         func albedo() -> RGBSpectrum { return reflectance }
 
-        var reflectance: RGBSpectrum
+        var reflectance: RGBSpectrum = white
 }
