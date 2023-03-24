@@ -12,7 +12,7 @@ final class Diffuse: Material {
         func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectance = reflectance.evaluateRGBSpectrum(at: interaction)
-                bsdf.set(bxdf: LambertianReflection(reflectance: reflectance))
+                bsdf.set(bxdf: DiffuseBxdf(reflectance: reflectance))
                 return bsdf
         }
 

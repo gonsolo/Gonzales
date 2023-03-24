@@ -1,4 +1,4 @@
-struct LambertianReflection: BxDF {
+struct DiffuseBxdf: BxDF {
 
         func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
                 return reflectance / FloatX.pi
