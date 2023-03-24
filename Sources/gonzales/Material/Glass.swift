@@ -6,7 +6,7 @@ final class Glass: Material {
                 self.eta = eta
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let eta = self.eta.evaluateFloat(at: interaction)
                 bsdf.eta = eta

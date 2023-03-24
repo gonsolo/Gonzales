@@ -6,7 +6,7 @@ final class Conductor: Material {
                 self.roughness = roughness
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)

@@ -10,7 +10,7 @@ final class DiffuseTransmission: Material {
                 self.scale = scale
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectance = reflectance.evaluateRGBSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)

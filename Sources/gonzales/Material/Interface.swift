@@ -1,6 +1,6 @@
 final class Interface: Material {
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 // Unimplemented by design
                 unimplemented()
         }

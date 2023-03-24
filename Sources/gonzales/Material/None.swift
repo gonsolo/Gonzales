@@ -1,6 +1,6 @@
 final class None: Material {
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 return BSDF(interaction: interaction)
         }
 }

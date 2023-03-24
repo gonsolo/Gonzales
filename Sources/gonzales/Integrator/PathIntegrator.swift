@@ -363,7 +363,7 @@ final class VolumePathIntegrator {
                         }
                         return (black, ray, false, true, false)
                 }
-                let bsdf = material.computeScatteringFunctions(interaction: surfaceInteraction)
+                let bsdf = material.getBSDF(interaction: surfaceInteraction)
                 if bounce == 0 {
                         albedo = bsdf.albedo()
                         firstNormal = surfaceInteraction.normal

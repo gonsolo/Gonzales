@@ -25,8 +25,8 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
                 return shape.objectBound()
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
-                return materials[material]!.computeScatteringFunctions(interaction: interaction)
+        func getBSDF(interaction: Interaction) -> BSDF {
+                return materials[material]!.getBSDF(interaction: interaction)
         }
 
         var shape: Shape

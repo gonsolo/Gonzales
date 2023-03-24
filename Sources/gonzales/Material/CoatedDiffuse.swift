@@ -5,7 +5,7 @@ final class CoatedDiffuse: Material {
                 self.reflectance = reflectance
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRGBSpectrum(at: interaction)
                 bsdf.set(bxdf: LambertianReflection(reflectance: reflectanceAtInteraction))

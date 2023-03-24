@@ -6,7 +6,7 @@ final class Substrate: Material {
                 self.roughness = roughness
         }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let kd = self.kd.evaluateRGBSpectrum(at: interaction)
                 let ks = self.ks.evaluateRGBSpectrum(at: interaction)

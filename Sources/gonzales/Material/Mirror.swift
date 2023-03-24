@@ -2,7 +2,7 @@ final class Mirror: Material {
 
         init(kr: RGBSpectrumTexture) { self.kr = kr }
 
-        func computeScatteringFunctions(interaction: Interaction) -> BSDF {
+        func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectance = kr.evaluateRGBSpectrum(at: interaction)
                 bsdf.set(bxdf: SpecularReflection(reflectance: reflectance, fresnel: FresnelNop()))
