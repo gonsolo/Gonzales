@@ -8,12 +8,15 @@ final class CoatedDiffuse: Material {
         func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRGBSpectrum(at: interaction)
-                bsdf.set(bxdf: LambertianReflection(reflectance: reflectanceAtInteraction))
+                let bxdf = CoatedDiffuseBxdf(
+                        reflectance: reflectanceAtInteraction,
+                        roughness: roughness)
+                bsdf.set(bxdf: bxdf)
                 return bsdf
         }
 
-        var roughness: (FloatX, FloatX)
         var reflectance: RGBSpectrumTexture
+        var roughness: (FloatX, FloatX)
 }
 
 func createCoatedDiffuse(parameters: ParameterDictionary) throws -> CoatedDiffuse {
