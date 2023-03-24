@@ -131,20 +131,18 @@ final class Embree: Accelerator {
                 rtcIntersect1(rtcScene, &context, &rayhit)
 
                 var intersected = false
-                var uvTriangle = Point2F()
                 var uv = Point2F()
 
                 if rayhit.hit.geomID != rtcInvalidGeometryId {
                         tout = rayhit.ray.tfar
                         geomID = rayhit.hit.geomID
                         intersected = true
-                        uvTriangle[0] = rayhit.hit.u
-                        uvTriangle[1] = rayhit.hit.v
+                        let bary1 = rayhit.hit.u
+                        let bary2 = rayhit.hit.v
+                        let bary0 = 1 - bary1 - bary2
                         let uvs = triangleUVs[geomID]!
-                        uv[0] = (lerp(with: uvTriangle[0], between: uvs.0.x, and: uvs.1.x) +
-                                lerp(with: uvTriangle[1], between: uvs.0.x, and: uvs.2.x)) / 2
-                        uv[1] = (lerp(with: uvTriangle[0], between: uvs.0.y, and: uvs.1.y) +
-                                lerp(with: uvTriangle[1], between: uvs.0.y, and: uvs.2.y)) / 2
+                        uv[0] = bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x
+                        uv[1] = bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
                 }
                 guard intersected else {
                         return empty(#line)
