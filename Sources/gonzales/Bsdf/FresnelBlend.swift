@@ -1,3 +1,9 @@
+// https://www.pbr-book.org/3ed-2018/Reflection_Models/Fresnel_Incidence_Effects
+
+// Ashikhmin, Michael, and Peter Shirley.
+// "An anisotropic phong brdf model."
+// Journal of graphics tools 5.2 (2000): 25-32.
+
 struct FresnelBlend: BxDF {
 
         private func pow5(_ x: FloatX) -> FloatX {
