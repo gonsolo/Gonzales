@@ -277,27 +277,21 @@ struct Api {
                                 prims.append(areaLight)
                         }
                 } else {
-                        if !(material is None) {
-                                materials[materialCounter] = material
-                                for shape in shapes {
-                                        let geometricPrimitive = GeometricPrimitive(
-                                                shape: shape,
-                                                material: materialCounter,
-                                                mediumInterface: state.currentMediumInterface)
-                                        prims.append(geometricPrimitive)
-                                }
-                                materialCounter = materialCounter + 1
+                        materials[materialCounter] = material
+                        for shape in shapes {
+                                let geometricPrimitive = GeometricPrimitive(
+                                        shape: shape,
+                                        material: materialCounter,
+                                        mediumInterface: state.currentMediumInterface)
+                                prims.append(geometricPrimitive)
                         }
+                        materialCounter = materialCounter + 1
                 }
                 if let name = state.objectName {
                         if options.objects[name] == nil {
-                                if !(material is None) {
-                                        options.objects[name] = prims
-                                }
+                                options.objects[name] = prims
                         } else {
-                                if !(material is None) {
-                                        options.objects[name]!.append(contentsOf: prims)
-                                }
+                                options.objects[name]!.append(contentsOf: prims)
                         }
                 } else {
                         options.primitives.append(contentsOf: prims)
@@ -515,8 +509,10 @@ struct Api {
                         material = try createInterface(parameters: parameters)
                 case "mirror":
                         material = try createMirror(parameters: parameters)
-                case "none":
-                        material = try createNone()
+                // measured missing
+                // mix missing
+                // subsurface missing
+                // thindielectric missing
                 default:
                         material = try makeDefault(insteadOf: name)
                 }
