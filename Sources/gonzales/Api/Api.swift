@@ -486,7 +486,7 @@ struct Api {
                 func makeDefault(insteadOf material: String) throws -> Material {
                         warnOnce("Unknown material \"\(material)\". Creating default.")
                         var parameterList = ParameterDictionary()
-                        parameterList["Kd"] = [0.5]
+                        parameterList["reflectance"] = [gray]
                         return try createDiffuse(parameters: parameters)
                 }
 
@@ -507,8 +507,6 @@ struct Api {
                         material = try createHair(parameters: parameters)
                 case "interface":
                         material = try createInterface(parameters: parameters)
-                case "mirror":
-                        material = try createMirror(parameters: parameters)
                 // measured missing
                 // mix missing
                 // subsurface missing
