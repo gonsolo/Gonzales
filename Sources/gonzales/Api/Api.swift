@@ -518,8 +518,6 @@ struct Api {
                         material = try createMirror(parameters: parameters)
                 case "none":
                         material = try createNone()
-                case "substrate":
-                        material = try createSubstrate(parameters: parameters)
                 default:
                         material = try makeDefault(insteadOf: name)
                 }
