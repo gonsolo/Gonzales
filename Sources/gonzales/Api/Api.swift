@@ -500,6 +500,7 @@ struct Api {
                 switch name {
                 case "coateddiffuse":
                         material = try createCoatedDiffuse(parameters: parameters)
+                // coatedconductor missing
                 case "conductor":
                         material = try createConductor(parameters: parameters)
                 case "dielectric":
@@ -508,8 +509,6 @@ struct Api {
                         material = try createDiffuse(parameters: parameters)
                 case "diffusetransmission":
                         material = try createDiffuseTransmission(parameters: parameters)
-                case "glass":
-                        material = try createGlass(parameters: parameters)
                 case "hair":
                         material = try createHair(parameters: parameters)
                 case "interface":
