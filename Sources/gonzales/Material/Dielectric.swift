@@ -16,9 +16,9 @@ final class Dielectric: Material {
                 let reflectance = self.reflectance.evaluateRGBSpectrum(at: interaction)
                 let transmittance = self.transmittance.evaluateRGBSpectrum(at: interaction)
                 if reflectance.isBlack && transmittance.isBlack { return bsdf }
-                let specular = FresnelSpecular(
-                        reflectance: reflectance, transmittance: transmittance, etaA: 1, etaB: eta)
-                bsdf.set(bxdf: specular)
+                let distribution = TrowbridgeReitzDistribution(alpha: (1, 1))
+                let bxdf = DielectricBsdf(distribution: distribution, eta: eta)
+                bsdf.set(bxdf: bxdf)
                 return bsdf
         }
 

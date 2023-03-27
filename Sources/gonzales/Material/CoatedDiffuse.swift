@@ -8,7 +8,7 @@ final class CoatedDiffuse: Material {
         func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRGBSpectrum(at: interaction)
-                let bxdf = CoatedDiffuseBxdf(
+                let bxdf = CoatedDiffuseBsdf(
                         reflectance: reflectanceAtInteraction,
                         roughness: roughness)
                 bsdf.set(bxdf: bxdf)

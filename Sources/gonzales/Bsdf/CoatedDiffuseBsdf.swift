@@ -1,14 +1,24 @@
-struct CoatedDiffuseBxdf: BxDF {
+struct CoatedDiffuseBsdf: BxDF {
 
         init(reflectance: RGBSpectrum, roughness: (FloatX, FloatX)) {
                 self.reflectance = reflectance
                 self.roughness = roughness
-                self.topBxdf = Dielectric()
+                self.topBxdf = DielectricBsdf(
+                        distribution: TrowbridgeReitzDistribution(alpha: (1, 1)),
+                        eta: 1)
                 self.bottomBxdf = DiffuseBxdf(reflectance: reflectance)
         }
 
         func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
-                // TODO
+                assert(wo.z > 0)
+                assert(sameHemisphere(wi, wo))
+                // enterInterface = top
+                // enteredTop = true
+
+                let numberOfSamples = 1
+                var evaluation = black
+
+                evaluation = FloatX(numberOfSamples) * topBxdf.evaluate(wo: wo, wi: wi)
                 return bottomBxdf.evaluate(wo: wo, wi: wi)
         }
 
@@ -25,6 +35,6 @@ struct CoatedDiffuseBxdf: BxDF {
         let reflectance: RGBSpectrum
         let roughness: (FloatX, FloatX)
 
-        let topBxdf: Dielectric
+        let topBxdf: DielectricBsdf
         let bottomBxdf: DiffuseBxdf
 }
