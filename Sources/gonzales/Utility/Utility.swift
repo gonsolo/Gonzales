@@ -52,6 +52,8 @@ func gammaLinearToSrgb(value: FloatX) -> FloatX {
 
 func square(_ x: FloatX) -> FloatX { return x * x }
 
+func square(_ x: RGBSpectrum) -> RGBSpectrum { return x * x }
+
 func gammaSrgbToLinear(value: FloatX) -> FloatX {
         if value <= 0.04045 {
                 return value / 12.92

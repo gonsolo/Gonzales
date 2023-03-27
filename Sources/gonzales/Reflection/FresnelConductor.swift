@@ -1,9 +1,12 @@
+// https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations
 struct FresnelConductor: Fresnel {
 
-        // https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations
-        func frConductor(cosTheta: FloatX, etaI: RGBSpectrum, etaT: RGBSpectrum, k: RGBSpectrum)
-                -> RGBSpectrum
-        {
+        private func fresnelConductor(
+                cosTheta: FloatX,
+                etaI: RGBSpectrum,
+                etaT: RGBSpectrum,
+                k: RGBSpectrum
+        ) -> RGBSpectrum {
                 let cosThetaClamped = clamp(value: cosTheta, low: -1, high: 1)
                 let eta = etaT / etaI
                 let etak = k / etaI
@@ -24,7 +27,7 @@ struct FresnelConductor: Fresnel {
         }
 
         func evaluate(cosTheta: FloatX) -> RGBSpectrum {
-                return frConductor(cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, k: k)
+                return fresnelConductor(cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, k: k)
         }
 
         let etaI: RGBSpectrum
