@@ -3,7 +3,7 @@
 struct BSDF {
 
         init() {
-                bxdf = DiffuseBxdf(reflectance: black)
+                bxdf = DiffuseBsdf(reflectance: black)
                 ng = Normal()
                 ns = Normal()
                 ss = up
@@ -11,7 +11,7 @@ struct BSDF {
         }
 
         init(interaction: Interaction) {
-                bxdf = DiffuseBxdf(reflectance: black)
+                bxdf = DiffuseBsdf(reflectance: black)
                 ng = interaction.normal
                 ns = interaction.shadingNormal
                 ss = normalized(interaction.dpdu)

@@ -1,35 +1,34 @@
 final class Dielectric: Material {
 
         init(
-                reflectance: RGBSpectrumTexture = ConstantTexture(value: white),
-                transmittance: RGBSpectrumTexture = ConstantTexture(value: white),
-                eta: FloatTexture = ConstantTexture(value: FloatX(1))
+                refractiveIndex: FloatTexture = ConstantTexture(value: FloatX(1)),
+                roughness: (FloatX, FloatX)
         ) {
-                self.reflectance = reflectance
-                self.transmittance = transmittance
-                self.eta = eta
+                self.refractiveIndex = refractiveIndex
+                self.roughness = roughness
         }
 
         func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
-                let eta = self.eta.evaluateFloat(at: interaction)
-                let reflectance = self.reflectance.evaluateRGBSpectrum(at: interaction)
-                let transmittance = self.transmittance.evaluateRGBSpectrum(at: interaction)
-                if reflectance.isBlack && transmittance.isBlack { return bsdf }
-                let distribution = TrowbridgeReitzDistribution(alpha: (1, 1))
-                let bxdf = DielectricBsdf(distribution: distribution, eta: eta)
+                let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
+                let alpha = TrowbridgeReitzDistribution.getAlpha(from: roughness)
+                let distribution = TrowbridgeReitzDistribution(alpha: alpha)
+                let bxdf = DielectricBsdf(distribution: distribution, refractiveIndex: refractiveIndex)
                 bsdf.set(bxdf: bxdf)
                 return bsdf
         }
 
-        var reflectance: RGBSpectrumTexture
-        var transmittance: RGBSpectrumTexture
-        var eta: FloatTexture
+        let refractiveIndex: FloatTexture
+        let roughness: (FloatX, FloatX)
 }
 
 func createDielectric(parameters: ParameterDictionary) throws -> Dielectric {
-        let kr = try parameters.findRGBSpectrumTexture(name: "Kr", else: RGBSpectrum(intensity: 1))
-        let kt = try parameters.findRGBSpectrumTexture(name: "Kt", else: RGBSpectrum(intensity: 1))
-        let eta = try parameters.findFloatXTexture(name: "eta", else: 1.5)
-        return Dielectric(reflectance: kr, transmittance: kt, eta: eta)
+        let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
+        let uRoughness =
+                try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
+        let vRoughness =
+                try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
+        let roughness = (uRoughness, vRoughness)
+        let refractiveIndex = try parameters.findFloatXTexture(name: "eta", else: 1.5)
+        return Dielectric(refractiveIndex: refractiveIndex, roughness: roughness)
 }

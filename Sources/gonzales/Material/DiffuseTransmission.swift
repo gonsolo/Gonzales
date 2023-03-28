@@ -16,7 +16,7 @@ final class DiffuseTransmission: Material {
                 let scale = scale.evaluateFloat(at: interaction)
                 // TODO: check same hemisphere and transmission
                 // TODO: transmittance
-                let bxdf = DiffuseBxdf(reflectance: scale * reflectance)
+                let bxdf = DiffuseBsdf(reflectance: scale * reflectance)
                 bsdf.set(bxdf: bxdf)
                 return bsdf
         }

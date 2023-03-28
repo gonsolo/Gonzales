@@ -77,3 +77,7 @@ func makeCoordinateSystem(from v1: Vector) -> (v2: Vector, v3: Vector) {
 func faceforward(normal: Normal, comparedTo vector: Vector) -> Normal {
         return dot(normal, vector) < 0 ? -normal : normal
 }
+
+func faceforward(vector: Vector, comparedTo normal: Normal) -> Vector {
+        return dot(vector, normal) < 0 ? -vector : vector
+}

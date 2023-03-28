@@ -104,5 +104,13 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                         * x * x * x * x
         }
 
+        var isSmooth: Bool {
+                return max(alpha.0, alpha.1) < 0.001
+        }
+
+        // α = √2 σ/τ
+        // σ = height
+        // τ = area/length
+        // α  corresponds to roughness: 0.1 is smooth (spiky highlight), 1 is Lambertian.
         let alpha: (FloatX, FloatX)
 }

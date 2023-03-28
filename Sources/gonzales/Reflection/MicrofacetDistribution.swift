@@ -16,6 +16,8 @@ protocol MicrofacetDistribution {
         // G1 in PBRT
         func maskingShadowing(_ vector: Vector) -> FloatX
 
+        var isSmooth: Bool { get }
+
         func pdf(wo: Vector, half: Vector) -> FloatX
 }
 
