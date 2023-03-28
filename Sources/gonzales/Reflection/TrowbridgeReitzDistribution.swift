@@ -26,7 +26,7 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return result
         }
 
-        func sampleHalfVector(wo: Vector, u: Point2F) -> Vector {
+        func sampleHalfVector(wo: Vector, u: TwoRandomVariables) -> Vector {
                 var localWo = wo
                 let flip = wo.z < 0
                 if flip { localWo = -localWo }
@@ -38,10 +38,10 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 }
         }
 
-        private func trowbridgeReitzSample11(cosTheta: FloatX, u: Point2F) -> (FloatX, FloatX) {
+        private func trowbridgeReitzSample11(cosTheta: FloatX, u: TwoRandomVariables) -> (FloatX, FloatX) {
                 if cosTheta > 0.9999 {
-                        let r = (u.x / (1 - u.x)).squareRoot()
-                        let phi = 2 * FloatX.pi * u.y
+                        let r = (u.0 / (1 - u.0)).squareRoot()
+                        let phi = 2 * FloatX.pi * u.1
                         let slope = (r * cos(phi), r * sin(phi))
                         return slope
                 }
@@ -49,7 +49,7 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 let tanTheta = sinTheta / cosTheta
                 let invTanTheta = 1 / tanTheta
                 let g1 = 2 / (1 + (1 + 1 / (invTanTheta * invTanTheta)).squareRoot())
-                let a = 2 * u.x / g1 - 1
+                let a = 2 * u.0 / g1 - 1
                 var tmp = 1 / (a * a - 1)
                 if tmp > 1e10 { tmp = 1e10 }
                 let b = tanTheta
@@ -64,23 +64,23 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 }
                 var s: FloatX = 0.0
                 var u = u
-                if u.y > 0.5 {
+                if u.1 > 0.5 {
                         s = 1
-                        u.y = 2 * (u.y - 0.5)
+                        u.1 = 2 * (u.1 - 0.5)
                 } else {
                         s = -1
-                        u.y = 2 * (0.5 - u.y)
+                        u.1 = 2 * (0.5 - u.1)
                 }
                 let z =
-                        (u.y * (u.y * (u.y * 0.27385 - 0.73369) + 0.46341))
-                        / (u.y * (u.y * (u.y * 0.093073 + 0.309420) - 1.000000) + 0.597999)
+                        (u.1 * (u.1 * (u.1 * 0.27385 - 0.73369) + 0.46341))
+                        / (u.1 * (u.1 * (u.1 * 0.093073 + 0.309420) - 1.000000) + 0.597999)
                 slope.1 = s * z * (1 + slope.0 * slope.0).squareRoot()
                 assert(!slope.1.isInfinite)
                 assert(!slope.1.isNaN)
                 return slope
         }
 
-        private func trowbridgeReitzSample(wi: Vector, alpha: (FloatX, FloatX), u: Point2F)
+        private func trowbridgeReitzSample(wi: Vector, alpha: (FloatX, FloatX), u: TwoRandomVariables)
                 -> Vector
         {
                 let wiStretched = normalized(Vector(x: alpha.0 * wi.x, y: alpha.1 * wi.y, z: wi.z))

@@ -11,14 +11,14 @@ protocol MicrofacetDistribution {
 
         func lambda(_ vector: Vector) -> FloatX
 
-        func sampleHalfVector(wo: Vector, u: Point2F) -> Vector
+        func sampleHalfVector(wo: Vector, u: TwoRandomVariables) -> Vector
 
         // G1 in PBRT
         func maskingShadowing(_ vector: Vector) -> FloatX
 
         var isSmooth: Bool { get }
 
-        func pdf(wo: Vector, half: Vector) -> FloatX
+        func probabilityDensity(wo: Vector, half: Vector) -> FloatX
 }
 
 extension MicrofacetDistribution {
@@ -32,7 +32,7 @@ extension MicrofacetDistribution {
                 return 1 / (1 + lambda(wo) + lambda(wi))
         }
 
-        func pdf(wo: Vector, half: Vector) -> FloatX {
+        func probabilityDensity(wo: Vector, half: Vector) -> FloatX {
                 return differentialArea(withNormal: half) * maskingShadowing(wo) * absDot(wo, half)
                         / absCosTheta(wo)
         }

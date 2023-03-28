@@ -6,18 +6,23 @@ func reflect(vector: Vector, by normal: Vector) -> Vector {
         return -vector + 2 * dot(vector, normal) * normal
 }
 
-func refract(wi: Vector, normal: Normal, eta: FloatX) -> Vector? {
-        var wt = up
-        let cosThetaI = dot(normal, wi)
-        let sin2ThetaI = max(0, 1 - cosThetaI * cosThetaI)
-        let sin2ThetaT = eta * eta * sin2ThetaI
+func refract(wi: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
+        var eta = eta
+        var cosThetaI = dot(normal, wi)
+        var normal = -normal
+        if cosThetaI < 0 {
+                eta = 1 / eta
+                cosThetaI = -cosThetaI
+                normal = -normal
+        }
+        let sin2ThetaI = max(0, 1 - square(cosThetaI))
+        let sin2ThetaT = square(eta) * sin2ThetaI
         if sin2ThetaT >= 1 {
                 return nil
-        } else {
-                let cosThetaT = (1 - sin2ThetaT).squareRoot()
-                wt = eta * -wi + (eta * cosThetaI - cosThetaT) * Vector(normal: normal)
         }
-        return wt
+        let cosThetaT = (1 - sin2ThetaT).squareRoot()
+        let wt = eta * -wi + (eta * cosThetaI - cosThetaT) * Vector(normal: normal)
+        return (wt, eta)
 }
 
 func sinTheta(_ w: Vector) -> FloatX { return sin2Theta(w).squareRoot() }

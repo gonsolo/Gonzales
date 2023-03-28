@@ -93,6 +93,10 @@ public typealias Vector = Vector3<FloatX>
 let nullVector = Vector(x: 0, y: 0, z: 0)
 let up = Vector(x: 0, y: 1, z: 0)
 
+func mirror<T: FloatingPoint>(_ vector: Vector3<T>) -> Vector3<T> {
+        return Vector3(x: -vector.x, y: -vector.y, z: vector.z)
+}
+
 func abs<T: FloatingPoint>(_ vector: Vector3<T>) -> Vector3<T> {
         return Vector3(x: abs(vector.x), y: abs(vector.y), z: abs(vector.z))
 }

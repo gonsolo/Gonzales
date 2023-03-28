@@ -48,40 +48,118 @@ struct DielectricBsdf: BxDF {
                 }
         }
 
-        private func sampleSpecularReflection() -> BSDFSample {
-                unimplemented()
+        private func sampleSpecularReflection(wo: Vector, reflected: FloatX, probabilityReflected: FloatX)
+                -> BSDFSample
+        {
+                let wi = mirror(wo)
+                let estimate = RGBSpectrum(intensity: reflected / absCosTheta(wi))
+                return BSDFSample(estimate, wi, probabilityReflected)
         }
 
-        private func sampleSpecularTransmission() -> BSDFSample {
-                unimplemented()
+        private func sampleSpecularTransmission(
+                wo: Vector,
+                transmitted: FloatX,
+                probabilityTransmitted: FloatX
+        ) -> BSDFSample {
+                let up = Normal(x: 0, y: 0, z: 1)
+                guard let (wi, etap) = refract(wi: wo, normal: up, eta: refractiveIndex) else {
+                        return BSDFSample()
+                }
+                var estimate = RGBSpectrum(intensity: transmitted / absCosTheta(wi))
+                // transport mode radiance
+                estimate /= square(etap)
+                return BSDFSample(estimate, wi, probabilityTransmitted)
         }
 
         private func sampleSpecular(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: cosTheta(wo),
                         refractiveIndex: refractiveIndex)
-                let transmitted = white - reflected
-                //if u < fre
-                if true {
-                        return sampleSpecularReflection()
+                let transmitted = 1 - reflected
+                let probabilityReflected = reflected / (reflected + transmitted)
+                let probabilityTransmitted = transmitted / (reflected + transmitted)
+                if u.0 < probabilityReflected {
+                        return sampleSpecularReflection(
+                                wo: wo,
+                                reflected: reflected,
+                                probabilityReflected: probabilityReflected)
                 } else {
-                        return sampleSpecularTransmission()
+                        return sampleSpecularTransmission(
+                                wo: wo,
+                                transmitted: transmitted,
+                                probabilityTransmitted: probabilityTransmitted)
                 }
         }
 
-        private func sampleRoughReflection() -> BSDFSample {
-                unimplemented()
+        private func sampleRoughReflection(
+                wo: Vector,
+                wm: Vector,
+                reflected: FloatX,
+                probabilityReflected: FloatX
+        ) -> BSDFSample {
+                let wi = reflect(vector: wo, by: wm)
+                guard sameHemisphere(wo, wi) else {
+                        return BSDFSample()
+                }
+                let probabilityDensity =
+                        distribution.probabilityDensity(wo: wo, half: wm)
+                        / (4 * absDot(wo, wm)) * probabilityReflected
+
+                let differentialArea = distribution.differentialArea(withNormal: wm)
+                let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
+                let enumerator = differentialArea * visibleFraction * reflected
+                let denominator = 4 * cosTheta(wi) * cosTheta(wo)
+                let estimate = RGBSpectrum(intensity: enumerator / denominator)
+                return BSDFSample(estimate, wi, probabilityDensity)
         }
 
-        private func sampleRoughTransmission() -> BSDFSample {
-                unimplemented()
+        private func sampleRoughTransmission(
+                wo: Vector,
+                wm: Vector,
+                transmitted: FloatX,
+                probabilityTransmitted: FloatX
+        ) -> BSDFSample {
+                guard let (wi, etap) = refract(wi: wo, normal: Normal(wm), eta: refractiveIndex) else {
+                        return BSDFSample()
+                }
+                if sameHemisphere(wo, wi) || wi.z == 0 {
+                        return BSDFSample()
+                }
+                let denom = square(dot(wi, wm) + dot(wo, wm) / etap)
+                let dwmDwi = absDot(wi, wm) / denom
+                let probabilityDensity =
+                        distribution.probabilityDensity(wo: wo, half: wm) * dwmDwi * probabilityTransmitted
+                let differentialArea = distribution.differentialArea(withNormal: wm)
+                let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
+                var estimate = RGBSpectrum(
+                        intensity:
+                                transmitted * differentialArea * visibleFraction
+                                * abs(dot(wi, wm) * dot(wo, wm) / cosTheta(wi) * cosTheta(wo) * denom))
+                // transport mode radiance
+                estimate /= square(etap)
+                return BSDFSample(estimate, wi, probabilityDensity)
         }
 
-        private func sampleRough() -> BSDFSample {
-                if true {
-                        return sampleRoughReflection()
+        private func sampleRough(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+                let wm = distribution.sampleHalfVector(wo: wo, u: (u.0, u.1))
+                let reflected = FresnelDielectric.reflected(
+                        cosThetaI: dot(wo, wm),
+                        refractiveIndex: refractiveIndex)
+                let transmitted = 1 - reflected
+                let probabilityReflected = reflected / (reflected + transmitted)
+                let probabilityTransmitted = transmitted / (reflected + transmitted)
+                if u.2 < probabilityReflected {
+                        return sampleRoughReflection(
+                                wo: wo,
+                                wm: wm,
+                                reflected: reflected,
+                                probabilityReflected: probabilityReflected)
                 } else {
-                        return sampleRoughTransmission()
+                        return sampleRoughTransmission(
+                                wo: wo,
+                                wm: wm,
+                                transmitted: transmitted,
+                                probabilityTransmitted: probabilityTransmitted)
                 }
         }
 
@@ -89,7 +167,7 @@ struct DielectricBsdf: BxDF {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return sampleSpecular(wo: wo, u: u)
                 } else {
-                        return sampleRough()
+                        return sampleRough(wo: wo, u: u)
                 }
         }
 
