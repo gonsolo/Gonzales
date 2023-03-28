@@ -3,7 +3,7 @@
 ///        Distribution Functions).
 protocol BxDF {
         func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum
-        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX)
+        func sample(wo: Vector, u: Point2F) -> BSDFSample
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX
         func albedo() -> RGBSpectrum
 
@@ -13,17 +13,15 @@ protocol BxDF {
 
 extension BxDF {
 
-        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
-                RGBSpectrum, Vector, FloatX
-        ) {
+        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> BSDFSample {
                 var wi = cosineSampleHemisphere(u: u)
                 if wo.z < 0 { wi.z = -wi.z }
                 let density = probabilityDensity(wo: wo, wi: wi)
                 let radiance = evaluate(wo, wi)
-                return (radiance, wi, density)
+                return BSDFSample(radiance, wi, density)
         }
 
-        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
+        func sample(wo: Vector, u: Point2F) -> BSDFSample {
                 return sample(wo: wo, u: u, evaluate: self.evaluate)
         }
 

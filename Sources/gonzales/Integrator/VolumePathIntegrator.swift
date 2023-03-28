@@ -110,25 +110,23 @@ final class VolumePathIntegrator {
 
                 let zero = (black, FloatX(0.0), up)
 
-                var scatter = RGBSpectrum()
-                var wi = Vector()
-                var bsdfDensity: FloatX = 1
+                var bsdfSample = BSDFSample()
                 if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        (scatter, wi, bsdfDensity, _) = try bsdf.sample(
-                                wo: surfaceInteraction.wo, u: sampler.get2D())
-                        guard scatter != black && bsdfDensity > 0 else {
+                        //(scatter, wi, bsdfDensity, _) = try bsdf.sample(
+                        (bsdfSample, _) = try bsdf.sample(wo: surfaceInteraction.wo, u: sampler.get2D())
+                        guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                                 return zero
                         }
-                        scatter *= absDot(wi, surfaceInteraction.shadingNormal)
+                        bsdfSample.estimate *= absDot(bsdfSample.incoming, surfaceInteraction.shadingNormal)
                 }
                 if let mediumInteraction = interaction as? MediumInteraction {
                         let (value, _) = mediumInteraction.phase.samplePhase(
                                 wo: interaction.wo,
                                 sampler: sampler)
-                        scatter = RGBSpectrum(intensity: value)
-                        bsdfDensity = value
+                        bsdfSample.estimate = RGBSpectrum(intensity: value)
+                        bsdfSample.probabilityDensity = value
                 }
-                let ray = interaction.spawnRay(inDirection: wi)
+                let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
                 try intersect(
@@ -140,18 +138,18 @@ final class VolumePathIntegrator {
                         for light in scene.lights {
                                 if light is InfiniteLight {
                                         let radiance = light.radianceFromInfinity(for: ray)
-                                        let estimate = scatter * radiance
+                                        let estimate = bsdfSample.estimate * radiance
                                         return (
-                                                estimate: estimate, density: bsdfDensity,
-                                                sample: wi
+                                                estimate: estimate, density: bsdfSample.probabilityDensity,
+                                                sample: bsdfSample.incoming
                                         )
                                 }
                         }
                         return zero
                 }
                 let radiance = black
-                let estimate = scatter * radiance
-                return (estimate: estimate, density: bsdfDensity, sample: wi)
+                let estimate = bsdfSample.estimate * radiance
+                return (estimate: estimate, density: bsdfSample.probabilityDensity, sample: bsdfSample.incoming)
         }
 
         private func sampleLight(
@@ -378,13 +376,13 @@ final class VolumePathIntegrator {
                                 hierarchy: hierarchy,
                                 lightSampler: lightSampler)
                 l += ld
-                let (f, wi, pdf, _) = try bsdf.sample(
+                let (bsdfSample, _) = try bsdf.sample(
                         wo: surfaceInteraction.wo, u: sampler.get2D())
-                guard pdf != 0 && !pdf.isNaN else {
+                guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
                         return (l, ray, false, false, true)
                 }
-                beta = beta * f * absDot(wi, surfaceInteraction.normal) / pdf
-                ray = surfaceInteraction.spawnRay(inDirection: wi)
+                beta = beta * bsdfSample.estimate * absDot(bsdfSample.incoming, surfaceInteraction.normal) / bsdfSample.probabilityDensity
+                ray = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
                 return (l, ray, false, false, false)
         }
 

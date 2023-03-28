@@ -52,13 +52,14 @@ struct BSDF {
                                 z: ss.z * local.x + ts.z * local.y + ns.z * local.z))
         }
 
-        func sample(wo woWorld: Vector, u: Point2F) throws -> (
-                L: RGBSpectrum, wi: Vector, pdf: FloatX, isTransmissive: Bool
-        ) {
+        func sample(wo woWorld: Vector, u: Point2F) throws -> (bsdfSample: BSDFSample, isTransmissive: Bool) {
                 let woLocal = worldToLocal(world: woWorld)
-                let (estimate, wiLocal, density) = bxdf.sample(wo: woLocal, u: u)
-                let wiWorld = localToWorld(local: wiLocal)
-                return (estimate, wiWorld, density, bxdf.isTransmissive)
+                let bsdfSample = bxdf.sample(wo: woLocal, u: u)
+                let wiWorld = localToWorld(local: bsdfSample.incoming)
+                return (
+                        BSDFSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),
+                        bxdf.isTransmissive
+                )
         }
 
         func probabilityDensity(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
