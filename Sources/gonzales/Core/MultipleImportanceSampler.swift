@@ -1,14 +1,10 @@
-struct MultipleImportanceSampler<Sample> {
+struct MultipleImportanceSampler {
 
         struct MISSampler {
                 typealias sampleFunc = (Light, Interaction, Sampler, BSDF, Scene, Accelerator)
-                        throws -> (
-                                estimate: RGBSpectrum,
-                                density: FloatX,
-                                sample: Sample
-                        )
+                        throws -> BSDFSample
 
-                typealias densityFunc = (Light, Interaction, Sample, BSDF) throws -> FloatX
+                typealias densityFunc = (Light, Interaction, Vector, BSDF) throws -> FloatX
 
                 let sample: sampleFunc
                 let density: densityFunc
@@ -31,12 +27,13 @@ struct MultipleImportanceSampler<Sample> {
                         sampler: Sampler,
                         bsdf: BSDF
                 ) throws -> RGBSpectrum {
-                        let (estimate, density, sample) = try first.sample(
+                        let thisSample = try first.sample(
                                 light, interaction, sampler, bsdf, scene, hierarchy)
                         let otherDensity = try second.density(
-                                light, interaction, sample, bsdf)
-                        let weight = powerHeuristic(f: density, g: otherDensity)
-                        return density == 0 ? black : estimate * weight / density
+                                light, interaction, thisSample.incoming, bsdf)
+                        let weight = powerHeuristic(f: thisSample.probabilityDensity, g: otherDensity)
+                        return thisSample.probabilityDensity == 0
+                                ? black : thisSample.estimate * weight / thisSample.probabilityDensity
                 }
 
                 let a = try evaluate(

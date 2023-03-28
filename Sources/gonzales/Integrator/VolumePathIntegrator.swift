@@ -73,10 +73,8 @@ final class VolumePathIntegrator {
                 bsdf: BSDF,
                 scene: Scene,
                 hierarchy: Accelerator
-        ) throws -> (
-                estimate: RGBSpectrum, density: FloatX, sample: Vector
-        ) {
-                let zero = (black, FloatX(0.0), up)
+        ) throws -> BSDFSample {
+                let zero = BSDFSample()
 
                 let (radiance, wi, lightDensity, visibility) = light.sample(
                         for: interaction, u: sampler.get2D())
@@ -96,7 +94,7 @@ final class VolumePathIntegrator {
                         scatter = reflected * dot
                 }
                 let estimate = scatter * radiance
-                return (estimate: estimate, density: lightDensity, sample: wi)
+                return BSDFSample(estimate, wi, lightDensity)
         }
 
         private func sampleBrdf(
@@ -106,13 +104,12 @@ final class VolumePathIntegrator {
                 bsdf: BSDF,
                 scene: Scene,
                 hierarchy: Accelerator
-        ) throws -> (estimate: RGBSpectrum, density: FloatX, sample: Vector) {
+        ) throws -> BSDFSample {
 
-                let zero = (black, FloatX(0.0), up)
+                let zero = BSDFSample()
 
                 var bsdfSample = BSDFSample()
                 if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        //(scatter, wi, bsdfDensity, _) = try bsdf.sample(
                         (bsdfSample, _) = try bsdf.sample(wo: surfaceInteraction.wo, u: sampler.get2D())
                         guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                                 return zero
@@ -138,18 +135,13 @@ final class VolumePathIntegrator {
                         for light in scene.lights {
                                 if light is InfiniteLight {
                                         let radiance = light.radianceFromInfinity(for: ray)
-                                        let estimate = bsdfSample.estimate * radiance
-                                        return (
-                                                estimate: estimate, density: bsdfSample.probabilityDensity,
-                                                sample: bsdfSample.incoming
-                                        )
+                                        bsdfSample.estimate *= radiance
+                                        return bsdfSample
                                 }
                         }
                         return zero
                 }
-                let radiance = black
-                let estimate = bsdfSample.estimate * radiance
-                return (estimate: estimate, density: bsdfSample.probabilityDensity, sample: bsdfSample.incoming)
+                return bsdfSample
         }
 
         private func sampleLight(
@@ -160,19 +152,19 @@ final class VolumePathIntegrator {
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws -> RGBSpectrum {
-                let (estimate, density, _) = try sampleLightSource(
+                let bsdfSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
                         bsdf: bsdf,
                         scene: scene,
                         hierarchy: hierarchy)
-                if density == 0 {
+                if bsdfSample.probabilityDensity == 0 {
                         print("light: black")
                         return black
                 } else {
-                        print("light: ", estimate / density, estimate, density)
-                        return estimate / density
+                        print("light: ", bsdfSample)
+                        return bsdfSample.estimate / bsdfSample.probabilityDensity
                 }
         }
 
@@ -184,18 +176,17 @@ final class VolumePathIntegrator {
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws -> RGBSpectrum {
-                let (estimate, density, _) = try sampleBrdf(
+                let bsdfSample = try sampleBrdf(
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
                         bsdf: bsdf,
                         scene: scene,
                         hierarchy: hierarchy)
-                print("Brdf: ", estimate, density)
-                if density == 0 {
+                if bsdfSample.probabilityDensity == 0 {
                         return black
                 } else {
-                        return estimate / density
+                        return bsdfSample.estimate / bsdfSample.probabilityDensity
                 }
         }
 
@@ -207,9 +198,9 @@ final class VolumePathIntegrator {
                 scene: Scene,
                 hierarchy: Accelerator
         ) throws -> RGBSpectrum {
-                let lightSampler = MultipleImportanceSampler<Vector>.MISSampler(
+                let lightSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
-                let brdfSampler = MultipleImportanceSampler<Vector>.MISSampler(
+                let brdfSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleBrdf, density: brdfDensity)
                 let misSampler = MultipleImportanceSampler(samplers: (lightSampler, brdfSampler))
                 return try misSampler.evaluate(
@@ -381,7 +372,8 @@ final class VolumePathIntegrator {
                 guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
                         return (l, ray, false, false, true)
                 }
-                beta = beta * bsdfSample.estimate * absDot(bsdfSample.incoming, surfaceInteraction.normal) / bsdfSample.probabilityDensity
+                beta = beta * bsdfSample.estimate * absDot(bsdfSample.incoming, surfaceInteraction.normal)
+                        / bsdfSample.probabilityDensity
                 ray = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
                 return (l, ray, false, false, false)
         }
