@@ -21,13 +21,13 @@ final class HenyeyGreenstein: PhaseFunction {
                 let u = sampler.get2D()
                 var cosTheta: FloatX
                 if abs(g) < 1e-3 {
-                        cosTheta = 1 - 2 * u[0]
+                        cosTheta = 1 - 2 * u.0
                 } else {
-                        let sqrTerm = (1 - g * g) / (1 + g - 2 * g * u[0])
+                        let sqrTerm = (1 - g * g) / (1 + g - 2 * g * u.0)
                         cosTheta = -(1 + g * g - sqrTerm * sqrTerm) / (2 * g)
                 }
                 let sinTheta = (max(0.0, 1 - cosTheta * cosTheta)).squareRoot()
-                let phi = 2 * FloatX.pi * u[1]
+                let phi = 2 * FloatX.pi * u.1
                 let (v1, v2) = makeCoordinateSystem(from: wo)
                 let wi = sphericalDirection(
                         sinTheta: sinTheta,

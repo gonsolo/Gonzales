@@ -23,15 +23,15 @@ final class Sphere: Shape {
                 return Bounds3f(first: p0, second: p1)
         }
 
-        func uniformSampleSphere(u: Point2F) -> Point {
+        func uniformSampleSphere(u: TwoRandomVariables) -> Point {
 
-                let z = 1 - 2 * u[0]
+                let z = 1 - 2 * u.0
                 let r = max(0, 1 - z * z).squareRoot()
-                let phi = 2 * FloatX.pi * u[1]
+                let phi = 2 * FloatX.pi * u.1
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
 
-        func sample(u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
 
                 let localPosition = radius * uniformSampleSphere(u: u)
                 let worldNormal = normalized(objectToWorld * Normal(point: localPosition))
@@ -41,7 +41,7 @@ final class Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func sample(ref: Interaction, u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(ref: Interaction, u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
 
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
@@ -67,17 +67,17 @@ final class Sphere: Shape {
                 let sinThetaMax2 = sinThetaMax * sinThetaMax
                 let invSinThetaMax = 1 / sinThetaMax
                 let cosThetaMax = max(0, 1 - sinThetaMax2).squareRoot()
-                var cosTheta = (cosThetaMax - 1) * u[0] + 1
+                var cosTheta = (cosThetaMax - 1) * u.0 + 1
                 var sinTheta2 = 1 - cosTheta * cosTheta
                 if sinThetaMax2 < 0.00068523 {
-                        sinTheta2 = sinThetaMax2 * u[0]
+                        sinTheta2 = sinThetaMax2 * u.0
                         cosTheta = (1 - sinTheta2).squareRoot()
                 }
                 let cosAlpha =
                         sinTheta2 * invSinThetaMax + cosTheta
                         * (max(0, 1 - sinTheta2 * invSinThetaMax * invSinThetaMax)).squareRoot()
                 let sinAlpha = max(0, 1 - cosAlpha * cosAlpha).squareRoot()
-                let phi = u[1] * 2 * FloatX.pi
+                let phi = u.1 * 2 * FloatX.pi
                 let worldNormal = Normal(
                         sphericalDirection(
                                 sinTheta: sinAlpha,

@@ -23,8 +23,10 @@ struct DielectricBsdf: BxDF {
                 if backfacing(wi: wi, wo: wo, half: half) {
                         return black
                 }
-                let fresnelDielectric = FresnelDielectric(refractiveIndex: refractiveIndex)
-                let fresnel = fresnelDielectric.evaluate(cosTheta: dot(wo, half))
+                let fresnelReflected = FresnelDielectric.reflected(
+                        cosThetaI: dot(wo, half),
+                        refractiveIndex: refractiveIndex
+                )
                 if reflect {
                         let differentialArea = distribution.differentialArea(withNormal: half)
                         let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
@@ -35,27 +37,60 @@ struct DielectricBsdf: BxDF {
                         let denominator = square(dot(wi, half) + dot(wo, half) / etap) * cosThetaI * cosThetaO
                         let differentialArea = distribution.differentialArea(withNormal: half)
                         let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
-                        let oneMinusFresnel = white - fresnel
+                        let fresnelTransmitted = 1 - fresnelReflected
                         let absDotI = abs(dot(wi, half))
                         let absDotO = abs(dot(wo, half))
                         let absDotIO = absDotI * absDotO
-                        var enumerator = differentialArea * oneMinusFresnel * visibleFraction * absDotIO
+                        var enumerator = differentialArea * fresnelTransmitted * visibleFraction * absDotIO
                         // radiance transport
                         enumerator /= square(etap)
-                        return enumerator / denominator
+                        return RGBSpectrum(intensity: enumerator / denominator)
                 }
         }
 
-        func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
-
+        private func sampleSpecularReflection() -> BSDFSample {
                 unimplemented()
-                //let fresnelDielectric = FresnelDielectric(etaI: etaA, etaT: etaB)
-                //let fresnel = fresnelDielectric.evaluate(cosTheta: cosTheta(wo))
-                //if u.x < fresnel.average() {
-                //        return reflective(wo: wo, fresnel: fresnel.average())
-                //} else {
-                //        return transmittive(wo: wo, fresnel: fresnel.average())
-                //}
+        }
+
+        private func sampleSpecularTransmission() -> BSDFSample {
+                unimplemented()
+        }
+
+        private func sampleSpecular(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+                let reflected = FresnelDielectric.reflected(
+                        cosThetaI: cosTheta(wo),
+                        refractiveIndex: refractiveIndex)
+                let transmitted = white - reflected
+                //if u < fre
+                if true {
+                        return sampleSpecularReflection()
+                } else {
+                        return sampleSpecularTransmission()
+                }
+        }
+
+        private func sampleRoughReflection() -> BSDFSample {
+                unimplemented()
+        }
+
+        private func sampleRoughTransmission() -> BSDFSample {
+                unimplemented()
+        }
+
+        private func sampleRough() -> BSDFSample {
+                if true {
+                        return sampleRoughReflection()
+                } else {
+                        return sampleRoughTransmission()
+                }
+        }
+
+        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+                if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
+                        return sampleSpecular(wo: wo, u: u)
+                } else {
+                        return sampleRough()
+                }
         }
 
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {

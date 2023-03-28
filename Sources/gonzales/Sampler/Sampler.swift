@@ -1,7 +1,12 @@
+typealias RandomVariable = FloatX
+typealias TwoRandomVariables = (RandomVariable, RandomVariable)
+typealias ThreeRandomVariables = (RandomVariable, RandomVariable, RandomVariable)
+
 ///        A type that provides samples points.
 protocol Sampler {
-        func get1D() -> FloatX
-        func get2D() -> Point2F
+        func get1D() -> RandomVariable
+        func get2D() -> TwoRandomVariables
+        func get3D() -> ThreeRandomVariables
         func clone() -> Sampler
         func getCameraSample(pixel: Point2I) -> CameraSample
 
@@ -11,10 +16,11 @@ protocol Sampler {
 extension Sampler {
 
         func getCameraSample(pixel: Point2I) -> CameraSample {
-                var cameraSample = CameraSample()
-                let offset = get2D()
-                cameraSample.film = Point2F(from: pixel) + offset
-                cameraSample.lens = get2D()
-                return cameraSample
+                return CameraSample(
+                        film: (
+                                FloatX(pixel.x) + get1D(),
+                                FloatX(pixel.y) + get1D()
+                        ),
+                        lens: get2D())
         }
 }

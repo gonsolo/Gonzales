@@ -56,7 +56,7 @@ final class Tile {
                                 albedo: albedo,
                                 normal: normal,
                                 weight: rayWeight,
-                                location: cameraSample.film)
+                                location: Point2F(x: cameraSample.film.0, y: cameraSample.film.1))
                         samples.append(sample)
                         reporter.update()
                 }

@@ -8,12 +8,16 @@ final class RandomSampler: Sampler {
                 samplesPerPixel = instance.samplesPerPixel
         }
 
-        func get1D() -> FloatX {
+        func get1D() -> RandomVariable {
                 return FloatX.random(in: 0..<1, using: &xoshiro)
         }
 
-        func get2D() -> Point2F {
-                return Point2F(x: get1D(), y: get1D())
+        func get2D() -> TwoRandomVariables {
+                return (get1D(), get1D())
+        }
+
+        func get3D() -> ThreeRandomVariables {
+                return (get1D(), get1D(), get1D())
         }
 
         func clone() -> Sampler {

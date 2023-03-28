@@ -36,7 +36,7 @@ final class PerspectiveCamera: Camera, Transformable {
         }
 
         func generateRay(sample: CameraSample) -> Ray {
-                let rasterPoint = Point(x: sample.film.x, y: sample.film.y, z: 0)
+                let rasterPoint = Point(x: sample.film.0, y: sample.film.1, z: 0)
                 let cameraPoint = cameraTransform.rasterToCamera * rasterPoint
                 let pinholeRay = Ray(
                         origin: origin,

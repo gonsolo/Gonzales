@@ -39,15 +39,19 @@ struct HairBsdf: BxDF {
                 var attenuation = Array(repeating: black, count: pMax + 1)
                 let cosGammaO = (1 - h * h).squareRoot()
                 let cosTheta = cosThetaO * cosGammaO
-                let fresnelDielectric = FresnelDielectric(refractiveIndex: indexRefraction)
-                let fresnel = fresnelDielectric.evaluate(cosTheta: cosTheta)
-                attenuation[0] = fresnel
-                attenuation[1] = square(white - fresnel) * transmittance
+                let fresnelReflected = FresnelDielectric.reflected(
+                        cosThetaI: cosTheta,
+                        refractiveIndex: indexRefraction)
+                let fresnelTransmitted = 1 - fresnelReflected
+                attenuation[0] = RGBSpectrum(intensity: fresnelReflected)
+                attenuation[1] = square(fresnelTransmitted) * transmittance
                 for p in 2..<pMax {
-                        attenuation[p] = attenuation[p - 1] * transmittance * fresnel
+                        attenuation[p] = attenuation[p - 1] * transmittance * fresnelReflected
                 }
-                attenuation[pMax] =
-                        attenuation[pMax - 1] * fresnel * transmittance / (white - transmittance * fresnel)
+                let enumerator: RGBSpectrum = attenuation[pMax - 1] * fresnelReflected * transmittance
+                let denominator: RGBSpectrum = white - transmittance * fresnelReflected
+                attenuation[pMax] = enumerator / denominator
+                        
                 return attenuation
         }
 

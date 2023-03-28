@@ -1,6 +1,6 @@
-struct FresnelDielectric: Fresnel {
+struct FresnelDielectric {
 
-        func evaluate(cosThetaI: FloatX, refractiveIndex: FloatX) -> FloatX {
+        static func reflected(cosThetaI: FloatX, refractiveIndex: FloatX) -> FloatX {
                 var refractiveIndex = refractiveIndex
                 var cosThetaI = clamp(value: cosThetaI, low: -1, high: 1)
                 if cosThetaI < 0 {
@@ -19,11 +19,4 @@ struct FresnelDielectric: Fresnel {
                 let perpendicular = (cosThetaI - refractiveT) / (cosThetaI + refractiveT)
                 return (square(parallel) + square(perpendicular)) / 2
         }
-
-        func evaluate(cosTheta: FloatX) -> RGBSpectrum {
-                return RGBSpectrum(
-                        intensity: evaluate(cosThetaI: cosTheta, refractiveIndex: refractiveIndex))
-        }
-
-        var refractiveIndex: FloatX = 1.0
 }

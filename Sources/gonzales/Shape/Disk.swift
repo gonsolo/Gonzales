@@ -28,7 +28,7 @@ final class Disk: Shape {
                 fatalError("Not implemented")
         }
 
-        func sample(u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
                 // TODO
                 return (SurfaceInteraction(), 0)
         }

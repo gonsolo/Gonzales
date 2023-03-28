@@ -345,7 +345,7 @@ final class Curve: Shape {
                 fatalError("Not implemented")
         }
 
-        func sample(u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoFloats) -> (interaction: Interaction, pdf: FloatX) {
                 fatalError("Not implemented")
         }
 
@@ -420,11 +420,11 @@ final class EmbreeCurve: Shape {
                 return bounds
         }
 
-        func sample(u: Point2F) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
                 unimplemented()
         }
 
-        func sample(ref: Interaction, u: Point2F) -> (Interaction, FloatX) {
+        func sample(ref: Interaction, u: TwoRandomVariables) -> (Interaction, FloatX) {
                 unimplemented()
         }
 

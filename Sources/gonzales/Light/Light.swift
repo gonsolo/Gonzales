@@ -6,7 +6,7 @@ import Foundation
 
 protocol Light {
 
-        func sample(for reference: Interaction, u: Point2F) -> (
+        func sample(for reference: Interaction, u: TwoRandomVariables) -> (
                 radiance: RGBSpectrum,
                 direction: Vector,
                 pdf: FloatX,

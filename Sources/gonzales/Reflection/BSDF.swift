@@ -52,7 +52,9 @@ struct BSDF {
                                 z: ss.z * local.x + ts.z * local.y + ns.z * local.z))
         }
 
-        func sample(wo woWorld: Vector, u: Point2F) throws -> (bsdfSample: BSDFSample, isTransmissive: Bool) {
+        func sample(wo woWorld: Vector, u: ThreeRandomVariables)
+                throws -> (bsdfSample: BSDFSample, isTransmissive: Bool)
+        {
                 let woLocal = worldToLocal(world: woWorld)
                 let bsdfSample = bxdf.sample(wo: woLocal, u: u)
                 let wiWorld = localToWorld(local: bsdfSample.incoming)

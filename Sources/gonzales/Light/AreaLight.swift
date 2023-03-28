@@ -13,7 +13,7 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(for ref: Interaction, u: Point2F) -> (
+        func sample(for ref: Interaction, u: TwoRandomVariables) -> (
                 radiance: RGBSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)

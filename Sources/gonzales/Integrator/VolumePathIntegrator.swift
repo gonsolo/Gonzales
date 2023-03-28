@@ -110,7 +110,7 @@ final class VolumePathIntegrator {
 
                 var bsdfSample = BSDFSample()
                 if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        (bsdfSample, _) = try bsdf.sample(wo: surfaceInteraction.wo, u: sampler.get2D())
+                        (bsdfSample, _) = try bsdf.sample(wo: surfaceInteraction.wo, u: sampler.get3D())
                         guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                                 return zero
                         }
@@ -368,7 +368,7 @@ final class VolumePathIntegrator {
                                 lightSampler: lightSampler)
                 l += ld
                 let (bsdfSample, _) = try bsdf.sample(
-                        wo: surfaceInteraction.wo, u: sampler.get2D())
+                        wo: surfaceInteraction.wo, u: sampler.get3D())
                 guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
                         return (l, ray, false, false, true)
                 }
