@@ -295,7 +295,6 @@ final class VolumePathIntegrator {
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RGBSpectrum, Ray) {
-                var ray = ray
                 let dummy = BSDF()
                 let l =
                         try pathThroughputWeight
@@ -309,8 +308,8 @@ final class VolumePathIntegrator {
                 let (_, wi) = mediumInteraction.phase.samplePhase(
                         wo: -ray.direction,
                         sampler: sampler)
-                ray = mediumInteraction.spawnRay(inDirection: wi)
-                return (l, ray)
+                let spawnedRay = mediumInteraction.spawnRay(inDirection: wi)
+                return (l, spawnedRay)
         }
 
         private func sampleSurface(
