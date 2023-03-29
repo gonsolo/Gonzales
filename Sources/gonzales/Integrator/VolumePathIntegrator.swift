@@ -275,19 +275,19 @@ final class VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
-        func russianRoulette(beta: inout RGBSpectrum) -> Bool {
+        func russianRoulette(pathThroughputWeight: inout RGBSpectrum) -> Bool {
                 let roulette = FloatX.random(in: 0..<1)
                 let probability: FloatX = 0.5
                 if roulette < probability {
                         return true
                 } else {
-                        beta /= probability
+                        pathThroughputWeight /= probability
                         return false
                 }
         }
 
         private func sampleMedium(
-                beta: RGBSpectrum,
+                pathThroughputWeight: RGBSpectrum,
                 mediumInteraction: MediumInteraction,
                 sampler: Sampler,
                 scene: Scene,
@@ -298,7 +298,7 @@ final class VolumePathIntegrator {
                 var ray = ray
                 let dummy = BSDF()
                 let l =
-                        try beta
+                        try pathThroughputWeight
                         * sampleOneLight(
                                 at: mediumInteraction,
                                 bsdf: dummy,
@@ -316,7 +316,7 @@ final class VolumePathIntegrator {
         private func sampleSurface(
                 bounce: Int,
                 surfaceInteraction: SurfaceInteraction,
-                beta: inout RGBSpectrum,
+                pathThroughputWeight: inout RGBSpectrum,
                 ray: Ray,
                 albedo: inout RGBSpectrum,
                 firstNormal: inout Normal,
@@ -330,7 +330,7 @@ final class VolumePathIntegrator {
                 if bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
                                 l +=
-                                        beta
+                                       pathThroughputWeight 
                                         * areaLight.emittedRadiance(
                                                 from: surfaceInteraction,
                                                 inDirection: surfaceInteraction.wo)
@@ -358,7 +358,7 @@ final class VolumePathIntegrator {
                         firstNormal = surfaceInteraction.normal
                 }
                 let ld =
-                        try beta
+                        try pathThroughputWeight
                         * sampleOneLight(
                                 at: surfaceInteraction,
                                 bsdf: bsdf,
@@ -372,7 +372,7 @@ final class VolumePathIntegrator {
                 guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
                         return (l, ray, false, false, true)
                 }
-                beta = beta * bsdfSample.estimate * absDot(bsdfSample.incoming, surfaceInteraction.normal)
+                pathThroughputWeight = pathThroughputWeight * bsdfSample.estimate * absDot(bsdfSample.incoming, surfaceInteraction.normal)
                         / bsdfSample.probabilityDensity
                 ray = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
                 return (l, ray, false, false, false)
@@ -430,7 +430,7 @@ final class VolumePathIntegrator {
                                 }
                                 var mediumRadiance = black
                                 (mediumRadiance, ray) = try sampleMedium(
-                                        beta: pathThroughputWeight,
+                                        pathThroughputWeight: pathThroughputWeight,
                                         mediumInteraction: mediumInteraction,
                                         sampler: sampler,
                                         scene: scene,
@@ -447,7 +447,7 @@ final class VolumePathIntegrator {
                                         try sampleSurface(
                                                 bounce: bounce,
                                                 surfaceInteraction: interaction,
-                                                beta: &pathThroughputWeight,
+                                                pathThroughputWeight: &pathThroughputWeight,
                                                 ray: ray,
                                                 albedo: &albedo,
                                                 firstNormal: &firstNormal,
@@ -468,7 +468,7 @@ final class VolumePathIntegrator {
                                 l += surfaceRadiance
                         }
                         tHit = FloatX.infinity
-                        if bounce > 3 && russianRoulette(beta: &pathThroughputWeight) {
+                        if bounce > 3 && russianRoulette(pathThroughputWeight: &pathThroughputWeight) {
                                 break
                         }
                 }

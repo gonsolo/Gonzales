@@ -40,7 +40,7 @@ struct CoatedDiffuseBsdf: BxDF {
                         {
                                 continue
                         }
-                        let beta =
+                        let pathThroughputWeight =
                                 topSample.estimate * absCosTheta(topSample.incoming)
                                 / topSample.probabilityDensity
                         let z = thickness
