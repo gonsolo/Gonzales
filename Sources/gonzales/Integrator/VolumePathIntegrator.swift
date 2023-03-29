@@ -54,7 +54,11 @@ final class VolumePathIntegrator {
                 interaction: inout SurfaceInteraction,
                 accelerator: Accelerator
         ) throws {
-                try intersect(ray: ray, tHit: &tHit, interaction: &interaction, accelerator: accelerator)
+                try scene.intersect(
+                        ray: ray,
+                        tHit: &tHit,
+                        interaction: &interaction,
+                        accelerator: accelerator)
                 if interaction.valid {
                         return
                 }
@@ -79,7 +83,7 @@ final class VolumePathIntegrator {
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return zero
                 }
-                guard try visibility.unoccluded(accelerator: accelerator) else {
+                guard try visibility.unoccluded(scene: scene) else {
                         return zero
                 }
                 var scatter: RGBSpectrum
@@ -123,7 +127,7 @@ final class VolumePathIntegrator {
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
-                try intersect(
+                try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction,
