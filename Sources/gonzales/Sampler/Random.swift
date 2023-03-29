@@ -1,6 +1,6 @@
 final class RandomSampler: Sampler {
 
-        init(numberOfSamples: Int) {
+        init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples
         }
 
