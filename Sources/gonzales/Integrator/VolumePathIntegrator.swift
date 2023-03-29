@@ -296,7 +296,7 @@ final class VolumePathIntegrator {
                 ray: Ray
         ) throws -> (RGBSpectrum, Ray) {
                 let dummy = BSDF()
-                let l =
+                let estimate =
                         try pathThroughputWeight
                         * sampleOneLight(
                                 at: mediumInteraction,
@@ -309,7 +309,7 @@ final class VolumePathIntegrator {
                         wo: -ray.direction,
                         sampler: sampler)
                 let spawnedRay = mediumInteraction.spawnRay(inDirection: wi)
-                return (l, spawnedRay)
+                return (estimate, spawnedRay)
         }
 
         private func sampleSurface(
