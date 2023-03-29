@@ -57,8 +57,7 @@ final class VolumePathIntegrator {
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        interaction: &interaction,
-                        accelerator: accelerator)
+                        interaction: &interaction)
                 if interaction.valid {
                         return
                 }
@@ -130,8 +129,7 @@ final class VolumePathIntegrator {
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        interaction: &brdfInteraction,
-                        accelerator: accelerator)
+                        interaction: &brdfInteraction)
                 if !brdfInteraction.valid {
                         for light in scene.lights {
                                 if light is InfiniteLight {

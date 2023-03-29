@@ -8,8 +8,7 @@ struct Visibility {
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        interaction: &interaction,
-                        accelerator: scene.accelerator)
+                        interaction: &interaction)
                 if interaction.valid {
                         return false
                 } else {
