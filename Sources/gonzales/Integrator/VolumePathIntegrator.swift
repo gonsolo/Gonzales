@@ -325,11 +325,11 @@ final class VolumePathIntegrator {
                 lightSampler: LightSampler
         ) throws -> (RGBSpectrum, Ray, shouldBreak: Bool, shouldContinue: Bool, shouldReturn: Bool) {
                 var ray = ray
-                var l = black
+                var estimate = black
                 if bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
-                                l +=
-                                       pathThroughputWeight 
+                                estimate +=
+                                       pathThroughputWeight
                                         * areaLight.emittedRadiance(
                                                 from: surfaceInteraction,
                                                 inDirection: surfaceInteraction.wo)
@@ -365,15 +365,15 @@ final class VolumePathIntegrator {
                                 scene: scene,
                                 hierarchy: hierarchy,
                                 lightSampler: lightSampler)
-                l += ld
+                estimate += ld
                 let (bsdfSample, _) = try bsdf.sample(
                         wo: surfaceInteraction.wo, u: sampler.get3D())
                 guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
-                        return (l, ray, false, false, true)
+                        return (estimate, ray, false, false, true)
                 }
                 pathThroughputWeight *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
                 ray = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
-                return (l, ray, false, false, false)
+                return (estimate, ray, false, false, false)
         }
 
         func getRadianceAndAlbedo(
