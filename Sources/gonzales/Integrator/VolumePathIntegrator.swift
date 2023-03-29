@@ -389,7 +389,12 @@ final class VolumePathIntegrator {
                 -> (radiance: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
         {
                 var l = black
-                var beta = white
+
+                // Path throughput weight
+                // The product of all BSDFs and cosines divided by the pdf
+                // Π f |cosθ| / pdf
+                var pathThroughputWeight = white
+
                 var ray = ray
                 var albedo = black
                 var firstNormal = Normal()
@@ -414,9 +419,9 @@ final class VolumePathIntegrator {
                                         ray: ray,
                                         tHit: tHit,
                                         sampler: sampler)
-                                beta *= mediumL
+                                pathThroughputWeight *= mediumL
                         }
-                        if beta.isBlack {
+                        if pathThroughputWeight.isBlack {
                                 break
                         }
                         if let mediumInteraction {
@@ -425,7 +430,7 @@ final class VolumePathIntegrator {
                                 }
                                 var mediumRadiance = black
                                 (mediumRadiance, ray) = try sampleMedium(
-                                        beta: beta,
+                                        beta: pathThroughputWeight,
                                         mediumInteraction: mediumInteraction,
                                         sampler: sampler,
                                         scene: scene,
@@ -442,7 +447,7 @@ final class VolumePathIntegrator {
                                         try sampleSurface(
                                                 bounce: bounce,
                                                 surfaceInteraction: interaction,
-                                                beta: &beta,
+                                                beta: &pathThroughputWeight,
                                                 ray: ray,
                                                 albedo: &albedo,
                                                 firstNormal: &firstNormal,
@@ -463,7 +468,7 @@ final class VolumePathIntegrator {
                                 l += surfaceRadiance
                         }
                         tHit = FloatX.infinity
-                        if bounce > 3 && russianRoulette(beta: &beta) {
+                        if bounce > 3 && russianRoulette(beta: &pathThroughputWeight) {
                                 break
                         }
                 }
