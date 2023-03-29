@@ -48,3 +48,5 @@ extension Normal3: CustomStringConvertible {
 }
 
 public typealias Normal = Normal3<FloatX>
+
+let upNormal = Normal(x: 0, y: 0, z: 1)

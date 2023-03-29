@@ -1,4 +1,5 @@
 struct BSDFSample {
+
         init(
                 _ estimate: RGBSpectrum = black,
                 _ incoming: Vector = nullVector,
@@ -7,6 +8,10 @@ struct BSDFSample {
                 self.estimate = estimate
                 self.incoming = incoming
                 self.probabilityDensity = probabilityDensity
+        }
+
+        func throughputWeight(normal: Normal = upNormal) -> RGBSpectrum {
+                return estimate * absDot(incoming, normal) / probabilityDensity
         }
 
         var estimate: RGBSpectrum

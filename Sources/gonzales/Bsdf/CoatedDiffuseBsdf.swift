@@ -40,9 +40,7 @@ struct CoatedDiffuseBsdf: BxDF {
                         {
                                 continue
                         }
-                        let pathThroughputWeight =
-                                topSample.estimate * absCosTheta(topSample.incoming)
-                                / topSample.probabilityDensity
+                        let pathThroughputWeight = topSample.throughputWeight()
                         let z = thickness
                         let w = topSample.incoming
                         let phase = HenyeyGreenstein()

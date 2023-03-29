@@ -372,8 +372,7 @@ final class VolumePathIntegrator {
                 guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
                         return (l, ray, false, false, true)
                 }
-                pathThroughputWeight = pathThroughputWeight * bsdfSample.estimate * absDot(bsdfSample.incoming, surfaceInteraction.normal)
-                        / bsdfSample.probabilityDensity
+                pathThroughputWeight *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
                 ray = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
                 return (l, ray, false, false, false)
         }
