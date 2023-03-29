@@ -4,10 +4,10 @@ func intersect(
         ray: Ray,
         tHit: inout FloatX,
         interaction: inout SurfaceInteraction,
-        hierarchy: Accelerator
+        accelerator: Accelerator
 ) throws {
         intersectionTests += 1
-        try hierarchy.intersect(
+        try accelerator.intersect(
                 ray: ray,
                 tHit: &tHit,
                 material: -1,

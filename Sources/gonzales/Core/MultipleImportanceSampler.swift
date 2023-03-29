@@ -11,7 +11,7 @@ struct MultipleImportanceSampler {
         }
 
         func evaluate(
-                hierarchy: Accelerator,
+                accelerator: Accelerator,
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
@@ -27,7 +27,7 @@ struct MultipleImportanceSampler {
                         bsdf: BSDF
                 ) throws -> RGBSpectrum {
                         let thisSample = try first.sample(
-                                light, interaction, sampler, bsdf, hierarchy)
+                                light, interaction, sampler, bsdf, accelerator)
                         let otherDensity = try second.density(
                                 light, interaction, thisSample.incoming, bsdf)
                         let weight = powerHeuristic(f: thisSample.probabilityDensity, g: otherDensity)

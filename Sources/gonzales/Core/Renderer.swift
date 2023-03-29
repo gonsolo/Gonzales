@@ -3,7 +3,7 @@ import Foundation
 final class Renderer {
 
         init(
-                hierarchy: Accelerator,
+                accelerator: Accelerator,
                 camera: Camera,
                 integrator: VolumePathIntegrator,
                 sampler: Sampler,
@@ -14,7 +14,7 @@ final class Renderer {
                 self.integrator = integrator
                 self.sampler = sampler
                 self.scene = scene
-                self.hierarchy = hierarchy
+                self.accelerator = accelerator
                 self.lightSampler = lightSampler
         }
 
@@ -47,7 +47,7 @@ final class Renderer {
                         sampler: tileSampler,
                         camera: self.camera,
                         scene: scene,
-                        hierarchy: hierarchy,
+                        accelerator: accelerator,
                         lightSampler: lightSampler
                 )
                 return samples
@@ -121,7 +121,7 @@ final class Renderer {
 
         let camera: Camera
         let group = DispatchGroup()
-        let hierarchy: Accelerator
+        let accelerator: Accelerator
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
         let queue = DispatchQueue.global()

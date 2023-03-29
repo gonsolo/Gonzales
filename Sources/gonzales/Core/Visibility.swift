@@ -2,14 +2,14 @@
 
 struct Visibility {
 
-        func unoccluded(hierarchy: Accelerator) throws -> Bool {
+        func unoccluded(accelerator: Accelerator) throws -> Bool {
                 var (ray, tHit) = from.spawnRay(to: to.position)
                 var interaction = SurfaceInteraction()
                 try intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction,
-                        hierarchy: hierarchy)
+                        accelerator: accelerator)
                 if interaction.valid {
                         return false
                 } else {

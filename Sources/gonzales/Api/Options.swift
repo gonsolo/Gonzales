@@ -214,7 +214,7 @@ class Options {
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = PowerLightSampler(sampler: sampler, lights: lights)
                 return Renderer(
-                        hierarchy: accelerator,
+                        accelerator: accelerator,
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,

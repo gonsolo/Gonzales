@@ -2,8 +2,6 @@
 
 import Foundation
 
-//typealias Power = FloatX
-
 protocol Light {
 
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
