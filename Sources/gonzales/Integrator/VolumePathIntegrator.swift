@@ -46,7 +46,7 @@ final class VolumePathIntegrator {
                 return lightSampler.chooseLight()
         }
 
-        func intersectOrInfiniteLights(
+        private func intersectOrInfiniteLights(
                 ray: Ray,
                 tHit: inout FloatX,
                 bounce: Int,
@@ -275,7 +275,7 @@ final class VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
-        func russianRoulette(pathThroughputWeight: inout RGBSpectrum) -> Bool {
+        private func russianRoulette(pathThroughputWeight: inout RGBSpectrum) -> Bool {
                 let roulette = FloatX.random(in: 0..<1)
                 let probability: FloatX = 0.5
                 if roulette < probability {
