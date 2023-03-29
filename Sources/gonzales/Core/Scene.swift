@@ -16,15 +16,15 @@ func intersect(
 
 struct Scene {
 
-        init(aggregate: Accelerator, lights: [Light]) {
-                self.primitive = aggregate
+        init(accelerator: Accelerator, lights: [Light]) {
+                self.accelerator = accelerator
                 self.lights = lights
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
                 sceneDiameter = diameter()
         }
 
         func bound() -> Bounds3f {
-                return primitive.worldBound()
+                return accelerator.worldBound()
         }
 
         func diameter() -> FloatX {
@@ -35,7 +35,7 @@ struct Scene {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
-        var primitive: Accelerator
+        var accelerator: Accelerator
         var lights: [Light]
         var infiniteLights: [Light]
 }

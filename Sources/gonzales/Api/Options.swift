@@ -209,7 +209,7 @@ class Options {
                 primitives = []
                 objects = [:]
                 print(timer.elapsed)
-                let scene = makeScene(hierarchy: accelerator)
+                let scene = makeScene(accelerator: accelerator)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = PowerLightSampler(sampler: sampler, lights: lights)
@@ -223,7 +223,7 @@ class Options {
                 )
         }
 
-        func makeScene(hierarchy: Accelerator) -> Scene {
-                return Scene(aggregate: hierarchy, lights: lights)
+        func makeScene(accelerator: Accelerator) -> Scene {
+                return Scene(accelerator: accelerator, lights: lights)
         }
 }
