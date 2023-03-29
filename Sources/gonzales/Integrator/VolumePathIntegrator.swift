@@ -50,7 +50,7 @@ final class VolumePathIntegrator {
                 ray: Ray,
                 tHit: inout FloatX,
                 bounce: Int,
-                l: inout RGBSpectrum,
+                estimate: inout RGBSpectrum,
                 interaction: inout SurfaceInteraction,
                 scene: Scene,
                 hierarchy: Accelerator
@@ -63,7 +63,7 @@ final class VolumePathIntegrator {
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
                 )
-                if bounce == 0 { l += radiance }
+                if bounce == 0 { estimate += radiance }
         }
 
         private func sampleLightSource(
@@ -329,7 +329,7 @@ final class VolumePathIntegrator {
                 if bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
                                 estimate +=
-                                       pathThroughputWeight
+                                        pathThroughputWeight
                                         * areaLight.emittedRadiance(
                                                 from: surfaceInteraction,
                                                 inDirection: surfaceInteraction.wo)
@@ -403,7 +403,7 @@ final class VolumePathIntegrator {
                                 ray: ray,
                                 tHit: &tHit,
                                 bounce: bounce,
-                                l: &estimate,
+                                estimate: &estimate,
                                 interaction: &interaction,
                                 scene: scene,
                                 hierarchy: hierarchy)
