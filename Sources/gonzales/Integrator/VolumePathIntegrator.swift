@@ -384,9 +384,9 @@ final class VolumePathIntegrator {
                 hierarchy: Accelerator,
                 lightSampler: LightSampler
         ) throws
-                -> (radiance: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
+                -> (estimate: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
         {
-                var l = black
+                var estimate = black
 
                 // Path throughput weight
                 // The product of all BSDFs and cosines divided by the pdf
@@ -403,7 +403,7 @@ final class VolumePathIntegrator {
                                 ray: ray,
                                 tHit: &tHit,
                                 bounce: bounce,
-                                l: &l,
+                                l: &estimate,
                                 interaction: &interaction,
                                 scene: scene,
                                 hierarchy: hierarchy)
@@ -435,7 +435,7 @@ final class VolumePathIntegrator {
                                         hierarchy: hierarchy,
                                         lightSampler: lightSampler,
                                         ray: ray)
-                                l += mediumRadiance
+                                estimate += mediumRadiance
                         } else {
                                 var surfaceRadiance = black
                                 var shouldBreak = false
@@ -454,8 +454,8 @@ final class VolumePathIntegrator {
                                                 hierarchy: hierarchy,
                                                 lightSampler: lightSampler)
                                 if shouldReturn {
-                                        l += surfaceRadiance
-                                        return (l, white, Normal())
+                                        estimate += surfaceRadiance
+                                        return (estimate, white, Normal())
                                 }
                                 if shouldBreak {
                                         break
@@ -463,7 +463,7 @@ final class VolumePathIntegrator {
                                 if shouldContinue {
                                         continue
                                 }
-                                l += surfaceRadiance
+                                estimate += surfaceRadiance
                         }
                         tHit = FloatX.infinity
                         if bounce > 3 && russianRoulette(pathThroughputWeight: &pathThroughputWeight) {
@@ -471,7 +471,7 @@ final class VolumePathIntegrator {
                         }
                 }
                 intelHack(&albedo)
-                return (radiance: l, albedo, firstNormal)
+                return (estimate: estimate, albedo: albedo, normal: firstNormal)
         }
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
