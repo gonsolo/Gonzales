@@ -356,7 +356,7 @@ final class VolumePathIntegrator {
                         albedo = bsdf.albedo()
                         firstNormal = surfaceInteraction.normal
                 }
-                let ld =
+                let lightEstimate =
                         try pathThroughputWeight
                         * sampleOneLight(
                                 at: surfaceInteraction,
@@ -365,7 +365,7 @@ final class VolumePathIntegrator {
                                 scene: scene,
                                 hierarchy: hierarchy,
                                 lightSampler: lightSampler)
-                estimate += ld
+                estimate += lightEstimate
                 let (bsdfSample, _) = try bsdf.sample(
                         wo: surfaceInteraction.wo, u: sampler.get3D())
                 guard bsdfSample.probabilityDensity != 0 && !bsdfSample.probabilityDensity.isNaN else {
