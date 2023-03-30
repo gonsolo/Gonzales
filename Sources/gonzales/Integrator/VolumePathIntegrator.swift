@@ -316,7 +316,7 @@ final class VolumePathIntegrator {
                         if let interface = surfaceInteraction.mediumInterface {
                                 spawnedRay.medium = state.namedMedia[interface.interior]
                         }
-                        return (black, spawnedRay, false, true, false)
+                        return (estimate, spawnedRay, false, true, false)
                 }
                 let bsdf = material.getBSDF(interaction: surfaceInteraction)
                 if bounce == 0 {
