@@ -4,7 +4,7 @@ struct BSDF {
 
         init() {
                 bxdf = DiffuseBsdf(reflectance: black)
-                ng = Normal()
+                geometricNormal = Normal()
                 ns = Normal()
                 ss = up
                 ts = up
@@ -12,7 +12,7 @@ struct BSDF {
 
         init(interaction: Interaction) {
                 bxdf = DiffuseBsdf(reflectance: black)
-                ng = interaction.normal
+                geometricNormal = interaction.normal
                 ns = interaction.shadingNormal
                 ss = normalized(interaction.dpdu)
                 ts = cross(Vector(normal: ns), ss)
@@ -26,7 +26,7 @@ struct BSDF {
                 var totalLightScattered = black
                 let woLocal = worldToLocal(world: woWorld)
                 let wiLocal = worldToLocal(world: wiWorld)
-                let reflect = dot(wiWorld, ng) * dot(woWorld, ng) > 0
+                let reflect = dot(wiWorld, geometricNormal) * dot(woWorld, geometricNormal) > 0
                 if reflect && bxdf.isReflective {
                         totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
                 }
@@ -72,7 +72,7 @@ struct BSDF {
         }
 
         var bxdf: BxDF
-        var ng = Normal()
+        var geometricNormal = Normal()
         var ns = Normal()
         var ss = up
         var ts = up
