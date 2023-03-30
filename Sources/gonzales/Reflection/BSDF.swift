@@ -5,7 +5,7 @@ struct BSDF {
         init() {
                 bxdf = DiffuseBsdf(reflectance: black)
                 geometricNormal = Normal()
-                ns = Normal()
+                shadingNormal = Normal()
                 ss = up
                 ts = up
         }
@@ -13,9 +13,9 @@ struct BSDF {
         init(interaction: Interaction) {
                 bxdf = DiffuseBsdf(reflectance: black)
                 geometricNormal = interaction.normal
-                ns = interaction.shadingNormal
+                shadingNormal = interaction.shadingNormal
                 ss = normalized(interaction.dpdu)
-                ts = cross(Vector(normal: ns), ss)
+                ts = cross(Vector(normal: shadingNormal), ss)
         }
 
         mutating func set(bxdf: BxDF) {
@@ -41,15 +41,15 @@ struct BSDF {
         }
 
         private func worldToLocal(world: Vector) -> Vector {
-                return normalized(Vector(x: dot(world, ss), y: dot(world, ts), z: dot(world, ns)))
+                return normalized(Vector(x: dot(world, ss), y: dot(world, ts), z: dot(world, shadingNormal)))
         }
 
         private func localToWorld(local: Vector) -> Vector {
                 return normalized(
                         Vector(
-                                x: ss.x * local.x + ts.x * local.y + ns.x * local.z,
-                                y: ss.y * local.x + ts.y * local.y + ns.y * local.z,
-                                z: ss.z * local.x + ts.z * local.y + ns.z * local.z))
+                                x: ss.x * local.x + ts.x * local.y + shadingNormal.x * local.z,
+                                y: ss.y * local.x + ts.y * local.y + shadingNormal.y * local.z,
+                                z: ss.z * local.x + ts.z * local.y + shadingNormal.z * local.z))
         }
 
         func sample(wo woWorld: Vector, u: ThreeRandomVariables)
@@ -73,7 +73,7 @@ struct BSDF {
 
         var bxdf: BxDF
         var geometricNormal = Normal()
-        var ns = Normal()
+        var shadingNormal = Normal()
         var ss = up
         var ts = up
 }
