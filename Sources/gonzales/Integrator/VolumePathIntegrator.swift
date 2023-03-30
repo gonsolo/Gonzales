@@ -246,7 +246,10 @@ final class VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
-        private func russianRoulette(pathThroughputWeight: inout RGBSpectrum) -> Bool {
+        private func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RGBSpectrum) -> Bool {
+                if bounce < 4 {
+                        return false
+                }
                 let roulette = FloatX.random(in: 0..<1)
                 let probability: FloatX = 0.5
                 if roulette < probability {
@@ -421,7 +424,10 @@ final class VolumePathIntegrator {
                                 estimate += surfaceRadiance
                         }
                         tHit = FloatX.infinity
-                        if bounce > 3 && russianRoulette(pathThroughputWeight: &pathThroughputWeight) {
+                        if stopWithRussianRoulette(
+                                bounce: bounce,
+                                pathThroughputWeight: &pathThroughputWeight)
+                        {
                                 break
                         }
                 }
