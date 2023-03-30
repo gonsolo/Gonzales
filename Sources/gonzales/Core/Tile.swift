@@ -10,7 +10,6 @@ final class Tile {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                accelerator: Accelerator,
                 lightSampler: LightSampler
         ) throws -> [Sample] {
 
@@ -22,7 +21,6 @@ final class Tile {
                                 sampler: sampler,
                                 camera: camera,
                                 scene: scene,
-                                accelerator: accelerator,
                                 lightSampler: lightSampler)
                         samples.append(contentsOf: pixelSamples)
                 }
@@ -35,7 +33,6 @@ final class Tile {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                accelerator: Accelerator,
                 lightSampler: LightSampler
         ) throws -> [Sample] {
                 var samples = [Sample]()

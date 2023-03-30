@@ -47,7 +47,6 @@ final class Renderer {
                         sampler: tileSampler,
                         camera: self.camera,
                         scene: scene,
-                        accelerator: accelerator,
                         lightSampler: lightSampler
                 )
                 return samples

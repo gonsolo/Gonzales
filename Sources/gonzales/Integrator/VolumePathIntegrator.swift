@@ -375,7 +375,6 @@ final class VolumePathIntegrator {
                         let (mediumL, mediumInteraction) =
                                 ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
                         pathThroughputWeight *= mediumL
-
                         if pathThroughputWeight.isBlack {
                                 break
                         }
