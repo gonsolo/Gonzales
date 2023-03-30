@@ -292,7 +292,6 @@ final class VolumePathIntegrator {
                 sampler: Sampler,
                 lightSampler: LightSampler
         ) throws -> (RGBSpectrum, Ray, shouldBreak: Bool, shouldContinue: Bool, shouldReturn: Bool) {
-                var ray = ray
                 var estimate = black
                 if bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
@@ -313,11 +312,11 @@ final class VolumePathIntegrator {
                         return (black, ray, true, false, false)
                 }
                 if material is Interface {
-                        ray = surfaceInteraction.spawnRay(inDirection: ray.direction)
+                        var spawnedRay = surfaceInteraction.spawnRay(inDirection: ray.direction)
                         if let interface = surfaceInteraction.mediumInterface {
-                                ray.medium = state.namedMedia[interface.interior]
+                                spawnedRay.medium = state.namedMedia[interface.interior]
                         }
-                        return (black, ray, false, true, false)
+                        return (black, spawnedRay, false, true, false)
                 }
                 let bsdf = material.getBSDF(interaction: surfaceInteraction)
                 if bounce == 0 {
@@ -338,8 +337,8 @@ final class VolumePathIntegrator {
                         return (estimate, ray, false, false, true)
                 }
                 pathThroughputWeight *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
-                ray = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
-                return (estimate, ray, false, false, false)
+                let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
+                return (estimate, spawnedRay, false, false, false)
         }
 
         func getRadianceAndAlbedo(
