@@ -372,15 +372,10 @@ final class VolumePathIntegrator {
                         if !interaction.valid {
                                 break
                         }
-                        var mediumL: RGBSpectrum
-                        var mediumInteraction: MediumInteraction? = nil
-                        if let medium = ray.medium {
-                                (mediumL, mediumInteraction) = medium.sample(
-                                        ray: ray,
-                                        tHit: tHit,
-                                        sampler: sampler)
-                                pathThroughputWeight *= mediumL
-                        }
+                        let (mediumL, mediumInteraction) =
+                                ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
+                        pathThroughputWeight *= mediumL
+
                         if pathThroughputWeight.isBlack {
                                 break
                         }
