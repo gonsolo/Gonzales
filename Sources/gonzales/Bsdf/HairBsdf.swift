@@ -51,7 +51,6 @@ struct HairBsdf: BxDF {
                 let enumerator: RGBSpectrum = attenuation[pMax - 1] * fresnelReflected * transmittance
                 let denominator: RGBSpectrum = white - transmittance * fresnelReflected
                 attenuation[pMax] = enumerator / denominator
-                        
                 return attenuation
         }
 
