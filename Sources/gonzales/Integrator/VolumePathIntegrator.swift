@@ -51,8 +51,7 @@ final class VolumePathIntegrator {
                 tHit: inout FloatX,
                 bounce: Int,
                 estimate: inout RGBSpectrum,
-                interaction: inout SurfaceInteraction,
-                accelerator: Accelerator
+                interaction: inout SurfaceInteraction
         ) throws {
                 try scene.intersect(
                         ray: ray,
@@ -72,8 +71,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
-                bsdf: BSDF,
-                accelerator: Accelerator
+                bsdf: BSDF
         ) throws -> BSDFSample {
                 let zero = BSDFSample()
 
@@ -102,8 +100,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
-                bsdf: BSDF,
-                accelerator: Accelerator
+                bsdf: BSDF
         ) throws -> BSDFSample {
 
                 let zero = BSDFSample()
@@ -147,15 +144,13 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 bsdf: BSDF,
-                sampler: Sampler,
-                accelerator: Accelerator
+                sampler: Sampler
         ) throws -> RGBSpectrum {
                 let bsdfSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
-                        bsdf: bsdf,
-                        accelerator: accelerator)
+                        bsdf: bsdf)
                 if bsdfSample.probabilityDensity == 0 {
                         print("light: black")
                         return black
@@ -169,15 +164,13 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 bsdf: BSDF,
-                sampler: Sampler,
-                accelerator: Accelerator
+                sampler: Sampler
         ) throws -> RGBSpectrum {
                 let bsdfSample = try sampleBrdf(
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
-                        bsdf: bsdf,
-                        accelerator: accelerator)
+                        bsdf: bsdf)
                 if bsdfSample.probabilityDensity == 0 {
                         return black
                 } else {
@@ -189,8 +182,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 bsdf: BSDF,
-                sampler: Sampler,
-                accelerator: Accelerator
+                sampler: Sampler
         ) throws -> RGBSpectrum {
                 let lightSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
@@ -200,7 +192,6 @@ final class VolumePathIntegrator {
                         scene: scene,
                         samplers: (lightSampler, brdfSampler))
                 return try misSampler.evaluate(
-                        accelerator: accelerator,
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
@@ -211,42 +202,36 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 bsdf: BSDF,
-                sampler: Sampler,
-                accelerator: Accelerator
+                sampler: Sampler
         ) throws -> RGBSpectrum {
                 if light.isDelta {
                         return try sampleLight(
                                 light: light,
                                 interaction: interaction,
                                 bsdf: bsdf,
-                                sampler: sampler,
-                                accelerator: accelerator)
+                                sampler: sampler)
                 }
                 //return try sampleLight(
                 //        light: light,
                 //        interaction: interaction,
                 //        bsdf: bsdf,
-                //        sampler: sampler,
-                //        accelerator: accelerator)
+                //        sampler: sampler)
                 //return try sampleBSDF(
                 //        light: light,
                 //        interaction: interaction,
                 //        bsdf: bsdf,
-                //        sampler: sampler,
-                //        accelerator: accelerator)
+                //        sampler: sampler)
                 return try sampleMultipleImportance(
                         light: light,
                         interaction: interaction,
                         bsdf: bsdf,
-                        sampler: sampler,
-                        accelerator: accelerator)
+                        sampler: sampler)
         }
 
         private func sampleOneLight(
                 at interaction: Interaction,
                 bsdf: BSDF,
                 with sampler: Sampler,
-                accelerator: Accelerator,
                 lightSampler: LightSampler
         ) throws -> RGBSpectrum {
                 guard scene.lights.count > 0 else { return black }
@@ -257,8 +242,7 @@ final class VolumePathIntegrator {
                         light: light,
                         interaction: interaction,
                         bsdf: bsdf,
-                        sampler: sampler,
-                        accelerator: accelerator)
+                        sampler: sampler)
                 return estimate / lightPdf
         }
 
@@ -277,7 +261,6 @@ final class VolumePathIntegrator {
                 pathThroughputWeight: RGBSpectrum,
                 mediumInteraction: MediumInteraction,
                 sampler: Sampler,
-                accelerator: Accelerator,
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RGBSpectrum, Ray) {
@@ -288,7 +271,6 @@ final class VolumePathIntegrator {
                                 at: mediumInteraction,
                                 bsdf: dummy,
                                 with: sampler,
-                                accelerator: accelerator,
                                 lightSampler: lightSampler)
                 let (_, wi) = mediumInteraction.phase.samplePhase(
                         wo: -ray.direction,
@@ -305,7 +287,6 @@ final class VolumePathIntegrator {
                 albedo: inout RGBSpectrum,
                 firstNormal: inout Normal,
                 sampler: Sampler,
-                accelerator: Accelerator,
                 lightSampler: LightSampler
         ) throws -> (RGBSpectrum, Ray, shouldBreak: Bool, shouldContinue: Bool, shouldReturn: Bool) {
                 var ray = ray
@@ -346,7 +327,6 @@ final class VolumePathIntegrator {
                                 at: surfaceInteraction,
                                 bsdf: bsdf,
                                 with: sampler,
-                                accelerator: accelerator,
                                 lightSampler: lightSampler)
                 estimate += lightEstimate
                 let (bsdfSample, _) = try bsdf.sample(
@@ -363,7 +343,6 @@ final class VolumePathIntegrator {
                 from ray: Ray,
                 tHit: inout FloatX,
                 with sampler: Sampler,
-                accelerator: Accelerator,
                 lightSampler: LightSampler
         ) throws
                 -> (estimate: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
@@ -386,8 +365,7 @@ final class VolumePathIntegrator {
                                 tHit: &tHit,
                                 bounce: bounce,
                                 estimate: &estimate,
-                                interaction: &interaction,
-                                accelerator: accelerator)
+                                interaction: &interaction)
                         if !interaction.valid {
                                 break
                         }
@@ -412,7 +390,6 @@ final class VolumePathIntegrator {
                                         pathThroughputWeight: pathThroughputWeight,
                                         mediumInteraction: mediumInteraction,
                                         sampler: sampler,
-                                        accelerator: accelerator,
                                         lightSampler: lightSampler,
                                         ray: ray)
                                 estimate += mediumRadiance
@@ -430,7 +407,6 @@ final class VolumePathIntegrator {
                                                 albedo: &albedo,
                                                 firstNormal: &firstNormal,
                                                 sampler: sampler,
-                                                accelerator: accelerator,
                                                 lightSampler: lightSampler)
                                 if shouldReturn {
                                         estimate += surfaceRadiance

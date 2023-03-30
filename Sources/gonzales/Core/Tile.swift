@@ -47,7 +47,6 @@ final class Tile {
                                 from: ray,
                                 tHit: &tHit,
                                 with: sampler,
-                                accelerator: accelerator,
                                 lightSampler: lightSampler)
                         let rayWeight: FloatX = 1.0
                         let sample = Sample(
