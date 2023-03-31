@@ -1,9 +1,5 @@
 import Foundation  // Scanner, CharacterSet
 
-func rawScanGlobal(file: UnsafeMutablePointer<FILE>) -> Int32? {
-        return fgetc(file)
-}
-
 func rawPeekGlobal(file: UnsafeMutablePointer<FILE>) -> Int32? {
         let c = fgetc(file)
         ungetc(c, file)
