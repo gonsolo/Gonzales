@@ -52,7 +52,12 @@ struct CoatedDiffuseBsdf: BxDF {
                                         pathThroughputWeight /= 1 - q
                                 }
                         }
+                        _ = estimate
+                        _ = z
+                        _ = w
+                        _ = phase
                 }
+
                 // TODO
                 return bottomBxdf.evaluate(wo: wo, wi: wi)
         }

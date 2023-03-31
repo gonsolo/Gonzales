@@ -55,7 +55,8 @@ else
 	ifeq ($(HOSTNAME), Limone)
 		SWIFT		= ~/bin/swift
 	else
-		SWIFT		= swift
+		#SWIFT		= swift
+		SWIFT		= ~/Downloads/swift-5.8-RELEASE-ubuntu22.04/usr/bin/swift
 	endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
@@ -66,7 +67,8 @@ else
 	SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
 	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
 	CXX_INTEROP 		= -Xswiftc -enable-experimental-cxx-interop
-	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
+	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
+	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)
 	RELEASE_OPTIONS 	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_OPTIMIZE) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP)
 	BUILD			= $(SWIFT) build
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
