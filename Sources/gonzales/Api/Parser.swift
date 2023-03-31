@@ -1,19 +1,11 @@
 import Foundation  // Scanner, CharacterSet
 
-enum PbrtScannerError: Error {
-        case noFile
-        case unsupported
-}
-
 final class PbrtScanner {
 
-        let eof: UInt8 = 0
-        let htab: UInt8 = 9
-        let newline: UInt8 = 10
-        let space: UInt8 = 32
-        let minus: UInt8 = 45
-        let dot: UInt8 = 46
-        let e: UInt8 = 101
+        enum PbrtScannerError: Error {
+                case noFile
+                case unsupported
+        }
 
         init(path: String) throws {
                 guard let s = InputStream(fileAtPath: path) else {
@@ -331,6 +323,14 @@ final class PbrtScanner {
                         scanOne()
                 }
         }
+
+        let eof: UInt8 = 0
+        let htab: UInt8 = 9
+        let newline: UInt8 = 10
+        let space: UInt8 = 32
+        let minus: UInt8 = 45
+        let dot: UInt8 = 46
+        let e: UInt8 = 101
 
         var scanLocation = 0
         var isAtEnd = false
