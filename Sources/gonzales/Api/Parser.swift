@@ -1,11 +1,5 @@
 import Foundation  // Scanner, CharacterSet
 
-func rawPeekGlobal(file: UnsafeMutablePointer<FILE>) -> Int32? {
-        let c = fgetc(file)
-        ungetc(c, file)
-        return c
-}
-
 func match(character: String, in list: [String]) -> Bool {
         for l in list {
                 if character == l { return true }
