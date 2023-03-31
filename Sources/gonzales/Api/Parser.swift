@@ -1,41 +1,5 @@
 import Foundation  // Scanner, CharacterSet
 
-enum RenderStatement: String {
-        case accelerator = "Accelerator"
-        case areaLightSource = "AreaLightSource"
-        case attributeBegin = "AttributeBegin"
-        case attributeEnd = "AttributeEnd"
-        case camera = "Camera"
-        case concatTransform = "ConcatTransform"
-        case film = "Film"
-        case importFile = "Import"  // import is a keyword in Swift
-        case include = "Include"
-        case integrator = "Integrator"
-        case lightSource = "LightSource"
-        case lookAt = "LookAt"
-        case makeNamedMaterial = "MakeNamedMaterial"
-        case makeNamedMedium = "MakeNamedMedium"
-        case material = "Material"
-        case mediumInterface = "MediumInterface"
-        case namedMaterial = "NamedMaterial"
-        case objectBegin = "ObjectBegin"
-        case objectEnd = "ObjectEnd"
-        case objectInstance = "ObjectInstance"
-        case pixelFilter = "PixelFilter"
-        case reverseOrientation = "ReverseOrientation"
-        case rotate = "Rotate"
-        case sampler = "Sampler"
-        case scale = "Scale"
-        case shape = "Shape"
-        case texture = "Texture"
-        case transform = "Transform"
-        case transformBegin = "TransformBegin"
-        case transformEnd = "TransformEnd"
-        case translate = "Translate"
-        case worldBegin = "WorldBegin"
-        case worldEnd = "WorldEnd"
-}
-
 func ascii(_ x: UInt8) -> String {
         return ascii(Int32(x))
 }
@@ -395,10 +359,41 @@ final class PbrtScanner {
 @available(OSX 10.15, *)
 final class Parser {
 
-        var scanner: PbrtScanner
-        let fileName: String
-        var render = true
-        var worldEndSeen = false
+        enum RenderStatement: String {
+                case accelerator = "Accelerator"
+                case areaLightSource = "AreaLightSource"
+                case attributeBegin = "AttributeBegin"
+                case attributeEnd = "AttributeEnd"
+                case camera = "Camera"
+                case concatTransform = "ConcatTransform"
+                case film = "Film"
+                case importFile = "Import"  // import is a keyword in Swift
+                case include = "Include"
+                case integrator = "Integrator"
+                case lightSource = "LightSource"
+                case lookAt = "LookAt"
+                case makeNamedMaterial = "MakeNamedMaterial"
+                case makeNamedMedium = "MakeNamedMedium"
+                case material = "Material"
+                case mediumInterface = "MediumInterface"
+                case namedMaterial = "NamedMaterial"
+                case objectBegin = "ObjectBegin"
+                case objectEnd = "ObjectEnd"
+                case objectInstance = "ObjectInstance"
+                case pixelFilter = "PixelFilter"
+                case reverseOrientation = "ReverseOrientation"
+                case rotate = "Rotate"
+                case sampler = "Sampler"
+                case scale = "Scale"
+                case shape = "Shape"
+                case texture = "Texture"
+                case transform = "Transform"
+                case transformBegin = "TransformBegin"
+                case transformEnd = "TransformEnd"
+                case translate = "Translate"
+                case worldBegin = "WorldBegin"
+                case worldEnd = "WorldEnd"
+        }
 
         init(fileName: String, render: Bool = true, function: String = #function) throws {
                 self.scanner = try PbrtScanner(path: fileName)
@@ -947,4 +942,9 @@ final class Parser {
                         try handleRenderStatement(buffer)
                 }
         }
+
+        var scanner: PbrtScanner
+        let fileName: String
+        var render = true
+        var worldEndSeen = false
 }
