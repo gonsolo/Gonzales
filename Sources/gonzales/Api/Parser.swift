@@ -1,23 +1,19 @@
 import Foundation  // Scanner, CharacterSet
 
-let eof: UInt8 = 0
-let htab: UInt8 = 9
-let newline: UInt8 = 10
-let space: UInt8 = 32
-let quote: UInt8 = 34
-let hashmark: UInt8 = 35
-let minus: UInt8 = 45
-let dot: UInt8 = 46
-let bracketOpen: UInt8 = 91
-let bracketClose: UInt8 = 93
-let e: UInt8 = 101
-
 enum PbrtScannerError: Error {
         case noFile
         case unsupported
 }
 
 final class PbrtScanner {
+
+        let eof: UInt8 = 0
+        let htab: UInt8 = 9
+        let newline: UInt8 = 10
+        let space: UInt8 = 32
+        let minus: UInt8 = 45
+        let dot: UInt8 = 46
+        let e: UInt8 = 101
 
         init(path: String) throws {
                 guard let s = InputStream(fileAtPath: path) else {
@@ -319,9 +315,9 @@ final class PbrtScanner {
 
         private func isWhitespace(_ c: UInt8) -> Bool {
                 switch c {
-                case 9: return true  // htab
-                case 10: return true  // new line
-                case 32: return true  // space
+                case htab: return true
+                case newline: return true
+                case space: return true
                 default: return false
                 }
         }
