@@ -19,18 +19,166 @@ enum PbrtScannerError: Error {
 
 final class PbrtScanner {
 
-        func match(character: String, in list: [String]) -> Bool {
+        init(path: String) throws {
+                guard let s = InputStream(fileAtPath: path) else {
+                        throw PbrtScannerError.noFile
+                }
+                stream = s
+                stream.open()
+                if stream.streamStatus == .error {
+                        throw PbrtScannerError.noFile
+                }
+                var bytes: [UInt8] = Array(repeating: 0, count: bufferLength)
+                buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferLength)
+                buffer.initialize(from: &bytes, count: bufferLength)
+                bufferIndex = 0
+                bytesRead = stream.read(buffer, maxLength: bufferLength)
+                c = 0
+        }
+
+        deinit {
+                buffer.deallocate()
+        }
+
+        func peekString(_ expected: String) -> String? {
+                skipWhitespace()
+                peekOne()
+                let s = ascii(c)
+                if s != expected {
+                        return nil
+                } else {
+                        return s
+                }
+        }
+
+        func scanString(_ expected: String) -> String? {
+                skipWhitespace()
+                peekOne()
+                let s = ascii(c)
+                if s != expected {
+                        return nil
+                } else {
+                        scanOne()
+                        return s
+                }
+        }
+
+        func scanUpToString(_ input: String) -> String? {
+                let s = scanUpToCharactersList(from: [input])
+                return s
+
+        }
+
+        func scanInt(_ i: inout Int) -> Bool {
+                skipWhitespace()
+                peekOne()
+                var isNegative = false
+                if c == minus {
+                        isNegative = true
+                        scanOne()
+                }
+                peekOne()
+                if !isInteger(c) {
+                        return false
+                }
+                i = 0
+                while isInteger(c) {
+                        scanOne()
+                        i = 10 * i + (Int(c) - 48)
+                        peekOne()
+                }
+                if isNegative {
+                        i = -i
+                }
+                return true
+        }
+
+        func scanFloat(_ float: inout Float) throws -> Bool {
+                var i = 0
+                // scanInt scans -0 as 0 so we have to remember whether we are negative
+                skipWhitespace()
+                peekOne()
+                var isNegative = false
+                if c == minus {
+                        isNegative = true
+                }
+
+                var f = 0.0
+                var intSeen = false
+                if scanInt(&i) {
+                        f = Double(i)
+                        intSeen = true
+                }
+                peekOne()
+                if c == dot {
+                        scanOne()
+                        var tenth = 0.1
+                        peekOne()
+                        while isInteger(c) {
+                                scanOne()
+                                if f < 0 {
+                                        f -= tenth * Double(c - 48)
+                                } else {
+                                        f += tenth * Double(c - 48)
+                                }
+                                tenth *= 0.1
+                                peekOne()
+                        }
+                } else {
+                        // If neither a number not a dot is seen this is not a floating point number
+                        if !intSeen {
+                                return false
+                        }
+                }
+                peekOne()
+                var exponent = 0
+                if c == e {
+                        scanOne()
+                        if !scanInt(&exponent) {
+                                exponent = 0
+                        }
+                        f = f * pow(Double(10), Double(exponent))
+                }
+
+                float = FloatX(f)
+
+                if isNegative && i == 0 {
+                        float = -float
+                }
+                return true
+        }
+
+        func scanUpToCharactersList(from list: [String]) -> String? {
+                var string = String()
+                skipWhitespace()
+                while true {
+                        peekOne()
+                        if c == eof {
+                                isAtEnd = true
+                                return nil
+                        }
+                        let s = ascii(c)
+                        if match(character: s, in: list) {
+                                break
+                        }
+                        string.append(s)
+                        scanOne()
+                }
+                return string
+        }
+
+        private func match(character: String, in list: [String]) -> Bool {
                 for l in list {
                         if character == l { return true }
                 }
                 return false
         }
 
-        func ascii(_ x: UInt8) -> String {
+        private func ascii(_ x: UInt8) -> String {
                 return ascii(Int32(x))
         }
 
-        func ascii(_ x: Int32) -> String {
+        private func ascii(_ x: Int32) -> String {
                 switch x {
                 case EOF: return "EOF"
 
@@ -140,35 +288,14 @@ final class PbrtScanner {
                 }
         }
 
-        init(path: String) throws {
-                guard let s = InputStream(fileAtPath: path) else {
-                        throw PbrtScannerError.noFile
-                }
-                stream = s
-                stream.open()
-                if stream.streamStatus == .error {
-                        throw PbrtScannerError.noFile
-                }
-                var bytes: [UInt8] = Array(repeating: 0, count: bufferLength)
-                buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferLength)
-                buffer.initialize(from: &bytes, count: bufferLength)
-                bufferIndex = 0
-                bytesRead = stream.read(buffer, maxLength: bufferLength)
-                c = 0
-        }
-
-        deinit {
-                buffer.deallocate()
-        }
-
-        func peekOne() {
+        private func peekOne() {
                 if bytesRead == 0 {
                         return
                 }
                 c = buffer[bufferIndex]
         }
 
-        func scanOne() {
+        private func scanOne() {
                 if bytesRead == 0 {
                         c = eof
                         return
@@ -182,36 +309,7 @@ final class PbrtScanner {
                 }
         }
 
-        func peekString(_ expected: String) -> String? {
-                skipWhitespace()
-                peekOne()
-                let s = ascii(c)
-                if s != expected {
-                        return nil
-                } else {
-                        return s
-                }
-        }
-
-        func scanString(_ expected: String) -> String? {
-                skipWhitespace()
-                peekOne()
-                let s = ascii(c)
-                if s != expected {
-                        return nil
-                } else {
-                        scanOne()
-                        return s
-                }
-        }
-
-        func scanUpToString(_ input: String) -> String? {
-                let s = scanUpToCharactersList(from: [input])
-                return s
-
-        }
-
-        func isInteger(_ c: UInt8) -> Bool {
+        private func isInteger(_ c: UInt8) -> Bool {
                 if c >= 48 && c <= 57 {
                         return true
                 } else {
@@ -219,86 +317,7 @@ final class PbrtScanner {
                 }
         }
 
-        func scanInt(_ i: inout Int) -> Bool {
-                skipWhitespace()
-                peekOne()
-                var isNegative = false
-                if c == minus {
-                        isNegative = true
-                        scanOne()
-                }
-                peekOne()
-                if !isInteger(c) {
-                        return false
-                }
-                i = 0
-                while isInteger(c) {
-                        scanOne()
-                        i = 10 * i + (Int(c) - 48)
-                        peekOne()
-                }
-                if isNegative {
-                        i = -i
-                }
-                return true
-        }
-
-        func scanFloat(_ float: inout Float) throws -> Bool {
-                var i = 0
-                // scanInt scans -0 as 0 so we have to remember whether we are negative
-                skipWhitespace()
-                peekOne()
-                var isNegative = false
-                if c == minus {
-                        isNegative = true
-                }
-
-                var f = 0.0
-                var intSeen = false
-                if scanInt(&i) {
-                        f = Double(i)
-                        intSeen = true
-                }
-                peekOne()
-                if c == dot {
-                        scanOne()
-                        var tenth = 0.1
-                        peekOne()
-                        while isInteger(c) {
-                                scanOne()
-                                if f < 0 {
-                                        f -= tenth * Double(c - 48)
-                                } else {
-                                        f += tenth * Double(c - 48)
-                                }
-                                tenth *= 0.1
-                                peekOne()
-                        }
-                } else {
-                        // If neither a number not a dot is seen this is not a floating point number
-                        if !intSeen {
-                                return false
-                        }
-                }
-                peekOne()
-                var exponent = 0
-                if c == e {
-                        scanOne()
-                        if !scanInt(&exponent) {
-                                exponent = 0
-                        }
-                        f = f * pow(Double(10), Double(exponent))
-                }
-
-                float = FloatX(f)
-
-                if isNegative && i == 0 {
-                        float = -float
-                }
-                return true
-        }
-
-        func isWhitespace(_ c: UInt8) -> Bool {
+        private func isWhitespace(_ c: UInt8) -> Bool {
                 switch c {
                 case 9: return true  // htab
                 case 10: return true  // new line
@@ -307,7 +326,7 @@ final class PbrtScanner {
                 }
         }
 
-        func skipWhitespace() {
+        private func skipWhitespace() {
                 while true {
                         peekOne()
                         if !isWhitespace(c) {
@@ -315,25 +334,6 @@ final class PbrtScanner {
                         }
                         scanOne()
                 }
-        }
-
-        func scanUpToCharactersList(from list: [String]) -> String? {
-                var string = String()
-                skipWhitespace()
-                while true {
-                        peekOne()
-                        if c == eof {
-                                isAtEnd = true
-                                return nil
-                        }
-                        let s = ascii(c)
-                        if match(character: s, in: list) {
-                                break
-                        }
-                        string.append(s)
-                        scanOne()
-                }
-                return string
         }
 
         var scanLocation = 0
@@ -391,7 +391,31 @@ final class Parser {
                 self.render = render
         }
 
-        func bail(
+        func parse() throws {
+                while !scanner.isAtEnd {
+                        parseComments()
+                        if scanner.isAtEnd {
+                                return
+                        }
+                        guard
+                                let buffer = scanner.scanUpToCharactersList(from: ["\n", " ", "\t"])
+                        else {
+                                if scanner.isAtEnd {
+                                        // PBRT v4 does not use WorldEnd
+                                        if render && !worldEndSeen {
+                                                try api.worldEnd()
+                                        }
+                                        return
+                                }
+                                var message = "Parser error in file \(fileName)"
+                                message += " at \(scanner.scanLocation)"
+                                try bail(message: message)
+                        }
+                        try handleRenderStatement(buffer)
+                }
+        }
+
+        private func bail(
                 function: String = #function,
                 file: String = #file,
                 line: Int = #line,
@@ -405,7 +429,7 @@ final class Parser {
                 )
         }
 
-        func parseString() throws -> String {
+        private func parseString() throws -> String {
                 var string = ""
                 var ok = true
                 ok = try parseString(string: &string)
@@ -416,7 +440,7 @@ final class Parser {
                 }
         }
 
-        func parseTextures() throws -> [String] {
+        private func parseTextures() throws -> [String] {
                 var textures = [String]()
                 var string = ""
                 var ok = true
@@ -442,7 +466,7 @@ final class Parser {
                 guard let _ = scanner.scanString("e") else { try bail() }
         }
 
-        func parseBool() throws -> [Bool] {
+        private func parseBool() throws -> [Bool] {
                 var value = ""
                 let f = scanner.peekString("f")
                 if f != nil {
@@ -464,7 +488,7 @@ final class Parser {
                 }
         }
 
-        func parseString(string: inout String) throws -> Bool {
+        private func parseString(string: inout String) throws -> Bool {
                 guard scanner.scanString("\"") != nil else {
                         return false
                 }
@@ -478,7 +502,7 @@ final class Parser {
                 return true
         }
 
-        func parseFloatXs() throws -> [FloatX] {
+        private func parseFloatXs() throws -> [FloatX] {
                 var values = [FloatX]()
                 while let value = try parseFloatX() {
                         values.append(value)
@@ -486,7 +510,7 @@ final class Parser {
                 return values
         }
 
-        func parseInteger() -> [Int] {
+        private func parseInteger() -> [Int] {
                 var integers = [Int]()
                 var i = Int()
                 var ok = true
@@ -499,13 +523,13 @@ final class Parser {
                 return integers
         }
 
-        func parseFloatX() throws -> FloatX? {
+        private func parseFloatX() throws -> FloatX? {
                 var x: Float = 0
                 guard try scanner.scanFloat(&x) else { return nil }
                 return FloatX(x)
         }
 
-        func parseThreeFloatXs() throws -> (FloatX, FloatX, FloatX)? {
+        private func parseThreeFloatXs() throws -> (FloatX, FloatX, FloatX)? {
                 guard let x = try parseFloatX() else { return nil }
                 guard let y = try parseFloatX() else { return nil }
                 guard let z = try parseFloatX() else { return nil }
@@ -513,7 +537,7 @@ final class Parser {
                 return f
         }
 
-        func parseNamedSpectrum() throws -> (any Spectrum)? {
+        private func parseNamedSpectrum() throws -> (any Spectrum)? {
                 var string = ""
                 if try parseString(string: &string) {
                         if let namedSpectrum = namedSpectra[string] {
@@ -527,7 +551,7 @@ final class Parser {
                 return nil
         }
 
-        func parseRGBSpectrum() throws -> [any Spectrum] {
+        private func parseRGBSpectrum() throws -> [any Spectrum] {
                 var spectra = [RGBSpectrum]()
                 if let namedSpectrum = try parseNamedSpectrum() {
                         return [namedSpectrum]
@@ -539,12 +563,12 @@ final class Parser {
                 return spectra
         }
 
-        func parsePoint() throws -> Point {
+        private func parsePoint() throws -> Point {
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 return Point(xyz: f)
         }
 
-        func parsePoints() throws -> [Point] {
+        private func parsePoints() throws -> [Point] {
                 var points = [Point]()
                 while let f = try parseThreeFloatXs() {
                         let point = Point(xyz: f)
@@ -553,14 +577,14 @@ final class Parser {
                 return points
         }
 
-        func parseVector() throws -> Vector {
+        private func parseVector() throws -> Vector {
                 guard let f = try parseThreeFloatXs() else {
                         try bail()
                 }
                 return Vector(xyz: f)
         }
 
-        func parseVectors() throws -> [Vector] {
+        private func parseVectors() throws -> [Vector] {
                 var vectors = [Vector]()
                 while let f = try parseThreeFloatXs() {
                         let vector = Vector(xyz: f)
@@ -569,7 +593,7 @@ final class Parser {
                 return vectors
         }
 
-        func parseNormals() throws -> [Normal] {
+        private func parseNormals() throws -> [Normal] {
                 var normals = [Normal]()
                 while let f = try parseThreeFloatXs() {
                         let normal = Normal(xyz: f)
@@ -578,7 +602,7 @@ final class Parser {
                 return normals
         }
 
-        func parseParameter() throws -> (String, Parameter)? {
+        private func parseParameter() throws -> (String, Parameter)? {
                 parseComments()
                 guard let _ = scanner.scanString("\"") else { return nil }
                 guard let type = scanner.scanUpToCharactersList(from: ["\n", " "]) else {
@@ -630,7 +654,7 @@ final class Parser {
                 return (name, parameter)
         }
 
-        func parseParameters() throws -> ParameterDictionary {
+        private func parseParameters() throws -> ParameterDictionary {
                 var parameters = ParameterDictionary()
                 var nameAndParameter = try parseParameter()
                 while nameAndParameter != nil {
@@ -643,33 +667,33 @@ final class Parser {
                 return parameters
         }
 
-        func parseIntegrator() throws {
+        private func parseIntegrator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.integrator(name: name, parameters: parameters)
         }
 
-        func parseLightSource() throws {
+        private func parseLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.lightSource(name: name, parameters: parameters)
         }
 
-        func parseLookAt() throws {
+        private func parseLookAt() throws {
                 let eye = try parsePoint()
                 let at = try parsePoint()
                 let up = try parseVector()
                 try api.lookAt(eye: eye, at: at, up: up)
         }
 
-        func parseRotate() throws {
+        private func parseRotate() throws {
                 guard let angle = try parseFloatX() else { try bail() }
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 let axis = Vector(xyz: f)
                 try api.rotate(by: FloatX(angle), around: axis)
         }
 
-        func scanTransform() throws -> [FloatX] {
+        private func scanTransform() throws -> [FloatX] {
                 guard let _ = scanner.scanString("[") else { try bail() }
                 var values = [FloatX]()
                 for _ in 0..<16 {
@@ -680,47 +704,47 @@ final class Parser {
                 return values
         }
 
-        func parseTransform() throws {
+        private func parseTransform() throws {
                 let values = try scanTransform()
                 try api.transform(values: values)
         }
 
-        func parseTransformBegin() throws {
+        private func parseTransformBegin() throws {
                 try api.transformBegin()
         }
 
-        func parseTransformEnd() throws {
+        private func parseTransformEnd() throws {
                 try api.transformEnd()
         }
 
-        func parseTranslate() throws {
+        private func parseTranslate() throws {
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 let translation = Vector(xyz: f)
                 try api.translate(by: translation)
         }
 
-        func parseSampler() throws {
+        private func parseSampler() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 api.sampler(name: name, parameters: parameters)
         }
 
-        func parseScale() throws {
+        private func parseScale() throws {
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 try api.scale(x: f.0, y: f.1, z: f.2)
         }
 
-        func parsePixelFilter() throws {
+        private func parsePixelFilter() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 api.pixelFilter(name: name, parameters: parameters)
         }
 
-        func parseReverseOrientation() {
+        private func parseReverseOrientation() {
                 warning("Ignoring reverseOrientation!")
         }
 
-        func parseFilm() throws {
+        private func parseFilm() throws {
                 let name = try parseString()
                 switch name {
                 case "image":
@@ -734,17 +758,17 @@ final class Parser {
                 try api.film(name: name, parameters: parameters)
         }
 
-        func parseImport() throws {
+        private func parseImport() throws {
                 let name = try parseString()
                 try api.importFile(file: name)
         }
 
-        func parseInclude() throws {
+        private func parseInclude() throws {
                 let name = try parseString()
                 try api.include(file: name, render: false)
         }
 
-        func parseCamera() throws {
+        private func parseCamera() throws {
                 let name = try parseString()
                 guard name == "perspective" else {
                         try bail()
@@ -753,70 +777,70 @@ final class Parser {
                 try api.camera(name: name, parameters: parameters)
         }
 
-        func parseConcatTransform() throws {
+        private func parseConcatTransform() throws {
                 let values = try scanTransform()
                 try api.concatTransform(values: values)
         }
 
-        func parseWorldBegin() throws {
+        private func parseWorldBegin() throws {
                 api.worldBegin()
         }
 
-        func parseWorldEnd() throws {
+        private func parseWorldEnd() throws {
                 worldEndSeen = true
                 try api.worldEnd()
         }
 
-        func parseMakeNamedMaterial() throws {
+        private func parseMakeNamedMaterial() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.makeNamedMaterial(name: name, parameters: parameters)
         }
 
-        func parseMakeNamedMedium() throws {
+        private func parseMakeNamedMedium() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.makeNamedMedium(name: name, parameters: parameters)
         }
 
-        func parseMaterial() throws {
+        private func parseMaterial() throws {
                 let type = try parseString()
                 let parameters = try parseParameters()
                 try api.material(type: type, parameters: parameters)
         }
 
-        func parseMediumInterface() throws {
+        private func parseMediumInterface() throws {
                 let interior = try parseString()
                 let exterior = try parseString()
                 api.mediumInterface(interior: interior, exterior: exterior)
         }
 
-        func parseNamedMaterial() throws {
+        private func parseNamedMaterial() throws {
                 let name = try parseString()
                 try api.namedMaterial(name: name)
         }
 
-        func parseObjectBegin() throws {
+        private func parseObjectBegin() throws {
                 let name = try parseString()
                 try api.objectBegin(name: name)
         }
 
-        func parseObjectEnd() throws {
+        private func parseObjectEnd() throws {
                 try api.objectEnd()
         }
 
-        func parseObjectInstance() throws {
+        private func parseObjectInstance() throws {
                 let name = try parseString()
                 try api.objectInstance(name: name)
         }
 
-        func parseShape() throws {
+        private func parseShape() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.shape(name: name, parameters: parameters)
         }
 
-        func parseTexture() throws {
+        private func parseTexture() throws {
                 let textureName = try parseString()
                 let textureType = try parseString()
                 let textureClass = try parseString()
@@ -829,27 +853,27 @@ final class Parser {
                 )
         }
 
-        func parseAttributeBegin() throws {
+        private func parseAttributeBegin() throws {
                 try api.attributeBegin()
         }
 
-        func parseAttributeEnd() throws {
+        private func parseAttributeEnd() throws {
                 try api.attributeEnd()
         }
 
-        func parseAccelerator() throws {
+        private func parseAccelerator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.accelerator(name: name, parameters: parameters)
         }
 
-        func parseAreaLightSource() throws {
+        private func parseAreaLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.areaLight(name: name, parameters: parameters)
         }
 
-        func parseComment() -> Bool {
+        private func parseComment() -> Bool {
                 let hashmark = scanner.peekString("#")
                 if hashmark != nil {
                         _ = scanner.scanUpToCharactersList(from: ["\n"])
@@ -858,14 +882,14 @@ final class Parser {
                 return false
         }
 
-        func parseComments() {
+        private func parseComments() {
                 var commentFound: Bool
                 repeat {
                         commentFound = parseComment()
                 } while commentFound
         }
 
-        func handleRenderStatement(_ input: String) throws {
+        private func handleRenderStatement(_ input: String) throws {
                 guard let statement = RenderStatement(rawValue: input) else {
                         var message = "Unknown RenderStatement: |\(input)|"
                         message += " in file \(fileName)"
@@ -906,30 +930,6 @@ final class Parser {
                 case .translate: try parseTranslate()
                 case .worldBegin: try parseWorldBegin()
                 case .worldEnd: try parseWorldEnd()
-                }
-        }
-
-        func parse() throws {
-                while !scanner.isAtEnd {
-                        parseComments()
-                        if scanner.isAtEnd {
-                                return
-                        }
-                        guard
-                                let buffer = scanner.scanUpToCharactersList(from: ["\n", " ", "\t"])
-                        else {
-                                if scanner.isAtEnd {
-                                        // PBRT v4 does not use WorldEnd
-                                        if render && !worldEndSeen {
-                                                try api.worldEnd()
-                                        }
-                                        return
-                                }
-                                var message = "Parser error in file \(fileName)"
-                                message += " at \(scanner.scanLocation)"
-                                try bail(message: message)
-                        }
-                        try handleRenderStatement(buffer)
                 }
         }
 
