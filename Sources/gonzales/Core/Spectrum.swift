@@ -243,6 +243,10 @@ extension BaseRGBSpectrum where T: FloatingPoint {
                 return (r + g + b) / 3
         }
 
+        var maxValue: T {
+                return max(r, max(g, b))
+        }
+
         subscript(index: Int) -> T {
                 get {
                         switch index {

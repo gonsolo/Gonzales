@@ -23,7 +23,6 @@ struct CoatedDiffuseBsdf: BxDF {
                 let numberOfSamples = 1
 
                 let estimate = FloatX(numberOfSamples) * topBxdf.evaluate(wo: wo, wi: wi)
-                _ = estimate
                 let sampler = RandomSampler()
                 for _ in 0..<numberOfSamples {
                         let u1 = (sampler.get1D(), sampler.get1D(), sampler.get1D())
@@ -40,14 +39,19 @@ struct CoatedDiffuseBsdf: BxDF {
                         {
                                 continue
                         }
-                        let pathThroughputWeight = topSample.throughputWeight()
+                        var pathThroughputWeight = topSample.throughputWeight()
                         let z = thickness
                         let w = topSample.incoming
                         let phase = HenyeyGreenstein()
                         for depth in 0..<maxDepth {
-
+                                if depth > 3 && pathThroughputWeight.maxValue < 0.25 {
+                                        let q = max(0, 1 - pathThroughputWeight.maxValue)
+                                        if sampler.get1D() < q {
+                                                break
+                                        }
+                                        pathThroughputWeight /= 1 - q
+                                }
                         }
-
                 }
                 // TODO
                 return bottomBxdf.evaluate(wo: wo, wi: wi)
