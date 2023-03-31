@@ -1,12 +1,5 @@
 import Foundation  // Scanner, CharacterSet
 
-func match(character: String, in list: [String]) -> Bool {
-        for l in list {
-                if character == l { return true }
-        }
-        return false
-}
-
 let eof: UInt8 = 0
 let htab: UInt8 = 9
 let newline: UInt8 = 10
@@ -25,6 +18,13 @@ enum PbrtScannerError: Error {
 }
 
 final class PbrtScanner {
+
+        func match(character: String, in list: [String]) -> Bool {
+                for l in list {
+                        if character == l { return true }
+                }
+                return false
+        }
 
         func ascii(_ x: UInt8) -> String {
                 return ascii(Int32(x))
