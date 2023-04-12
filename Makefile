@@ -55,8 +55,7 @@ else
 	ifeq ($(HOSTNAME), Limone)
 		SWIFT		= ~/bin/swift
 	else
-		#SWIFT		= swift
-		SWIFT		= ~/Downloads/swift-5.8-RELEASE-ubuntu22.04/usr/bin/swift
+		SWIFT		= swift
 	endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
