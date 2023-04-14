@@ -1,3 +1,5 @@
+import Foundation  // exp
+
 struct CoatedDiffuseBsdf: BxDF {
 
         init(reflectance: RGBSpectrum, roughness: (FloatX, FloatX)) {
@@ -40,7 +42,7 @@ struct CoatedDiffuseBsdf: BxDF {
                                 continue
                         }
                         var pathThroughputWeight = topSample.throughputWeight()
-                        let z = thickness
+                        var z = thickness
                         let w = topSample.incoming
                         let phase = HenyeyGreenstein()
                         for depth in 0..<maxDepth {
@@ -50,6 +52,18 @@ struct CoatedDiffuseBsdf: BxDF {
                                                 break
                                         }
                                         pathThroughputWeight /= 1 - q
+                                }
+                                // medium scattering albedo is assumed to be zero
+                                let mediumScatteringAlbedo = 0
+                                if mediumScatteringAlbedo == 0 {
+                                        if z == thickness {
+                                                z = 0
+                                        } else {
+                                                z = thickness
+                                        }
+                                        pathThroughputWeight *= transmittance(dz: thickness, w: w)
+                                } else {
+                                        unimplemented()
                                 }
                         }
                         _ = estimate
@@ -69,6 +83,14 @@ struct CoatedDiffuseBsdf: BxDF {
         //func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
         //        unimplemented()
         //}
+
+        private func transmittance(dz: FloatX, w: Vector) -> FloatX {
+                if abs(dz) < FloatX.leastNormalMagnitude {
+                        return 1
+                } else {
+                        return exp(-abs(dz / w.z))
+                }
+        }
 
         func albedo() -> RGBSpectrum { return reflectance }
 
