@@ -28,8 +28,7 @@ func unimplemented(
 func todo(
         function: String = #function, file: String = #file, line: Int = #line, message: String = ""
 ) -> Never {
-        print("Unimplemented in function \(function) in file \(file), line \(line), \(message)")
-        fatalError()
+        unimplemented(function: function, file: file, line: line, message: message)
 }
 
 func notOverridden(function: String = #function, file: String = #file, line: Int = #line) -> Never {
