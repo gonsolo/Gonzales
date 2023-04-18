@@ -14,6 +14,10 @@ struct BSDFSample {
                 return estimate * absDot(incoming, normal) / probabilityDensity
         }
 
+        var isValid: Bool {
+                return !estimate.isBlack && incoming.z != 0 && probabilityDensity != 0
+        }
+
         var estimate: RGBSpectrum
         let incoming: Vector
         var probabilityDensity: FloatX

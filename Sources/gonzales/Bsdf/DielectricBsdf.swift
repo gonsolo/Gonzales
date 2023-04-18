@@ -177,6 +177,10 @@ struct DielectricBsdf: BxDF {
 
         func albedo() -> RGBSpectrum { return white }
 
+        var isSpecular: Bool {
+                return distribution.isSmooth
+        }
+
         let distribution: MicrofacetDistribution
 
         let refractiveIndexVacuum: FloatX = 1
