@@ -160,7 +160,11 @@ struct CoatedDiffuseBsdf: BxDF {
                 return estimate
         }
 
-        //func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
+        //func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        //        let bs = topBxdf.sample(wo: wo, u: u)
+        //        if !bs.isValid {
+        //                return invalidBSDFSample
+        //        }
         //        unimplemented()
         //}
 

@@ -22,3 +22,5 @@ struct BSDFSample {
         let incoming: Vector
         var probabilityDensity: FloatX
 }
+
+let invalidBSDFSample = BSDFSample()
