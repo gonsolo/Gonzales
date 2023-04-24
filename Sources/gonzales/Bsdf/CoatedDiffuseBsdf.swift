@@ -50,17 +50,17 @@ struct CoatedDiffuseBsdf: BxDF {
                                         pathThroughputWeight /= 1 - q
                                 }
                                 // medium scattering albedo is assumed to be zero
-                                let mediumScatteringAlbedo = 0
-                                if mediumScatteringAlbedo == 0 {
-                                        if z == thickness {
-                                                z = 0
-                                        } else {
-                                                z = thickness
-                                        }
-                                        pathThroughputWeight *= transmittance(dz: thickness, w: w)
+                                //let mediumScatteringAlbedo = 0
+                                //if mediumScatteringAlbedo == 0 {
+                                if z == thickness {
+                                        z = 0
                                 } else {
-                                        unimplemented()
+                                        z = thickness
                                 }
+                                pathThroughputWeight *= transmittance(dz: thickness, w: w)
+                                //} else {
+                                //        unimplemented()
+                                //}
                                 if z == exitZ {
                                         let bsdfSample = topBxdf.sample(wo: -w, u: sampler.get3D())
                                         if !bsdfSample.isValid {
@@ -115,7 +115,8 @@ struct CoatedDiffuseBsdf: BxDF {
                                 }
                         }
                 }
-                return estimate / FloatX(numberOfSamples)
+                estimate /= FloatX(numberOfSamples)
+                return estimate
         }
 
         //func sample(wo: Vector, u: Point2F) -> (RGBSpectrum, Vector, FloatX) {
