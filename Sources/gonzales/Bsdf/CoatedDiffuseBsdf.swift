@@ -11,6 +11,89 @@ struct CoatedDiffuseBsdf: BxDF {
                 self.bottomBxdf = DiffuseBsdf(reflectance: reflectance)
         }
 
+        private func evaluateNextEvent(
+                depth: Int,
+                pathThroughputWeight: inout RGBSpectrum,
+                sampler: Sampler,
+                z: inout FloatX,
+                w: inout Vector,
+                exitZ: FloatX,
+                wis: BSDFSample,
+                wi: Vector
+        ) -> RGBSpectrum? {
+                var estimate = black
+                if depth > 3 && pathThroughputWeight.maxValue < 0.25 {
+                        let q = max(0, 1 - pathThroughputWeight.maxValue)
+                        if sampler.get1D() < q {
+                                return nil
+                        }
+                        pathThroughputWeight /= 1 - q
+                }
+                // medium scattering albedo is assumed to be zero
+                //let mediumScatteringAlbedo = 0
+                //if mediumScatteringAlbedo == 0 {
+                if z == thickness {
+                        z = 0
+                } else {
+                        z = thickness
+                }
+                pathThroughputWeight *= transmittance(dz: thickness, w: w)
+                //} else {
+                //        unimplemented()
+                //}
+                if z == exitZ {
+                        let bsdfSample = topBxdf.sample(wo: -w, u: sampler.get3D())
+                        if !bsdfSample.isValid {
+                                return nil
+                        }
+                        pathThroughputWeight *= bsdfSample.throughputWeight()
+                        w = bsdfSample.incoming
+                } else {
+                        // non-exit interface is diffuse
+                        var wt: FloatX = 1
+                        if !topBxdf.isSpecular {
+                                wt = powerHeuristic(
+                                        f: wis.probabilityDensity,
+                                        g: bottomBxdf.probabilityDensity(
+                                                wo: -w,
+                                                wi: -wis.incoming))
+                        }
+                        let floatWeight =
+                                pathThroughputWeight
+                                * absCosTheta(wis.incoming)
+                                * wt
+                                * transmittance(dz: thickness, w: wis.incoming)
+                                * wis.estimate
+                                / wis.probabilityDensity
+                        let eval = bottomBxdf.evaluate(wo: -w, wi: -wis.incoming)
+                        estimate += floatWeight * eval
+                        let bs = bottomBxdf.sample(wo: -w, u: sampler.get3D())
+                        if !bs.isValid {
+                                return nil
+                        }
+                        pathThroughputWeight *= bs.throughputWeight()
+                        w = bs.incoming
+                        if !topBxdf.isSpecular {
+                                let fExit = topBxdf.evaluate(wo: -w, wi: wi)
+                                if !fExit.isBlack {
+                                        var wt: FloatX = 1
+                                        // bottom is always black
+                                        let exitPDF = topBxdf.probabilityDensity(
+                                                wo: -w,
+                                                wi: wi)
+                                        wt = powerHeuristic(
+                                                f: bs.probabilityDensity,
+                                                g: exitPDF)
+                                        estimate +=
+                                                pathThroughputWeight
+                                                * transmittance(dz: thickness, w: bs.incoming)
+                                                * fExit * wt
+                                }
+                        }
+                }
+                return estimate
+        }
+
         private func evaluateOneSample(
                 sampler: Sampler,
                 wo: Vector,
@@ -32,75 +115,21 @@ struct CoatedDiffuseBsdf: BxDF {
                 var z = thickness
                 var w = wos.incoming
                 for depth in 0..<maxDepth {
-                        if depth > 3 && pathThroughputWeight.maxValue < 0.25 {
-                                let q = max(0, 1 - pathThroughputWeight.maxValue)
-                                if sampler.get1D() < q {
-                                        break
-                                }
-                                pathThroughputWeight /= 1 - q
+                        guard
+                                let nextEstimate = evaluateNextEvent(
+                                        depth: depth,
+                                        pathThroughputWeight: &pathThroughputWeight,
+                                        sampler: sampler,
+                                        z: &z,
+                                        w: &w,
+                                        exitZ: exitZ,
+                                        wis: wis,
+                                        wi: wi
+                                )
+                        else {
+                                break
                         }
-                        // medium scattering albedo is assumed to be zero
-                        //let mediumScatteringAlbedo = 0
-                        //if mediumScatteringAlbedo == 0 {
-                        if z == thickness {
-                                z = 0
-                        } else {
-                                z = thickness
-                        }
-                        pathThroughputWeight *= transmittance(dz: thickness, w: w)
-                        //} else {
-                        //        unimplemented()
-                        //}
-                        if z == exitZ {
-                                let bsdfSample = topBxdf.sample(wo: -w, u: sampler.get3D())
-                                if !bsdfSample.isValid {
-                                        break
-                                }
-                                pathThroughputWeight *= bsdfSample.throughputWeight()
-                                w = bsdfSample.incoming
-                        } else {
-                                // non-exit interface is diffuse
-                                var wt: FloatX = 1
-                                if !topBxdf.isSpecular {
-                                        wt = powerHeuristic(
-                                                f: wis.probabilityDensity,
-                                                g: bottomBxdf.probabilityDensity(
-                                                        wo: -w,
-                                                        wi: -wis.incoming))
-                                }
-                                let floatWeight =
-                                        pathThroughputWeight
-                                        * absCosTheta(wis.incoming)
-                                        * wt
-                                        * transmittance(dz: thickness, w: wis.incoming)
-                                        * wis.estimate
-                                        / wis.probabilityDensity
-                                let eval = bottomBxdf.evaluate(wo: -w, wi: -wis.incoming)
-                                estimate += floatWeight * eval
-                                let bs = bottomBxdf.sample(wo: -w, u: sampler.get3D())
-                                if !bs.isValid {
-                                        break
-                                }
-                                pathThroughputWeight *= bs.throughputWeight()
-                                w = bs.incoming
-                                if !topBxdf.isSpecular {
-                                        let fExit = topBxdf.evaluate(wo: -w, wi: wi)
-                                        if !fExit.isBlack {
-                                                var wt: FloatX = 1
-                                                // bottom is always black
-                                                let exitPDF = topBxdf.probabilityDensity(
-                                                        wo: -w,
-                                                        wi: wi)
-                                                wt = powerHeuristic(
-                                                        f: bs.probabilityDensity,
-                                                        g: exitPDF)
-                                                estimate +=
-                                                        pathThroughputWeight
-                                                        * transmittance(dz: thickness, w: bs.incoming)
-                                                        * fExit * wt
-                                        }
-                                }
-                        }
+                        estimate += nextEstimate
                 }
 
         }
