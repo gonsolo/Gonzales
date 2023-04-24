@@ -101,8 +101,7 @@ struct CoatedDiffuseBsdf: BxDF {
                 exitZ: FloatX,
                 estimate: inout RGBSpectrum
         ) {
-                let u1 = (sampler.get1D(), sampler.get1D(), sampler.get1D())
-                let wos = topBxdf.sample(wo: wo, u: u1)
+                let wos = topBxdf.sample(wo: wo, u: sampler.get3D())
                 if !wos.isValid {
                         return
                 }
