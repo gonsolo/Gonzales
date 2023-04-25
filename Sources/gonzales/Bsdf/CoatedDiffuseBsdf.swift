@@ -205,9 +205,70 @@ struct CoatedDiffuseBsdf: BxDF {
                 return invalidBSDFSample
         }
 
-        //func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
-        //        unimplemented()
-        //}
+        private func evaluateTRT(wo: Vector, wi: Vector) -> FloatX {
+                var pdfSum: FloatX = 0
+                let rInterface = bottomBxdf
+                let tInterface = topBxdf
+                let sampler = RandomSampler()
+                let wos = tInterface.sample(wo: wo, u: sampler.get3D())
+                let wis = tInterface.sample(wo: wi, u: sampler.get3D())
+                if wos.isValid && wis.isValid {
+                        if tInterface.isSpecular {
+                                pdfSum += rInterface.probabilityDensity(wo: -wos.incoming, wi: -wis.incoming)
+                        } else {
+                                let rs = rInterface.sample(wo: -wos.incoming, u: sampler.get3D())
+                                if rs.isValid {
+                                        let rPdf = rInterface.probabilityDensity(
+                                                wo: -wos.incoming, wi: -wis.incoming)
+                                        let rwt = powerHeuristic(f: wis.probabilityDensity, g: rPdf)
+                                        pdfSum += rwt * rPdf
+                                        let tPdf = tInterface.probabilityDensity(wo: -rs.incoming, wi: wi)
+                                        let twt = powerHeuristic(f: rs.probabilityDensity, g: tPdf)
+                                        pdfSum += twt * tPdf
+                                }
+                        }
+                }
+                return pdfSum
+        }
+
+        private func evaluateTT(wo: Vector, wi: Vector) -> FloatX {
+                let toInterface = topBxdf
+                let tiInterface = bottomBxdf
+                let sampler = RandomSampler()
+                var pdfSum: FloatX = 0
+                let wos = toInterface.sample(wo: wo, u: sampler.get3D())
+                guard wos.isValid else {
+                        return pdfSum
+                }
+                let wis = tiInterface.sample(wo: wi, u: sampler.get3D())
+                guard wis.isValid else {
+                        return pdfSum
+                }
+                if toInterface.isSpecular {
+                        pdfSum += tiInterface.probabilityDensity(wo: -wos.incoming, wi: wi)
+                } else {  // tiInterface/bottomBxdf/DiffuseBxdf is never specular
+                        let toPdf = toInterface.probabilityDensity(wo: wo, wi: -wis.incoming)
+                        let tiPdf = tiInterface.probabilityDensity(wo: -wos.incoming, wi: wi)
+                        pdfSum += (toPdf + tiPdf) / 2
+                }
+                return pdfSum
+        }
+
+        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+                let numberOfSamples = 1
+                var pdfSum: FloatX = 0
+                if sameHemisphere(wo, wi) {
+                        pdfSum += FloatX(numberOfSamples) * topBxdf.probabilityDensity(wo: wo, wi: wi)
+                }
+                for _ in 0..<numberOfSamples {
+                        if sameHemisphere(wo, wi) {
+                                pdfSum += evaluateTRT(wo: wo, wi: wi)
+                        } else {
+                                pdfSum += evaluateTT(wo: wo, wi: wi)
+                        }
+                }
+                return lerp(with: 0.9, between: 1 / (4 * FloatX.pi), and: pdfSum / FloatX(numberOfSamples))
+        }
 
         private func transmittance(dz: FloatX, w: Vector) -> FloatX {
                 if abs(dz) < FloatX.leastNormalMagnitude {
