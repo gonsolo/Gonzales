@@ -172,7 +172,42 @@ struct DielectricBsdf: BxDF {
         }
 
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
-                unimplemented()
+                if refractiveIndex == refractiveIndexVacuum  || isSpecular {
+                        return 0
+                }
+                let cosThetaO = cosTheta(wo)
+                let cosThetaI = cosTheta(wi)
+                let reflect = cosThetaI * cosThetaO > 0
+                var etap: FloatX = 1
+                if !reflect {
+                        etap = cosThetaO > 0 ? refractiveIndex : 1 / refractiveIndex
+                }
+                var wm = wi * etap + wo
+                if cosThetaO.isZero || cosThetaI.isZero || lengthSquared(wm).isZero {
+                        return 0
+                }
+                wm = faceforward(vector: normalized(wm), comparedTo: Normal(x: 0, y: 0, z: 1))
+                if dot(wm, wi) * cosThetaI < 0 || dot(wm, wo) * cosThetaO < 0 {
+                        return 0
+                }
+                let fresnelR = FresnelDielectric.reflected(
+                        cosThetaI: dot(wo, wm),
+                        refractiveIndex: refractiveIndex)
+                let fresnelT = 1 - fresnelR
+                let pr = fresnelR
+                let pt = fresnelT
+                var pdf: FloatX = 0
+                if reflect {
+                        let dPdf: FloatX = distribution.probabilityDensity(wo: wo, half: wm)
+                        let four: FloatX = 4 * absDot(wo, wm)
+                        let p: FloatX = pr / (pr + pt)
+                        pdf = dPdf / four * p
+                } else {
+                        let denom = square(dot(wi, wm) + dot(wo, wm) / etap)
+                        let dwmDwi = absDot(wi, wm) / denom
+                        pdf = distribution.probabilityDensity(wo: wo, half: wm) * dwmDwi * pt / (pr + pt)
+                }
+                return pdf
         }
 
         func albedo() -> RGBSpectrum { return white }
