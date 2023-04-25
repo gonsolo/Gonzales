@@ -11,11 +11,15 @@ struct BSDFSample {
         }
 
         func throughputWeight(normal: Normal = upNormal) -> RGBSpectrum {
-                return estimate * absDot(incoming, normal) / probabilityDensity
+                estimate * absDot(incoming, normal) / probabilityDensity
         }
 
         var isValid: Bool {
-                return !estimate.isBlack && incoming.z != 0 && probabilityDensity != 0
+                !estimate.isBlack && incoming.z != 0 && probabilityDensity != 0
+        }
+
+        func isReflection(wo: Vector) -> Bool {
+                sameHemisphere(incoming, wo)
         }
 
         var estimate: RGBSpectrum

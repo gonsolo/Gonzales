@@ -160,13 +160,16 @@ struct CoatedDiffuseBsdf: BxDF {
                 return estimate
         }
 
-        //func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
-        //        let bs = topBxdf.sample(wo: wo, u: u)
-        //        if !bs.isValid {
-        //                return invalidBSDFSample
-        //        }
-        //        unimplemented()
-        //}
+        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+                let bs = topBxdf.sample(wo: wo, u: u)
+                if !bs.isValid {
+                        return invalidBSDFSample
+                }
+                if bs.isReflection(wo: wo) {
+                        return bs
+                }
+                unimplemented()
+        }
 
         //func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
         //        unimplemented()

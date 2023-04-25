@@ -1,9 +1,9 @@
-func sameHemisphere(_ v1: Vector, _ v2: Vector) -> Bool { return v1.z * v2.z > 0 }
+func sameHemisphere(_ v1: Vector, _ v2: Vector) -> Bool { v1.z * v2.z > 0 }
 
-func absCosTheta(_ v: Vector) -> FloatX { return abs(v.z) }
+func absCosTheta(_ v: Vector) -> FloatX { abs(v.z) }
 
 func reflect(vector: Vector, by normal: Vector) -> Vector {
-        return -vector + 2 * dot(vector, normal) * normal
+        -vector + 2 * dot(vector, normal) * normal
 }
 
 func refract(wi: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
