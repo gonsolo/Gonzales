@@ -172,7 +172,7 @@ struct DielectricBsdf: BxDF {
         }
 
         func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
-                if refractiveIndex == refractiveIndexVacuum  || isSpecular {
+                if refractiveIndex == refractiveIndexVacuum || isSpecular {
                         return 0
                 }
                 let cosThetaO = cosTheta(wo)
