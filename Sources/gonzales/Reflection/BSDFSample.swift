@@ -22,6 +22,10 @@ struct BSDFSample {
                 sameHemisphere(incoming, wo)
         }
 
+        func isTransmission(wo: Vector) -> Bool {
+                return !isReflection(wo: wo)
+        }
+
         var estimate: RGBSpectrum
         let incoming: Vector
         var probabilityDensity: FloatX

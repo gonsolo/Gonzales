@@ -168,7 +168,41 @@ struct CoatedDiffuseBsdf: BxDF {
                 if bs.isReflection(wo: wo) {
                         return bs
                 }
-                unimplemented()
+                var w = bs.incoming
+                var estimate = bs.estimate * absCosTheta(bs.incoming)
+                var probabilityDensity = bs.probabilityDensity
+                var z = thickness
+
+                for depth in 0..<maxDepth {
+                        let rrBeta = estimate.maxValue / probabilityDensity
+                        if depth > 3 && rrBeta < 0.25 {
+                                let q = max(0, 1 - rrBeta)
+                                if u.0 < q {
+                                        return invalidBSDFSample
+                                }
+                                probabilityDensity *= 1 - q
+                        }
+                        if w.z == 0 {
+                                return invalidBSDFSample
+                        }
+                        // albedo is zero
+                        z = (z == thickness) ? 0 : thickness
+                        estimate *= transmittance(dz: thickness, w: w)
+                        let interface: BxDF = (z == 0) ? bottomBxdf : topBxdf
+                        // TODO: u.0 is used above too, have to generate a new one
+                        let bs = interface.sample(wo: -w, u: u)
+                        if !bs.isValid {
+                                return invalidBSDFSample
+                        }
+                        estimate *= bs.estimate
+                        probabilityDensity *= bs.probabilityDensity
+                        w = bs.incoming
+                        if bs.isTransmission(wo: -w) {
+                                return BSDFSample(estimate, w, probabilityDensity)
+                        }
+                        estimate *= absCosTheta(bs.incoming)
+                }
+                return invalidBSDFSample
         }
 
         //func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
