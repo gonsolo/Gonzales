@@ -213,6 +213,7 @@ final class VolumePathIntegrator {
                                 bsdf: bsdf,
                                 sampler: sampler)
                 }
+                // For debugging uncomment one of the two following methods:
                 //return try sampleLight(
                 //        light: light,
                 //        interaction: interaction,
