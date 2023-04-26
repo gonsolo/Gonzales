@@ -1,6 +1,6 @@
 all: d
 
-#SINGLERAY = --single 120 53
+#SINGLERAY = --single 108 68
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick

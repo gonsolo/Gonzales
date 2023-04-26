@@ -32,7 +32,8 @@ struct DielectricBsdf: BxDF {
                         let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
                         let enumerator = differentialArea * visibleFraction
                         let denominator = abs(4 * cosThetaI * cosThetaO)
-                        return RGBSpectrum(intensity: enumerator / denominator)
+                        let estimate = RGBSpectrum(intensity: enumerator / denominator)
+                        return estimate
                 } else {
                         let denominator = square(dot(wi, half) + dot(wo, half) / etap) * cosThetaI * cosThetaO
                         let differentialArea = distribution.differentialArea(withNormal: half)
@@ -44,7 +45,8 @@ struct DielectricBsdf: BxDF {
                         var enumerator = differentialArea * fresnelTransmitted * visibleFraction * absDotIO
                         // radiance transport
                         enumerator /= square(etap)
-                        return RGBSpectrum(intensity: enumerator / denominator)
+                        let estimate = RGBSpectrum(intensity: enumerator / denominator)
+                        return estimate
                 }
         }
 

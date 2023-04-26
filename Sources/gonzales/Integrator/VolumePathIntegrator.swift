@@ -250,17 +250,15 @@ final class VolumePathIntegrator {
         }
 
         private func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RGBSpectrum) -> Bool {
-                if bounce < 4 {
-                        return false
+                if pathThroughputWeight.maxValue < 1 && bounce > 1 {
+                        let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
+                        let roulette = FloatX.random(in: 0..<1)
+                        if roulette < probability {
+                                return true
+                        }
+                        pathThroughputWeight /= 1 - probability
                 }
-                let roulette = FloatX.random(in: 0..<1)
-                let probability: FloatX = 0.5
-                if roulette < probability {
-                        return true
-                } else {
-                        pathThroughputWeight /= probability
-                        return false
-                }
+                return false
         }
 
         private func sampleMedium(
