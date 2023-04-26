@@ -127,17 +127,17 @@ final class VolumePathIntegrator {
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)
-                if !brdfInteraction.valid {
-                        for light in scene.lights {
-                                if light is InfiniteLight {
-                                        let radiance = light.radianceFromInfinity(for: ray)
-                                        bsdfSample.estimate *= radiance
-                                        return bsdfSample
-                                }
-                        }
+                if brdfInteraction.valid {
                         return zero
                 }
-                return bsdfSample
+                for light in scene.lights {
+                        if light is InfiniteLight {
+                                let radiance = light.radianceFromInfinity(for: ray)
+                                bsdfSample.estimate *= radiance
+                                return bsdfSample  // TODO: Just one infinite light?
+                        }
+                }
+                return zero
         }
 
         private func sampleLight(
@@ -146,17 +146,17 @@ final class VolumePathIntegrator {
                 bsdf: BSDF,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
-                let bsdfSample = try sampleLightSource(
+                let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         sampler: sampler,
                         bsdf: bsdf)
-                if bsdfSample.probabilityDensity == 0 {
+                if lightSample.probabilityDensity == 0 {
                         print("light: black")
                         return black
                 } else {
-                        print("light: ", bsdfSample)
-                        return bsdfSample.estimate / bsdfSample.probabilityDensity
+                        print("light: ", lightSample)
+                        return lightSample.estimate / lightSample.probabilityDensity
                 }
         }
 
@@ -172,8 +172,10 @@ final class VolumePathIntegrator {
                         sampler: sampler,
                         bsdf: bsdf)
                 if bsdfSample.probabilityDensity == 0 {
+                        print("light: black")
                         return black
                 } else {
+                        print("light: ", bsdfSample)
                         return bsdfSample.estimate / bsdfSample.probabilityDensity
                 }
         }
