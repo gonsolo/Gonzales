@@ -25,9 +25,9 @@ final class Dielectric: Material {
 func createDielectric(parameters: ParameterDictionary) throws -> Dielectric {
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
         let uRoughness =
-                try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
+                try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.0)
         let vRoughness =
-                try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
+                try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.0)
         let roughness = (uRoughness, vRoughness)
         let refractiveIndex = try parameters.findFloatXTexture(name: "eta", else: 1.5)
         return Dielectric(refractiveIndex: refractiveIndex, roughness: roughness)
