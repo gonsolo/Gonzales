@@ -4,6 +4,7 @@ struct CoatedDiffuseBsdf: BxDF {
 
         init(
                 reflectance: RGBSpectrum,
+                refractiveIndex: FloatX,
                 roughness: (FloatX, FloatX),
                 remapRoughness: Bool
         ) {
@@ -13,7 +14,7 @@ struct CoatedDiffuseBsdf: BxDF {
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 self.topBxdf = DielectricBsdf(
                         distribution: distribution,
-                        refractiveIndex: 1)
+                        refractiveIndex: refractiveIndex)
                 self.bottomBxdf = DiffuseBsdf(reflectance: reflectance)
         }
 
