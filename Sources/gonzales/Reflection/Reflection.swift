@@ -16,7 +16,7 @@ func refract(wi: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
                 normal = -normal
         }
         let sin2ThetaI = max(0, 1 - square(cosThetaI))
-        let sin2ThetaT = square(eta) * sin2ThetaI
+        let sin2ThetaT = sin2ThetaI / square(eta)
         if sin2ThetaT >= 1 {
                 return nil
         }
