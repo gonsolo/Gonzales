@@ -22,3 +22,9 @@ extension ConstantTexture: FloatTexture where T == FloatX {
                 return evaluate(at: interaction) as! FloatX
         }
 }
+
+extension ConstantTexture: CustomStringConvertible {
+        var description: String {
+                return "\(value)"
+        }
+}
