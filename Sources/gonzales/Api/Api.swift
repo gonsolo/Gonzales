@@ -481,14 +481,14 @@ struct Api {
                 }
         }
 
-        func makeMaterial(name: String, parameters: ParameterDictionary) throws -> Material {
+        private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
+                warnOnce("Unknown material \"\(material)\". Creating default.")
+                var parameters = ParameterDictionary()
+                parameters["reflectance"] = [gray]
+                return try createDiffuse(parameters: parameters)
+        }
 
-                func makeDefault(insteadOf material: String) throws -> Material {
-                        warnOnce("Unknown material \"\(material)\". Creating default.")
-                        var parameterList = ParameterDictionary()
-                        parameterList["reflectance"] = [gray]
-                        return try createDiffuse(parameters: parameters)
-                }
+        func makeMaterial(name: String, parameters: ParameterDictionary) throws -> Material {
 
                 var material: Material
                 switch name {
@@ -512,7 +512,7 @@ struct Api {
                 // subsurface missing
                 // thindielectric missing
                 default:
-                        material = try makeDefault(insteadOf: name)
+                        material = try makeDefaultMaterial(insteadOf: name)
                 }
                 return material
         }
