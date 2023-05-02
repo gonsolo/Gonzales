@@ -1,6 +1,6 @@
 all: td
 
-#SINGLERAY = --single 48 40
+#SINGLERAY = --single 68 2
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick

@@ -2,11 +2,17 @@ import Foundation  // exp
 
 struct CoatedDiffuseBsdf: BxDF {
 
-        init(reflectance: RGBSpectrum, roughness: (FloatX, FloatX)) {
+        init(
+                reflectance: RGBSpectrum,
+                roughness: (FloatX, FloatX),
+                remapRoughness: Bool
+        ) {
                 self.reflectance = reflectance
                 self.roughness = roughness
+                let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
+                let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 self.topBxdf = DielectricBsdf(
-                        distribution: TrowbridgeReitzDistribution(alpha: (1, 1)),
+                        distribution: distribution,
                         refractiveIndex: 1)
                 self.bottomBxdf = DiffuseBsdf(reflectance: reflectance)
         }
@@ -267,7 +273,11 @@ struct CoatedDiffuseBsdf: BxDF {
                                 pdfSum += evaluateTT(wo: wo, wi: wi)
                         }
                 }
-                return lerp(with: 0.9, between: 1 / (4 * FloatX.pi), and: pdfSum / FloatX(numberOfSamples))
+                let density = lerp(
+                        with: 0.9,
+                        between: 1 / (4 * FloatX.pi),
+                        and: pdfSum / FloatX(numberOfSamples))
+                return density
         }
 
         private func transmittance(dz: FloatX, w: Vector) -> FloatX {

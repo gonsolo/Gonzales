@@ -10,10 +10,9 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 let tan2 = tan2Theta(half)
                 if tan2.isInfinite { return 0 }
                 let cos4 = cos2Theta(half) * cos2Theta(half)
-                let e =
-                        (cos2Phi(half) / (alpha.0 * alpha.0) + sin2Phi(half) / (alpha.1 * alpha.1))
-                        * tan2
-                return 1 / (FloatX.pi * alpha.0 * alpha.1 * cos4 * (1 + e) * (1 + e))
+                let e = tan2 * (square(cosPhi(half) / alpha.0) + square(sinPhi(half) / alpha.1))
+                let area = 1 / (FloatX.pi * alpha.0 * alpha.1 * cos4 * square(1 + e))
+                return area
         }
 
         func lambda(_ vector: Vector) -> FloatX {
