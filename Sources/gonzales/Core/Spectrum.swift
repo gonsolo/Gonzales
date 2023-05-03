@@ -39,11 +39,7 @@ extension PiecewiseLinearSpectrum {
         }
 }
 
-// metal-Al-eta: Aluminium refractive indices
-// metal-Al-k: Aluminium extinction coefficients
-
-// Silver wavelengths, also used for copper etc.
-let metalAgLambdas: [FloatX] = [
+let metalWavelengths: [FloatX] = [
         298.757050, 302.400421, 306.133759, 309.960449, 313.884003, 317.908142, 322.036835,
         326.274139, 330.624481, 335.092377, 339.682678, 344.400482, 349.251221, 354.240509,
         359.374420, 364.659332, 370.102020, 375.709625, 381.489777, 387.450562, 393.600555,
@@ -56,7 +52,7 @@ let metalAgLambdas: [FloatX] = [
 
 // Silver refractive indices
 let metalAgEtaSpectrum = PiecewiseLinearSpectrum(
-        lambdas: metalAgLambdas,
+        lambdas: metalWavelengths,
         values: [
                 1.519000, 1.496000, 1.432500, 1.323000, 1.142062, 0.932000, 0.719062,
                 0.526000, 0.388125, 0.294000, 0.253313, 0.238000, 0.221438, 0.209000,
@@ -69,7 +65,7 @@ let metalAgEtaSpectrum = PiecewiseLinearSpectrum(
         ])
 
 let metalAlEtaSpectrum = PiecewiseLinearSpectrum(
-        lambdas: metalAgLambdas,
+        lambdas: metalWavelengths,
         values: [
                 0.273375, 0.280000, 0.286813, 0.294000, 0.301875, 0.310000, 0.317875,
                 0.326000, 0.334750, 0.344000, 0.353813, 0.364000, 0.374375, 0.385000,
@@ -83,7 +79,7 @@ let metalAlEtaSpectrum = PiecewiseLinearSpectrum(
 
 // Copper refractive indices
 let metalCuEtaSpectrum = PiecewiseLinearSpectrum(
-        lambdas: metalAgLambdas,
+        lambdas: metalWavelengths,
         values: [
                 1.400313, 1.380000, 1.358438, 1.340000, 1.329063, 1.325000, 1.332500,
                 1.340000, 1.334375, 1.325000, 1.317812, 1.310000, 1.300313, 1.290000,
@@ -97,7 +93,7 @@ let metalCuEtaSpectrum = PiecewiseLinearSpectrum(
 
 // Silver extinction coefficients
 let metalAgKSpectrum = PiecewiseLinearSpectrum(
-        lambdas: metalAgLambdas,
+        lambdas: metalWavelengths,
         values: [
                 1.080000, 0.882000, 0.761063, 0.647000, 0.550875, 0.504000, 0.554375,
                 0.663000, 0.818563, 0.986000, 1.120687, 1.240000, 1.345250, 1.440000,
@@ -110,7 +106,7 @@ let metalAgKSpectrum = PiecewiseLinearSpectrum(
         ])
 
 let metalAlKSpectrum = PiecewiseLinearSpectrum(
-        lambdas: metalAgLambdas,
+        lambdas: metalWavelengths,
         values: [
                 3.593750, 3.640000, 3.689375, 3.740000, 3.789375, 3.840000, 3.894375,
                 3.950000, 4.005000, 4.060000, 4.113750, 4.170000, 4.233750, 4.300000,
@@ -124,7 +120,7 @@ let metalAlKSpectrum = PiecewiseLinearSpectrum(
 
 // Copper extinction coefficients
 let metalCuKSpectrum = PiecewiseLinearSpectrum(
-        lambdas: metalAgLambdas,
+        lambdas: metalWavelengths,
         values: [
                 1.662125, 1.687000, 1.703313, 1.720000, 1.744563, 1.770000, 1.791625,
                 1.810000, 1.822125, 1.834000, 1.851750, 1.872000, 1.894250, 1.916000,
