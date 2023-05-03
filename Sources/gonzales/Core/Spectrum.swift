@@ -39,6 +39,10 @@ extension PiecewiseLinearSpectrum {
         }
 }
 
+// metal-Al-eta: Aluminium refractive indices
+// metal-Al-k: Aluminium extinction coefficients
+
+// Silver wavelengths, also used for copper etc.
 let metalAgLambdas: [FloatX] = [
         298.757050, 302.400421, 306.133759, 309.960449, 313.884003, 317.908142, 322.036835,
         326.274139, 330.624481, 335.092377, 339.682678, 344.400482, 349.251221, 354.240509,
@@ -50,6 +54,7 @@ let metalAgLambdas: [FloatX] = [
         729.318665, 751.419250, 774.901123, 799.897949, 826.561157, 855.063293, 885.601257,
 ]
 
+// Silver refractive indices
 let metalAgEtaSpectrum = PiecewiseLinearSpectrum(
         lambdas: metalAgLambdas,
         values: [
@@ -63,6 +68,7 @@ let metalAgEtaSpectrum = PiecewiseLinearSpectrum(
                 0.148000, 0.145875, 0.143000, 0.142563, 0.145000, 0.151938, 0.163000,
         ])
 
+// Copper refractive indices
 let metalCuEtaSpectrum = PiecewiseLinearSpectrum(
         lambdas: metalAgLambdas,
         values: [
@@ -76,6 +82,7 @@ let metalCuEtaSpectrum = PiecewiseLinearSpectrum(
                 0.223000, 0.236500, 0.250000, 0.254188, 0.260000, 0.280000, 0.300000,
         ])
 
+// Silver extinction coefficients
 let metalAgKSpectrum = PiecewiseLinearSpectrum(
         lambdas: metalAgLambdas,
         values: [
@@ -89,6 +96,7 @@ let metalAgKSpectrum = PiecewiseLinearSpectrum(
                 4.740000, 4.908125, 5.090000, 5.288750, 5.500000, 5.720624, 5.950000,
         ])
 
+// Copper extinction coefficients
 let metalCuKSpectrum = PiecewiseLinearSpectrum(
         lambdas: metalAgLambdas,
         values: [
