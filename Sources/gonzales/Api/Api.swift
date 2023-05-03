@@ -44,6 +44,7 @@ enum ApiError: Error {
         case transformsEmpty
         case unknownAccelerator
         case unknownIntegrator
+        case unknownTexture
         case writeUse
         case wrongType(message: String)
 }
@@ -386,6 +387,13 @@ struct Api {
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName)
+                case "scale":
+                        let scale = try parameters.findOneFloatX(called: "scale", else: 1)
+                        let textureName = try parameters.findString(called: "tex") ?? ""
+                        guard let unscaledTexture = state.textures[textureName] else {
+                                throw ApiError.unknownTexture
+                        }
+                        texture = ScaledTexture(scale: scale, texture: unscaledTexture)
                 default:
                         warning("Unimplemented texture class: \(textureClass)")
                         return

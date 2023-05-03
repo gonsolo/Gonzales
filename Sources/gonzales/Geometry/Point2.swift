@@ -109,6 +109,10 @@ extension Point2 where T: FloatingPoint {
                 return Vector2(x: left.x - right.x, y: left.y - right.y)
         }
 
+        public static func *= (left: inout Point2<T>, right: T) {
+                left.x *= right
+                left.y *= right
+        }
 }
 
 extension Point2 where T: BinaryInteger {
