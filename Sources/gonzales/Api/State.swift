@@ -31,7 +31,7 @@ struct State {
                 }
                 var merged = parameters
                 merged.merge(material.parameters) { (current, _) in current }
-                return try api.makeMaterial(name: material.type, parameters: merged)
+                return try api.makeMaterial(type: material.type, parameters: merged)
         }
 
         var areaLight = ""

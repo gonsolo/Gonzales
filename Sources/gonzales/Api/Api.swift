@@ -496,10 +496,10 @@ struct Api {
                 return try createDiffuse(parameters: parameters)
         }
 
-        func makeMaterial(name: String, parameters: ParameterDictionary) throws -> Material {
+        func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
 
                 var material: Material
-                switch name {
+                switch type {
                 case "coateddiffuse":
                         material = try createCoatedDiffuse(parameters: parameters)
                 // coatedconductor missing
@@ -515,12 +515,13 @@ struct Api {
                         material = try createHair(parameters: parameters)
                 case "interface":
                         material = try createInterface(parameters: parameters)
-                // measured missing
+                case "measured":
+                        material = try createMeasured(parameters: parameters)
                 // mix missing
                 // subsurface missing
                 // thindielectric missing
                 default:
-                        material = try makeDefaultMaterial(insteadOf: name)
+                        material = try makeDefaultMaterial(insteadOf: type)
                 }
                 return material
         }
