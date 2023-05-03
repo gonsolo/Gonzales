@@ -51,7 +51,7 @@ let metalWavelengths: [FloatX] = [
 ]
 
 // Silver refractive indices
-let metalAgEtaSpectrum = PiecewiseLinearSpectrum(
+let silverRefractiveIndices = PiecewiseLinearSpectrum(
         lambdas: metalWavelengths,
         values: [
                 1.519000, 1.496000, 1.432500, 1.323000, 1.142062, 0.932000, 0.719062,
@@ -64,7 +64,7 @@ let metalAgEtaSpectrum = PiecewiseLinearSpectrum(
                 0.148000, 0.145875, 0.143000, 0.142563, 0.145000, 0.151938, 0.163000,
         ])
 
-let metalAlEtaSpectrum = PiecewiseLinearSpectrum(
+let aluminiumRefractiveIndices = PiecewiseLinearSpectrum(
         lambdas: metalWavelengths,
         values: [
                 0.273375, 0.280000, 0.286813, 0.294000, 0.301875, 0.310000, 0.317875,
@@ -78,7 +78,7 @@ let metalAlEtaSpectrum = PiecewiseLinearSpectrum(
         ])
 
 // Copper refractive indices
-let metalCuEtaSpectrum = PiecewiseLinearSpectrum(
+let copperRefractiveIndices = PiecewiseLinearSpectrum(
         lambdas: metalWavelengths,
         values: [
                 1.400313, 1.380000, 1.358438, 1.340000, 1.329063, 1.325000, 1.332500,
@@ -92,7 +92,7 @@ let metalCuEtaSpectrum = PiecewiseLinearSpectrum(
         ])
 
 // Silver extinction coefficients
-let metalAgKSpectrum = PiecewiseLinearSpectrum(
+let silverExtinctionCoefficients = PiecewiseLinearSpectrum(
         lambdas: metalWavelengths,
         values: [
                 1.080000, 0.882000, 0.761063, 0.647000, 0.550875, 0.504000, 0.554375,
@@ -105,7 +105,7 @@ let metalAgKSpectrum = PiecewiseLinearSpectrum(
                 4.740000, 4.908125, 5.090000, 5.288750, 5.500000, 5.720624, 5.950000,
         ])
 
-let metalAlKSpectrum = PiecewiseLinearSpectrum(
+let aluminiumExtinctionCoefficients = PiecewiseLinearSpectrum(
         lambdas: metalWavelengths,
         values: [
                 3.593750, 3.640000, 3.689375, 3.740000, 3.789375, 3.840000, 3.894375,
@@ -119,7 +119,7 @@ let metalAlKSpectrum = PiecewiseLinearSpectrum(
         ])
 
 // Copper extinction coefficients
-let metalCuKSpectrum = PiecewiseLinearSpectrum(
+let copperExtinctionCoefficients = PiecewiseLinearSpectrum(
         lambdas: metalWavelengths,
         values: [
                 1.662125, 1.687000, 1.703313, 1.720000, 1.744563, 1.770000, 1.791625,
@@ -133,12 +133,12 @@ let metalCuKSpectrum = PiecewiseLinearSpectrum(
         ])
 
 var namedSpectra: [String: any Spectrum] = [
-        "metal-Ag-eta": metalAgEtaSpectrum,
-        "metal-Ag-k": metalAgKSpectrum,
-        "metal-Al-eta": metalAlEtaSpectrum,
-        "metal-Al-k": metalAlKSpectrum,
-        "metal-Cu-eta": metalCuEtaSpectrum,
-        "metal-Cu-k": metalCuKSpectrum,
+        "metal-Ag-eta": silverRefractiveIndices,
+        "metal-Ag-k": silverExtinctionCoefficients,
+        "metal-Al-eta": aluminiumRefractiveIndices,
+        "metal-Al-k": aluminiumExtinctionCoefficients,
+        "metal-Cu-eta": copperRefractiveIndices,
+        "metal-Cu-k": copperExtinctionCoefficients,
 ]
 
 public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Three {
