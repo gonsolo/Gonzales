@@ -196,6 +196,13 @@ final class Parser {
                 return FloatX(x)
         }
 
+        private func parseTwoFloatXs() throws -> (FloatX, FloatX)? {
+                guard let x = try parseFloatX() else { return nil }
+                guard let y = try parseFloatX() else { return nil }
+                let f = (x, y)
+                return f
+        }
+
         private func parseThreeFloatXs() throws -> (FloatX, FloatX, FloatX)? {
                 guard let x = try parseFloatX() else { return nil }
                 guard let y = try parseFloatX() else { return nil }
@@ -235,6 +242,13 @@ final class Parser {
                         return nil
                 }
                 return Point(xyz: threeFloats)
+        }
+
+        private func parsePoint2() throws -> Point2F? {
+                guard let twoFloats = try parseTwoFloatXs() else {
+                        return nil
+                }
+                return Point2F(xy: twoFloats)
         }
 
         private func parsePoints() throws -> [Point] {
@@ -301,8 +315,10 @@ final class Parser {
                         }
                         return [value]
                 case "point2":
-                        // TODO: Parse as Point2f
-                        return try parseFloatXs()
+                        guard let value = try parsePoint2() else {
+                                try bail(message: "Point2 expected")
+                        }
+                        return [value]
                 case "rgb", "color", "spectrum":
                         return try parseRGBSpectrum()
                 case "string":

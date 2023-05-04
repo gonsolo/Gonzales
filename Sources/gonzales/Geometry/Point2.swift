@@ -5,6 +5,11 @@ public struct Point2<T> {
                 self.y = y
         }
 
+        public init(xy: (T, T)) {
+                self.x = xy.0
+                self.y = xy.1
+        }
+
         subscript(index: Int) -> T {
 
                 get {
