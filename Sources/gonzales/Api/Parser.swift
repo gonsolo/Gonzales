@@ -100,7 +100,6 @@ final class Parser {
                 var ok = true
                 ok = try parseString(string: &string)
                 while ok {
-                        print(string)
                         strings.append(string)
                         ok = try parseString(string: &string)
                 }
