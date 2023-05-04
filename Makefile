@@ -22,10 +22,10 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
 #SCENE_NAME = bistro_boulangerie.pbrt
-SCENE_DIR  = bmw-m6
+
+#SCENE_DIR  = bmw-m6
+SCENE_DIR = bunny-cloud
 SCENE_NAME  = $(SCENE_DIR).pbrt
-#SCENE_DIR = bunny-cloud
-#SCENE_NAME = bunny-cloud.pbrt
 #SCENE_DIR = bunny-fur
 #SCENE_NAME = bunny-fur.pbrt
 #SCENE_DIR = clouds

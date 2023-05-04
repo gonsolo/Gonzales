@@ -100,6 +100,7 @@ final class Parser {
                 var ok = true
                 ok = try parseString(string: &string)
                 while ok {
+                        print(string)
                         strings.append(string)
                         ok = try parseString(string: &string)
                 }
@@ -268,6 +269,66 @@ final class Parser {
                 return normals
         }
 
+        private func parseValue(type: String) throws -> Parameter {
+                switch type {
+                case "bool":
+                        return try parseBool()
+                case "float":
+                        guard let float = try parseFloatX() else {
+                                try bail(message: "Float expected")
+                        }
+                        return [float]
+                case "integer":
+                        return parseInteger()
+                case "normal":
+                        return try parseNormals()
+                case "point", "point3":
+                        return try parsePoints()
+                case "point2":
+                        // TODO: Parse as Point2f
+                        return try parseFloatXs()
+                case "rgb", "color", "spectrum":
+                        return try parseRGBSpectrum()
+                case "string":
+                        let string = try parseString()
+                        return [string]
+                case "texture":
+                        return try parseTextures()
+                default:
+                        var message = "Unknown type \(type)"
+                        message += " at location \(scanner.scanLocation)"
+                        try bail(message: message)
+                }
+        }
+
+        private func parseValues(type: String) throws -> Parameter {
+                switch type {
+                case "bool":
+                        return try parseBool()
+                case "float":
+                        return try parseFloatXs()
+                case "integer":
+                        return parseInteger()
+                case "normal":
+                        return try parseNormals()
+                case "point", "point3":
+                        return try parsePoints()
+                case "point2":
+                        // TODO: Parse as Point2f
+                        return try parseFloatXs()
+                case "rgb", "color", "spectrum":
+                        return try parseRGBSpectrum()
+                case "string":
+                        return try parseStrings()
+                case "texture":
+                        return try parseTextures()
+                default:
+                        var message = "Unknown type \(type)"
+                        message += " at location \(scanner.scanLocation)"
+                        try bail(message: message)
+                }
+        }
+
         private func parseParameter() throws -> (String, Parameter)? {
                 parseComments()
                 guard let _ = scanner.scanString("\"") else { return nil }
@@ -277,46 +338,14 @@ final class Parser {
                 guard let name = scanner.scanUpToCharactersList(from: ["\""]) else {
                         try bail()
                 }
-                var parameter: Parameter
                 guard let _ = scanner.scanString("\"") else {
                         try bail()
                 }
-                _ = scanner.scanString("[")  // optional
-                switch type {
-                case "bool":
-                        let bools = try parseBool()
-                        parameter = bools
-                case "float":
-                        let doubles = try parseFloatXs()
-                        parameter = doubles
-                case "integer":
-                        let ints = parseInteger()
-                        parameter = ints
-                case "normal":
-                        let normals = try parseNormals()
-                        parameter = normals
-                case "point", "point3":
-                        let points = try parsePoints()
-                        parameter = points
-                case "point2":
-                        // TODO: Parse as Point2f
-                        let doubles = try parseFloatXs()
-                        parameter = doubles
-                case "rgb", "color", "spectrum":
-                        let rgbs = try parseRGBSpectrum()
-                        parameter = rgbs
-                case "string":
-                        let strings = try parseStrings()
-                        parameter = strings
-                case "texture":
-                        let textures = try parseTextures()
-                        parameter = textures
-                default:
-                        var message = "Unknown type \(type)"
-                        message += " at location \(scanner.scanLocation)"
-                        try bail(message: message)
+                let singleValue = scanner.scanString("[") == nil
+                let parameter = singleValue ? try parseValue(type: type) : try parseValues(type: type)
+                if !singleValue {
+                        _ = scanner.scanString("]")
                 }
-                _ = scanner.scanString("]")  // optional
                 return (name, parameter)
         }
 
