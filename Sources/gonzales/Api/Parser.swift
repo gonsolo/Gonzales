@@ -260,10 +260,16 @@ final class Parser {
                 return vectors
         }
 
+        private func parseNormal() throws -> Normal? {
+                guard let threeFloats = try parseThreeFloatXs() else {
+                        return nil
+                }
+                return Normal(xyz: threeFloats)
+        }
+
         private func parseNormals() throws -> [Normal] {
                 var normals = [Normal]()
-                while let f = try parseThreeFloatXs() {
-                        let normal = Normal(xyz: f)
+                while let normal = try parseNormal() {
                         normals.append(normal)
                 }
                 return normals
@@ -284,7 +290,10 @@ final class Parser {
                         }
                         return [value]
                 case "normal":
-                        return try parseNormals()
+                        guard let value = try parseNormal() else {
+                                try bail(message: "Normal expected")
+                        }
+                        return [value]
                 case "point", "point3":
                         return try parsePoints()
                 case "point2":
