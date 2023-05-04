@@ -176,17 +176,18 @@ final class Parser {
                 return values
         }
 
-        private func parseInteger() -> [Int] {
-                var integers = [Int]()
-                var i = Int()
-                var ok = true
-                while ok {
-                        ok = scanner.scanInt(&i)
-                        if ok {
-                                integers.append(i)
-                        }
+        private func parseIntegers() -> [Int] {
+                var values = [Int]()
+                while let value = parseInteger() {
+                        values.append(value)
                 }
-                return integers
+                return values
+        }
+
+        private func parseInteger() -> Int? {
+                var x: Int = 0
+                guard scanner.scanInt(&x) else { return nil }
+                return x
         }
 
         private func parseFloatX() throws -> FloatX? {
@@ -273,12 +274,15 @@ final class Parser {
                 case "bool":
                         return try parseBool()
                 case "float":
-                        guard let float = try parseFloatX() else {
+                        guard let value = try parseFloatX() else {
                                 try bail(message: "Float expected")
                         }
-                        return [float]
+                        return [value]
                 case "integer":
-                        return parseInteger()
+                        guard let value = parseInteger() else {
+                                try bail(message: "Int expected")
+                        }
+                        return [value]
                 case "normal":
                         return try parseNormals()
                 case "point", "point3":
@@ -307,7 +311,7 @@ final class Parser {
                 case "float":
                         return try parseFloatXs()
                 case "integer":
-                        return parseInteger()
+                        return parseIntegers()
                 case "normal":
                         return try parseNormals()
                 case "point", "point3":
