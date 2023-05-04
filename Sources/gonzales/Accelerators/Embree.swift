@@ -40,7 +40,9 @@ final class Embree: Accelerator {
                                         materials[geomID] = geometricPrimitive.material
                                         mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
                                 default:
-                                        embreeError("Unknown shape in geometric primitive.")
+                                        var message = "Unknown shape in geometric primitive: "
+                                        message += "\(geometricPrimitive.shape)"
+                                        embreeError(message)
                                 }
                         case let areaLight as AreaLight:
                                 switch areaLight.shape {
