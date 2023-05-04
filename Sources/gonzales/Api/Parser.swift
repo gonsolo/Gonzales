@@ -94,6 +94,18 @@ final class Parser {
                 }
         }
 
+        private func parseStrings() throws -> [String] {
+                var strings = [String]()
+                var string = ""
+                var ok = true
+                ok = try parseString(string: &string)
+                while ok {
+                        strings.append(string)
+                        ok = try parseString(string: &string)
+                }
+                return strings
+        }
+
         private func parseTextures() throws -> [String] {
                 var textures = [String]()
                 var string = ""
@@ -294,15 +306,15 @@ final class Parser {
                         let rgbs = try parseRGBSpectrum()
                         parameter = rgbs
                 case "string":
-                        // TODO: Only one string supported
-                        let string = try parseString()
-                        let strings = [string]
+                        let strings = try parseStrings()
                         parameter = strings
                 case "texture":
                         let textures = try parseTextures()
                         parameter = textures
                 default:
-                        try bail(message: "Unknown type \(type)")
+                        var message = "Unknown type \(type)"
+                        message += " at location \(scanner.scanLocation)"
+                        try bail(message: message)
                 }
                 _ = scanner.scanString("]")  // optional
                 return (name, parameter)

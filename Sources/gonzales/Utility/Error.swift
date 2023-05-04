@@ -37,7 +37,9 @@ func notOverridden(function: String = #function, file: String = #file, line: Int
 }
 
 func warning(_ message: String) {
-        print("Warning: \(message)")
+        if verbose {
+                print("Warning: \(message)")
+        }
 }
 
 var warningsSeen = Set<Int>()

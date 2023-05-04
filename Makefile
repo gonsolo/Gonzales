@@ -17,13 +17,13 @@ PTEXMEM = --ptexmem 1 # GB
 #SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 #IMAGE =  $(SCENE_NAME).exr
 
-PBRT_SCENES = /home/gonsolo/src/pbrt-v4-scenes
-SCENE_DIR = barcelona-pavilion
-SCENE_NAME = pavilion-day.pbrt
+PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
+#SCENE_DIR = barcelona-pavilion
+#SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
 #SCENE_NAME = bistro_boulangerie.pbrt
-#SCENE_DIR = bmw-m6
-#SCENE_NAME = bmw-m6.pbrt
+SCENE_DIR  = bmw-m6
+SCENE_NAME  = $(SCENE_DIR).pbrt
 #SCENE_DIR = bunny-cloud
 #SCENE_NAME = bunny-cloud.pbrt
 #SCENE_DIR = bunny-fur
@@ -34,7 +34,7 @@ SCENE_NAME = pavilion-day.pbrt
 #SCENE_NAME = contemporary-bathroom.pbrt
 #SCENE_DIR = crown
 #SCENE_NAME = crown.pbrt
-SCENE = $(PBRT_SCENES)/$(SCENE_DIR)/$(SCENE_NAME)
+SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 
 PFM = $(IMAGE:.exr=.pfm)
