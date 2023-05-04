@@ -83,33 +83,17 @@ final class Parser {
                 )
         }
 
-        private func parseString() throws -> String {
-                var string = ""
-                var ok = true
-                ok = try parseString(string: &string)
-                if ok {
-                        return string
-                } else {
-                        try bail()
-                }
-        }
-
         private func parseStrings() throws -> [String] {
                 var strings = [String]()
-                var string = ""
-                var ok = true
-                ok = try parseString(string: &string)
-                while ok {
+                while let string = try parseStringOpt() {
                         strings.append(string)
-                        ok = try parseString(string: &string)
                 }
                 return strings
         }
 
         // Collides with parseTexture below
         private func parseParameterTexture() throws -> String? {
-                var string = ""
-                guard try parseString(string: &string) else {
+                guard let string = try parseStringOpt() else {
                         return nil
                 }
                 return string
@@ -139,7 +123,6 @@ final class Parser {
         }
 
         private func parseBool() throws -> [Bool] {
-                var value = ""
                 let f = scanner.peekString("f")
                 if f != nil {
                         try parseFalse()
@@ -150,7 +133,7 @@ final class Parser {
                         try parseTrue()
                         return [true]
                 }
-                guard try parseString(string: &value) else {
+                guard let value = try parseStringOpt() else {
                         try bail()
                 }
                 switch value {
@@ -160,18 +143,24 @@ final class Parser {
                 }
         }
 
-        private func parseString(string: inout String) throws -> Bool {
+        private func parseStringOpt() throws -> String? {
                 guard scanner.scanString("\"") != nil else {
-                        return false
+                        return nil
                 }
-                guard let s = scanner.scanUpToString("\"") else {
-                        try bail()
+                guard let string = scanner.scanUpToString("\"") else {
+                        return nil
                 }
-                string = s
                 guard scanner.scanString("\"") != nil else {
-                        try bail()
+                        return nil
                 }
-                return true
+                return string
+        }
+
+        private func parseString() throws -> String {
+                guard let string = try parseStringOpt() else {
+                        try bail(message: "String expected!")
+                }
+                return string
         }
 
         private func parseFloatXs() throws -> [FloatX] {
@@ -218,17 +207,16 @@ final class Parser {
         }
 
         private func parseNamedSpectrum() throws -> (any Spectrum)? {
-                var string = ""
-                if try parseString(string: &string) {
-                        if let namedSpectrum = namedSpectra[string] {
-                                return namedSpectrum
-                        } else {
-                                warning("Unknown named spectrum \(string)!")
-                                warning("Returning default spectrum!")
-                                return RGBSpectrum(rgb: (1, 1, 1))
-                        }
+                guard let string = try parseStringOpt() else {
+                        return nil
                 }
-                return nil
+                if let namedSpectrum = namedSpectra[string] {
+                        return namedSpectrum
+                } else {
+                        warning("Unknown named spectrum \(string)!")
+                        warning("Returning default spectrum!")
+                        return RGBSpectrum(rgb: (1, 1, 1))
+                }
         }
 
         private func parseRGBSpectrum() throws -> (any Spectrum)? {
@@ -337,8 +325,8 @@ final class Parser {
                         }
                         return [value]
                 case "string":
-                        let string = try parseString()
-                        return [string]
+                        let value = try parseString()
+                        return [value]
                 case "texture":
                         guard let value = try parseParameterTexture() else {
                                 try bail(message: "Texture expected!")
