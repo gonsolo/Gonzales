@@ -5,14 +5,13 @@ enum MeasuredError: Error {
 final class Measured: Material {
 
         func getBSDF(interaction: Interaction) -> BSDF {
-                unimplemented()
+                // TODO: Implement this some day
+                var bsdf = BSDF(interaction: interaction)
+                bsdf.set(bxdf: DiffuseBsdf())
+                return bsdf
         }
 }
 
 func createMeasured(parameters: ParameterDictionary) throws -> Measured {
-        guard let fileName = try parameters.findString(called: "filename") else {
-                throw MeasuredError.emptyFileName
-        }
-        print("measured: ", fileName)
         return Measured()
 }
