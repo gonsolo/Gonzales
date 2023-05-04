@@ -230,15 +230,16 @@ final class Parser {
                 return spectra
         }
 
-        private func parsePoint() throws -> Point {
-                guard let f = try parseThreeFloatXs() else { try bail() }
-                return Point(xyz: f)
+        private func parsePoint() throws -> Point? {
+                guard let threeFloats = try parseThreeFloatXs() else {
+                        return nil
+                }
+                return Point(xyz: threeFloats)
         }
 
         private func parsePoints() throws -> [Point] {
                 var points = [Point]()
-                while let f = try parseThreeFloatXs() {
-                        let point = Point(xyz: f)
+                while let point = try parsePoint() {
                         points.append(point)
                 }
                 return points
@@ -295,7 +296,10 @@ final class Parser {
                         }
                         return [value]
                 case "point", "point3":
-                        return try parsePoints()
+                        guard let value = try parsePoint() else {
+                                try bail(message: "Point expected")
+                        }
+                        return [value]
                 case "point2":
                         // TODO: Parse as Point2f
                         return try parseFloatXs()
@@ -387,8 +391,12 @@ final class Parser {
         }
 
         private func parseLookAt() throws {
-                let eye = try parsePoint()
-                let at = try parsePoint()
+                guard let eye = try parsePoint() else {
+                        try bail(message: "LookAt: Point expected!")
+                }
+                guard let at = try parsePoint() else {
+                        try bail(message: "LookAt: Point expected!")
+                }
                 let up = try parseVector()
                 try api.lookAt(eye: eye, at: at, up: up)
         }
