@@ -106,13 +106,19 @@ final class Parser {
                 return strings
         }
 
+        // Collides with parseTexture below
+        private func parseParameterTexture() throws -> String? {
+                var string = ""
+                guard try parseString(string: &string) else {
+                        return nil
+                }
+                return string
+        }
+
         private func parseTextures() throws -> [String] {
                 var textures = [String]()
-                var string = ""
-                var ok = true
-                ok = try parseString(string: &string)
-                if ok {
-                        textures.append(string)
+                while let texture = try parseParameterTexture() {
+                        textures.append(texture)
                 }
                 return textures
         }
@@ -334,7 +340,10 @@ final class Parser {
                         let string = try parseString()
                         return [string]
                 case "texture":
-                        return try parseTextures()
+                        guard let value = try parseParameterTexture() else {
+                                try bail(message: "Texture expected!")
+                        }
+                        return [value]
                 default:
                         var message = "Unknown type \(type)"
                         message += " at location \(scanner.scanLocation)"
