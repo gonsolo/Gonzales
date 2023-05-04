@@ -39,6 +39,9 @@ final class Embree: Accelerator {
                                         bounds = union(first: bounds, second: sphere.worldBound())
                                         materials[geomID] = geometricPrimitive.material
                                         mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
+                                case let disk as Disk:
+                                        _ = disk
+                                        warnOnce("Ignoring disk!")
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
