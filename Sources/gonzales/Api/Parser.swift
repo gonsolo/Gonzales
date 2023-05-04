@@ -225,13 +225,19 @@ final class Parser {
                 return nil
         }
 
-        private func parseRGBSpectrum() throws -> [any Spectrum] {
-                var spectra = [RGBSpectrum]()
+        private func parseRGBSpectrum() throws -> (any Spectrum)? {
                 if let namedSpectrum = try parseNamedSpectrum() {
-                        return [namedSpectrum]
+                        return namedSpectrum
                 }
-                while let f = try parseThreeFloatXs() {
-                        let spectrum = RGBSpectrum(rgb: f)
+                guard let threeFloats = try parseThreeFloatXs() else {
+                        return nil
+                }
+                return RGBSpectrum(rgb: threeFloats)
+        }
+
+        private func parseRGBSpectra() throws -> [any Spectrum] {
+                var spectra = [any Spectrum]()
+                while let spectrum = try parseRGBSpectrum() {
                         spectra.append(spectrum)
                 }
                 return spectra
@@ -320,7 +326,10 @@ final class Parser {
                         }
                         return [value]
                 case "rgb", "color", "spectrum":
-                        return try parseRGBSpectrum()
+                        guard let value = try parseRGBSpectrum() else {
+                                try bail(message: "RGB spectrum expected!")
+                        }
+                        return [value]
                 case "string":
                         let string = try parseString()
                         return [string]
@@ -349,7 +358,7 @@ final class Parser {
                         // TODO: Parse as Point2f
                         return try parseFloatXs()
                 case "rgb", "color", "spectrum":
-                        return try parseRGBSpectrum()
+                        return try parseRGBSpectra()
                 case "string":
                         return try parseStrings()
                 case "texture":
