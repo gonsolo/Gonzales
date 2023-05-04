@@ -186,6 +186,8 @@ struct Api {
                                 scale: scale,
                                 absorption: absorption,
                                 scattering: scattering)
+                case "nanovdb":
+                        warning("Nanovdb not implemented!")
                 default:
                         throw ApiError.namedMedium
                 }
