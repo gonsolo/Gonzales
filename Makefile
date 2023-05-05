@@ -12,10 +12,10 @@ PTEXMEM = --ptexmem 1 # GB
 # dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
-#BITTERLI = ~/src/bitterli
-#SCENE_NAME = material-testball
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-#IMAGE =  $(SCENE_NAME).exr
+BITTERLI = ~/src/bitterli
+SCENE_NAME = cornell-box
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+IMAGE =  $(SCENE_NAME).exr
 
 #PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion
@@ -37,8 +37,8 @@ PTEXMEM = --ptexmem 1 # GB
 #SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 #IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 
-SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
-IMAGE = gonzales.exr
+#SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
+#IMAGE = gonzales.exr
 
 PFM = $(IMAGE:.exr=.pfm)
 
