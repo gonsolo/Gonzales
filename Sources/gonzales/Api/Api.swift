@@ -260,6 +260,7 @@ struct Api {
                         return
                 }
                 let material = try state.createMaterial(parameters: parameters)
+                let alpha = try parameters.findOneFloatX(called: "alpha", else: 1)
                 if !state.areaLight.isEmpty {
                         for shape in shapes {
                                 guard state.areaLight == "area" || state.areaLight == "diffuse"
@@ -273,7 +274,7 @@ struct Api {
                                 else {
                                         throw ParameterError.missing(parameter: "L", function: #function)
                                 }
-                                let areaLight = AreaLight(brightness: brightness, shape: shape)
+                                let areaLight = AreaLight(brightness: brightness, shape: shape, alpha: alpha)
                                 areaLights.append(areaLight)
                                 prims.append(areaLight)
                         }
@@ -283,7 +284,8 @@ struct Api {
                                 let geometricPrimitive = GeometricPrimitive(
                                         shape: shape,
                                         material: materialCounter,
-                                        mediumInterface: state.currentMediumInterface)
+                                        mediumInterface: state.currentMediumInterface,
+                                        alpha: alpha)
                                 prims.append(geometricPrimitive)
                         }
                         materialCounter = materialCounter + 1

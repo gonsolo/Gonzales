@@ -6,6 +6,7 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
+                if alpha == 0 { return }
                 // argument material is unused
                 try shape.intersect(
                         ray: ray,
@@ -32,6 +33,7 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
         var shape: Shape
         var material: MaterialIndex
         var mediumInterface: MediumInterface?
+        var alpha: FloatX
 }
 
 typealias MaterialIndex = Int

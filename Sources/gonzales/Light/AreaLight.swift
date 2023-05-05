@@ -2,9 +2,10 @@ import Foundation
 
 struct AreaLight: Light, Boundable, Intersectable, Material {
 
-        init(brightness: RGBSpectrum, shape: Shape) {
+        init(brightness: RGBSpectrum, shape: Shape, alpha: FloatX) {
                 self.brightness = brightness
                 self.shape = shape
+                self.alpha = alpha
         }
 
         func emittedRadiance(from interaction: Interaction, inDirection direction: Vector)
@@ -55,6 +56,7 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
+                if alpha == 0 { return }
                 try shape.intersect(
                         ray: ray,
                         tHit: &tHit,
@@ -70,4 +72,5 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
 
         let shape: Shape
         let brightness: RGBSpectrum
+        let alpha: FloatX
 }

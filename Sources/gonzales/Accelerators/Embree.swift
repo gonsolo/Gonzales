@@ -139,6 +139,13 @@ final class Embree: Accelerator {
                 }
                 tout = rayhit.ray.tfar
                 geomID = rayhit.hit.geomID
+
+                if let areaLight = areaLights[geomID] {
+                        if areaLight.alpha == 0 {
+                                return empty(#line)
+                        }
+                }
+
                 let bary1 = rayhit.hit.u
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
@@ -331,6 +338,7 @@ final class Embree: Accelerator {
 
         var rtcDevice: OpaquePointer?
         var rtcScene: OpaquePointer?
+
         var materials = [UInt32: MaterialIndex]()
         var mediumInterfaces = [UInt32: MediumInterface?]()
         var areaLights = [UInt32: AreaLight]()
