@@ -12,13 +12,13 @@ final class Embree: Accelerator {
                 rtcCommitScene(rtcScene)
         }
 
-        func check(_ pointer: Any?) {
+        private func check(_ pointer: Any?) {
                 guard pointer != nil else {
                         embreeError()
                 }
         }
 
-        func addPrimitives(primitives: inout [Boundable & Intersectable]) {
+        private func addPrimitives(primitives: inout [Boundable & Intersectable]) {
                 var geomID: UInt32 = 0
                 for primitive in primitives {
                         switch primitive {
@@ -74,12 +74,12 @@ final class Embree: Accelerator {
                 rtcReleaseDevice(rtcDevice)
         }
 
-        func geometry(curve: EmbreeCurve, geomID: UInt32) {
+        private func geometry(curve: EmbreeCurve, geomID: UInt32) {
                 let points = curve.controlPoints
                 embreeCurve(points: points, widths: curve.widths)
         }
 
-        func geometry(triangle: Triangle, geomID: UInt32) {
+        private func geometry(triangle: Triangle, geomID: UInt32) {
                 let points = triangle.getWorldPoints()
                 let a = points.0
                 let b = points.1
@@ -96,7 +96,7 @@ final class Embree: Accelerator {
                 triangleUVs[geomID] = uv
         }
 
-        func geometry(sphere: Sphere, geomID: UInt32) {
+        private func geometry(sphere: Sphere, geomID: UInt32) {
                 let center = sphere.objectToWorld * Point()
                 let radius = sphere.radius
                 embreeSphere(center: center, radius: radius)
@@ -190,7 +190,7 @@ final class Embree: Accelerator {
                 return bounds
         }
 
-        func embreeCurve(points: [Point], widths: (Float, Float)) {
+        private func embreeCurve(points: [Point], widths: (Float, Float)) {
 
                 // TODO: Just width.0 used
 
@@ -248,7 +248,7 @@ final class Embree: Accelerator {
                 rtcReleaseGeometry(geometry)
         }
 
-        func embreeSphere(center: Point, radius: FloatX) {
+        private func embreeSphere(center: Point, radius: FloatX) {
                 guard let geometry = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
                         embreeError()
                 }
@@ -274,7 +274,7 @@ final class Embree: Accelerator {
                 rtcReleaseGeometry(geometry)
         }
 
-        func embreeTriangle(
+        private func embreeTriangle(
                 ax: FloatX, ay: FloatX, az: FloatX,
                 bx: FloatX, by: FloatX, bz: FloatX,
                 cx: FloatX, cy: FloatX, cz: FloatX
@@ -331,25 +331,25 @@ final class Embree: Accelerator {
                 rtcReleaseGeometry(geometry)
         }
 
-        func embreeError(_ message: String = "") -> Never {
+        private func embreeError(_ message: String = "") -> Never {
                 print("embreeError: \(message)")
                 exit(-1)
         }
 
-        var rtcDevice: OpaquePointer?
-        var rtcScene: OpaquePointer?
+        private var rtcDevice: OpaquePointer?
+        private var rtcScene: OpaquePointer?
 
-        var materials = [UInt32: MaterialIndex]()
-        var mediumInterfaces = [UInt32: MediumInterface?]()
-        var areaLights = [UInt32: AreaLight]()
-        var triangleMeshIndices = [UInt32: Int]()
-        var triangleIndices = [UInt32: Int]()
-        var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
-        var bounds = Bounds3f()
+        private var materials = [UInt32: MaterialIndex]()
+        private var mediumInterfaces = [UInt32: MediumInterface?]()
+        private var areaLights = [UInt32: AreaLight]()
+        private var triangleMeshIndices = [UInt32: Int]()
+        private var triangleIndices = [UInt32: Int]()
+        private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
+        private var bounds = Bounds3f()
 
-        let floatSize = MemoryLayout<Float>.size
-        let unsignedIntSize = MemoryLayout<UInt32>.size
-        let vec4fSize = 4 * MemoryLayout<Float>.size
-        let vec3fSize = 3 * MemoryLayout<Float>.size
-        let vec3faSize = 16 * MemoryLayout<Float>.size
+        private let floatSize = MemoryLayout<Float>.size
+        private let unsignedIntSize = MemoryLayout<UInt32>.size
+        private let vec4fSize = 4 * MemoryLayout<Float>.size
+        private let vec3fSize = 3 * MemoryLayout<Float>.size
+        private let vec3faSize = 16 * MemoryLayout<Float>.size
 }
