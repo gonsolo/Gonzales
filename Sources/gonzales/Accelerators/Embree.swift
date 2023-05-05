@@ -181,7 +181,6 @@ final class Embree: Accelerator {
                 if let mediumInterface = mediumInterfaces[geomID] {
                         interaction.mediumInterface = mediumInterface
                 }
-
                 tHit = tout
         }
 
