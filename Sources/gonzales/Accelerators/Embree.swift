@@ -19,7 +19,6 @@ final class Embree: Accelerator {
         }
 
         func addPrimitives(primitives: inout [Boundable & Intersectable]) {
-                var geomID: UInt32 = 0
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
@@ -356,4 +355,6 @@ final class Embree: Accelerator {
         private let vec4fSize = 4 * MemoryLayout<Float>.size
         private let vec3fSize = 3 * MemoryLayout<Float>.size
         private let vec3faSize = 16 * MemoryLayout<Float>.size
+
+        private var geomID: UInt32 = 0
 }
