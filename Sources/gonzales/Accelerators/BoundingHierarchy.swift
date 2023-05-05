@@ -1,5 +1,3 @@
-var boundingHierarchyNodesVisited = 0
-
 struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
 
         func intersect(
@@ -47,7 +45,7 @@ struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
                                 current = nodesToVisit[toVisit]
                         }
                 }
-                boundingHierarchyNodesVisited += nodesVisited
+                BoundingHierarchy.boundingHierarchyNodesVisited += nodesVisited
         }
 
         func objectBound() -> Bounds3f {
@@ -68,4 +66,6 @@ struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
 
         let primitives: [IntersectablePrimitive]
         var nodes = [BoundingHierarchyNode]()
+
+        static var boundingHierarchyNodesVisited = 0
 }
