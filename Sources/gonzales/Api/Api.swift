@@ -6,7 +6,10 @@ func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> Ac
                 let builder = BoundingHierarchyBuilder(primitives: primitives)
                 return try builder.getBoundingHierarchy()
         case "embree":
-                return Embree(primitives: &primitives)
+                embree.addPrimitives(primitives: &primitives)
+                // TODO:  Ugly: Either an accelerator is returned here (like BoundingHierarchy)
+                // or it is global (like Embree).
+                return embree
         default:
                 throw ApiError.accelerator
         }

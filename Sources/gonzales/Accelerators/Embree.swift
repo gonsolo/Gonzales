@@ -1,15 +1,15 @@
 import Foundation
 import embree3
 
+let embree = Embree()
+
 final class Embree: Accelerator {
 
-        init(primitives: inout [Boundable & Intersectable]) {
+        init() {
                 rtcDevice = rtcNewDevice(nil)
                 check(rtcDevice)
                 rtcScene = rtcNewScene(rtcDevice)
                 check(rtcScene)
-                addPrimitives(primitives: &primitives)
-                rtcCommitScene(rtcScene)
         }
 
         private func check(_ pointer: Any?) {
@@ -18,7 +18,7 @@ final class Embree: Accelerator {
                 }
         }
 
-        private func addPrimitives(primitives: inout [Boundable & Intersectable]) {
+        func addPrimitives(primitives: inout [Boundable & Intersectable]) {
                 var geomID: UInt32 = 0
                 for primitive in primitives {
                         switch primitive {
@@ -67,6 +67,7 @@ final class Embree: Accelerator {
                         }
                         geomID += 1
                 }
+                rtcCommitScene(rtcScene)
         }
 
         deinit {
@@ -149,7 +150,10 @@ final class Embree: Accelerator {
                 let bary1 = rayhit.hit.u
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
-                let uvs = triangleUVs[geomID]!
+                guard let uvs = triangleUVs[geomID] else {
+                        embreeError("TriangleUVs is nil!")
+                }
+
                 let uv = Point2F(
                         x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
                         y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
