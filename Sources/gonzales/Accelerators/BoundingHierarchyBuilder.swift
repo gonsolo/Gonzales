@@ -37,7 +37,7 @@ final class BoundingHierarchyBuilder {
                         print("Unknown primitive \(primitives[$0.index])")
                         throw BoundingHierarchyBuilderError.unknown
                 }
-                return BoundingHierarchy(primitives: sortedPrimitives)
+                return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
 
         internal static func statistics() {
@@ -84,7 +84,7 @@ final class BoundingHierarchyBuilder {
         private func growNodes(counter: Int) {
                 let missing = counter - nodes.count + 1
                 if missing > 0 {
-                        nodes += Array(repeating: Node(), count: missing)
+                        nodes += Array(repeating: BoundingHierarchyNode(), count: missing)
                 }
         }
 
@@ -97,7 +97,11 @@ final class BoundingHierarchyBuilder {
         ) {
                 growNodes(counter: counter)
                 assert(range.count > 0)
-                nodes[counter] = Node(bounds: bounds, count: range.count, offset: offset, axis: 0)
+                nodes[counter] = BoundingHierarchyNode(
+                        bounds: bounds,
+                        count: range.count,
+                        offset: offset,
+                        axis: 0)
                 BoundingHierarchyBuilder.leafNodes += 1
                 offsetCounter += range.count
                 BoundingHierarchyBuilder.totalPrimitives += range.count
@@ -304,7 +308,7 @@ final class BoundingHierarchyBuilder {
 
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
-                nodes[counter] = Node(bounds: combinedBounds, offset: beforeRight, axis: dim)
+                nodes[counter] = BoundingHierarchyNode(bounds: combinedBounds, offset: beforeRight, axis: dim)
                 BoundingHierarchyBuilder.interiorNodes += 1
         }
 
@@ -321,4 +325,6 @@ final class BoundingHierarchyBuilder {
         private var offsetCounter = 0
         private var cachedPrimitives: [CachedPrimitive]
         private var primitives: [Boundable]
+
+        var nodes = [BoundingHierarchyNode]()
 }

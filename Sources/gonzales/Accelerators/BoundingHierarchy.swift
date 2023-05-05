@@ -1,22 +1,5 @@
 var boundingHierarchyNodesVisited = 0
 
-var nodes = [Node]()
-
-struct Node {
-
-        init(bounds: Bounds3f = Bounds3f(), count: Int = 0, offset: Int = 0, axis: Int = 0) {
-                self.bounds = bounds
-                self.count = count
-                self.offset = offset
-                self.axis = axis
-        }
-
-        let bounds: Bounds3f
-        let count: Int
-        let offset: Int
-        let axis: Int
-}
-
 struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
 
         func intersect(
@@ -84,4 +67,5 @@ struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
         }
 
         let primitives: [IntersectablePrimitive]
+        var nodes = [BoundingHierarchyNode]()
 }
