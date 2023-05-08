@@ -3,19 +3,46 @@ import embree3
 
 let embree = Embree()
 
-final class Embree: Accelerator {
+protocol EmbreeBase {
+
+        func check(_ pointer: Any?)
+        func embreeError(_ message: String) -> Never
+}
+
+extension EmbreeBase {
+
+        func check(_ pointer: Any?) {
+                guard pointer != nil else {
+                        embreeError()
+                }
+        }
+
+        func embreeError(_ message: String = "") -> Never {
+                print("embreeError: \(message)")
+                exit(-1)
+        }
+
+}
+
+final class Embree: EmbreeBase {
 
         init() {
                 rtcDevice = rtcNewDevice(nil)
                 check(rtcDevice)
-                rtcScene = rtcNewScene(rtcDevice)
-                check(rtcScene)
         }
 
-        private func check(_ pointer: Any?) {
-                guard pointer != nil else {
-                        embreeError()
-                }
+        deinit {
+                rtcReleaseDevice(rtcDevice)
+        }
+
+        var rtcDevice: OpaquePointer?
+}
+
+final class EmbreeAccelerator: Accelerator, EmbreeBase {
+
+        init() {
+                rtcScene = rtcNewScene(embree.rtcDevice)
+                check(rtcScene)
         }
 
         func addPrimitives(primitives: inout [Boundable & Intersectable]) {
@@ -71,7 +98,6 @@ final class Embree: Accelerator {
 
         deinit {
                 rtcReleaseScene(rtcScene)
-                rtcReleaseDevice(rtcDevice)
         }
 
         private func geometry(curve: EmbreeCurve, geomID: UInt32) {
@@ -198,7 +224,7 @@ final class Embree: Accelerator {
 
                 guard
                         let geometry = rtcNewGeometry(
-                                rtcDevice,
+                                embree.rtcDevice,
                                 RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE)
                 else {
                         embreeError()
@@ -251,7 +277,7 @@ final class Embree: Accelerator {
         }
 
         private func embreeSphere(center: Point, radius: FloatX) {
-                guard let geometry = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
+                guard let geometry = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
                         embreeError()
                 }
                 let numberPoints = 1
@@ -281,7 +307,7 @@ final class Embree: Accelerator {
                 bx: FloatX, by: FloatX, bz: FloatX,
                 cx: FloatX, cy: FloatX, cz: FloatX
         ) {
-                guard let geometry = rtcNewGeometry(rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
+                guard let geometry = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
                         embreeError()
                 }
                 let indexSlot: UInt32 = 0
@@ -333,12 +359,6 @@ final class Embree: Accelerator {
                 rtcReleaseGeometry(geometry)
         }
 
-        private func embreeError(_ message: String = "") -> Never {
-                print("embreeError: \(message)")
-                exit(-1)
-        }
-
-        private var rtcDevice: OpaquePointer?
         private var rtcScene: OpaquePointer?
 
         private var materials = [UInt32: MaterialIndex]()
