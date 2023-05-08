@@ -16,5 +16,5 @@ struct MatrixBacking {
                 set { m2[index(row, column)] = newValue }
         }
 
-        private var m2: [FloatX] = Array(repeating: 0, count: 16)
+        var m2: [FloatX] = Array(repeating: 0, count: 16)
 }

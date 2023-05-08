@@ -88,8 +88,32 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                                 default:
                                         embreeError("Unknown shape in AreaLight.")
                                 }
+                        case let transformedPrimitive as TransformedPrimitive:
+                                guard
+                                        let embreeAccelerator =
+                                                transformedPrimitive.primitive as? EmbreeAccelerator
+                                else {
+                                        embreeError("Expected EmbreeAccelerator!")
+                                }
+                                let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
+                                rtcSetGeometryInstancedScene(instance, embreeAccelerator.rtcScene)
+                                rtcSetGeometryTimeStepCount(instance, 1)
+
+                                rtcAttachGeometry(rtcScene, instance)
+
+                                rtcReleaseGeometry(instance)
+
+                                let xfm = transformedPrimitive.transform.getMatrix().backing.m2
+                                let timeStep: UInt32 = 0
+                                rtcSetGeometryTransform(
+                                        instance,
+                                        timeStep,
+                                        RTC_FORMAT_FLOAT4X4_COLUMN_MAJOR,
+                                        xfm)
+
+                                rtcCommitGeometry(instance)
                         default:
-                                embreeError("Unknown primitive.")
+                                embreeError("Unknown primitive \(primitive).")
                         }
                         geomID += 1
                 }
@@ -155,6 +179,7 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 rayhit.ray.tnear = 0
                 rayhit.ray.tfar = tHit
                 rayhit.hit.geomID = rtcInvalidGeometryId
+                rayhit.hit.instID = rtcInvalidGeometryId
 
                 var context = RTCIntersectContext()
                 rtcInitIntersectContext(&context)
@@ -166,6 +191,11 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 tout = rayhit.ray.tfar
                 geomID = rayhit.hit.geomID
 
+                print("intersected \(rayhit.hit.instID) \(rayhit.hit.geomID)")
+                if rayhit.hit.instID != rtcInvalidGeometryId {
+                        print("intersected instance \(rayhit.hit.instID) \(rayhit.hit.geomID)")
+                }
+
                 if let areaLight = areaLights[geomID] {
                         if areaLight.alpha == 0 {
                                 return empty(#line)
@@ -175,9 +205,10 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 let bary1 = rayhit.hit.u
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
-                guard let uvs = triangleUVs[geomID] else {
-                        embreeError("TriangleUVs is nil!")
-                }
+                //guard let uvs = triangleUVs[geomID] else {
+                //        embreeError("TriangleUVs is nil!")
+                //}
+                let uvs = (Vector2F(), Vector2F(), Vector2F())
 
                 let uv = Point2F(
                         x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,

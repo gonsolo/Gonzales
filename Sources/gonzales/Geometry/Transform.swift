@@ -16,6 +16,11 @@ struct Transform {
                 inverseMatrix = Matrix()
         }
 
+        // For Embree
+        public func getMatrix() -> Matrix {
+                return matrix
+        }
+
         var inverse: Transform {
                 return Transform(
                         matrix: self.inverseMatrix, inverseMatrix: self.matrix)
