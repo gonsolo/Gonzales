@@ -24,7 +24,6 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
                 let sortedPrimitives = try cachedPrimitives.map {
-                        //primitives[$0.index] as! Intersectable
                         if let triangle = primitives[$0.index] as? Triangle {
                                 return IntersectablePrimitive.triangle(triangle)
                         }
@@ -33,6 +32,9 @@ final class BoundingHierarchyBuilder {
                         }
                         if let areaLight = primitives[$0.index] as? AreaLight {
                                 return IntersectablePrimitive.areaLight(areaLight)
+                        }
+                        if let transformedPrimitive = primitives[$0.index] as? TransformedPrimitive {
+                                return IntersectablePrimitive.transformedPrimitive(transformedPrimitive)
                         }
                         print("Unknown primitive \(primitives[$0.index])")
                         throw BoundingHierarchyBuilderError.unknown

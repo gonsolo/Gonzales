@@ -16,6 +16,7 @@ PTEXMEM = --ptexmem 1 # GB
 #SCENE_NAME = cornell-box
 #SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 #IMAGE =  $(SCENE_NAME).exr
+#IMAGE_PBRT = $(IMAGE)
 
 #PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion
@@ -36,9 +37,11 @@ PTEXMEM = --ptexmem 1 # GB
 #SCENE_NAME = crown.pbrt
 #SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 #IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+#IMAGE_PBRT = $(IMAGE)
 
 SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
 IMAGE = gonzales.exr
+IMAGE_PBRT = pbrt.exr
 
 PFM = $(IMAGE:.exr=.pfm)
 
@@ -156,7 +159,7 @@ view_debug: test_debug
 	@$(VIEWER) $(IMAGE)
 vp: view_pbrt
 view_pbrt: test_pbrt
-	@$(VIEWER) $(IMAGE)
+	@$(VIEWER) $(IMAGE_PBRT)
 tp: test_pbrt
 test_pbrt:
 	$(PBRT) $(PBRT_OPTIONS) $(SCENE)

@@ -238,7 +238,7 @@ struct Api {
                                 primitive: first,
                                 transform: currentTransform)
                 }
-                primitives.append(instance)
+                options.primitives.append(instance)
         }
 
         func sampler(name: String, parameters: ParameterDictionary) {
