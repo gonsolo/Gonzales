@@ -38,7 +38,7 @@ String error;
 
 void initCache(long int memory) {
 #ifdef __x86_64
-        int maxFiles = 1024;
+        int maxFiles = 16 * 1024;
         size_t maxMemory = memory * 1024l * 1024l * 1024l; // 4GB
         bool premultiply = true;
         auto inputHandler = nullptr;
