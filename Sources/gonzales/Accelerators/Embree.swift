@@ -45,7 +45,7 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 check(rtcScene)
         }
 
-        func addPrimitives(primitives: inout [Boundable & Intersectable]) {
+        func addPrimitives(primitives: [Boundable & Intersectable]) {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:

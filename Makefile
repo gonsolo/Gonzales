@@ -188,7 +188,8 @@ perf_report:
 
 # Check for memory leaks
 leak:
-	valgrind --suppressions=valgrind.supp --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
+	#valgrind --suppressions=valgrind.supp --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
+	valgrind --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
 
 # Check memory usage
 MASSIF_OUT=massif.out.gonzales
