@@ -226,11 +226,15 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 let bary1 = rayhit.hit.u
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
-                guard let uvs = scene.triangleUVs[geomID] else {
+                var uvs = (Vector2F(), Vector2F(), Vector2F())
+                let uvsOpt = scene.triangleUVs[geomID]
+                if uvsOpt == nil {
                         var message = "TriangleUVs is nil: \(geomID)"
                         message += " in scene \(String(describing: rtcScene))"
                         message += " debug: \(String(describing: scene.debugMap[geomID]))"
-                        embreeError(message)
+                        //embreeError(message)
+                } else {
+                        uvs = uvsOpt!
                 }
 
                 let uv = Point2F(
