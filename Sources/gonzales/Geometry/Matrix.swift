@@ -150,6 +150,16 @@ public struct Matrix {
                 }
         }
 
+        func transpose() -> Matrix {
+                var transposed = Matrix()
+                for x in 0..<4 {
+                        for y in 0..<4 {
+                                transposed[x, y] = backing[y, x]
+                        }
+                }
+                return transposed
+        }
+
         public var inverse: Matrix {
                 return invert(m: self)
         }

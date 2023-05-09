@@ -103,7 +103,10 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
 
                                 rtcReleaseGeometry(instance)
 
-                                let xfm = transformedPrimitive.transform.getMatrix().backing.m2
+                                let transformMatrix = transformedPrimitive.transform.getMatrix()
+                                let transposed = transformMatrix.transpose()
+                                let xfm = transposed.backing.m2
+
                                 let timeStep: UInt32 = 0
                                 rtcSetGeometryTransform(
                                         instance,
@@ -191,9 +194,10 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 tout = rayhit.ray.tfar
                 geomID = rayhit.hit.geomID
 
-                print("intersected \(rayhit.hit.instID) \(rayhit.hit.geomID)")
+                //print("intersected \(rayhit.hit.instID) \(rayhit.hit.geomID)")
                 if rayhit.hit.instID != rtcInvalidGeometryId {
-                        print("intersected instance \(rayhit.hit.instID) \(rayhit.hit.geomID)")
+                        //print("intersected instance \(rayhit.hit.instID) \(rayhit.hit.geomID)")
+                        //return empty(#line)
                 }
 
                 if let areaLight = areaLights[geomID] {
