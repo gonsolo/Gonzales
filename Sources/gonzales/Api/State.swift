@@ -8,9 +8,11 @@ struct State {
         init() {
                 namedMaterials = [String: UninstancedMaterial]()
                 currentNamedMaterial = "None"
+                var parameters = ParameterDictionary()
+                parameters["reflectance"] = [gray]
                 namedMaterials["None"] = UninstancedMaterial(
-                        type: "matte",
-                        parameters: ParameterDictionary()
+                        type: "diffuse",
+                        parameters: parameters
                 )
                 namedMedia = [String: Medium]()
                 textures = [String: Texture]()

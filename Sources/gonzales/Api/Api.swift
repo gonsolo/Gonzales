@@ -110,6 +110,7 @@ struct Api {
         }
 
         mutating func include(file sceneName: String, render: Bool) throws {
+                print("Include: \(sceneName)")
                 do {
                         let fileManager = FileManager.default
                         let absoluteSceneName = sceneDirectory + "/" + sceneName
