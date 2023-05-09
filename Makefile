@@ -1,7 +1,7 @@
 all: d
 
 #SINGLERAY = --single 68 2
-#SYNC = --sync
+SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse

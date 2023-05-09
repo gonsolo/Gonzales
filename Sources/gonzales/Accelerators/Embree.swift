@@ -101,6 +101,8 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
 
                                 rtcAttachGeometry(rtcScene, instance)
 
+                                instanceMap[geomID] = embreeAccelerator
+
                                 rtcReleaseGeometry(instance)
 
                                 let transformMatrix = transformedPrimitive.transform.getMatrix()
@@ -147,6 +149,14 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 triangleMeshIndices[geomID] = triangle.meshIndex
                 triangleIndices[geomID] = triangle.idx
                 triangleUVs[geomID] = uv
+                //if geomID == 85 {
+                //        print("Setting uv \(uv) for geomID \(geomID) in scene \(rtcScene)")
+                //        guard let uvs = triangleUVs[geomID] else {
+                //                print("Not found")
+                //                exit(-1)
+                //        }
+                //        print("Found \(uvs)")
+                //}
         }
 
         private func geometry(sphere: Sphere, geomID: UInt32) {
@@ -191,16 +201,19 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 guard rayhit.hit.geomID != rtcInvalidGeometryId else {
                         return empty(#line)
                 }
+
                 tout = rayhit.ray.tfar
                 geomID = rayhit.hit.geomID
 
-                //print("intersected \(rayhit.hit.instID) \(rayhit.hit.geomID)")
+                var scene = self
                 if rayhit.hit.instID != rtcInvalidGeometryId {
-                        //print("intersected instance \(rayhit.hit.instID) \(rayhit.hit.geomID)")
-                        //return empty(#line)
+                        guard let sceneOpt = instanceMap[rayhit.hit.instID] else {
+                                embreeError("No scene in instanceMap")
+                        }
+                        scene = sceneOpt
                 }
 
-                if let areaLight = areaLights[geomID] {
+                if let areaLight = scene.areaLights[geomID] {
                         if areaLight.alpha == 0 {
                                 return empty(#line)
                         }
@@ -209,10 +222,9 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 let bary1 = rayhit.hit.u
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
-                //guard let uvs = triangleUVs[geomID] else {
-                //        embreeError("TriangleUVs is nil!")
-                //}
-                let uvs = (Vector2F(), Vector2F(), Vector2F())
+                guard let uvs = scene.triangleUVs[geomID] else {
+                        embreeError("TriangleUVs is nil: \(geomID) in scene \(String(describing: rtcScene))")
+                }
 
                 let uv = Point2F(
                         x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
@@ -233,13 +245,13 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 interaction.dpdu = dpdu
 
                 interaction.faceIndex = 0  // TODO
-                if let areaLight = areaLights[geomID] {
+                if let areaLight = scene.areaLights[geomID] {
                         interaction.areaLight = areaLight
                 }
-                if let material = materials[geomID] {
+                if let material = scene.materials[geomID] {
                         interaction.material = material
                 }
-                if let mediumInterface = mediumInterfaces[geomID] {
+                if let mediumInterface = scene.mediumInterfaces[geomID] {
                         interaction.mediumInterface = mediumInterface
                 }
                 tHit = tout
@@ -402,6 +414,8 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
         private var triangleMeshIndices = [UInt32: Int]()
         private var triangleIndices = [UInt32: Int]()
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
+        private var instanceMap = [UInt32: EmbreeAccelerator]()
+
         private var bounds = Bounds3f()
 
         private let floatSize = MemoryLayout<Float>.size
