@@ -157,7 +157,10 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 embreeTriangle(
                         ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y,
                         cz: c.z)
-                triangleUVs[geomID] = uv
+                // TODO: Unused uvs shouldn't be set in the first place!
+                if uv.0 != Vector2F() && uv.1 != Vector2F() && uv.2 != Vector2F() {
+                        triangleUVs[geomID] = uv
+                }
         }
 
         private func geometry(sphere: Sphere, geomID: UInt32) {

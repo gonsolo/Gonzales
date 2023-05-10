@@ -38,6 +38,14 @@ extension Vector2 where T: FloatingPoint {
 
 }
 
+func == (left: Vector2F, right: Vector2F) -> Bool {
+        return left.x == right.x && left.y == right.y
+}
+
+func != (left: Vector2F, right: Vector2F) -> Bool {
+        return !(left == right)
+}
+
 func lengthSquared(_ vector: Vector2F) -> FloatX {
         return vector.x * vector.x + vector.y * vector.y
 }
