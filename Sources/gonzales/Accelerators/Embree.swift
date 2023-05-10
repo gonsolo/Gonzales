@@ -127,14 +127,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                         geomID += 1
                 }
                 rtcCommitScene(rtcScene)
-
-                //print("Size of materials: \(sizeInBytes(of: materials)) bytes")
-                //print("Size of mediumInterfaces: \(sizeInBytes(of: mediumInterfaces)) bytes")
-                //print("Size of areaLights: \(sizeInBytes(of: areaLights)) bytes")
-                //print("Size of triangleMeshIndices: \(sizeInBytes(of: triangleMeshIndices)) bytes")
-                //print("Size of triangleIndices: \(sizeInBytes(of: triangleIndices)) bytes")
-                //print("Size of triangleUVs: \(sizeInBytes(of: triangleUVs)) bytes")
-                //print("Size of instanceMap: \(sizeInBytes(of: instanceMap)) bytes")
         }
 
         func sizeInBytes<Key, Value>(of dictionary: [Key: Value]) -> Int {
@@ -165,8 +157,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 embreeTriangle(
                         ax: a.x, ay: a.y, az: a.z, bx: b.x, by: b.y, bz: b.z, cx: c.x, cy: c.y,
                         cz: c.z)
-                triangleMeshIndices[geomID] = triangle.meshIndex
-                triangleIndices[geomID] = triangle.idx
                 triangleUVs[geomID] = uv
         }
 
@@ -427,8 +417,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()
         private var areaLights = [UInt32: AreaLight]()
-        private var triangleMeshIndices = [UInt32: Int]()
-        private var triangleIndices = [UInt32: Int]()
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
         private var instanceMap = [UInt32: EmbreeAccelerator]()
 
