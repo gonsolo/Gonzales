@@ -52,21 +52,23 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 }
         }
 
+        func setBound(primitive: GeometricPrimitive) {
+                bounds = union(first: bounds, second: primitive.worldBound())
+        }
+
         func addPrimitives(primitives: [Boundable & Intersectable]) {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 setIDs(id: geomID, primitive: geometricPrimitive)
+                                setBound(primitive: geometricPrimitive)
                                 switch geometricPrimitive.shape {
                                 case let curve as EmbreeCurve:
                                         geometry(curve: curve, geomID: geomID)
-                                        bounds = union(first: bounds, second: curve.worldBound())
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
-                                        bounds = union(first: bounds, second: triangle.worldBound())
                                 case let sphere as Sphere:
                                         geometry(sphere: sphere, geomID: geomID)
-                                        bounds = union(first: bounds, second: sphere.worldBound())
                                 case let disk as Disk:
                                         _ = disk
                                         warnOnce("Ignoring disk!")
