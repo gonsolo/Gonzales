@@ -45,6 +45,14 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 check(rtcScene)
         }
 
+        func setIDs(id: UInt32, primitive: GeometricPrimitive) {
+                print(primitive.material)
+                materials[id] = primitive.material
+                if primitive.mediumInterface != nil {
+                        mediumInterfaces[id] = primitive.mediumInterface
+                }
+        }
+
         func addPrimitives(primitives: [Boundable & Intersectable]) {
                 for primitive in primitives {
                         switch primitive {
@@ -53,18 +61,15 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                                 case let curve as EmbreeCurve:
                                         geometry(curve: curve, geomID: geomID)
                                         bounds = union(first: bounds, second: curve.worldBound())
-                                        materials[geomID] = geometricPrimitive.material
-                                        mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
+                                        setIDs(id: geomID, primitive: geometricPrimitive)
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
-                                        materials[geomID] = geometricPrimitive.material
-                                        mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
+                                        setIDs(id: geomID, primitive: geometricPrimitive)
                                 case let sphere as Sphere:
                                         geometry(sphere: sphere, geomID: geomID)
                                         bounds = union(first: bounds, second: sphere.worldBound())
-                                        materials[geomID] = geometricPrimitive.material
-                                        mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
+                                        setIDs(id: geomID, primitive: geometricPrimitive)
                                 case let disk as Disk:
                                         _ = disk
                                         warnOnce("Ignoring disk!")
@@ -123,6 +128,21 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                         geomID += 1
                 }
                 rtcCommitScene(rtcScene)
+
+                //print("Size of materials: \(sizeInBytes(of: materials)) bytes")
+                //print("Size of mediumInterfaces: \(sizeInBytes(of: mediumInterfaces)) bytes")
+                //print("Size of areaLights: \(sizeInBytes(of: areaLights)) bytes")
+                //print("Size of triangleMeshIndices: \(sizeInBytes(of: triangleMeshIndices)) bytes")
+                //print("Size of triangleIndices: \(sizeInBytes(of: triangleIndices)) bytes")
+                //print("Size of triangleUVs: \(sizeInBytes(of: triangleUVs)) bytes")
+                //print("Size of instanceMap: \(sizeInBytes(of: instanceMap)) bytes")
+        }
+
+        func sizeInBytes<Key, Value>(of dictionary: [Key: Value]) -> Int {
+                let keyStride = MemoryLayout<Key>.stride
+                let valueStride = MemoryLayout<Value>.stride
+                let bytes = (keyStride + valueStride) * 4 / 3 * dictionary.capacity
+                return bytes
         }
 
         deinit {
