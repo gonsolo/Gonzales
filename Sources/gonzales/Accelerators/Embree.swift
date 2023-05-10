@@ -46,7 +46,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
         }
 
         func setIDs(id: UInt32, primitive: GeometricPrimitive) {
-                print(primitive.material)
                 materials[id] = primitive.material
                 if primitive.mediumInterface != nil {
                         mediumInterfaces[id] = primitive.mediumInterface
@@ -57,19 +56,17 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
+                                setIDs(id: geomID, primitive: geometricPrimitive)
                                 switch geometricPrimitive.shape {
                                 case let curve as EmbreeCurve:
                                         geometry(curve: curve, geomID: geomID)
                                         bounds = union(first: bounds, second: curve.worldBound())
-                                        setIDs(id: geomID, primitive: geometricPrimitive)
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
-                                        setIDs(id: geomID, primitive: geometricPrimitive)
                                 case let sphere as Sphere:
                                         geometry(sphere: sphere, geomID: geomID)
                                         bounds = union(first: bounds, second: sphere.worldBound())
-                                        setIDs(id: geomID, primitive: geometricPrimitive)
                                 case let disk as Disk:
                                         _ = disk
                                         warnOnce("Ignoring disk!")
@@ -169,14 +166,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 triangleMeshIndices[geomID] = triangle.meshIndex
                 triangleIndices[geomID] = triangle.idx
                 triangleUVs[geomID] = uv
-                //if geomID == 85 {
-                //        print("Setting uv \(uv) for geomID \(geomID) in scene \(rtcScene)")
-                //        guard let uvs = triangleUVs[geomID] else {
-                //                print("Not found")
-                //                exit(-1)
-                //        }
-                //        print("Found \(uvs)")
-                //}
         }
 
         private func geometry(sphere: Sphere, geomID: UInt32) {
