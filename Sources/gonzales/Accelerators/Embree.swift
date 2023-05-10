@@ -55,22 +55,18 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                                         bounds = union(first: bounds, second: curve.worldBound())
                                         materials[geomID] = geometricPrimitive.material
                                         mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
-                                        //debugMap[geomID] = "EmbreeCurve"
                                 case let triangle as Triangle:
                                         geometry(triangle: triangle, geomID: geomID)
                                         bounds = union(first: bounds, second: triangle.worldBound())
                                         materials[geomID] = geometricPrimitive.material
                                         mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
-                                        //debugMap[geomID] = "Triangle"
                                 case let sphere as Sphere:
                                         geometry(sphere: sphere, geomID: geomID)
                                         bounds = union(first: bounds, second: sphere.worldBound())
                                         materials[geomID] = geometricPrimitive.material
                                         mediumInterfaces[geomID] = geometricPrimitive.mediumInterface
-                                        //debugMap[geomID] = "Sphere"
                                 case let disk as Disk:
                                         _ = disk
-                                        //debugMap[geomID] = "Disk"
                                         warnOnce("Ignoring disk!")
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
@@ -231,8 +227,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 if uvsOpt == nil {
                         var message = "TriangleUVs is nil: \(geomID)"
                         message += " in scene \(String(describing: rtcScene))"
-                        //message += " debug: \(String(describing: scene.debugMap[geomID]))"
-                        //embreeError(message)
                 } else {
                         uvs = uvsOpt!
                 }
@@ -426,7 +420,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
         private var triangleIndices = [UInt32: Int]()
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
         private var instanceMap = [UInt32: EmbreeAccelerator]()
-        //private var debugMap = [UInt32: String]()
 
         private var bounds = Bounds3f()
 
