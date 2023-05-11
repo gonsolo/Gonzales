@@ -40,23 +40,172 @@ final class Embree: EmbreeBase {
 
 final class EmbreeAccelerator: Accelerator, EmbreeBase {
 
-        init() {
-                rtcScene = rtcNewScene(embree.rtcDevice)
-                check(rtcScene)
+        init(
+                bounds: Bounds3f,
+                rtcScene: OpaquePointer?,
+                materials: [UInt32: MaterialIndex],
+                mediumInterfaces: [UInt32: MediumInterface?],
+                areaLights: [UInt32: AreaLight],
+                triangleUVs: [UInt32: (Vector2F, Vector2F, Vector2F)],
+                instanceMap: [UInt32: EmbreeAccelerator]
+        ) {
+                self.bounds = bounds
+                self.rtcScene = rtcScene
+                self.materials = materials
+                self.mediumInterfaces = mediumInterfaces
+                self.areaLights = areaLights
+                self.triangleUVs = triangleUVs
+                self.instanceMap = instanceMap
         }
 
-        func setIDs(id: UInt32, primitive: GeometricPrimitive) {
+        func worldBound() -> Bounds3f {
+                return bounds
+        }
+
+        func objectBound() -> Bounds3f {
+                return bounds
+        }
+
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
+
+                let empty = { (line: Int) in
+                        //print("No triangle intersection at line ", line)
+                        return
+                }
+
+                var tout: FloatX = 0
+                var geomID: UInt32 = 0
+
+                let rtcInvalidGeometryId = UInt32.max
+
+                var rayhit = RTCRayHit()
+                rayhit.ray.org_x = ray.origin.x
+                rayhit.ray.org_y = ray.origin.y
+                rayhit.ray.org_z = ray.origin.z
+                rayhit.ray.dir_x = ray.direction.x
+                rayhit.ray.dir_y = ray.direction.y
+                rayhit.ray.dir_z = ray.direction.z
+                rayhit.ray.tnear = 0
+                rayhit.ray.tfar = tHit
+                rayhit.hit.geomID = rtcInvalidGeometryId
+                rayhit.hit.instID = rtcInvalidGeometryId
+
+                var context = RTCIntersectContext()
+                rtcInitIntersectContext(&context)
+                rtcIntersect1(rtcScene, &context, &rayhit)
+
+                guard rayhit.hit.geomID != rtcInvalidGeometryId else {
+                        return empty(#line)
+                }
+
+                tout = rayhit.ray.tfar
+                geomID = rayhit.hit.geomID
+
+                var scene = self
+                if rayhit.hit.instID != rtcInvalidGeometryId {
+                        guard let sceneOpt = instanceMap[rayhit.hit.instID] else {
+                                embreeError("No scene in instanceMap")
+                        }
+                        scene = sceneOpt
+                }
+
+                if let areaLight = scene.areaLights[geomID] {
+                        if areaLight.alpha == 0 {
+                                return empty(#line)
+                        }
+                }
+
+                let bary1 = rayhit.hit.u
+                let bary2 = rayhit.hit.v
+                let bary0 = 1 - bary1 - bary2
+                var uvs = (Vector2F(), Vector2F(), Vector2F())
+                let uvsOpt = scene.triangleUVs[geomID]
+                if uvsOpt == nil {
+                        var message = "TriangleUVs is nil: \(geomID)"
+                        message += " in scene \(String(describing: rtcScene))"
+                } else {
+                        uvs = uvsOpt!
+                }
+
+                let uv = Point2F(
+                        x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
+                        y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
+                )
+                interaction.valid = true
+                interaction.position = ray.origin + tout * ray.direction
+                interaction.normal = normalized(
+                        Normal(
+                                x: rayhit.hit.Ng_x,
+                                y: rayhit.hit.Ng_y,
+                                z: rayhit.hit.Ng_z))
+                interaction.shadingNormal = interaction.normal
+                interaction.wo = -ray.direction
+                interaction.uv = uv
+
+                let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
+                interaction.dpdu = dpdu
+
+                interaction.faceIndex = 0  // TODO
+                if let areaLight = scene.areaLights[geomID] {
+                        interaction.areaLight = areaLight
+                }
+                if let material = scene.materials[geomID] {
+                        interaction.material = material
+                }
+                if let mediumInterface = scene.mediumInterfaces[geomID] {
+                        interaction.mediumInterface = mediumInterface
+                }
+                tHit = tout
+        }
+
+        private var bounds = Bounds3f()
+        var rtcScene: OpaquePointer?
+
+        private var materials = [UInt32: MaterialIndex]()
+        private var mediumInterfaces = [UInt32: MediumInterface?]()
+        private var areaLights = [UInt32: AreaLight]()
+        private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
+        private var instanceMap = [UInt32: EmbreeAccelerator]()
+
+}
+
+final class EmbreeBuilder: EmbreeBase {
+
+        init(primitives: [Boundable & Intersectable]) {
+                rtcScene = rtcNewScene(embree.rtcDevice)
+                check(rtcScene)
+                addPrimitives(primitives: primitives)
+        }
+
+        func getAccelerator() -> EmbreeAccelerator {
+                return EmbreeAccelerator(
+                        bounds: bounds,
+                        rtcScene: rtcScene,
+                        materials: materials,
+                        mediumInterfaces: mediumInterfaces,
+                        areaLights: areaLights,
+                        triangleUVs: triangleUVs,
+                        instanceMap: instanceMap
+                )
+        }
+
+        private func setIDs(id: UInt32, primitive: GeometricPrimitive) {
                 materials[id] = primitive.material
                 if primitive.mediumInterface != nil {
                         mediumInterfaces[id] = primitive.mediumInterface
                 }
         }
 
-        func setBound(primitive: GeometricPrimitive) {
+        private func setBound(primitive: GeometricPrimitive) {
                 bounds = union(first: bounds, second: primitive.worldBound())
         }
 
-        func addPrimitives(primitives: [Boundable & Intersectable]) {
+        private func addPrimitives(primitives: [Boundable & Intersectable]) {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
@@ -167,111 +316,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 let center = sphere.objectToWorld * Point()
                 let radius = sphere.radius
                 embreeSphere(center: center, radius: radius)
-        }
-
-        func intersect(
-                ray: Ray,
-                tHit: inout FloatX,
-                material: MaterialIndex,
-                interaction: inout SurfaceInteraction
-        ) throws {
-
-                let empty = { (line: Int) in
-                        //print("No triangle intersection at line ", line)
-                        return
-                }
-
-                var tout: FloatX = 0
-                var geomID: UInt32 = 0
-
-                let rtcInvalidGeometryId = UInt32.max
-
-                var rayhit = RTCRayHit()
-                rayhit.ray.org_x = ray.origin.x
-                rayhit.ray.org_y = ray.origin.y
-                rayhit.ray.org_z = ray.origin.z
-                rayhit.ray.dir_x = ray.direction.x
-                rayhit.ray.dir_y = ray.direction.y
-                rayhit.ray.dir_z = ray.direction.z
-                rayhit.ray.tnear = 0
-                rayhit.ray.tfar = tHit
-                rayhit.hit.geomID = rtcInvalidGeometryId
-                rayhit.hit.instID = rtcInvalidGeometryId
-
-                var context = RTCIntersectContext()
-                rtcInitIntersectContext(&context)
-                rtcIntersect1(rtcScene, &context, &rayhit)
-
-                guard rayhit.hit.geomID != rtcInvalidGeometryId else {
-                        return empty(#line)
-                }
-
-                tout = rayhit.ray.tfar
-                geomID = rayhit.hit.geomID
-
-                var scene = self
-                if rayhit.hit.instID != rtcInvalidGeometryId {
-                        guard let sceneOpt = instanceMap[rayhit.hit.instID] else {
-                                embreeError("No scene in instanceMap")
-                        }
-                        scene = sceneOpt
-                }
-
-                if let areaLight = scene.areaLights[geomID] {
-                        if areaLight.alpha == 0 {
-                                return empty(#line)
-                        }
-                }
-
-                let bary1 = rayhit.hit.u
-                let bary2 = rayhit.hit.v
-                let bary0 = 1 - bary1 - bary2
-                var uvs = (Vector2F(), Vector2F(), Vector2F())
-                let uvsOpt = scene.triangleUVs[geomID]
-                if uvsOpt == nil {
-                        var message = "TriangleUVs is nil: \(geomID)"
-                        message += " in scene \(String(describing: rtcScene))"
-                } else {
-                        uvs = uvsOpt!
-                }
-
-                let uv = Point2F(
-                        x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
-                        y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
-                )
-                interaction.valid = true
-                interaction.position = ray.origin + tout * ray.direction
-                interaction.normal = normalized(
-                        Normal(
-                                x: rayhit.hit.Ng_x,
-                                y: rayhit.hit.Ng_y,
-                                z: rayhit.hit.Ng_z))
-                interaction.shadingNormal = interaction.normal
-                interaction.wo = -ray.direction
-                interaction.uv = uv
-
-                let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
-                interaction.dpdu = dpdu
-
-                interaction.faceIndex = 0  // TODO
-                if let areaLight = scene.areaLights[geomID] {
-                        interaction.areaLight = areaLight
-                }
-                if let material = scene.materials[geomID] {
-                        interaction.material = material
-                }
-                if let mediumInterface = scene.mediumInterfaces[geomID] {
-                        interaction.mediumInterface = mediumInterface
-                }
-                tHit = tout
-        }
-
-        func worldBound() -> Bounds3f {
-                return bounds
-        }
-
-        func objectBound() -> Bounds3f {
-                return bounds
         }
 
         private func embreeCurve(points: [Point], widths: (Float, Float)) {
