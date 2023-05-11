@@ -217,7 +217,7 @@ struct Api {
         }
 
         func objectInstance(name: String) throws {
-                guard let primitives = options.objects[name] else {
+                guard var primitives = options.objects[name] else {
                         return
                 }
                 if primitives.isEmpty {
@@ -226,6 +226,7 @@ struct Api {
                 var instance: Boundable & Intersectable
                 if primitives.count > 1 {
                         let accelerator = try makeAccelerator(primitives: primitives)
+                        primitives.removeAll()
                         options.objects[name] = [accelerator]
                         instance = TransformedPrimitive(
                                 primitive: accelerator,
