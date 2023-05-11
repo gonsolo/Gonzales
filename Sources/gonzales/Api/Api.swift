@@ -294,11 +294,11 @@ struct Api {
                         }
                         materialCounter = materialCounter + 1
                 }
-                if let name = state.objectName {
-                        if options.objects[name] == nil {
-                                options.objects[name] = prims
+                if let objectName = state.objectName {
+                        if options.objects[objectName] == nil {
+                                options.objects[objectName] = prims
                         } else {
-                                options.objects[name]!.append(contentsOf: prims)
+                                options.objects[objectName]!.append(contentsOf: prims)
                         }
                 } else {
                         options.primitives.append(contentsOf: prims)
