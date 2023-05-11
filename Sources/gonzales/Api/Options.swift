@@ -201,14 +201,18 @@ class Options {
                 return sampler
         }
 
+        private func cleanUp() {
+                primitives.removeAll()
+                objects.removeAll()
+        }
+
         func makeRenderer() throws -> Renderer {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
-                let timer = Timer("Build accelerator...", newline: false)
-                let accelerator = try makeAccelerator(primitives: &primitives)
-                primitives = []
-                objects = [:]
-                print(timer.elapsed)
+                let acceleratorTimer = Timer("Build accelerator...", newline: false)
+                let accelerator = try makeAccelerator(primitives: primitives)
+                cleanUp()
+                print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let scene = makeScene(accelerator: accelerator)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)

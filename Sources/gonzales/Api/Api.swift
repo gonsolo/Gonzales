@@ -1,6 +1,6 @@
 import Foundation
 
-func makeAccelerator(primitives: inout [Boundable & Intersectable]) throws -> Accelerator {
+func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
                 let builder = BoundingHierarchyBuilder(primitives: primitives)
@@ -217,7 +217,7 @@ struct Api {
         }
 
         func objectInstance(name: String) throws {
-                guard var primitives = options.objects[name] else {
+                guard let primitives = options.objects[name] else {
                         return
                 }
                 if primitives.isEmpty {
@@ -225,7 +225,7 @@ struct Api {
                 }
                 var instance: Boundable & Intersectable
                 if primitives.count > 1 {
-                        let accelerator = try makeAccelerator(primitives: &primitives)
+                        let accelerator = try makeAccelerator(primitives: primitives)
                         options.objects[name] = [accelerator]
                         instance = TransformedPrimitive(
                                 primitive: accelerator,
@@ -458,7 +458,6 @@ struct Api {
 
         func worldEnd() throws {
                 print("Reading: \(readTimer.elapsed)")
-                options.objects.removeAll()
                 if justParse { return }
                 let renderer = try options.makeRenderer()
                 try renderer.render()
