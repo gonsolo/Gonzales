@@ -58,6 +58,10 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 self.instanceMap = instanceMap
         }
 
+        deinit {
+                rtcReleaseScene(rtcScene)
+        }
+
         func worldBound() -> Bounds3f {
                 return bounds
         }
@@ -171,7 +175,6 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
         private var areaLights = [UInt32: AreaLight]()
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
         private var instanceMap = [UInt32: EmbreeAccelerator]()
-
 }
 
 final class EmbreeBuilder: EmbreeBase {
@@ -283,10 +286,6 @@ final class EmbreeBuilder: EmbreeBase {
                 let valueStride = MemoryLayout<Value>.stride
                 let bytes = (keyStride + valueStride) * 4 / 3 * dictionary.capacity
                 return bytes
-        }
-
-        deinit {
-                rtcReleaseScene(rtcScene)
         }
 
         private func geometry(curve: EmbreeCurve, geomID: UInt32) {
