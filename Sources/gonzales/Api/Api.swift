@@ -110,6 +110,7 @@ struct Api {
         }
 
         mutating func include(file sceneName: String, render: Bool) throws {
+                print(sceneName)
                 do {
                         let fileManager = FileManager.default
                         let absoluteSceneName = sceneDirectory + "/" + sceneName
@@ -456,7 +457,8 @@ struct Api {
         }
 
         func worldEnd() throws {
-                print(readTimer.elapsed)
+                print("Reading: \(readTimer.elapsed)")
+                options.objects.removeAll()
                 if justParse { return }
                 let renderer = try options.makeRenderer()
                 try renderer.render()

@@ -2,7 +2,7 @@ all: d
 
 #SINGLERAY = --single 68 2
 #SYNC = --sync
-VERBOSE = --verbose
+#VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
