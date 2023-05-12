@@ -359,7 +359,7 @@ final class VolumePathIntegrator {
 
                 var ray = ray
                 var albedo = black
-                var firstNormal = Normal()
+                var firstNormal = zeroNormal
                 var interaction = SurfaceInteraction()
                 for bounce in 0...maxDepth {
                         interaction.valid = false
