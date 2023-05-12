@@ -56,16 +56,16 @@ final class Film {
                                         weight: sample.weight,
                                         location: sample.location,
                                         image: &image)
-                                //add(
-                                //        value: sample.albedo,
-                                //        weight: sample.weight,
-                                //        location: sample.location,
-                                //        image: &albedoImage)
-                                //add(
-                                //        value: RGBSpectrum(from: sample.normal),
-                                //        weight: sample.weight,
-                                //        location: sample.location,
-                                //        image: &normalImage)
+                                add(
+                                        value: sample.albedo,
+                                        weight: sample.weight,
+                                        location: sample.location,
+                                        image: &albedoImage)
+                                add(
+                                        value: RGBSpectrum(from: sample.normal),
+                                        weight: sample.weight,
+                                        location: sample.location,
+                                        image: &normalImage)
                         }
                 }
         }
