@@ -37,5 +37,6 @@ struct GeometricPrimitive: Boundable, Intersectable, Material {
 }
 
 typealias MaterialIndex = Int
+let noMaterial = -1
 var materials: [Int: Material] = [:]
 var materialCounter: MaterialIndex = 0

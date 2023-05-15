@@ -303,7 +303,7 @@ final class VolumePathIntegrator {
                                                 inDirection: surfaceInteraction.wo)
                         }
                 }
-                if surfaceInteraction.material == -1 {
+                if surfaceInteraction.material == noMaterial {
                         return (black, ray, true, false, false)
                 }
                 guard let material = materials[surfaceInteraction.material] else {
