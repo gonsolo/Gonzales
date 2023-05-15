@@ -16,9 +16,17 @@ With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Thread
 
 ![Moana](Images/moana.png)
 
-### Build
+### Build on Ubuntu
 
-Type `make` and wait for error messages. :)
+- Install swift from https://www.swiftlang.xyz.
+- Install libopenimageio-dev and libembree-dev.
+- Install ptex from https://mentors.debian.net/package/ptex.
+- Type make
+
+### Try it out
+
+- Get scenes from https://benedikt-bitterli.me/resources in pbrt v4 format and try them out.
+- Get scenes from https://github.com/mmp/pbrt-v4-scenes and try them. Not all of them work out of the box.
 
 ### Acknowledgments
 
