@@ -303,9 +303,6 @@ final class VolumePathIntegrator {
                                                 inDirection: surfaceInteraction.wo)
                         }
                 }
-                guard bounce < maxDepth else {
-                        return (black, ray, true, false, false)
-                }
                 if surfaceInteraction.material == -1 {
                         return (black, ray, true, false, false)
                 }
@@ -378,10 +375,10 @@ final class VolumePathIntegrator {
                         if pathThroughputWeight.isBlack {
                                 break
                         }
+                        guard bounce < maxDepth else {
+                                break
+                        }
                         if let mediumInteraction {
-                                guard bounce < maxDepth else {
-                                        break
-                                }
                                 var mediumRadiance = black
                                 (mediumRadiance, ray) = try sampleMedium(
                                         pathThroughputWeight: pathThroughputWeight,
