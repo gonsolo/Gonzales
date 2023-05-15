@@ -9,8 +9,10 @@ Brute-force path tracing written in Swift.
 
 ### Moana
 
-2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 GB of memory.
-Memory usage was around 50GB.
+~~2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 GB of memory.
+Memory usage was around 50GB.~~
+
+With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Threadripper 1920x 12 cores 24 threads, 64GB RAM, 80GB swap)
 
 ![Moana](Images/moana.png)
 
