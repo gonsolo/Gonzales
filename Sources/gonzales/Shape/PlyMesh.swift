@@ -79,8 +79,6 @@ struct PlyMesh {
                 enum HeaderState { case vertex, face, none }
                 var headerState = HeaderState.none
 
-                let data = try GzipArchive.unarchive(archive: data)
-
                 guard readLine(in: data) == "ply" else {
                         throw ApiError.ply(message: "First line must be ply")
                 }
@@ -153,7 +151,7 @@ struct PlyMesh {
                                         switch words[2] {
                                         case "uint":
                                                 listBits = 32
-                                        case "uint8":
+                                        case "uchar", "uint8":
                                                 listBits = 8
                                         default:
                                                 throw ApiError.ply(
@@ -336,7 +334,13 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) th
         guard let file = FileHandle(forReadingAtPath: absoluteFileName) else {
                 throw RenderError.noFileHandle
         }
-        let data = file.readDataToEndOfFile()
+        let uncompressedData = file.readDataToEndOfFile()
+        var data: Data
+        if absoluteFileName.hasSuffix(".gz") {
+                data = try GzipArchive.unarchive(archive: uncompressedData)
+        } else {
+                data = uncompressedData
+        }
         let plyMesh = try PlyMesh(from: data)
         return try createTriangleMesh(
                 objectToWorld: objectToWorld,
