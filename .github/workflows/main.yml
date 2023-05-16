@@ -27,7 +27,7 @@ jobs:
         id: cache
         with:
           # A directory to store and save the cache
-          path: downloads 
+          path: libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           # An explicit key for restoring and saving the cache
           key: ${{ runner.os }}-${{ hashFiles('**/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb') }}
 
