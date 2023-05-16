@@ -23,19 +23,18 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
 
+      - name: Cache libswift
       - uses: actions/cache@v1.2.1
-        id: cache
+        id: cache-libswift
         with:
-          # A directory to store and save the cache
           path: libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
-          # An explicit key for restoring and saving the cache
-          key: ${{ runner.os }}-${{ hashFiles('**/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb') }}
+          key: ${{ runner.os }}-libswift
 
-      - name: Download dependencies
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Download libswift
+        if: steps.cache-libswift.outputs.cache-hit != 'true'
         run: |
           wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
         
-      - name: Install dependencies
+      - name: Install libswift
         run: |
           sudo dpkg -i libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
