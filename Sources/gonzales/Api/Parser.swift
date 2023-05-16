@@ -292,6 +292,11 @@ final class Parser {
 
         private func parseValue(type: String) throws -> Parameter {
                 switch type {
+                case "blackbody":
+                        guard let value = try parseFloatX() else {
+                                try bail(message: "Blackbody expected")
+                        }
+                        return blackBodyDummy(value: value)
                 case "bool":
                         return try parseBool()
                 case "float":
@@ -339,8 +344,16 @@ final class Parser {
                 }
         }
 
+        private func blackBodyDummy(value: FloatX) -> [RGBSpectrum] {
+                warning("Blackbody emission is not implemented!")
+                return [gray]
+        }
+
         private func parseValues(type: String) throws -> Parameter {
                 switch type {
+                case "blackbody":
+                        let value = try parseFloatXs()
+                        return blackBodyDummy(value: value[0])
                 case "bool":
                         return try parseBool()
                 case "float":
