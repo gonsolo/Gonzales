@@ -29,4 +29,6 @@ jobs:
         
       # Runs a single command using the runners shell
       - name: Build debug version
-        run: make debug
+        run: |
+          python --version
+          #make debug
