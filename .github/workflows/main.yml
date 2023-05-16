@@ -24,8 +24,8 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Cache libswift
-      - uses: actions/cache@v1.2.1
         id: cache-libswift
+        uses: actions/cache@v1.2.1
         with:
           path: libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           key: ${{ runner.os }}-libswift
