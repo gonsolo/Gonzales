@@ -28,5 +28,6 @@ jobs:
       # Runs a single command using the runners shell
       - name: Build debug version
         run: |
-          python --version
+          wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
+          sudo dpkg -i libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           #make debug
