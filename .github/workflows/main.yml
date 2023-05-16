@@ -29,25 +29,28 @@ jobs:
           packages: libopenimageio-dev
           version: 1.3
           
-      - name: Cache swift
-        id: cache-swift
+      - name: Cache deb
+        id: cache-deb
         uses: actions/cache@v3
         with:
           path: |
             libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
             swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
-          key: ${{ runner.os }}-swift
+            ptex_2.4.2-1ubuntu6_amd64.deb
+          key: ${{ runner.os }}-cache-deb
 
-      - name: Download swift
-        if: steps.cache-swift.outputs.cache-hit != 'true'
+      - name: Download deb
+        if: steps.cache-deb.outputs.cache-hit != 'true'
         run: |
           wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           wget https://archive.swiftlang.xyz/ubuntu/pool/main/s/swiftlang/swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
+          wget https://drive.google.com/file/d/1Jt9kMxN-h9lnzLpeas8BJryxBHSUqZch/view?usp=sharing
 
-      - name: Install swift
+      - name: Install deb
         run: |
           sudo dpkg -i libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           sudo dpkg -i swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
-            
+          sudo dpkg -i ptex_2.4.2-1ubuntu6_amd64.deb
+          
       - name: Compile debug
         run: make debug
