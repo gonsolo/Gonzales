@@ -26,31 +26,47 @@ jobs:
  
       - uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: libopenimageio-dev
+          packages: devscripts libopenimageio-dev
           version: 1.3
           
-      - name: Cache deb
-        id: cache-deb
+      - name: Cache swift
+        id: cache-swift
         uses: actions/cache@v3
         with:
           path: |
             libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
             swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
-            ptex_2.4.2-1ubuntu6_amd64.deb
-          key: ${{ runner.os }}-cache-deb
+          key: ${{ runner.os }}-cache-swift
 
-      - name: Download deb
-        if: steps.cache-deb.outputs.cache-hit != 'true'
+      - name: Download swift
+        if: steps.cache-swift.outputs.cache-hit != 'true'
         run: |
           wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           wget https://archive.swiftlang.xyz/ubuntu/pool/main/s/swiftlang/swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
-          wget https://drive.google.com/file/d/1Jt9kMxN-h9lnzLpeas8BJryxBHSUqZch/view?usp=sharing
+
+      - name: Cache ptex
+        id: cache-ptex
+        uses: actions/cache@v3
+        with:
+          path: |
+            ptex_2.4.2-1ubuntu6_amd64.deb
+          key: ${{ runner.os }}-cache-ptex
+        
+      - name: Download and build ptex
+        if: steps.cache-ptex.outputs.cache-hit != 'true'
+        run: |
+          dget https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
+          cd ptex-2.4.2
+          debuild
+          cd ..
 
       - name: Install deb
         run: |
           sudo dpkg -i libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           sudo dpkg -i swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           sudo dpkg -i ptex_2.4.2-1ubuntu6_amd64.deb
+          
+          
           
       - name: Compile debug
         run: make debug
