@@ -1,6 +1,5 @@
-/// TODO: Redesign this!
-
 import Foundation
+import SWCompression
 
 protocol DefaultInitializable {
         init()
@@ -79,8 +78,11 @@ struct PlyMesh {
         mutating func readPlyHeader(from data: Data) throws {
                 enum HeaderState { case vertex, face, none }
                 var headerState = HeaderState.none
+
+                let data = try GzipArchive.unarchive(archive: data)
+
                 guard readLine(in: data) == "ply" else {
-                        throw ApiError.ply(message: "First line myst be ply")
+                        throw ApiError.ply(message: "First line must be ply")
                 }
                 while true {
                         let line = readLine(in: data)
