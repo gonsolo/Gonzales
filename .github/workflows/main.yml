@@ -43,9 +43,10 @@ jobs:
         run: |
           sudo dpkg -i libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
           sudo dpkg -i swiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
+  
+      - name: Install dependencies
+        run: |
+          sudo apt install libopenimageio-dev
           
-      - name: Test swift
-        run: swift --version
-        
       - name: Compile debug
         run: make debug
