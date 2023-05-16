@@ -118,9 +118,6 @@ struct Api {
                         guard fileManager.fileExists(atPath: absoluteSceneName) else {
                                 throw RenderError.fileNotExisting(name: absoluteSceneName)
                         }
-                        if absoluteSceneName.hasSuffix(".gz") {
-                                print("gzip found: ", absoluteSceneName)
-                        }
                         if #available(OSX 10.15, *) {
                                 let parser = try Parser(fileName: absoluteSceneName, render: render)
                                 try parser.parse()

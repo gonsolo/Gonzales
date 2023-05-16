@@ -1,17 +1,32 @@
 import Foundation  // InputStream, pow, EOF, exit
 
+import SWCompression
+
 final class PbrtScanner {
 
         enum PbrtScannerError: Error {
+                case decompress
                 case noFile
                 case unsupported
         }
 
         init(path: String) throws {
-                guard let inputStream = InputStream(fileAtPath: path) else {
-                        throw PbrtScannerError.noFile
+
+                if path.hasSuffix(".gz") {
+                        let urlString = "file://" + path
+                        guard let url = URL(string: urlString) else {
+                                throw PbrtScannerError.noFile
+                        }
+                        let data = try Data(contentsOf: url)
+                        let decompressedData = try GzipArchive.unarchive(archive: data)
+                        let inputStream = InputStream(data: decompressedData)
+                        self.stream = inputStream
+                } else {
+                        guard let inputStream = InputStream(fileAtPath: path) else {
+                                throw PbrtScannerError.noFile
+                        }
+                        self.stream = inputStream
                 }
-                self.stream = inputStream
                 stream.open()
                 if stream.streamStatus == .error {
                         throw PbrtScannerError.noFile
