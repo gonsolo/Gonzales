@@ -33,11 +33,12 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = clouds
 #SCENE_DIR = contemporary-bathroom
 #SCENE_DIR = crown
-SCENE_DIR = disney-cloud
+#SCENE_DIR = disney-cloud
+SCENE_DIR = explosion
 SCENE_NAME  = $(SCENE_DIR).pbrt
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
-IMAGE = disney-cloud-720p.exr
-#IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+#IMAGE = disney-cloud-720p.exr
+IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 IMAGE_PBRT = $(IMAGE)
 
 #SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
