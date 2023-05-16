@@ -38,4 +38,4 @@ jobs:
         
       - name: Install dependencies
         run: |
-          sudo dpkg -i downloads/libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
+          sudo dpkg -i libswiftlang_5.8-1.0.0-ubuntu-jammy_amd64.deb
