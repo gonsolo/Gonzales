@@ -340,6 +340,9 @@ final class Parser {
                                 try bail(message: "Texture expected!")
                         }
                         return [value]
+                case "vector3":
+                        let value = try parseVector()
+                        return [value]
                 default:
                         var message = "Unknown type \(type)"
                         message += " at location \(scanner.scanLocation)"
@@ -376,6 +379,8 @@ final class Parser {
                         return try parseStrings()
                 case "texture":
                         return try parseTextures()
+                case "vector3":
+                        return try parseVectors()
                 default:
                         var message = "Unknown type \(type)"
                         message += " at location \(scanner.scanLocation)"
