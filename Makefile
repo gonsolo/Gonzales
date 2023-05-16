@@ -18,7 +18,7 @@ PTEXMEM = --ptexmem 1 # GB
 #IMAGE =  $(SCENE_NAME).exr
 #IMAGE_PBRT = $(IMAGE)
 
-#PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
+PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion
 #SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
@@ -26,22 +26,21 @@ PTEXMEM = --ptexmem 1 # GB
 
 #SCENE_DIR  = bmw-m6
 #SCENE_DIR = bunny-cloud
-#SCENE_NAME  = $(SCENE_DIR).pbrt
-#SCENE_DIR = bunny-fur
-#SCENE_NAME = bunny-fur.pbrt
+SCENE_DIR = bunny-fur
+SCENE_NAME  = $(SCENE_DIR).pbrt
 #SCENE_DIR = clouds
 #SCENE_NAME = clouds.pbrt
 #SCENE_DIR = contemporary-bathroom
 #SCENE_NAME = contemporary-bathroom.pbrt
 #SCENE_DIR = crown
 #SCENE_NAME = crown.pbrt
-#SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
-#IMAGE =  $(SCENE_NAME:.pbrt=.exr)
-#IMAGE_PBRT = $(IMAGE)
+SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
+IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+IMAGE_PBRT = $(IMAGE)
 
-SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
-IMAGE = gonzales.exr
-IMAGE_PBRT = pbrt.exr
+#SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
+#IMAGE = gonzales.exr
+#IMAGE_PBRT = pbrt.exr
 
 PFM = $(IMAGE:.exr=.pfm)
 
@@ -79,7 +78,7 @@ else
 	endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
-	SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
+	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	SWIFT_OPTIMIZE_FLAG	= -Xswiftc -Ounchecked -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules

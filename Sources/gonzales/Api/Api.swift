@@ -539,10 +539,14 @@ struct Api {
                 throws -> [Shape]
         {
                 switch name {
+                case "bilinearmesh":
+                        return []  // Ignore for now
                 case "curve":
                         return try createCurveShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
+                case "cylinder":
+                        return []  // Ignore for now
                 case "disk":
                         return try createDiskShape(
                                 objectToWorld: objectToWorld,
