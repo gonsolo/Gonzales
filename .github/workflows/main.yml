@@ -55,7 +55,7 @@ jobs:
       - name: Download and build ptex
         if: steps.cache-ptex.outputs.cache-hit != 'true'
         run: |
-          dget https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
+          dget -u https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
           cd ptex-2.4.2
           debuild -i -us -uc
           cd ..
