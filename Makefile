@@ -26,9 +26,9 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 
 #SCENE_DIR  = bmw-m6
 #SCENE_DIR = bunny-cloud
-SCENE_DIR = bunny-fur
+#SCENE_DIR = bunny-fur
+SCENE_DIR = clouds
 SCENE_NAME  = $(SCENE_DIR).pbrt
-#SCENE_DIR = clouds
 #SCENE_NAME = clouds.pbrt
 #SCENE_DIR = contemporary-bathroom
 #SCENE_NAME = contemporary-bathroom.pbrt

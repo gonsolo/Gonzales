@@ -176,6 +176,8 @@ struct Api {
                         throw ApiError.namedMedium
                 }
                 switch type {
+                case "cloud":
+                        warning("Cloud is not implemented!")
                 case "homogeneous":
                         let scale = try parameters.findOneFloatX(called: "scale", else: 1)
                         let absorption =
@@ -187,7 +189,7 @@ struct Api {
                                 absorption: absorption,
                                 scattering: scattering)
                 case "nanovdb":
-                        warning("Nanovdb not implemented!")
+                        warning("Nanovdb is not implemented!")
                 default:
                         throw ApiError.namedMedium
                 }
