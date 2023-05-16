@@ -8,10 +8,10 @@ final class PbrtScanner {
         }
 
         init(path: String) throws {
-                guard let s = InputStream(fileAtPath: path) else {
+                guard let inputStream = InputStream(fileAtPath: path) else {
                         throw PbrtScannerError.noFile
                 }
-                stream = s
+                self.stream = inputStream
                 stream.open()
                 if stream.streamStatus == .error {
                         throw PbrtScannerError.noFile
