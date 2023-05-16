@@ -25,7 +25,8 @@ struct DistantLight: Light {
         func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
 
         func power() -> Measurement<UnitPower> {
-                unimplemented()
+                let value = square(worldRadius) * FloatX.pi * brightness.average()
+                return Measurement(value: Double(value), unit: UnitPower.watts)
         }
 
         var isDelta: Bool { return true }

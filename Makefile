@@ -23,17 +23,21 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
 #SCENE_NAME = bistro_boulangerie.pbrt
+#SCENE_DIR = dambreak
+#SCENE_NAME = dambreak0.pbrt
+#SCENE_NAME = dambreak1.pbrt
 
-#SCENE_DIR  = bmw-m6
+#SCENE_DIR = bmw-m6
 #SCENE_DIR = bunny-cloud
 #SCENE_DIR = bunny-fur
 #SCENE_DIR = clouds
-SCENE_DIR = contemporary-bathroom
-SCENE_NAME  = $(SCENE_DIR).pbrt
+#SCENE_DIR = contemporary-bathroom
 #SCENE_DIR = crown
-#SCENE_NAME = crown.pbrt
+SCENE_DIR = disney-cloud
+SCENE_NAME  = $(SCENE_DIR).pbrt
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
-IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+IMAGE = disney-cloud-720p.exr
+#IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 IMAGE_PBRT = $(IMAGE)
 
 #SCENE = ~/src/moana/island/pbrt-v4/island.pbrt

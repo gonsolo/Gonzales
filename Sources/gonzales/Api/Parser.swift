@@ -426,12 +426,15 @@ final class Parser {
         }
 
         private func parseLookAt() throws {
+                parseComments()
                 guard let eye = try parsePoint() else {
                         try bail(message: "LookAt: Point expected!")
                 }
+                parseComments()
                 guard let at = try parsePoint() else {
                         try bail(message: "LookAt: Point expected!")
                 }
+                parseComments()
                 let up = try parseVector()
                 try api.lookAt(eye: eye, at: at, up: up)
         }
