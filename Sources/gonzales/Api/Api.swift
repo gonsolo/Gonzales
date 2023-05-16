@@ -117,6 +117,10 @@ struct Api {
                 options.filmParameters = parameters
         }
 
+        func identity() {
+                currentTransform = Transform()
+        }
+
         mutating func importFile(file sceneName: String) throws {
                 try include(file: sceneName, render: false)
         }

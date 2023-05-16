@@ -13,6 +13,7 @@ final class Parser {
                 case coordinateSystem = "CoordinateSystem"
                 case coordSysTransform = "CoordSysTransform"
                 case film = "Film"
+                case identity = "Identity"
                 case importFile = "Import"  // import is a keyword in Swift
                 case include = "Include"
                 case integrator = "Integrator"
@@ -500,17 +501,19 @@ final class Parser {
         }
 
         private func parseFilm() throws {
-                let name = try parseString()
-                switch name {
-                case "image":
-                        break
-                case "rgb":  // v4
+                let filmType = try parseString()
+                switch filmType {
+                case "image", "rgb", "gbuffer":
                         break
                 default:
-                        try bail()
+                        try bail(message: "Unknown film format: \(filmType)")
                 }
                 let parameters = try parseParameters()
-                try api.film(name: name, parameters: parameters)
+                try api.film(name: filmType, parameters: parameters)
+        }
+
+        private func parseIdentity() {
+                api.identity()
         }
 
         private func parseImport() throws {
@@ -671,6 +674,7 @@ final class Parser {
                 case .coordSysTransform: try parseCoordSysTransform()
                 case .concatTransform: try parseConcatTransform()
                 case .film: try parseFilm()
+                case .identity: parseIdentity()
                 case .include: try parseInclude()
                 case .importFile: try parseImport()
                 case .integrator: try parseIntegrator()
