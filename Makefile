@@ -18,6 +18,7 @@ PTEXMEM = --ptexmem 1 # GB
 #IMAGE =  $(SCENE_NAME).exr
 #IMAGE_PBRT = $(IMAGE)
 
+# 13/28 scenes
 PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion
 #SCENE_NAME = pavilion-day.pbrt
@@ -35,8 +36,10 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = crown
 #SCENE_DIR = disney-cloud
 #SCENE_DIR = explosion
-SCENE_DIR = ganesha
-SCENE_NAME  = $(SCENE_DIR).pbrt
+#SCENE_DIR = ganesha
+SCENE_DIR = hair
+SCENE_NAME  = hair-actual-bsdf.pbrt
+#SCENE_NAME  = $(SCENE_DIR).pbrt
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 #IMAGE = disney-cloud-720p.exr
 IMAGE =  $(SCENE_NAME:.pbrt=.exr)

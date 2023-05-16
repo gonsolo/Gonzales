@@ -10,6 +10,8 @@ final class Parser {
                 case attributeEnd = "AttributeEnd"
                 case camera = "Camera"
                 case concatTransform = "ConcatTransform"
+                case coordinateSystem = "CoordinateSystem"
+                case coordSysTransform = "CoordSysTransform"
                 case film = "Film"
                 case importFile = "Import"  // import is a keyword in Swift
                 case include = "Include"
@@ -530,6 +532,16 @@ final class Parser {
                 try api.camera(name: name, parameters: parameters)
         }
 
+        private func parseCoordinateSystem() throws {
+                let name = try parseString()
+                api.coordinateSystem(name: name)
+        }
+
+        private func parseCoordSysTransform() throws {
+                let name = try parseString()
+                try api.coordSysTransform(name: name)
+        }
+
         private func parseConcatTransform() throws {
                 let values = try scanTransform()
                 try api.concatTransform(values: values)
@@ -655,6 +667,8 @@ final class Parser {
                 case .attributeBegin: try parseAttributeBegin()
                 case .attributeEnd: try parseAttributeEnd()
                 case .camera: try parseCamera()
+                case .coordinateSystem: try parseCoordinateSystem()
+                case .coordSysTransform: try parseCoordSysTransform()
                 case .concatTransform: try parseConcatTransform()
                 case .film: try parseFilm()
                 case .include: try parseInclude()

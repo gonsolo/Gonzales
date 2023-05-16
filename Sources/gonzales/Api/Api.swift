@@ -32,6 +32,7 @@ func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
 enum ApiError: Error {
         case accelerator
         case areaLight
+        case coordSysTransform
         case input(message: String)
         case makeLight(message: String)
         case makeSampler
@@ -84,6 +85,18 @@ struct Api {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
                 options.cameraToWorld = currentTransform.inverse
+                namedCoordinateSystems["camera"] = options.cameraToWorld
+        }
+
+        func coordinateSystem(name: String) {
+                namedCoordinateSystems[name] = currentTransform
+        }
+
+        func coordSysTransform(name: String) throws {
+                guard let transform = namedCoordinateSystems[name] else {
+                        throw ApiError.coordSysTransform
+                }
+                currentTransform = transform
         }
 
         func concatTransform(values: [FloatX]) throws {
@@ -603,3 +616,4 @@ var currentTransform = Transform()
 var transforms = [Transform]()
 var readTimer = Timer("")
 var acceleratorName = "embree"
+var namedCoordinateSystems = [String: Transform]()
