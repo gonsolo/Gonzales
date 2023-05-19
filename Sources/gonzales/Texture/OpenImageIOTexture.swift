@@ -1,12 +1,25 @@
 import Foundation
 
-final class OpenImageIOTexture: RGBSpectrumTexture {
+final class OpenImageIOTexture: FloatTexture, RGBSpectrumTexture {
 
-        init(path: String) {
-                filename = path
+        enum TextureType {
+                case float
+                case rgb
         }
 
-        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
+        init(path: String, type: String) {
+                filename = path
+                switch type {
+                case "spectrum", "color":
+                        textureType = .rgb
+                case "float":
+                        textureType = .float
+                default:
+                        fatalError("Unknown texture type in OpenImageIOTexture!")
+                }
+        }
+
+        private func getTextureCoordinates(at interaction: Interaction) -> (s: FloatX, t: FloatX) {
                 var (_, s) = modf(interaction.uv.x)
                 var (_, t) = modf(interaction.uv.y)
                 if s < 0 {
@@ -15,8 +28,28 @@ final class OpenImageIOTexture: RGBSpectrumTexture {
                 if t < 0 {
                         t = 1 + t
                 }
+                return (s, t)
+        }
+
+        func evaluateFloat(at interaction: Interaction) -> FloatX {
+                let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
 
+        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
+                let (s, t) = getTextureCoordinates(at: interaction)
+                return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
+        }
+
+        func evaluate(at interaction: Interaction) -> TextureEvaluation {
+                switch textureType {
+                case .float:
+                        return evaluateFloat(at: interaction)
+                case .rgb:
+                        return evaluateRGBSpectrum(at: interaction)
+                }
+        }
+
         let filename: String
+        let textureType: TextureType
 }

@@ -46,7 +46,7 @@ enum ApiError: Error {
         case transformsEmpty
         case unknownAccelerator
         case unknownIntegrator
-        case unknownTexture
+        case unknownTexture(name: String)
         case writeUse
         case wrongType(message: String)
 }
@@ -393,7 +393,7 @@ struct Api {
                         warning("Unimplemented texture type: \(type)")
                         return
                 }
-                var texture: RGBSpectrumTexture
+                var texture: Texture
                 switch textureClass {
                 case "checkerboard":
                         let textureEven = try parameters.findRGBSpectrumTexture(name: "tex1")
@@ -407,17 +407,27 @@ struct Api {
                         texture = try parameters.findRGBSpectrumTexture(name: "value")
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
-                        texture = try getTextureFrom(name: fileName)
+                        texture = try getTextureFrom(name: fileName, type: type)
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
-                        texture = try getTextureFrom(name: fileName)
+                        texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
-                        let scale = try parameters.findOneFloatX(called: "scale", else: 1)
-                        let textureName = try parameters.findString(called: "tex") ?? ""
-                        guard let unscaledTexture = state.textures[textureName] else {
-                                throw ApiError.unknownTexture
-                        }
-                        texture = ScaledTexture(scale: scale, texture: unscaledTexture)
+                        //print(name)
+                        //print(parameters)
+                        //let scale = try parameters.findOneFloatX(called: "scale", else: 1)
+                        //print("scale: ", scale)
+                        //let scaleTexture = try parameters.findTexture(name: "scale")
+                        //print("scaleTexture: ", scaleTexture)
+                        let scale = try parameters.findFloatXTexture(name: "scale")
+                        //print("scale: ", scale)
+
+                        let tex = try parameters.findRGBSpectrumTexture(name: "tex")
+                        //print("tex: ", tex)
+
+                        //guard let unscaledTexture = state.textures[tex] else {
+                        //        throw ApiError.unknownTexture(name: tex)
+                        //}
+                        texture = ScaledTexture(scale: scale, texture: tex)
                 default:
                         warning("Unimplemented texture class: \(textureClass)")
                         return
@@ -594,7 +604,7 @@ struct Api {
         }
 }
 
-func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
+func getTextureFrom(name: String, type: String) throws -> Texture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
@@ -606,7 +616,7 @@ func getTextureFrom(name: String) throws -> RGBSpectrumTexture {
         case ".ptx":
                 return Ptex(path: absoluteFileName)
         case ".exr", ".pfm", ".png", ".tga":
-                return OpenImageIOTexture(path: absoluteFileName)
+                return OpenImageIOTexture(path: absoluteFileName, type: type)
         default:
                 throw ApiError.unknownTextureFormat(suffix: String(suffix))
         }

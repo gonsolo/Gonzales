@@ -9,7 +9,7 @@ struct InfiniteLight: Light {
         init(
                 lightToWorld: Transform,
                 brightness: RGBSpectrum,
-                texture: RGBSpectrumTexture
+                texture: Texture
         ) {
                 self.lightToWorld = lightToWorld
                 self.brightness = brightness
@@ -35,7 +35,10 @@ struct InfiniteLight: Light {
                 let visibility = Visibility(from: reference, to: distantPoint)
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                let color = texture.evaluateRGBSpectrum(at: interaction)
+                guard let color = texture.evaluate(at: interaction) as? RGBSpectrum else {
+                        warning("Unsupported texture type!")
+                        return (black, direction, pdf, visibility)
+                }
                 return (radiance: color, direction, pdf, visibility)
         }
 
@@ -101,7 +104,10 @@ struct InfiniteLight: Light {
         func radianceFromInfinity(for ray: Ray) -> RGBSpectrum {
                 let uv = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                let radiance = texture.evaluateRGBSpectrum(at: interaction)
+                guard let radiance = texture.evaluate(at: interaction) as? RGBSpectrum else {
+                        warning("Unsupported texture type!")
+                        return black
+                }
                 return radiance
         }
 
@@ -117,7 +123,7 @@ struct InfiniteLight: Light {
         var worldToLight: Transform { return lightToWorld.inverse }
 
         let brightness: RGBSpectrum
-        let texture: RGBSpectrumTexture
+        let texture: Texture
         let lightToWorld: Transform
 }
 
@@ -132,6 +138,6 @@ func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionar
                         brightness: brightness,
                         texture: texture)
         }
-        let texture = try getTextureFrom(name: mapname)
+        let texture = try getTextureFrom(name: mapname, type: "color")
         return InfiniteLight(lightToWorld: lightToWorld, brightness: white, texture: texture)
 }

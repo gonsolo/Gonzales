@@ -67,11 +67,11 @@ extension ParameterDictionary {
         func findFloatXTexture(name: String, else value: FloatX = 1.0) throws -> FloatTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = state.textures[textureName] as? FloatTexture else {
-                                print("No texture")
+                        guard let floatTexture = state.textures[textureName] as? FloatTexture else {
+                                print("No named texture \"\(textureName)\"")
                                 fatalError()
                         }
-                        return texture
+                        return floatTexture
                 } else {
                         let value = try findOneFloatX(called: name, else: value)
                         return ConstantTexture<FloatX>(value: value)

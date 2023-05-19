@@ -5,25 +5,38 @@ enum DiffuseError: Error {
 
 final class Diffuse: Material {
 
-        init(reflectance: RGBSpectrumTexture) {
+        init(reflectance: Texture) {
                 self.reflectance = reflectance
         }
 
         func getBSDF(interaction: Interaction) -> BSDF {
                 var bsdf = BSDF(interaction: interaction)
-                let reflectance = reflectance.evaluateRGBSpectrum(at: interaction)
+                let evaluation = reflectance.evaluate(at: interaction)
+                var reflectance = black
+                let reflectanceFloat = evaluation as? FloatX
+                if reflectanceFloat != nil {
+                        reflectance = RGBSpectrum(intensity: reflectanceFloat!)
+                }
+                let reflectanceRgb = evaluation as? RGBSpectrum
+                if reflectanceRgb != nil {
+                        reflectance = reflectanceRgb!
+                }
                 bsdf.set(bxdf: DiffuseBsdf(reflectance: reflectance))
                 return bsdf
         }
 
-        let reflectance: RGBSpectrumTexture
+        let reflectance: Texture
 }
 
 func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {
-                guard let texture = state.textures[reflectanceTextureName] as? RGBSpectrumTexture else {
-                        throw DiffuseError.noTexture
+                var texture: Texture = ConstantTexture(value: black)
+                if let floatTexture = state.textures[reflectanceTextureName] as? FloatTexture {
+                        texture = floatTexture
+                }
+                if let rgbTexture = state.textures[reflectanceTextureName] as? RGBSpectrumTexture {
+                        texture = rgbTexture
                 }
                 return Diffuse(reflectance: texture)
         }
