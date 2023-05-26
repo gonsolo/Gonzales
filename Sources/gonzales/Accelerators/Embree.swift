@@ -113,7 +113,7 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 var scene = self
                 if rayhit.hit.instID != rtcInvalidGeometryId {
                         guard let sceneOpt = instanceMap[rayhit.hit.instID] else {
-                                embreeError("No scene in instanceMap")
+                                embreeError("No scene in instanceMap, instID: \(rayhit.hit.instID)")
                         }
                         scene = sceneOpt
                 }
@@ -255,7 +255,7 @@ final class EmbreeBuilder: EmbreeBase {
                                 rtcSetGeometryInstancedScene(instance, embreeAccelerator.rtcScene)
                                 rtcSetGeometryTimeStepCount(instance, 1)
 
-                                rtcAttachGeometry(rtcScene, instance)
+                                rtcAttachGeometryByID(rtcScene, instance, geomID)
 
                                 instanceMap[geomID] = embreeAccelerator
 
@@ -371,7 +371,7 @@ final class EmbreeBuilder: EmbreeBase {
                         vertices.storeBytes(of: curveRadius, toByteOffset: wIndex, as: Float.self)
                 }
                 rtcCommitGeometry(geometry)
-                rtcAttachGeometry(rtcScene, geometry)
+                rtcAttachGeometryByID(rtcScene, geometry, geomID)
                 rtcReleaseGeometry(geometry)
         }
 
@@ -397,7 +397,7 @@ final class EmbreeBuilder: EmbreeBase {
                 vertices.storeBytes(of: center.z, toByteOffset: 2 * floatSize, as: Float.self)
                 vertices.storeBytes(of: radius, toByteOffset: 3 * floatSize, as: Float.self)
                 rtcCommitGeometry(geometry)
-                rtcAttachGeometry(rtcScene, geometry)
+                rtcAttachGeometryByID(rtcScene, geometry, geomID)
                 rtcReleaseGeometry(geometry)
         }
 
@@ -454,7 +454,7 @@ final class EmbreeBuilder: EmbreeBase {
                 indices.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
                 rtcCommitGeometry(geometry)
-                rtcAttachGeometry(rtcScene, geometry)
+                rtcAttachGeometryByID(rtcScene, geometry, geomID)
                 rtcReleaseGeometry(geometry)
         }
 
