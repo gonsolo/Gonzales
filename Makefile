@@ -12,11 +12,11 @@ PTEXMEM = --ptexmem 1 # GB
 # dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
-#BITTERLI = ~/src/bitterli
-#SCENE_NAME = cornell-box
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-#IMAGE =  $(SCENE_NAME).exr
-#IMAGE_PBRT = $(IMAGE)
+BITTERLI = ~/src/bitterli
+SCENE_NAME = cornell-box
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+IMAGE =  $(SCENE_NAME).exr
+IMAGE_PBRT = $(IMAGE)
 
 # Render 15/28 scenes
 PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
@@ -43,12 +43,12 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = head
 #SCENE_DIR = killeroos
 #SCENE_NAME  = killeroo-simple.pbrt
-SCENE_DIR = kroken
-SCENE_NAME  = camera-1.pbrt
+#SCENE_DIR = kroken
+#SCENE_NAME  = camera-1.pbrt
 #SCENE_NAME  = $(SCENE_DIR).pbrt
-SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
-IMAGE =  $(SCENE_NAME:.pbrt=.exr)
-IMAGE_PBRT = $(IMAGE)
+#SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
+#IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+#IMAGE_PBRT = $(IMAGE)
 
 #SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
 #IMAGE = gonzales.exr

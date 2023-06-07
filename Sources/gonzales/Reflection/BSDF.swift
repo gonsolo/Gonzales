@@ -4,18 +4,14 @@ struct BSDF {
 
         init() {
                 bxdf = DiffuseBsdf(reflectance: black)
-                geometricNormal = Normal()
-                shadingNormal = Normal()
-                ss = up
-                ts = up
         }
 
         init(interaction: Interaction) {
                 bxdf = DiffuseBsdf(reflectance: black)
                 geometricNormal = interaction.normal
-                shadingNormal = interaction.shadingNormal
-                ss = normalized(interaction.dpdu)
-                ts = cross(Vector(normal: shadingNormal), ss)
+                let ss = normalized(interaction.dpdu)
+                let ts = cross(Vector(normal: interaction.shadingNormal), ss)
+                frame = CoordinateFrame(x: Vector(normal: interaction.shadingNormal), y: ss, z: ts)
         }
 
         mutating func set(bxdf: BxDF) {
@@ -41,15 +37,18 @@ struct BSDF {
         }
 
         private func worldToLocal(world: Vector) -> Vector {
-                return normalized(Vector(x: dot(world, ss), y: dot(world, ts), z: dot(world, shadingNormal)))
+                return normalized(
+                        Vector(
+                                x: dot(world, frame.y),
+                                y: dot(world, frame.z),
+                                z: dot(world, frame.x)))
         }
 
         private func localToWorld(local: Vector) -> Vector {
-                return normalized(
-                        Vector(
-                                x: ss.x * local.x + ts.x * local.y + shadingNormal.x * local.z,
-                                y: ss.y * local.x + ts.y * local.y + shadingNormal.y * local.z,
-                                z: ss.z * local.x + ts.z * local.y + shadingNormal.z * local.z))
+                let x = frame.y.x * local.x + frame.z.x * local.y + frame.x.x * local.z
+                let y = frame.y.y * local.x + frame.z.y * local.y + frame.x.y * local.z
+                let z = frame.y.z * local.x + frame.z.z * local.y + frame.x.z * local.z
+                return normalized(Vector(x: x, y: y, z: z))
         }
 
         func sample(wo woWorld: Vector, u: ThreeRandomVariables)
@@ -73,7 +72,5 @@ struct BSDF {
 
         var bxdf: BxDF
         var geometricNormal = Normal()
-        var shadingNormal = Normal()
-        var ss = up
-        var ts = up
+        var frame = CoordinateFrame()
 }
