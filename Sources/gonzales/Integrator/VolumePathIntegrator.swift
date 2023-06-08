@@ -29,7 +29,7 @@ final class VolumePathIntegrator {
         ) -> FloatX {
                 var density: FloatX = 0
                 if interaction is SurfaceInteraction {
-                        density = bsdf.probabilityDensity(wo: interaction.wo, wi: sample)
+                        density = bsdf.probabilityDensityWorld(wo: interaction.wo, wi: sample)
                 }
                 if let mediumInteraction = interaction as? MediumInteraction {
                         density = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: sample)
@@ -88,7 +88,7 @@ final class VolumePathIntegrator {
                         let phase = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: wi)
                         scatter = RGBSpectrum(intensity: phase)
                 } else {
-                        let reflected = bsdf.evaluate(wo: interaction.wo, wi: wi)
+                        let reflected = bsdf.evaluateWorld(wo: interaction.wo, wi: wi)
                         let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
                         scatter = reflected * dot
                 }
@@ -107,7 +107,7 @@ final class VolumePathIntegrator {
 
                 var bsdfSample = BSDFSample()
                 if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        (bsdfSample, _) = try bsdf.sample(wo: surfaceInteraction.wo, u: sampler.get3D())
+                        (bsdfSample, _) = try bsdf.sampleWorld(wo: surfaceInteraction.wo, u: sampler.get3D())
                         guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                                 return zero
                         }
@@ -362,7 +362,7 @@ final class VolumePathIntegrator {
                                 }
                                 let bsdf = material.getBSDF(interaction: surfaceInteraction)
                                 if bounce == 0 {
-                                        albedo = bsdf.albedo()
+                                        albedo = bsdf.albedoWorld()
                                         firstNormal = surfaceInteraction.normal
                                 }
                                 let lightEstimate =
@@ -373,7 +373,7 @@ final class VolumePathIntegrator {
                                                 with: sampler,
                                                 lightSampler: lightSampler)
                                 estimate += lightEstimate
-                                let (bsdfSample, _) = try bsdf.sample(
+                                let (bsdfSample, _) = try bsdf.sampleWorld(
                                         wo: surfaceInteraction.wo, u: sampler.get3D())
                                 guard
                                         bsdfSample.probabilityDensity != 0

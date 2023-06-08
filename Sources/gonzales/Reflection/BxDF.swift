@@ -3,10 +3,10 @@
 ///        Distribution Functions).
 protocol BxDF {
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum
-        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX
         func albedo() -> RGBSpectrum
+        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum
+        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX
+        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample
 
         var isReflective: Bool { get }
         var isTransmissive: Bool { get }

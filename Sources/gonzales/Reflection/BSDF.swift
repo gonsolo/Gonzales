@@ -16,7 +16,11 @@ struct BSDF {
                 bsdfGeometry = BsdfGeometry(geometricNormal: geometricNormal, frame: frame)
         }
 
-        func evaluate(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
+        func albedoWorld() -> RGBSpectrum {
+                return bxdf.albedo()
+        }
+
+        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
                 var totalLightScattered = black
                 let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
                 let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
@@ -30,11 +34,14 @@ struct BSDF {
                 return totalLightScattered
         }
 
-        func albedo() -> RGBSpectrum {
-                return bxdf.albedo()
+        func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
+                let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
+                let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
+                if woLocal.z == 0 { return 0 }
+                return bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
         }
 
-        func sample(wo woWorld: Vector, u: ThreeRandomVariables)
+        func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
                 throws -> (bsdfSample: BSDFSample, isTransmissive: Bool)
         {
                 let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
@@ -46,17 +53,8 @@ struct BSDF {
                 )
         }
 
-        func probabilityDensity(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
-                let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
-                let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
-                if woLocal.z == 0 { return 0 }
-                return bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
-        }
-
         let bxdf: BxDF
         let bsdfGeometry: BsdfGeometry
-        //let geometricNormal: Normal
-        //let frame: ShadingFrame
 }
 
 struct BsdfGeometry {
