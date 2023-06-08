@@ -14,11 +14,15 @@ struct BSDF {
                 frame = ShadingFrame(x: Vector(normal: interaction.shadingNormal), y: ss, z: ts)
         }
 
+        private func isReflecting(wi: Vector, wo: Vector) -> Bool {
+                return dot(wi, geometricNormal) * dot(wo, geometricNormal) > 0
+        }
+
         func evaluate(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
                 var totalLightScattered = black
                 let woLocal = frame.worldToLocal(world: woWorld)
                 let wiLocal = frame.worldToLocal(world: wiWorld)
-                let reflect = dot(wiWorld, geometricNormal) * dot(woWorld, geometricNormal) > 0
+                let reflect = isReflecting(wi: wiWorld, wo: woWorld)
                 if reflect && bxdf.isReflective {
                         totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
                 }

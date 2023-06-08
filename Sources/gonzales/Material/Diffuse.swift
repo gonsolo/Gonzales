@@ -22,7 +22,6 @@ final class Diffuse: Material {
                 }
                 let bxdf = DiffuseBsdf(reflectance: reflectance)
                 let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
-                //bsdf.set(bxdf: DiffuseBsdf(reflectance: reflectance))
                 return bsdf
         }
 
