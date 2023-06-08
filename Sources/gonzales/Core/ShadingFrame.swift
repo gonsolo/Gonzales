@@ -12,6 +12,10 @@ struct ShadingFrame {
                 self.z = z
         }
 
+        init(x: Vector, y: Vector) {
+                self.init(x: x, y: y, z: cross(x, y))
+        }
+
         func worldToLocal(world: Vector) -> Vector {
                 return normalized(
                         Vector(

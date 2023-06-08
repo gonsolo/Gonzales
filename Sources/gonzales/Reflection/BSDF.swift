@@ -10,9 +10,10 @@ struct BSDF {
         init(bxdf: BxDF, interaction: Interaction) {
                 self.bxdf = bxdf
                 let geometricNormal = interaction.normal
-                let ss = normalized(interaction.dpdu)
-                let ts = cross(Vector(normal: interaction.shadingNormal), ss)
-                let frame = ShadingFrame(x: Vector(normal: interaction.shadingNormal), y: ss, z: ts)
+                let frame = ShadingFrame(
+                        x: Vector(normal: interaction.shadingNormal),
+                        y: normalized(interaction.dpdu)
+                )
                 bsdfGeometry = BsdfGeometry(geometricNormal: geometricNormal, frame: frame)
         }
 
