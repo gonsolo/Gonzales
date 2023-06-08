@@ -11,7 +11,7 @@ struct BSDF {
                 geometricNormal = interaction.normal
                 let ss = normalized(interaction.dpdu)
                 let ts = cross(Vector(normal: interaction.shadingNormal), ss)
-                frame = CoordinateFrame(x: Vector(normal: interaction.shadingNormal), y: ss, z: ts)
+                frame = ShadingFrame(x: Vector(normal: interaction.shadingNormal), y: ss, z: ts)
         }
 
         mutating func set(bxdf: BxDF) {
@@ -57,5 +57,5 @@ struct BSDF {
 
         var bxdf: BxDF
         var geometricNormal = Normal()
-        var frame = CoordinateFrame()
+        var frame = ShadingFrame()
 }
