@@ -6,16 +6,12 @@ struct BSDF {
                 bxdf = DiffuseBsdf(reflectance: black)
         }
 
-        init(interaction: Interaction) {
-                bxdf = DiffuseBsdf(reflectance: black)
+        init(bxdf: BxDF, interaction: Interaction) {
+                self.bxdf = bxdf
                 geometricNormal = interaction.normal
                 let ss = normalized(interaction.dpdu)
                 let ts = cross(Vector(normal: interaction.shadingNormal), ss)
                 frame = ShadingFrame(x: Vector(normal: interaction.shadingNormal), y: ss, z: ts)
-        }
-
-        mutating func set(bxdf: BxDF) {
-                self.bxdf = bxdf
         }
 
         func evaluate(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {

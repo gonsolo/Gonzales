@@ -10,7 +10,6 @@ final class Diffuse: Material {
         }
 
         func getBSDF(interaction: Interaction) -> BSDF {
-                var bsdf = BSDF(interaction: interaction)
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black
                 let reflectanceFloat = evaluation as? FloatX
@@ -21,7 +20,9 @@ final class Diffuse: Material {
                 if reflectanceRgb != nil {
                         reflectance = reflectanceRgb!
                 }
-                bsdf.set(bxdf: DiffuseBsdf(reflectance: reflectance))
+                let bxdf = DiffuseBsdf(reflectance: reflectance)
+                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
+                //bsdf.set(bxdf: DiffuseBsdf(reflectance: reflectance))
                 return bsdf
         }
 

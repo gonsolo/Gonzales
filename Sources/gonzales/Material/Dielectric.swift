@@ -11,12 +11,11 @@ final class Dielectric: Material {
         }
 
         func getBSDF(interaction: Interaction) -> BSDF {
-                var bsdf = BSDF(interaction: interaction)
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let bxdf = DielectricBsdf(distribution: distribution, refractiveIndex: refractiveIndex)
-                bsdf.set(bxdf: bxdf)
+                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 

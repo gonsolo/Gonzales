@@ -6,8 +6,8 @@ final class Measured: Material {
 
         func getBSDF(interaction: Interaction) -> BSDF {
                 // TODO: Implement this some day
-                var bsdf = BSDF(interaction: interaction)
-                bsdf.set(bxdf: DiffuseBsdf())
+                let bxdf = DiffuseBsdf()
+                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 }

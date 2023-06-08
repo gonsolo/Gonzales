@@ -11,13 +11,12 @@ final class DiffuseTransmission: Material {
         }
 
         func getBSDF(interaction: Interaction) -> BSDF {
-                var bsdf = BSDF(interaction: interaction)
                 let reflectance = reflectance.evaluateRGBSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)
                 // TODO: check same hemisphere and transmission
                 // TODO: transmittance
                 let bxdf = DiffuseBsdf(reflectance: scale * reflectance)
-                bsdf.set(bxdf: bxdf)
+                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 
