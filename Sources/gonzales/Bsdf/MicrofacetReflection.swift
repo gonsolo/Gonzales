@@ -1,4 +1,4 @@
-struct MicrofacetReflection: BsdfGeometryProtocol, GlobalBsdf {
+struct MicrofacetReflection: GlobalBsdf {
 
         func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 let cosThetaO = absCosTheta(wo)

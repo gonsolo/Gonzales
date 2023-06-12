@@ -1,6 +1,6 @@
 import Foundation  // exp
 
-struct CoatedDiffuseBsdf: BsdfGeometryProtocol, GlobalBsdf {
+struct CoatedDiffuseBsdf: GlobalBsdf {
 
         init(
                 reflectance: RGBSpectrum,

@@ -13,4 +13,6 @@ struct DummyBsdf: GlobalBsdf {
         func isReflecting(wi: Vector, wo: Vector) -> Bool { return false }
 
         func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum { return white }
+
+        var bsdfGeometry: BsdfGeometry { return BsdfGeometry() }
 }

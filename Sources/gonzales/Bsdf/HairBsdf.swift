@@ -1,6 +1,6 @@
 import Foundation  // atan2
 
-struct HairBsdf: BsdfGeometryProtocol, GlobalBsdf {
+struct HairBsdf: GlobalBsdf {
 
         init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum, bsdfGeometry: BsdfGeometry) {
                 self.h = h
