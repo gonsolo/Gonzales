@@ -4,7 +4,7 @@ struct DiffuseBsdf: GlobalBsdf, LocalBsdf {
                 return reflectance / FloatX.pi
         }
 
-        func albedoLocal() -> RGBSpectrum { return reflectance }
+        func albedo() -> RGBSpectrum { return reflectance }
 
         var reflectance: RGBSpectrum = white
 
@@ -33,7 +33,7 @@ struct DummyBsdf: GlobalBsdf, LocalBsdf {
                 return nullVector
         }
 
-        func albedoLocal() -> RGBSpectrum { return white }
+        func albedo() -> RGBSpectrum { return white }
 
         func isReflecting(wi: Vector, wo: Vector) -> Bool { return false }
 

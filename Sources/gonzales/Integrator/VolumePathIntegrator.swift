@@ -362,7 +362,7 @@ final class VolumePathIntegrator {
                                 }
                                 let bsdf = material.getGlobalBsdf(interaction: surfaceInteraction)
                                 if bounce == 0 {
-                                        albedo = bsdf.albedoWorld()
+                                        albedo = bsdf.albedo()
                                         firstNormal = surfaceInteraction.normal
                                 }
                                 let lightEstimate =

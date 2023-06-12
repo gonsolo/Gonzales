@@ -30,7 +30,7 @@ struct MicrofacetReflection: GlobalBsdf, LocalBsdf {
                 return distribution.probabilityDensity(wo: wo, half: half) / (4 * dot(wo, half))
         }
 
-        func albedoLocal() -> RGBSpectrum { return white }
+        func albedo() -> RGBSpectrum { return white }
 
         var reflectance: RGBSpectrum
         var distribution: MicrofacetDistribution

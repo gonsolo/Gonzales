@@ -212,7 +212,7 @@ struct DielectricBsdf: GlobalBsdf, LocalBsdf {
                 return pdf
         }
 
-        func albedoLocal() -> RGBSpectrum { return white }
+        func albedo() -> RGBSpectrum { return white }
 
         var isSpecular: Bool {
                 return distribution.isSmooth

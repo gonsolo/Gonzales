@@ -12,7 +12,7 @@ struct SpecularReflection: LocalBsdf {
 
         func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX { return 0 }
 
-        func albedoLocal() -> RGBSpectrum { return reflectance }
+        func albedo() -> RGBSpectrum { return reflectance }
 
         let reflectance: RGBSpectrum
         let fresnel: Fresnel

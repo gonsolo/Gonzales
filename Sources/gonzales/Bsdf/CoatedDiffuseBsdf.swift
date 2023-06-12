@@ -298,7 +298,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf, LocalBsdf {
                 }
         }
 
-        func albedoLocal() -> RGBSpectrum { return reflectance }
+        func albedo() -> RGBSpectrum { return reflectance }
 
         let thickness: FloatX = 0.1
 

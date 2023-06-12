@@ -378,7 +378,7 @@ struct HairBsdf: GlobalBsdf, LocalBsdf {
                 return (radiance, wi, pdf)
         }
 
-        func albedoLocal() -> RGBSpectrum {
+        func albedo() -> RGBSpectrum {
                 // Not correct but should be ok
                 return absorption
         }

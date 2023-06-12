@@ -3,7 +3,7 @@
 ///        Distribution Functions).
 protocol LocalBsdf {
 
-        func albedoLocal() -> RGBSpectrum
+        func albedo() -> RGBSpectrum
         func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum
         func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX
         func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample
