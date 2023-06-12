@@ -1,4 +1,4 @@
-struct DummyBsdf: GlobalBsdf, LocalBsdf {
+struct DummyBsdf: GlobalBsdf {
 
         func worldToLocal(world: Vector) -> Vector {
                 return nullVector

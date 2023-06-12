@@ -1,6 +1,6 @@
 import Foundation  // exp
 
-struct CoatedDiffuseBsdf: GlobalBsdf, LocalBsdf {
+struct CoatedDiffuseBsdf: GlobalBsdf {
 
         init(
                 reflectance: RGBSpectrum,

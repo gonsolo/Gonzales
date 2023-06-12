@@ -1,4 +1,4 @@
-struct DiffuseBsdf: GlobalBsdf, LocalBsdf {
+struct DiffuseBsdf: GlobalBsdf {
 
         func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 return reflectance / FloatX.pi
@@ -22,5 +22,3 @@ struct DiffuseBsdf: GlobalBsdf, LocalBsdf {
 
         let bsdfGeometry: BsdfGeometry
 }
-
-

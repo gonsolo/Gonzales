@@ -1,4 +1,4 @@
-struct DielectricBsdf: GlobalBsdf, LocalBsdf {
+struct DielectricBsdf: GlobalBsdf {
 
         private func backfacing(wi: Vector, wo: Vector, half: Vector) -> Bool {
                 return dot(half, wi) * cosTheta(wi) < 0 || dot(half, wo) * cosTheta(wo) < 0
