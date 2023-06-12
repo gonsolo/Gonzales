@@ -1,10 +1,10 @@
-struct DiffuseBsdf: BxDF {
+struct DiffuseBsdf: LocalBsdf {
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 return reflectance / FloatX.pi
         }
 
-        func albedo() -> RGBSpectrum { return reflectance }
+        func albedoLocal() -> RGBSpectrum { return reflectance }
 
         var reflectance: RGBSpectrum = white
 }

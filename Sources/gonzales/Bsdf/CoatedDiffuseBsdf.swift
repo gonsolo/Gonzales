@@ -1,6 +1,6 @@
 import Foundation  // exp
 
-struct CoatedDiffuseBsdf: BxDF {
+struct CoatedDiffuseBsdf: LocalBsdf {
 
         init(
                 reflectance: RGBSpectrum,
@@ -49,7 +49,7 @@ struct CoatedDiffuseBsdf: BxDF {
                 //        unimplemented()
                 //}
                 if z == exitZ {
-                        let bsdfSample = topBxdf.sample(wo: -w, u: sampler.get3D())
+                        let bsdfSample = topBxdf.sampleLocal(wo: -w, u: sampler.get3D())
                         if !bsdfSample.isValid {
                                 return nil
                         }
@@ -61,7 +61,7 @@ struct CoatedDiffuseBsdf: BxDF {
                         if !topBxdf.isSpecular {
                                 wt = powerHeuristic(
                                         f: wis.probabilityDensity,
-                                        g: bottomBxdf.probabilityDensity(
+                                        g: bottomBxdf.probabilityDensityLocal(
                                                 wo: -w,
                                                 wi: -wis.incoming))
                         }
@@ -72,20 +72,20 @@ struct CoatedDiffuseBsdf: BxDF {
                                 * transmittance(dz: thickness, w: wis.incoming)
                                 * wis.estimate
                                 / wis.probabilityDensity
-                        let eval = bottomBxdf.evaluate(wo: -w, wi: -wis.incoming)
+                        let eval = bottomBxdf.evaluateLocal(wo: -w, wi: -wis.incoming)
                         estimate += floatWeight * eval
-                        let bs = bottomBxdf.sample(wo: -w, u: sampler.get3D())
+                        let bs = bottomBxdf.sampleLocal(wo: -w, u: sampler.get3D())
                         if !bs.isValid {
                                 return nil
                         }
                         pathThroughputWeight *= bs.throughputWeight()
                         w = bs.incoming
                         if !topBxdf.isSpecular {
-                                let fExit = topBxdf.evaluate(wo: -w, wi: wi)
+                                let fExit = topBxdf.evaluateLocal(wo: -w, wi: wi)
                                 if !fExit.isBlack {
                                         var wt: FloatX = 1
                                         // bottom is always black
-                                        let exitPDF = topBxdf.probabilityDensity(
+                                        let exitPDF = topBxdf.probabilityDensityLocal(
                                                 wo: -w,
                                                 wi: wi)
                                         wt = powerHeuristic(
@@ -108,12 +108,12 @@ struct CoatedDiffuseBsdf: BxDF {
                 exitZ: FloatX,
                 estimate: inout RGBSpectrum
         ) {
-                let wos = topBxdf.sample(wo: wo, u: sampler.get3D())
+                let wos = topBxdf.sampleLocal(wo: wo, u: sampler.get3D())
                 if !wos.isValid {
                         return
                 }
                 let u2 = (sampler.get1D(), sampler.get1D(), sampler.get1D())
-                let wis = topBxdf.sample(wo: wi, u: u2)
+                let wis = topBxdf.sampleLocal(wo: wi, u: u2)
                 if !wis.isValid {
                         return
                 }
@@ -140,7 +140,7 @@ struct CoatedDiffuseBsdf: BxDF {
 
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 assert(wo.z > 0)
                 assert(sameHemisphere(wi, wo))
 
@@ -153,7 +153,7 @@ struct CoatedDiffuseBsdf: BxDF {
                 let exitZ = thickness
                 let numberOfSamples = 1
 
-                var estimate = FloatX(numberOfSamples) * topBxdf.evaluate(wo: wo, wi: wi)
+                var estimate = FloatX(numberOfSamples) * topBxdf.evaluateLocal(wo: wo, wi: wi)
                 let sampler = RandomSampler()
                 for _ in 0..<numberOfSamples {
                         evaluateOneSample(
@@ -167,8 +167,8 @@ struct CoatedDiffuseBsdf: BxDF {
                 return estimate
         }
 
-        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
-                let bs = topBxdf.sample(wo: wo, u: u)
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+                let bs = topBxdf.sampleLocal(wo: wo, u: u)
                 if !bs.isValid {
                         return invalidBSDFSample
                 }
@@ -195,9 +195,9 @@ struct CoatedDiffuseBsdf: BxDF {
                         // albedo is zero
                         z = (z == thickness) ? 0 : thickness
                         estimate *= transmittance(dz: thickness, w: w)
-                        let interface: BxDF = (z == 0) ? bottomBxdf : topBxdf
+                        let interface: LocalBsdf = (z == 0) ? bottomBxdf : topBxdf
                         // TODO: u.0 is used above too, have to generate a new one
-                        let bs = interface.sample(wo: -w, u: u)
+                        let bs = interface.sampleLocal(wo: -w, u: u)
                         if !bs.isValid {
                                 return invalidBSDFSample
                         }
@@ -217,19 +217,23 @@ struct CoatedDiffuseBsdf: BxDF {
                 let rInterface = bottomBxdf
                 let tInterface = topBxdf
                 let sampler = RandomSampler()
-                let wos = tInterface.sample(wo: wo, u: sampler.get3D())
-                let wis = tInterface.sample(wo: wi, u: sampler.get3D())
+                let wos = tInterface.sampleLocal(wo: wo, u: sampler.get3D())
+                let wis = tInterface.sampleLocal(wo: wi, u: sampler.get3D())
                 if wos.isValid && wis.isValid {
                         if tInterface.isSpecular {
-                                pdfSum += rInterface.probabilityDensity(wo: -wos.incoming, wi: -wis.incoming)
+                                pdfSum += rInterface.probabilityDensityLocal(
+                                        wo: -wos.incoming,
+                                        wi: -wis.incoming)
                         } else {
-                                let rs = rInterface.sample(wo: -wos.incoming, u: sampler.get3D())
+                                let rs = rInterface.sampleLocal(wo: -wos.incoming, u: sampler.get3D())
                                 if rs.isValid {
-                                        let rPdf = rInterface.probabilityDensity(
+                                        let rPdf = rInterface.probabilityDensityLocal(
                                                 wo: -wos.incoming, wi: -wis.incoming)
                                         let rwt = powerHeuristic(f: wis.probabilityDensity, g: rPdf)
                                         pdfSum += rwt * rPdf
-                                        let tPdf = tInterface.probabilityDensity(wo: -rs.incoming, wi: wi)
+                                        let tPdf = tInterface.probabilityDensityLocal(
+                                                wo: -rs.incoming,
+                                                wi: wi)
                                         let twt = powerHeuristic(f: rs.probabilityDensity, g: tPdf)
                                         pdfSum += twt * tPdf
                                 }
@@ -243,29 +247,29 @@ struct CoatedDiffuseBsdf: BxDF {
                 let tiInterface = bottomBxdf
                 let sampler = RandomSampler()
                 var pdfSum: FloatX = 0
-                let wos = toInterface.sample(wo: wo, u: sampler.get3D())
+                let wos = toInterface.sampleLocal(wo: wo, u: sampler.get3D())
                 guard wos.isValid else {
                         return pdfSum
                 }
-                let wis = tiInterface.sample(wo: wi, u: sampler.get3D())
+                let wis = tiInterface.sampleLocal(wo: wi, u: sampler.get3D())
                 guard wis.isValid else {
                         return pdfSum
                 }
                 if toInterface.isSpecular {
-                        pdfSum += tiInterface.probabilityDensity(wo: -wos.incoming, wi: wi)
+                        pdfSum += tiInterface.probabilityDensityLocal(wo: -wos.incoming, wi: wi)
                 } else {  // tiInterface/bottomBxdf/DiffuseBxdf is never specular
-                        let toPdf = toInterface.probabilityDensity(wo: wo, wi: -wis.incoming)
-                        let tiPdf = tiInterface.probabilityDensity(wo: -wos.incoming, wi: wi)
+                        let toPdf = toInterface.probabilityDensityLocal(wo: wo, wi: -wis.incoming)
+                        let tiPdf = tiInterface.probabilityDensityLocal(wo: -wos.incoming, wi: wi)
                         pdfSum += (toPdf + tiPdf) / 2
                 }
                 return pdfSum
         }
 
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 let numberOfSamples = 1
                 var pdfSum: FloatX = 0
                 if sameHemisphere(wo, wi) {
-                        pdfSum += FloatX(numberOfSamples) * topBxdf.probabilityDensity(wo: wo, wi: wi)
+                        pdfSum += FloatX(numberOfSamples) * topBxdf.probabilityDensityLocal(wo: wo, wi: wi)
                 }
                 for _ in 0..<numberOfSamples {
                         if sameHemisphere(wo, wi) {
@@ -289,7 +293,7 @@ struct CoatedDiffuseBsdf: BxDF {
                 }
         }
 
-        func albedo() -> RGBSpectrum { return reflectance }
+        func albedoLocal() -> RGBSpectrum { return reflectance }
 
         let thickness: FloatX = 0.1
 

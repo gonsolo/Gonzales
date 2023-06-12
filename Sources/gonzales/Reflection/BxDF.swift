@@ -1,36 +1,36 @@
 ///        A type that is a generalization of BRDFs (Bidirectional Reflection
 ///        Distribution Functions) and BTDFs (Bidirectional Transmission
 ///        Distribution Functions).
-protocol BxDF {
+protocol LocalBsdf {
 
-        func albedo() -> RGBSpectrum
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX
-        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample
+        func albedoLocal() -> RGBSpectrum
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample
 
         var isReflective: Bool { get }
         var isTransmissive: Bool { get }
 }
 
-extension BxDF {
+extension LocalBsdf {
 
-        func sample(
+        func sampleLocal(
                 wo: Vector,
                 u: ThreeRandomVariables,
                 evaluate: (Vector, Vector) -> RGBSpectrum
         ) -> BSDFSample {
                 var wi = cosineSampleHemisphere(u: TwoRandomVariables(u.0, u.1))
                 if wo.z < 0 { wi.z = -wi.z }
-                let density = probabilityDensity(wo: wo, wi: wi)
+                let density = probabilityDensityLocal(wo: wo, wi: wi)
                 let radiance = evaluate(wo, wi)
                 return BSDFSample(radiance, wi, density)
         }
 
-        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
-                return sample(wo: wo, u: u, evaluate: self.evaluate)
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+                return sampleLocal(wo: wo, u: u, evaluate: self.evaluateLocal)
         }
 
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 guard sameHemisphere(wo, wi) else { return 0 }
                 let result = absCosTheta(wi) / FloatX.pi
                 return result

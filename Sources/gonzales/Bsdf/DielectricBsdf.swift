@@ -1,10 +1,10 @@
-struct DielectricBsdf: BxDF {
+struct DielectricBsdf: LocalBsdf {
 
         private func backfacing(wi: Vector, wo: Vector, half: Vector) -> Bool {
                 return dot(half, wi) * cosTheta(wi) < 0 || dot(half, wo) * cosTheta(wo) < 0
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return black
                 }
@@ -165,7 +165,7 @@ struct DielectricBsdf: BxDF {
                 }
         }
 
-        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return sampleSpecular(wo: wo, u: u)
                 } else {
@@ -173,7 +173,7 @@ struct DielectricBsdf: BxDF {
                 }
         }
 
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 if refractiveIndex == refractiveIndexVacuum || isSpecular {
                         return 0
                 }
@@ -212,7 +212,7 @@ struct DielectricBsdf: BxDF {
                 return pdf
         }
 
-        func albedo() -> RGBSpectrum { return white }
+        func albedoLocal() -> RGBSpectrum { return white }
 
         var isSpecular: Bool {
                 return distribution.isSmooth

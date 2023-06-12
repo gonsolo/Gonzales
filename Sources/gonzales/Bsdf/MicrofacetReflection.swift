@@ -1,6 +1,6 @@
-struct MicrofacetReflection: BxDF {
+struct MicrofacetReflection: LocalBsdf {
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 let cosThetaO = absCosTheta(wo)
                 let cosThetaI = absCosTheta(wi)
                 var half = wo + wi
@@ -13,24 +13,24 @@ struct MicrofacetReflection: BxDF {
                 return reflectance * area * visible * f / (4 * cosThetaI * cosThetaO)
         }
 
-        func sample(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
                 guard !wo.z.isZero else {
                         return BSDFSample()
                 }
                 let half = distribution.sampleHalfVector(wo: wo, u: (u.0, u.1))
                 let wi = reflect(vector: wo, by: half)
-                let radiance = evaluate(wo: wo, wi: wi)
-                let density = probabilityDensity(wo: wo, wi: wi)
+                let radiance = evaluateLocal(wo: wo, wi: wi)
+                let density = probabilityDensityLocal(wo: wo, wi: wi)
                 return BSDFSample(radiance, wi, density)
         }
 
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 guard sameHemisphere(wo, wi) else { return 0 }
                 let half = normalized(wo + wi)
                 return distribution.probabilityDensity(wo: wo, half: half) / (4 * dot(wo, half))
         }
 
-        func albedo() -> RGBSpectrum { return white }
+        func albedoLocal() -> RGBSpectrum { return white }
 
         var reflectance: RGBSpectrum
         var distribution: MicrofacetDistribution

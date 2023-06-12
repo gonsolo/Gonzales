@@ -7,13 +7,13 @@ struct BSDF {
                 bsdfGeometry = BsdfGeometry()
         }
 
-        init(bxdf: BxDF, interaction: Interaction) {
+        init(bxdf: LocalBsdf, interaction: Interaction) {
                 self.bxdf = bxdf
                 bsdfGeometry = BsdfGeometry(interaction: interaction)
         }
 
         func albedoWorld() -> RGBSpectrum {
-                return bxdf.albedo()
+                return bxdf.albedoLocal()
         }
 
         func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
@@ -22,10 +22,10 @@ struct BSDF {
                 let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
                 let reflect = bsdfGeometry.isReflecting(wi: wiWorld, wo: woWorld)
                 if reflect && bxdf.isReflective {
-                        totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
+                        totalLightScattered += bxdf.evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
                 if !reflect && bxdf.isTransmissive {
-                        totalLightScattered += bxdf.evaluate(wo: woLocal, wi: wiLocal)
+                        totalLightScattered += bxdf.evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
                 return totalLightScattered
         }
@@ -34,14 +34,14 @@ struct BSDF {
                 let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
                 let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
                 if woLocal.z == 0 { return 0 }
-                return bxdf.probabilityDensity(wo: woLocal, wi: wiLocal)
+                return bxdf.probabilityDensityLocal(wo: woLocal, wi: wiLocal)
         }
 
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
                 throws -> (bsdfSample: BSDFSample, isTransmissive: Bool)
         {
                 let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
-                let bsdfSample = bxdf.sample(wo: woLocal, u: u)
+                let bsdfSample = bxdf.sampleLocal(wo: woLocal, u: u)
                 let wiWorld = bsdfGeometry.frame.localToWorld(local: bsdfSample.incoming)
                 return (
                         BSDFSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),
@@ -49,7 +49,7 @@ struct BSDF {
                 )
         }
 
-        let bxdf: BxDF
+        let bxdf: LocalBsdf
         let bsdfGeometry: BsdfGeometry
 }
 

@@ -1,8 +1,8 @@
-struct SpecularReflection: BxDF {
+struct SpecularReflection: LocalBsdf {
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum { return black }
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum { return black }
 
-        func sample(wo: Vector, u: Point2F) -> BSDFSample {
+        func sampleLocal(wo: Vector, u: Point2F) -> BSDFSample {
                 let wi = Vector(x: -wo.x, y: -wo.y, z: wo.z)
                 let radiance =
                         fresnel.evaluate(cosTheta: cosTheta(wi)) * reflectance / absCosTheta(wi)
@@ -10,9 +10,9 @@ struct SpecularReflection: BxDF {
                 return BSDFSample(radiance, wi, density)
         }
 
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX { return 0 }
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX { return 0 }
 
-        func albedo() -> RGBSpectrum { return reflectance }
+        func albedoLocal() -> RGBSpectrum { return reflectance }
 
         let reflectance: RGBSpectrum
         let fresnel: Fresnel

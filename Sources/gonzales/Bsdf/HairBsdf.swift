@@ -1,6 +1,6 @@
 import Foundation  // atan2
 
-struct HairBsdf: BxDF {
+struct HairBsdf: LocalBsdf {
 
         init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum) {
                 self.h = h
@@ -172,7 +172,7 @@ struct HairBsdf: BxDF {
                 return (longitudinalScattering, azimuthalScattering)
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
 
                 let sinThetaO = wo.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
@@ -247,7 +247,7 @@ struct HairBsdf: BxDF {
                 return attenuation.map { $0.average() / sumY }
         }
 
-        func probabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 let sinThetaO = wo.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
                 let phiO = atan2(wo.z, wo.y)
@@ -310,7 +310,7 @@ struct HairBsdf: BxDF {
                 return clamp(value: x, low: a, high: b)
         }
 
-        func sample(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
+        func sampleLocal(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
                 RGBSpectrum, Vector, FloatX
         ) {
                 let sinThetaO = wo.x
@@ -377,7 +377,7 @@ struct HairBsdf: BxDF {
                 return (radiance, wi, pdf)
         }
 
-        func albedo() -> RGBSpectrum {
+        func albedoLocal() -> RGBSpectrum {
                 // Not correct but should be ok
                 return absorption
         }
