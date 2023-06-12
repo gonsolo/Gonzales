@@ -12,7 +12,7 @@ final class CoatedDiffuse: Material {
                 self.remapRoughness = remapRoughness
         }
 
-        func getBSDF(interaction: Interaction) -> BSDF {
+        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRGBSpectrum(at: interaction)
                 let bxdf = CoatedDiffuseBsdf(
@@ -20,7 +20,7 @@ final class CoatedDiffuse: Material {
                         refractiveIndex: refractiveIndex,
                         roughness: roughness,
                         remapRoughness: remapRoughness)
-                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
+                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 

@@ -4,10 +4,10 @@ enum MeasuredError: Error {
 
 final class Measured: Material {
 
-        func getBSDF(interaction: Interaction) -> BSDF {
+        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
                 // TODO: Implement this some day
                 let bxdf = DiffuseBsdf()
-                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
+                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 }

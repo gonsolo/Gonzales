@@ -9,7 +9,7 @@ final class Diffuse: Material {
                 self.reflectance = reflectance
         }
 
-        func getBSDF(interaction: Interaction) -> BSDF {
+        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black
                 let reflectanceFloat = evaluation as? FloatX
@@ -21,7 +21,7 @@ final class Diffuse: Material {
                         reflectance = reflectanceRgb!
                 }
                 let bxdf = DiffuseBsdf(reflectance: reflectance)
-                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
+                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 

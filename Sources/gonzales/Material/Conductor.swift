@@ -6,7 +6,7 @@ final class Conductor: Material {
                 self.roughness = roughness
         }
 
-        func getBSDF(interaction: Interaction) -> BSDF {
+        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnel = FresnelConductor(
@@ -17,7 +17,7 @@ final class Conductor: Material {
                         reflectance: white,
                         distribution: trowbridge,
                         fresnel: fresnel)
-                let bsdf = BSDF(bxdf: reflection, interaction: interaction)
+                let bsdf = GlobalBsdf(bxdf: reflection, interaction: interaction)
                 return bsdf
         }
 

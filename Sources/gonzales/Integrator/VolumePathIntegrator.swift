@@ -15,7 +15,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sample: Vector,
-                bsdf: BSDF
+                bsdf: GlobalBsdf
         ) throws -> FloatX {
                 return try light.probabilityDensityFor(
                         samplingDirection: sample, from: interaction)
@@ -25,7 +25,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sample: Vector,
-                bsdf: BSDF
+                bsdf: GlobalBsdf
         ) -> FloatX {
                 var density: FloatX = 0
                 if interaction is SurfaceInteraction {
@@ -71,7 +71,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
-                bsdf: BSDF
+                bsdf: GlobalBsdf
         ) throws -> BsdfSample {
                 let zero = BsdfSample()
 
@@ -100,7 +100,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
-                bsdf: BSDF
+                bsdf: GlobalBsdf
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
@@ -143,7 +143,7 @@ final class VolumePathIntegrator {
         private func sampleLight(
                 light: Light,
                 interaction: Interaction,
-                bsdf: BSDF,
+                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 let lightSample = try sampleLightSource(
@@ -160,10 +160,10 @@ final class VolumePathIntegrator {
                 }
         }
 
-        private func sampleBSDF(
+        private func sampleGlobalBsdf(
                 light: Light,
                 interaction: Interaction,
-                bsdf: BSDF,
+                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 let bsdfSample = try sampleBrdf(
@@ -183,7 +183,7 @@ final class VolumePathIntegrator {
         private func sampleMultipleImportance(
                 light: Light,
                 interaction: Interaction,
-                bsdf: BSDF,
+                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 let lightSampler = MultipleImportanceSampler.MISSampler(
@@ -203,7 +203,7 @@ final class VolumePathIntegrator {
         private func estimateDirect(
                 light: Light,
                 interaction: Interaction,
-                bsdf: BSDF,
+                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 if light.isDelta {
@@ -219,7 +219,7 @@ final class VolumePathIntegrator {
                 //        interaction: interaction,
                 //        bsdf: bsdf,
                 //        sampler: sampler)
-                //return try sampleBSDF(
+                //return try sampleGlobalBsdf(
                 //        light: light,
                 //        interaction: interaction,
                 //        bsdf: bsdf,
@@ -233,7 +233,7 @@ final class VolumePathIntegrator {
 
         private func sampleOneLight(
                 at interaction: Interaction,
-                bsdf: BSDF,
+                bsdf: GlobalBsdf,
                 with sampler: Sampler,
                 lightSampler: LightSampler
         ) throws -> RGBSpectrum {
@@ -268,7 +268,7 @@ final class VolumePathIntegrator {
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RGBSpectrum, Ray) {
-                let dummy = BSDF()
+                let dummy = GlobalBsdf()
                 let estimate =
                         try pathThroughputWeight
                         * sampleOneLight(
@@ -294,7 +294,7 @@ final class VolumePathIntegrator {
                 var estimate = black
 
                 // Path throughput weight
-                // The product of all BSDFs and cosines divided by the pdf
+                // The product of all GlobalBsdfs and cosines divided by the pdf
                 // Π f |cosθ| / pdf
                 var pathThroughputWeight = white
 
@@ -360,7 +360,7 @@ final class VolumePathIntegrator {
                                         continue
                                         //return (estimate, spawnedRay, false, true, false)
                                 }
-                                let bsdf = material.getBSDF(interaction: surfaceInteraction)
+                                let bsdf = material.getGlobalBsdf(interaction: surfaceInteraction)
                                 if bounce == 0 {
                                         albedo = bsdf.albedoWorld()
                                         firstNormal = surfaceInteraction.normal

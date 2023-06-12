@@ -1,6 +1,6 @@
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
-struct BSDF {
+struct GlobalBsdf {
 
         init() {
                 bxdf = DiffuseBsdf(reflectance: black)

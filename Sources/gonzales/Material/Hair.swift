@@ -15,14 +15,14 @@ final class Hair: Material {
                 return eumelaninAbsorption + pheomelaninAbsorption
         }
 
-        func getBSDF(interaction: Interaction) -> BSDF {
+        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
                 let absorption = absorptionFrom(eumelaninConcentration: eumelanin)
                 // Embree already provides values from -1 to 1 for flat bspline curves
                 let h = interaction.uv[1]
                 let alpha: FloatX = 2
                 let bxdf = HairBsdf(alpha: alpha, h: h, absorption: absorption)
-                let bsdf = BSDF(bxdf: bxdf, interaction: interaction)
+                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
                 return bsdf
         }
 

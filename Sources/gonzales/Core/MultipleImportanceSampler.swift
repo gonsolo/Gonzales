@@ -1,10 +1,10 @@
 struct MultipleImportanceSampler {
 
         struct MISSampler {
-                typealias sampleFunc = (Light, Interaction, Sampler, BSDF)
+                typealias sampleFunc = (Light, Interaction, Sampler, GlobalBsdf)
                         throws -> BsdfSample
 
-                typealias densityFunc = (Light, Interaction, Vector, BSDF) throws -> FloatX
+                typealias densityFunc = (Light, Interaction, Vector, GlobalBsdf) throws -> FloatX
 
                 let sample: sampleFunc
                 let density: densityFunc
@@ -14,7 +14,7 @@ struct MultipleImportanceSampler {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler,
-                bsdf: BSDF
+                bsdf: GlobalBsdf
         ) throws -> RGBSpectrum {
 
                 func evaluate(
@@ -23,7 +23,7 @@ struct MultipleImportanceSampler {
                         light: Light,
                         interaction: Interaction,
                         sampler: Sampler,
-                        bsdf: BSDF
+                        bsdf: GlobalBsdf
                 ) throws -> RGBSpectrum {
                         let thisSample = try first.sample(
                                 light, interaction, sampler, bsdf)
