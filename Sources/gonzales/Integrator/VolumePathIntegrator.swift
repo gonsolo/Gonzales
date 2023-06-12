@@ -72,8 +72,8 @@ final class VolumePathIntegrator {
                 interaction: Interaction,
                 sampler: Sampler,
                 bsdf: BSDF
-        ) throws -> BSDFSample {
-                let zero = BSDFSample()
+        ) throws -> BsdfSample {
+                let zero = BsdfSample()
 
                 let (radiance, wi, lightDensity, visibility) = light.sample(
                         for: interaction, u: sampler.get2D())
@@ -93,7 +93,7 @@ final class VolumePathIntegrator {
                         scatter = reflected * dot
                 }
                 let estimate = scatter * radiance
-                return BSDFSample(estimate, wi, lightDensity)
+                return BsdfSample(estimate, wi, lightDensity)
         }
 
         private func sampleBrdf(
@@ -101,11 +101,11 @@ final class VolumePathIntegrator {
                 interaction: Interaction,
                 sampler: Sampler,
                 bsdf: BSDF
-        ) throws -> BSDFSample {
+        ) throws -> BsdfSample {
 
-                let zero = BSDFSample()
+                let zero = BsdfSample()
 
-                var bsdfSample = BSDFSample()
+                var bsdfSample = BsdfSample()
                 if let surfaceInteraction = interaction as? SurfaceInteraction {
                         (bsdfSample, _) = try bsdf.sampleWorld(wo: surfaceInteraction.wo, u: sampler.get3D())
                         guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {

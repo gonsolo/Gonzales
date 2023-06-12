@@ -25,7 +25,7 @@ struct CoatedDiffuseBsdf: LocalBsdf {
                 z: inout FloatX,
                 w: inout Vector,
                 exitZ: FloatX,
-                wis: BSDFSample,
+                wis: BsdfSample,
                 wi: Vector
         ) -> RGBSpectrum? {
                 var estimate = black
@@ -167,10 +167,10 @@ struct CoatedDiffuseBsdf: LocalBsdf {
                 return estimate
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 let bs = topBxdf.sampleLocal(wo: wo, u: u)
                 if !bs.isValid {
-                        return invalidBSDFSample
+                        return invalidBsdfSample
                 }
                 if bs.isReflection(wo: wo) {
                         return bs
@@ -185,12 +185,12 @@ struct CoatedDiffuseBsdf: LocalBsdf {
                         if depth > 3 && rrBeta < 0.25 {
                                 let q = max(0, 1 - rrBeta)
                                 if u.0 < q {
-                                        return invalidBSDFSample
+                                        return invalidBsdfSample
                                 }
                                 probabilityDensity *= 1 - q
                         }
                         if w.z == 0 {
-                                return invalidBSDFSample
+                                return invalidBsdfSample
                         }
                         // albedo is zero
                         z = (z == thickness) ? 0 : thickness
@@ -199,17 +199,17 @@ struct CoatedDiffuseBsdf: LocalBsdf {
                         // TODO: u.0 is used above too, have to generate a new one
                         let bs = interface.sampleLocal(wo: -w, u: u)
                         if !bs.isValid {
-                                return invalidBSDFSample
+                                return invalidBsdfSample
                         }
                         estimate *= bs.estimate
                         probabilityDensity *= bs.probabilityDensity
                         w = bs.incoming
                         if bs.isTransmission(wo: -w) {
-                                return BSDFSample(estimate, w, probabilityDensity)
+                                return BsdfSample(estimate, w, probabilityDensity)
                         }
                         estimate *= absCosTheta(bs.incoming)
                 }
-                return invalidBSDFSample
+                return invalidBsdfSample
         }
 
         private func evaluateTRT(wo: Vector, wi: Vector) -> FloatX {

@@ -38,13 +38,13 @@ struct BSDF {
         }
 
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
-                throws -> (bsdfSample: BSDFSample, isTransmissive: Bool)
+                throws -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
                 let bsdfSample = bxdf.sampleLocal(wo: woLocal, u: u)
                 let wiWorld = bsdfGeometry.frame.localToWorld(local: bsdfSample.incoming)
                 return (
-                        BSDFSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),
+                        BsdfSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),
                         bxdf.isTransmissive
                 )
         }

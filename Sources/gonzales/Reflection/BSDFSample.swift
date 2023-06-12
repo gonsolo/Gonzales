@@ -1,4 +1,4 @@
-struct BSDFSample {
+struct BsdfSample {
 
         init(
                 _ estimate: RGBSpectrum = black,
@@ -31,4 +31,4 @@ struct BSDFSample {
         var probabilityDensity: FloatX
 }
 
-let invalidBSDFSample = BSDFSample()
+let invalidBsdfSample = BsdfSample()

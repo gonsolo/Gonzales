@@ -51,29 +51,29 @@ struct DielectricBsdf: LocalBsdf {
         }
 
         private func sampleSpecularReflection(wo: Vector, reflected: FloatX, probabilityReflected: FloatX)
-                -> BSDFSample
+                -> BsdfSample
         {
                 let wi = mirror(wo)
                 let estimate = RGBSpectrum(intensity: reflected / absCosTheta(wi))
-                return BSDFSample(estimate, wi, probabilityReflected)
+                return BsdfSample(estimate, wi, probabilityReflected)
         }
 
         private func sampleSpecularTransmission(
                 wo: Vector,
                 transmitted: FloatX,
                 probabilityTransmitted: FloatX
-        ) -> BSDFSample {
+        ) -> BsdfSample {
                 let up = Normal(x: 0, y: 0, z: 1)
                 guard let (wi, etap) = refract(wi: wo, normal: up, eta: refractiveIndex) else {
-                        return BSDFSample()
+                        return BsdfSample()
                 }
                 var estimate = RGBSpectrum(intensity: transmitted / absCosTheta(wi))
                 // transport mode radiance
                 estimate /= square(etap)
-                return BSDFSample(estimate, wi, probabilityTransmitted)
+                return BsdfSample(estimate, wi, probabilityTransmitted)
         }
 
-        private func sampleSpecular(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        private func sampleSpecular(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: cosTheta(wo),
                         refractiveIndex: refractiveIndex)
@@ -98,10 +98,10 @@ struct DielectricBsdf: LocalBsdf {
                 wm: Vector,
                 reflected: FloatX,
                 probabilityReflected: FloatX
-        ) -> BSDFSample {
+        ) -> BsdfSample {
                 let wi = reflect(vector: wo, by: wm)
                 guard sameHemisphere(wo, wi) else {
-                        return BSDFSample()
+                        return BsdfSample()
                 }
                 let probabilityDensity =
                         distribution.probabilityDensity(wo: wo, half: wm)
@@ -112,7 +112,7 @@ struct DielectricBsdf: LocalBsdf {
                 let enumerator = differentialArea * visibleFraction * reflected
                 let denominator = 4 * cosTheta(wi) * cosTheta(wo)
                 let estimate = RGBSpectrum(intensity: enumerator / denominator)
-                return BSDFSample(estimate, wi, probabilityDensity)
+                return BsdfSample(estimate, wi, probabilityDensity)
         }
 
         private func sampleRoughTransmission(
@@ -120,12 +120,12 @@ struct DielectricBsdf: LocalBsdf {
                 wm: Vector,
                 transmitted: FloatX,
                 probabilityTransmitted: FloatX
-        ) -> BSDFSample {
+        ) -> BsdfSample {
                 guard let (wi, etap) = refract(wi: wo, normal: Normal(wm), eta: refractiveIndex) else {
-                        return BSDFSample()
+                        return BsdfSample()
                 }
                 if sameHemisphere(wo, wi) || wi.z == 0 {
-                        return BSDFSample()
+                        return BsdfSample()
                 }
                 let denom = square(dot(wi, wm) + dot(wo, wm) / etap)
                 let dwmDwi = absDot(wi, wm) / denom
@@ -139,10 +139,10 @@ struct DielectricBsdf: LocalBsdf {
                                 * abs(dot(wi, wm) * dot(wo, wm) / cosTheta(wi) * cosTheta(wo) * denom))
                 // transport mode radiance
                 estimate /= square(etap)
-                return BSDFSample(estimate, wi, probabilityDensity)
+                return BsdfSample(estimate, wi, probabilityDensity)
         }
 
-        private func sampleRough(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        private func sampleRough(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 let wm = distribution.sampleHalfVector(wo: wo, u: (u.0, u.1))
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: dot(wo, wm),
@@ -165,7 +165,7 @@ struct DielectricBsdf: LocalBsdf {
                 }
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return sampleSpecular(wo: wo, u: u)
                 } else {

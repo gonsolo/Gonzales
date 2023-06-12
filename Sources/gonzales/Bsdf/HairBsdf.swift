@@ -193,7 +193,7 @@ struct HairBsdf: LocalBsdf {
                 // Compute the transmittance _T_ of a single path through the cylinder
                 let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
 
-                // Evaluate hair BSDF
+                // Evaluate hair bsdf
                 let phi = phiI - phiO
                 let attenuation = computeAttenutation(
                         cosThetaO: cosThetaO,

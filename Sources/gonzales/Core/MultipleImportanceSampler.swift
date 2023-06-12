@@ -2,7 +2,7 @@ struct MultipleImportanceSampler {
 
         struct MISSampler {
                 typealias sampleFunc = (Light, Interaction, Sampler, BSDF)
-                        throws -> BSDFSample
+                        throws -> BsdfSample
 
                 typealias densityFunc = (Light, Interaction, Vector, BSDF) throws -> FloatX
 

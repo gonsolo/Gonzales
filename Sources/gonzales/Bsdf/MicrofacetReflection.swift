@@ -13,15 +13,15 @@ struct MicrofacetReflection: LocalBsdf {
                 return reflectance * area * visible * f / (4 * cosThetaI * cosThetaO)
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BSDFSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 guard !wo.z.isZero else {
-                        return BSDFSample()
+                        return BsdfSample()
                 }
                 let half = distribution.sampleHalfVector(wo: wo, u: (u.0, u.1))
                 let wi = reflect(vector: wo, by: half)
                 let radiance = evaluateLocal(wo: wo, wi: wi)
                 let density = probabilityDensityLocal(wo: wo, wi: wi)
-                return BSDFSample(radiance, wi, density)
+                return BsdfSample(radiance, wi, density)
         }
 
         func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
