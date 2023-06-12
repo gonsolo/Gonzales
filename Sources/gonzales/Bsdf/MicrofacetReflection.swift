@@ -1,4 +1,4 @@
-struct MicrofacetReflection: GlobalBsdf, LocalBsdf {
+struct MicrofacetReflection: BsdfGeometryProtocol, GlobalBsdf {
 
         func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
                 let cosThetaO = absCosTheta(wo)
@@ -35,18 +35,6 @@ struct MicrofacetReflection: GlobalBsdf, LocalBsdf {
         var reflectance: RGBSpectrum
         var distribution: MicrofacetDistribution
         var fresnel: Fresnel
-
-        func worldToLocal(world: Vector) -> Vector {
-                return bsdfGeometry.frame.worldToLocal(world: world)
-        }
-
-        func localToWorld(local: Vector) -> Vector {
-                return bsdfGeometry.frame.localToWorld(local: local)
-        }
-
-        func isReflecting(wi: Vector, wo: Vector) -> Bool {
-                return bsdfGeometry.isReflecting(wi: wi, wo: wo)
-        }
 
         let bsdfGeometry: BsdfGeometry
 }

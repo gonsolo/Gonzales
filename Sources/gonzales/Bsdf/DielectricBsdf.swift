@@ -1,4 +1,4 @@
-struct DielectricBsdf: GlobalBsdf {
+struct DielectricBsdf: BsdfGeometryProtocol, GlobalBsdf {
 
         private func backfacing(wi: Vector, wo: Vector, half: Vector) -> Bool {
                 return dot(half, wi) * cosTheta(wi) < 0 || dot(half, wo) * cosTheta(wo) < 0
@@ -227,18 +227,6 @@ struct DielectricBsdf: GlobalBsdf {
         // Water: 1.3
         // Glass: 1.52
         let refractiveIndex: FloatX
-
-        func worldToLocal(world: Vector) -> Vector {
-                return bsdfGeometry.frame.worldToLocal(world: world)
-        }
-
-        func localToWorld(local: Vector) -> Vector {
-                return bsdfGeometry.frame.localToWorld(local: local)
-        }
-
-        func isReflecting(wi: Vector, wo: Vector) -> Bool {
-                return bsdfGeometry.isReflecting(wi: wi, wo: wo)
-        }
 
         let bsdfGeometry: BsdfGeometry
 }
