@@ -9,12 +9,7 @@ struct BSDF {
 
         init(bxdf: BxDF, interaction: Interaction) {
                 self.bxdf = bxdf
-                let geometricNormal = interaction.normal
-                let frame = ShadingFrame(
-                        x: Vector(normal: interaction.shadingNormal),
-                        y: normalized(interaction.dpdu)
-                )
-                bsdfGeometry = BsdfGeometry(geometricNormal: geometricNormal, frame: frame)
+                bsdfGeometry = BsdfGeometry(interaction: interaction)
         }
 
         func albedoWorld() -> RGBSpectrum {
@@ -67,6 +62,15 @@ struct BsdfGeometry {
 
         init(geometricNormal: Normal, frame: ShadingFrame) {
                 self.geometricNormal = geometricNormal
+                self.frame = frame
+        }
+
+        init(interaction: Interaction) {
+                let frame = ShadingFrame(
+                        x: Vector(normal: interaction.shadingNormal),
+                        y: normalized(interaction.dpdu)
+                )
+                self.geometricNormal = interaction.normal
                 self.frame = frame
         }
 
