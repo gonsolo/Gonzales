@@ -20,9 +20,10 @@ final class Diffuse: Material {
                 if reflectanceRgb != nil {
                         reflectance = reflectanceRgb!
                 }
-                let bxdf = DiffuseBsdf(reflectance: reflectance)
-                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
-                return bsdf
+                let bsdfGeometry = BsdfGeometry(interaction: interaction)
+                let diffuseBsdf = DiffuseBsdf(reflectance: reflectance, bsdfGeometry: bsdfGeometry)
+                //let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
+                return diffuseBsdf
         }
 
         let reflectance: Texture

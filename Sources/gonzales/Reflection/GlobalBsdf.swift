@@ -1,56 +1,55 @@
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
-struct GlobalBsdf {
+protocol GlobalBsdf: LocalBsdf {
+        func albedoWorld() -> RGBSpectrum
+        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum
+        func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX
+        func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
+                throws -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 
-        init() {
-                bxdf = DiffuseBsdf(reflectance: black)
-                bsdfGeometry = BsdfGeometry()
-        }
+        func worldToLocal(world: Vector) -> Vector
+        func localToWorld(local: Vector) -> Vector
+        func isReflecting(wi: Vector, wo: Vector) -> Bool
+}
 
-        init(bxdf: LocalBsdf, interaction: Interaction) {
-                self.bxdf = bxdf
-                bsdfGeometry = BsdfGeometry(interaction: interaction)
-        }
+extension GlobalBsdf {
 
         func albedoWorld() -> RGBSpectrum {
-                return bxdf.albedoLocal()
+                return albedoLocal()
         }
 
         func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
                 var totalLightScattered = black
-                let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
-                let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
-                let reflect = bsdfGeometry.isReflecting(wi: wiWorld, wo: woWorld)
-                if reflect && bxdf.isReflective {
-                        totalLightScattered += bxdf.evaluateLocal(wo: woLocal, wi: wiLocal)
+                let woLocal = worldToLocal(world: woWorld)
+                let wiLocal = worldToLocal(world: wiWorld)
+                let reflect = isReflecting(wi: wiWorld, wo: woWorld)
+                if reflect && isReflective {
+                        totalLightScattered += evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
-                if !reflect && bxdf.isTransmissive {
-                        totalLightScattered += bxdf.evaluateLocal(wo: woLocal, wi: wiLocal)
+                if !reflect && isTransmissive {
+                        totalLightScattered += evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
                 return totalLightScattered
         }
 
         func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
-                let wiLocal = bsdfGeometry.frame.worldToLocal(world: wiWorld)
-                let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
+                let wiLocal = worldToLocal(world: wiWorld)
+                let woLocal = worldToLocal(world: woWorld)
                 if woLocal.z == 0 { return 0 }
-                return bxdf.probabilityDensityLocal(wo: woLocal, wi: wiLocal)
+                return probabilityDensityLocal(wo: woLocal, wi: wiLocal)
         }
 
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
                 throws -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
-                let woLocal = bsdfGeometry.frame.worldToLocal(world: woWorld)
-                let bsdfSample = bxdf.sampleLocal(wo: woLocal, u: u)
-                let wiWorld = bsdfGeometry.frame.localToWorld(local: bsdfSample.incoming)
+                let woLocal = worldToLocal(world: woWorld)
+                let bsdfSample = sampleLocal(wo: woLocal, u: u)
+                let wiWorld = localToWorld(local: bsdfSample.incoming)
                 return (
                         BsdfSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),
-                        bxdf.isTransmissive
+                        isTransmissive
                 )
         }
-
-        let bxdf: LocalBsdf
-        let bsdfGeometry: BsdfGeometry
 }
 
 struct BsdfGeometry {

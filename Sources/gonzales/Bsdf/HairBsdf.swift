@@ -1,8 +1,8 @@
 import Foundation  // atan2
 
-struct HairBsdf: LocalBsdf {
+struct HairBsdf: GlobalBsdf, LocalBsdf {
 
-        init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum) {
+        init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum, bsdfGeometry: BsdfGeometry) {
                 self.h = h
                 self.absorption = absorption
                 let sqrtPiOver8: FloatX = 0.626657069
@@ -28,6 +28,7 @@ struct HairBsdf: LocalBsdf {
                         sin2kAlpha[i] = 2 * cos2kAlpha[i - 1] * sin2kAlpha[i - 1]
                         cos2kAlpha[i] = square(cos2kAlpha[i - 1]) - square(sin2kAlpha[i - 1])
                 }
+                self.bsdfGeometry = bsdfGeometry
         }
 
         private func computeAttenutation(
@@ -391,4 +392,18 @@ struct HairBsdf: LocalBsdf {
         var v: [FloatX]
         var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
         var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
+
+        func worldToLocal(world: Vector) -> Vector {
+                return bsdfGeometry.frame.worldToLocal(world: world)
+        }
+
+        func localToWorld(local: Vector) -> Vector {
+                return bsdfGeometry.frame.localToWorld(local: local)
+        }
+
+        func isReflecting(wi: Vector, wo: Vector) -> Bool {
+                return bsdfGeometry.isReflecting(wi: wi, wo: wo)
+        }
+
+        let bsdfGeometry: BsdfGeometry
 }

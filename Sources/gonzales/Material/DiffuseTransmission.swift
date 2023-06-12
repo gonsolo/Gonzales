@@ -15,9 +15,11 @@ final class DiffuseTransmission: Material {
                 let scale = scale.evaluateFloat(at: interaction)
                 // TODO: check same hemisphere and transmission
                 // TODO: transmittance
-                let bxdf = DiffuseBsdf(reflectance: scale * reflectance)
-                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
-                return bsdf
+                let bsdfGeometry = BsdfGeometry(interaction: interaction)
+                let diffuseBsdf = DiffuseBsdf(
+                        reflectance: scale * reflectance,
+                        bsdfGeometry: bsdfGeometry)
+                return diffuseBsdf
         }
 
         var reflectance: RGBSpectrumTexture

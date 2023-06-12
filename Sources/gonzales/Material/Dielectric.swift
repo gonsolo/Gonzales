@@ -14,9 +14,12 @@ final class Dielectric: Material {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
-                let bxdf = DielectricBsdf(distribution: distribution, refractiveIndex: refractiveIndex)
-                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
-                return bsdf
+                let bsdfGeometry = BsdfGeometry(interaction: interaction)
+                let dielectricBsdf = DielectricBsdf(
+                        distribution: distribution,
+                        refractiveIndex: refractiveIndex,
+                        bsdfGeometry: bsdfGeometry)
+                return dielectricBsdf
         }
 
         let refractiveIndex: FloatTexture

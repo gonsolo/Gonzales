@@ -21,9 +21,13 @@ final class Hair: Material {
                 // Embree already provides values from -1 to 1 for flat bspline curves
                 let h = interaction.uv[1]
                 let alpha: FloatX = 2
-                let bxdf = HairBsdf(alpha: alpha, h: h, absorption: absorption)
-                let bsdf = GlobalBsdf(bxdf: bxdf, interaction: interaction)
-                return bsdf
+                let bsdfGeometry = BsdfGeometry(interaction: interaction)
+                let hairBsdf = HairBsdf(
+                        alpha: alpha,
+                        h: h,
+                        absorption: absorption,
+                        bsdfGeometry: bsdfGeometry)
+                return hairBsdf
         }
 
         var eumelanin: FloatTexture

@@ -1,12 +1,13 @@
 import Foundation  // exp
 
-struct CoatedDiffuseBsdf: LocalBsdf {
+struct CoatedDiffuseBsdf: GlobalBsdf, LocalBsdf {
 
         init(
                 reflectance: RGBSpectrum,
                 refractiveIndex: FloatX,
                 roughness: (FloatX, FloatX),
-                remapRoughness: Bool
+                remapRoughness: Bool,
+                bsdfGeometry: BsdfGeometry
         ) {
                 self.reflectance = reflectance
                 self.roughness = roughness
@@ -14,8 +15,12 @@ struct CoatedDiffuseBsdf: LocalBsdf {
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 self.topBxdf = DielectricBsdf(
                         distribution: distribution,
-                        refractiveIndex: refractiveIndex)
-                self.bottomBxdf = DiffuseBsdf(reflectance: reflectance)
+                        refractiveIndex: refractiveIndex,
+                        bsdfGeometry: bsdfGeometry)
+                self.bottomBxdf = DiffuseBsdf(
+                        reflectance: reflectance,
+                        bsdfGeometry: bsdfGeometry)
+                self.bsdfGeometry = bsdfGeometry
         }
 
         private func evaluateNextEvent(
@@ -307,4 +312,18 @@ struct CoatedDiffuseBsdf: LocalBsdf {
 
         let topBxdf: DielectricBsdf
         let bottomBxdf: DiffuseBsdf
+
+        func worldToLocal(world: Vector) -> Vector {
+                return bsdfGeometry.frame.worldToLocal(world: world)
+        }
+
+        func localToWorld(local: Vector) -> Vector {
+                return bsdfGeometry.frame.localToWorld(local: local)
+        }
+
+        func isReflecting(wi: Vector, wo: Vector) -> Bool {
+                return bsdfGeometry.isReflecting(wi: wi, wo: wo)
+        }
+
+        let bsdfGeometry: BsdfGeometry
 }

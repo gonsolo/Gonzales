@@ -268,7 +268,7 @@ final class VolumePathIntegrator {
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RGBSpectrum, Ray) {
-                let dummy = GlobalBsdf()
+                let dummy = DummyBsdf()
                 let estimate =
                         try pathThroughputWeight
                         * sampleOneLight(
