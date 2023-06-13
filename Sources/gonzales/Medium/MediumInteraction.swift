@@ -6,6 +6,11 @@ struct MediumInteraction: Interaction {
                 return scatter
         }
 
+        func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
+                let (value, wi) = phase.samplePhase(wo: wo, sampler: sampler)
+                return BsdfSample(RGBSpectrum(intensity: value), wi, value)
+        }
+
         func evaluateProbabilityDensity(wi: Vector) -> FloatX {
                 return phase.evaluate(wo: wo, wi: wi)
         }

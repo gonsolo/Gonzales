@@ -4,7 +4,7 @@ protocol GlobalBsdf: BsdfFrameProtocol, LocalBsdf {
         func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum
         func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
-                throws -> (bsdfSample: BsdfSample, isTransmissive: Bool)
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
 extension GlobalBsdf {
@@ -31,7 +31,7 @@ extension GlobalBsdf {
         }
 
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
-                throws -> (bsdfSample: BsdfSample, isTransmissive: Bool)
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 let woLocal = worldToLocal(world: woWorld)
                 let bsdfSample = sampleLocal(wo: woLocal, u: u)

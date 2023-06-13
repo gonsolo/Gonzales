@@ -48,6 +48,12 @@ struct SurfaceInteraction: Interaction {
                 return scatter
         }
 
+        func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
+                var (bsdfSample, _) = bsdf.sampleWorld(wo: wo, u: sampler.get3D())
+                bsdfSample.estimate *= absDot(bsdfSample.incoming, shadingNormal)
+                return bsdfSample
+        }
+
         func evaluateProbabilityDensity(wi: Vector) -> FloatX {
                 return bsdf.probabilityDensityWorld(wo: wo, wi: wi)
         }

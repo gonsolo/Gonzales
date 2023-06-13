@@ -85,23 +85,9 @@ final class VolumePathIntegrator {
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
-
-                var bsdfSample = BsdfSample()
-                if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        (bsdfSample, _) = try surfaceInteraction.bsdf.sampleWorld(
-                                wo: surfaceInteraction.wo,
-                                u: sampler.get3D())
-                        guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
-                                return zero
-                        }
-                        bsdfSample.estimate *= absDot(bsdfSample.incoming, surfaceInteraction.shadingNormal)
-                }
-                if let mediumInteraction = interaction as? MediumInteraction {
-                        let (value, _) = mediumInteraction.phase.samplePhase(
-                                wo: interaction.wo,
-                                sampler: sampler)
-                        bsdfSample.estimate = RGBSpectrum(intensity: value)
-                        bsdfSample.probabilityDensity = value
+                var bsdfSample = interaction.sampleDistributionFunction(sampler: sampler)
+                guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
+                        return zero
                 }
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
@@ -348,7 +334,7 @@ final class VolumePathIntegrator {
                                                 with: sampler,
                                                 lightSampler: lightSampler)
                                 estimate += lightEstimate
-                                let (bsdfSample, _) = try surfaceInteraction.bsdf.sampleWorld(
+                                let (bsdfSample, _) = surfaceInteraction.bsdf.sampleWorld(
                                         wo: surfaceInteraction.wo, u: sampler.get3D())
                                 guard
                                         bsdfSample.probabilityDensity != 0
