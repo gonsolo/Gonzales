@@ -1,32 +1,5 @@
 struct SurfaceInteraction: Interaction {
 
-        init(
-                valid: Bool = false,
-                position: Point = Point(),
-                normal: Normal = Normal(),
-                shadingNormal: Normal = Normal(),
-                wo: Vector = Vector(),
-                dpdu: Vector = Vector(),
-                uv: Point2F = Point2F(),
-                faceIndex: Int = 0,
-                areaLight: AreaLight? = nil,
-                material: MaterialIndex = -1,
-                mediumInterface: MediumInterface? = nil,
-                bsdf: GlobalBsdf = DummyBsdf()
-        ) {
-                self.valid = valid
-                self.position = position
-                self.normal = normal
-                self.shadingNormal = shadingNormal
-                self.wo = wo
-                self.dpdu = dpdu
-                self.uv = uv
-                self.faceIndex = faceIndex
-                self.material = material
-                self.mediumInterface = mediumInterface
-                self.bsdf = bsdf
-        }
-
         func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum {
                 let reflected = bsdf.evaluateWorld(wo: wo, wi: wi)
                 let dot = absDot(wi, Vector(normal: shadingNormal))
@@ -44,19 +17,18 @@ struct SurfaceInteraction: Interaction {
                 return bsdf.probabilityDensityWorld(wo: wo, wi: wi)
         }
 
-        var valid: Bool
-        var position: Point
-        var normal: Normal
-        var shadingNormal: Normal
-        var wo: Vector
-        var dpdu: Vector
-        var uv: Point2F
-        var faceIndex: Int
-        var areaLight: AreaLight?
-        var material: MaterialIndex
-        var mediumInterface: MediumInterface?
-
-        var bsdf: GlobalBsdf
+        var valid = false
+        var position = Point()
+        var normal = Normal()
+        var shadingNormal = Normal()
+        var wo = Vector()
+        var dpdu = Vector()
+        var uv = Point2F()
+        var faceIndex = 0
+        var areaLight: AreaLight? = nil
+        var material: MaterialIndex = -1
+        var mediumInterface: MediumInterface? = nil
+        var bsdf: GlobalBsdf = DummyBsdf()
 }
 
 extension SurfaceInteraction: CustomStringConvertible {
