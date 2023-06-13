@@ -27,20 +27,6 @@ struct SurfaceInteraction: Interaction {
                 self.bsdf = bsdf
         }
 
-        init(_ other: SurfaceInteraction) {
-                self.valid = other.valid
-                self.position = other.position
-                self.normal = other.normal
-                self.shadingNormal = other.shadingNormal
-                self.wo = other.wo
-                self.dpdu = other.dpdu
-                self.uv = other.uv
-                self.faceIndex = other.faceIndex
-                self.material = other.material
-                self.mediumInterface = other.mediumInterface
-                self.bsdf = other.bsdf
-        }
-
         func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum {
                 let reflected = bsdf.evaluateWorld(wo: wo, wi: wi)
                 let dot = absDot(wi, Vector(normal: shadingNormal))
