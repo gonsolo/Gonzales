@@ -2,7 +2,7 @@ import Foundation  // atan2
 
 struct HairBsdf: GlobalBsdf {
 
-        init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum, bsdfGeometry: BsdfGeometry) {
+        init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum, bsdfFrame: BsdfFrame) {
                 self.h = h
                 self.absorption = absorption
                 let sqrtPiOver8: FloatX = 0.626657069
@@ -28,7 +28,7 @@ struct HairBsdf: GlobalBsdf {
                         sin2kAlpha[i] = 2 * cos2kAlpha[i - 1] * sin2kAlpha[i - 1]
                         cos2kAlpha[i] = square(cos2kAlpha[i - 1]) - square(sin2kAlpha[i - 1])
                 }
-                self.bsdfGeometry = bsdfGeometry
+                self.bsdfFrame = bsdfFrame
         }
 
         private func computeAttenutation(
@@ -393,5 +393,5 @@ struct HairBsdf: GlobalBsdf {
         var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
         var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
 
-        let bsdfGeometry: BsdfGeometry
+        let bsdfFrame: BsdfFrame
 }

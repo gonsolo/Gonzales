@@ -228,5 +228,5 @@ struct DielectricBsdf: GlobalBsdf {
         // Glass: 1.52
         let refractiveIndex: FloatX
 
-        let bsdfGeometry: BsdfGeometry
+        let bsdfFrame: BsdfFrame
 }

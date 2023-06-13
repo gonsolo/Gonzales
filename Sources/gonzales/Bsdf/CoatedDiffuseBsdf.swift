@@ -7,7 +7,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 refractiveIndex: FloatX,
                 roughness: (FloatX, FloatX),
                 remapRoughness: Bool,
-                bsdfGeometry: BsdfGeometry
+                bsdfFrame: BsdfFrame
         ) {
                 self.reflectance = reflectance
                 self.roughness = roughness
@@ -16,11 +16,11 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 self.topBxdf = DielectricBsdf(
                         distribution: distribution,
                         refractiveIndex: refractiveIndex,
-                        bsdfGeometry: bsdfGeometry)
+                        bsdfFrame: bsdfFrame)
                 self.bottomBxdf = DiffuseBsdf(
                         reflectance: reflectance,
-                        bsdfGeometry: bsdfGeometry)
-                self.bsdfGeometry = bsdfGeometry
+                        bsdfFrame: bsdfFrame)
+                self.bsdfFrame = bsdfFrame
         }
 
         private func evaluateNextEvent(
@@ -313,5 +313,5 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         let topBxdf: DielectricBsdf
         let bottomBxdf: DiffuseBsdf
 
-        let bsdfGeometry: BsdfGeometry
+        let bsdfFrame: BsdfFrame
 }

@@ -13,12 +13,12 @@ final class Conductor: Material {
                         etaI: white,
                         etaT: eta,
                         k: k)
-                let bsdfGeometry = BsdfGeometry(interaction: interaction)
+                let bsdfFrame = BsdfFrame(interaction: interaction)
                 let microfaceReflectionBsdf = MicrofacetReflection(
                         reflectance: white,
                         distribution: trowbridge,
                         fresnel: fresnel,
-                        bsdfGeometry: bsdfGeometry)
+                        bsdfFrame: bsdfFrame)
                 return microfaceReflectionBsdf
         }
 

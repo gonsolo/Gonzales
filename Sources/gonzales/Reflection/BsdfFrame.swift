@@ -1,22 +1,22 @@
-struct BsdfGeometry {
+struct BsdfFrame {
 
         init() {
                 geometricNormal = Normal()
-                frame = ShadingFrame()
+                shadingFrame = ShadingFrame()
         }
 
-        init(geometricNormal: Normal, frame: ShadingFrame) {
+        init(geometricNormal: Normal, shadingFrame: ShadingFrame) {
                 self.geometricNormal = geometricNormal
-                self.frame = frame
+                self.shadingFrame = shadingFrame
         }
 
         init(interaction: Interaction) {
-                let frame = ShadingFrame(
+                let shadingFrame = ShadingFrame(
                         x: Vector(normal: interaction.shadingNormal),
                         y: normalized(interaction.dpdu)
                 )
                 self.geometricNormal = interaction.normal
-                self.frame = frame
+                self.shadingFrame = shadingFrame
         }
 
         func isReflecting(wi: Vector, wo: Vector) -> Bool {
@@ -24,5 +24,5 @@ struct BsdfGeometry {
         }
 
         let geometricNormal: Normal
-        let frame: ShadingFrame
+        let shadingFrame: ShadingFrame
 }

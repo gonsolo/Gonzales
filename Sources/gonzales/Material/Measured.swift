@@ -6,8 +6,8 @@ final class Measured: Material {
 
         func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
                 // TODO: Implement this some day
-                let bsdfGeometry = BsdfGeometry(interaction: interaction)
-                let diffuseBsdf = DiffuseBsdf(bsdfGeometry: bsdfGeometry)
+                let bsdfFrame = BsdfFrame(interaction: interaction)
+                let diffuseBsdf = DiffuseBsdf(bsdfFrame: bsdfFrame)
                 return diffuseBsdf
         }
 }

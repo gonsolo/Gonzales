@@ -8,5 +8,5 @@ struct DiffuseBsdf: GlobalBsdf {
 
         var reflectance: RGBSpectrum = white
 
-        let bsdfGeometry: BsdfGeometry
+        let bsdfFrame: BsdfFrame
 }

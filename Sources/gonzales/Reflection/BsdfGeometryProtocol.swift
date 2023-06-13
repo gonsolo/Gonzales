@@ -1,19 +1,19 @@
-protocol BsdfGeometryProtocol {
+protocol BsdfFrameProtocol {
 
-        var bsdfGeometry: BsdfGeometry { get }
+        var bsdfFrame: BsdfFrame { get }
 }
 
-extension BsdfGeometryProtocol {
+extension BsdfFrameProtocol {
 
         func worldToLocal(world: Vector) -> Vector {
-                return bsdfGeometry.frame.worldToLocal(world: world)
+                return bsdfFrame.shadingFrame.worldToLocal(world: world)
         }
 
         func localToWorld(local: Vector) -> Vector {
-                return bsdfGeometry.frame.localToWorld(local: local)
+                return bsdfFrame.shadingFrame.localToWorld(local: local)
         }
 
         func isReflecting(wi: Vector, wo: Vector) -> Bool {
-                return bsdfGeometry.isReflecting(wi: wi, wo: wo)
+                return bsdfFrame.isReflecting(wi: wi, wo: wo)
         }
 }

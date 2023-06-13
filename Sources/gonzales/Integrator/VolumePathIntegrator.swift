@@ -344,11 +344,9 @@ final class VolumePathIntegrator {
                                 }
                                 if surfaceInteraction.material == noMaterial {
                                         break
-                                        //return (black, ray, true, false, false)
                                 }
                                 guard let material = materials[surfaceInteraction.material] else {
                                         break
-                                        //return (black, ray, true, false, false)
                                 }
                                 if material is Interface {
                                         var spawnedRay = surfaceInteraction.spawnRay(
@@ -358,7 +356,6 @@ final class VolumePathIntegrator {
                                         }
                                         ray = spawnedRay
                                         continue
-                                        //return (estimate, spawnedRay, false, true, false)
                                 }
                                 let bsdf = material.getGlobalBsdf(interaction: surfaceInteraction)
                                 if bounce == 0 {

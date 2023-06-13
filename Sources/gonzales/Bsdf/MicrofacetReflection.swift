@@ -36,5 +36,5 @@ struct MicrofacetReflection: GlobalBsdf {
         var distribution: MicrofacetDistribution
         var fresnel: Fresnel
 
-        let bsdfGeometry: BsdfGeometry
+        let bsdfFrame: BsdfFrame
 }
