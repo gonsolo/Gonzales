@@ -13,8 +13,7 @@ struct MultipleImportanceSampler {
         func evaluate(
                 light: Light,
                 interaction: Interaction,
-                sampler: Sampler,
-                bsdf: GlobalBsdf
+                sampler: Sampler
         ) throws -> RGBSpectrum {
 
                 func evaluate(
@@ -22,8 +21,7 @@ struct MultipleImportanceSampler {
                         second: MISSampler,
                         light: Light,
                         interaction: Interaction,
-                        sampler: Sampler,
-                        bsdf: GlobalBsdf
+                        sampler: Sampler
                 ) throws -> RGBSpectrum {
                         let thisSample = try first.sample(
                                 light, interaction, sampler)
@@ -39,15 +37,13 @@ struct MultipleImportanceSampler {
                         second: samplers.1,
                         light: light,
                         interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
+                        sampler: sampler)
                 let b = try evaluate(
                         first: samplers.1,
                         second: samplers.0,
                         light: light,
                         interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
+                        sampler: sampler)
                 return a + b
         }
 

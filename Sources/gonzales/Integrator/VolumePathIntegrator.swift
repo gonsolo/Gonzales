@@ -149,8 +149,7 @@ final class VolumePathIntegrator {
         private func sampleMultipleImportance(
                 light: Light,
                 interaction: Interaction,
-                sampler: Sampler,
-                bsdf: GlobalBsdf
+                sampler: Sampler
         ) throws -> RGBSpectrum {
                 let lightSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
@@ -162,8 +161,7 @@ final class VolumePathIntegrator {
                 return try misSampler.evaluate(
                         light: light,
                         interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
+                        sampler: sampler)
         }
 
         private func estimateDirect(
@@ -188,16 +186,11 @@ final class VolumePathIntegrator {
                 //        interaction: interaction,
                 //        bsdf: bsdf,
                 //        sampler: sampler)
-                var bsdf: GlobalBsdf = DummyBsdf()
-                if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        bsdf = surfaceInteraction.bsdf
-                }
 
                 return try sampleMultipleImportance(
                         light: light,
                         interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
+                        sampler: sampler)
         }
 
         private func sampleOneLight(
