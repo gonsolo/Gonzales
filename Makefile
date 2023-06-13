@@ -18,7 +18,7 @@ PTEXMEM = --ptexmem 1 # GB
 #IMAGE =  $(SCENE_NAME).exr
 #IMAGE_PBRT = $(IMAGE)
 
-# Render 20/28 scenes
+# Render 21/28 scenes
 PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion
 #SCENE_NAME = pavilion-day.pbrt
@@ -52,8 +52,10 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = lte-orb-silver.pbrt
 #SCENE_DIR = pbrt-book
 #SCENE_NAME = book.pbrt
-SCENE_DIR = sanmiguel
-SCENE_NAME = sanmiguel-courtyard-second.pbrt
+#SCENE_DIR = sanmiguel
+#SCENE_NAME = sanmiguel-courtyard-second.pbrt
+SCENE_DIR = smoke-plume
+SCENE_NAME = plume.pbrt
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 IMAGE_PBRT = $(IMAGE)

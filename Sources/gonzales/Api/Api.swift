@@ -207,6 +207,8 @@ struct Api {
                                 scattering: scattering)
                 case "nanovdb":
                         warning("Nanovdb is not implemented!")
+                case "uniformgrid":
+                        warning("Uniform grid is not implemented!")
                 default:
                         throw ApiError.namedMedium
                 }
