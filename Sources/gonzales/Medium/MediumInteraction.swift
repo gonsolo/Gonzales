@@ -6,6 +6,10 @@ struct MediumInteraction: Interaction {
                 return scatter
         }
 
+        func evaluateProbabilityDensity(wi: Vector) -> FloatX {
+                return phase.evaluate(wo: wo, wi: wi)
+        }
+
         var dpdu = Vector()
         var faceIndex = 0
         var normal = Normal()

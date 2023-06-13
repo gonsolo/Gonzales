@@ -25,16 +25,7 @@ final class VolumePathIntegrator {
                 interaction: Interaction,
                 sample: Vector
         ) -> FloatX {
-                var density: FloatX = 0
-                if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        density = surfaceInteraction.bsdf.probabilityDensityWorld(
-                                wo: interaction.wo,
-                                wi: sample)
-                }
-                if let mediumInteraction = interaction as? MediumInteraction {
-                        density = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: sample)
-                }
-                return density
+                return interaction.evaluateProbabilityDensity(wi: sample)
         }
 
         private func chooseLight(

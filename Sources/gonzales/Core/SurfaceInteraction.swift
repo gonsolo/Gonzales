@@ -48,6 +48,10 @@ struct SurfaceInteraction: Interaction {
                 return scatter
         }
 
+        func evaluateProbabilityDensity(wi: Vector) -> FloatX {
+                return bsdf.probabilityDensityWorld(wo: wo, wi: wi)
+        }
+
         var valid: Bool
         var position: Point
         var normal: Normal
