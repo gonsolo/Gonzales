@@ -404,7 +404,14 @@ struct Api {
                         let scale = (uscale, vscale)
                         texture = Checkerboard(textures: textures, scale: scale)
                 case "constant":
-                        texture = try parameters.findRGBSpectrumTexture(name: "value")
+                        switch type {
+                        case "spectrum", "color":
+                                texture = try parameters.findRGBSpectrumTexture(name: "value")
+                        case "float":
+                                texture = try parameters.findFloatXTexture(name: "value")
+                        default:
+                                unimplemented()
+                        }
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName, type: type)
