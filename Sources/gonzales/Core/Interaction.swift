@@ -2,6 +2,7 @@ protocol Interaction {
 
         func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX)
         func spawnRay(inDirection direction: Vector) -> Ray
+        func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum
 
         var dpdu: Vector { get }
         var faceIndex: Int { get }

@@ -82,16 +82,7 @@ final class VolumePathIntegrator {
                 guard try visibility.unoccluded(scene: scene) else {
                         return zero
                 }
-                var scatter: RGBSpectrum = black
-                if let mediumInteraction = interaction as? MediumInteraction {
-                        let phase = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: wi)
-                        scatter = RGBSpectrum(intensity: phase)
-                }
-                if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        let reflected = surfaceInteraction.bsdf.evaluateWorld(wo: interaction.wo, wi: wi)
-                        let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
-                        scatter = reflected * dot
-                }
+                let scatter = interaction.evaluateDistributionFunction(wi: wi)
                 let estimate = scatter * radiance
                 return BsdfSample(estimate, wi, lightDensity)
         }

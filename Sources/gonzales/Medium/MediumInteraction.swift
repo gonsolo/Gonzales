@@ -50,6 +50,12 @@ final class HenyeyGreenstein: PhaseFunction {
 
 struct MediumInteraction: Interaction {
 
+        func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum {
+                let phase = phase.evaluate(wo: wo, wi: wi)
+                let scatter = RGBSpectrum(intensity: phase)
+                return scatter
+        }
+
         var dpdu = Vector()
         var faceIndex = 0
         var normal = Normal()
