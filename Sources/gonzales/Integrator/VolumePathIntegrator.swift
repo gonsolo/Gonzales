@@ -78,7 +78,7 @@ final class VolumePathIntegrator {
                 return BsdfSample(estimate, wi, lightDensity)
         }
 
-        private func sampleBrdf(
+        private func sampleDistributionFunction(
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
@@ -133,7 +133,7 @@ final class VolumePathIntegrator {
                 bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
-                let bsdfSample = try sampleBrdf(
+                let bsdfSample = try sampleDistributionFunction(
                         light: light,
                         interaction: interaction,
                         sampler: sampler)
@@ -154,7 +154,7 @@ final class VolumePathIntegrator {
                 let lightSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
                 let brdfSampler = MultipleImportanceSampler.MISSampler(
-                        sample: sampleBrdf, density: brdfDensity)
+                        sample: sampleDistributionFunction, density: brdfDensity)
                 let misSampler = MultipleImportanceSampler(
                         scene: scene,
                         samplers: (lightSampler, brdfSampler))
