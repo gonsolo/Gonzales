@@ -14,8 +14,7 @@ final class VolumePathIntegrator {
         private func lightDensity(
                 light: Light,
                 interaction: Interaction,
-                sample: Vector,
-                bsdf: GlobalBsdf
+                sample: Vector
         ) throws -> FloatX {
                 return try light.probabilityDensityFor(
                         samplingDirection: sample, from: interaction)
@@ -24,12 +23,13 @@ final class VolumePathIntegrator {
         private func brdfDensity(
                 light: Light,
                 interaction: Interaction,
-                sample: Vector,
-                bsdf: GlobalBsdf
+                sample: Vector
         ) -> FloatX {
                 var density: FloatX = 0
-                if interaction is SurfaceInteraction {
-                        density = bsdf.probabilityDensityWorld(wo: interaction.wo, wi: sample)
+                if let surfaceInteraction = interaction as? SurfaceInteraction {
+                        density = surfaceInteraction.bsdf.probabilityDensityWorld(
+                                wo: interaction.wo,
+                                wi: sample)
                 }
                 if let mediumInteraction = interaction as? MediumInteraction {
                         density = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: sample)
@@ -70,8 +70,7 @@ final class VolumePathIntegrator {
         private func sampleLightSource(
                 light: Light,
                 interaction: Interaction,
-                sampler: Sampler,
-                bsdf: GlobalBsdf
+                sampler: Sampler
         ) throws -> BsdfSample {
                 let zero = BsdfSample()
 
@@ -83,12 +82,13 @@ final class VolumePathIntegrator {
                 guard try visibility.unoccluded(scene: scene) else {
                         return zero
                 }
-                var scatter: RGBSpectrum
+                var scatter: RGBSpectrum = black
                 if let mediumInteraction = interaction as? MediumInteraction {
                         let phase = mediumInteraction.phase.evaluate(wo: mediumInteraction.wo, wi: wi)
                         scatter = RGBSpectrum(intensity: phase)
-                } else {
-                        let reflected = bsdf.evaluateWorld(wo: interaction.wo, wi: wi)
+                }
+                if let surfaceInteraction = interaction as? SurfaceInteraction {
+                        let reflected = surfaceInteraction.bsdf.evaluateWorld(wo: interaction.wo, wi: wi)
                         let dot = absDot(wi, Vector(normal: interaction.shadingNormal))
                         scatter = reflected * dot
                 }
@@ -99,15 +99,14 @@ final class VolumePathIntegrator {
         private func sampleBrdf(
                 light: Light,
                 interaction: Interaction,
-                sampler: Sampler,
-                bsdf: GlobalBsdf
+                sampler: Sampler
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
 
                 var bsdfSample = BsdfSample()
                 if let surfaceInteraction = interaction as? SurfaceInteraction {
-                        (bsdfSample, _) = try bsdf.sampleWorld(wo: surfaceInteraction.wo, u: sampler.get3D())
+                        (bsdfSample, _) = try surfaceInteraction.bsdf.sampleWorld(wo: surfaceInteraction.wo, u: sampler.get3D())
                         guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                                 return zero
                         }
@@ -143,14 +142,12 @@ final class VolumePathIntegrator {
         private func sampleLight(
                 light: Light,
                 interaction: Interaction,
-                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
+                        sampler: sampler)
                 if lightSample.probabilityDensity == 0 {
                         print("light: black")
                         return black
@@ -169,8 +166,7 @@ final class VolumePathIntegrator {
                 let bsdfSample = try sampleBrdf(
                         light: light,
                         interaction: interaction,
-                        sampler: sampler,
-                        bsdf: bsdf)
+                        sampler: sampler)
                 if bsdfSample.probabilityDensity == 0 {
                         print("light: black")
                         return black
@@ -183,8 +179,8 @@ final class VolumePathIntegrator {
         private func sampleMultipleImportance(
                 light: Light,
                 interaction: Interaction,
-                bsdf: GlobalBsdf,
-                sampler: Sampler
+                sampler: Sampler,
+                bsdf: GlobalBsdf
         ) throws -> RGBSpectrum {
                 let lightSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
@@ -203,14 +199,12 @@ final class VolumePathIntegrator {
         private func estimateDirect(
                 light: Light,
                 interaction: Interaction,
-                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 if light.isDelta {
                         return try sampleLight(
                                 light: light,
                                 interaction: interaction,
-                                bsdf: bsdf,
                                 sampler: sampler)
                 }
                 // For debugging uncomment one of the two following methods:
@@ -224,16 +218,20 @@ final class VolumePathIntegrator {
                 //        interaction: interaction,
                 //        bsdf: bsdf,
                 //        sampler: sampler)
+                var bsdf: GlobalBsdf = DummyBsdf()
+                if let surfaceInteraction = interaction as? SurfaceInteraction {
+                        bsdf = surfaceInteraction.bsdf
+                }
+
                 return try sampleMultipleImportance(
                         light: light,
                         interaction: interaction,
-                        bsdf: bsdf,
-                        sampler: sampler)
+                        sampler: sampler,
+                        bsdf: bsdf)
         }
 
         private func sampleOneLight(
                 at interaction: Interaction,
-                bsdf: GlobalBsdf,
                 with sampler: Sampler,
                 lightSampler: LightSampler
         ) throws -> RGBSpectrum {
@@ -244,7 +242,6 @@ final class VolumePathIntegrator {
                 let estimate = try estimateDirect(
                         light: light,
                         interaction: interaction,
-                        bsdf: bsdf,
                         sampler: sampler)
                 return estimate / lightPdf
         }
@@ -268,12 +265,10 @@ final class VolumePathIntegrator {
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RGBSpectrum, Ray) {
-                let dummy = DummyBsdf()
                 let estimate =
                         try pathThroughputWeight
                         * sampleOneLight(
                                 at: mediumInteraction,
-                                bsdf: dummy,
                                 with: sampler,
                                 lightSampler: lightSampler)
                 let (_, wi) = mediumInteraction.phase.samplePhase(
@@ -332,7 +327,7 @@ final class VolumePathIntegrator {
                                         ray: ray)
                                 estimate += mediumRadiance
                         } else {
-                                let surfaceInteraction = interaction
+                                var surfaceInteraction = interaction
                                 if bounce == 0 {
                                         if let areaLight = surfaceInteraction.areaLight {
                                                 estimate +=
@@ -357,20 +352,19 @@ final class VolumePathIntegrator {
                                         ray = spawnedRay
                                         continue
                                 }
-                                let bsdf = material.getGlobalBsdf(interaction: surfaceInteraction)
+                                material.setBsdf(interaction: &surfaceInteraction)
                                 if bounce == 0 {
-                                        albedo = bsdf.albedo()
+                                        albedo = surfaceInteraction.bsdf.albedo()
                                         firstNormal = surfaceInteraction.normal
                                 }
                                 let lightEstimate =
                                         try pathThroughputWeight
                                         * sampleOneLight(
                                                 at: surfaceInteraction,
-                                                bsdf: bsdf,
                                                 with: sampler,
                                                 lightSampler: lightSampler)
                                 estimate += lightEstimate
-                                let (bsdfSample, _) = try bsdf.sampleWorld(
+                                let (bsdfSample, _) = try surfaceInteraction.bsdf.sampleWorld(
                                         wo: surfaceInteraction.wo, u: sampler.get3D())
                                 guard
                                         bsdfSample.probabilityDensity != 0

@@ -65,9 +65,9 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
                 interaction.areaLight = self
         }
 
-        func getGlobalBsdf(interaction: SurfaceInteraction) -> GlobalBsdf {
+        func setBsdf(interaction: inout SurfaceInteraction) {
                 let diffuse = Diffuse(reflectance: ConstantTexture(value: white))
-                return diffuse.getGlobalBsdf(interaction: interaction)
+                diffuse.setBsdf(interaction: &interaction)
         }
 
         let shape: Shape

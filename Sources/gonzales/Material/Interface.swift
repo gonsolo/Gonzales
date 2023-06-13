@@ -1,6 +1,6 @@
 final class Interface: Material {
 
-        func getGlobalBsdf(interaction: SurfaceInteraction) -> GlobalBsdf {
+        func setBsdf(interaction: inout SurfaceInteraction) {
                 // Unimplemented by design
                 unimplemented()
         }

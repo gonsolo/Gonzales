@@ -11,7 +11,8 @@ struct SurfaceInteraction: Interaction {
                 faceIndex: Int = 0,
                 areaLight: AreaLight? = nil,
                 material: MaterialIndex = -1,
-                mediumInterface: MediumInterface? = nil
+                mediumInterface: MediumInterface? = nil,
+                bsdf: GlobalBsdf = DummyBsdf()
         ) {
                 self.valid = valid
                 self.position = position
@@ -23,6 +24,7 @@ struct SurfaceInteraction: Interaction {
                 self.faceIndex = faceIndex
                 self.material = material
                 self.mediumInterface = mediumInterface
+                self.bsdf = bsdf
         }
 
         init(_ other: SurfaceInteraction) {
@@ -36,6 +38,7 @@ struct SurfaceInteraction: Interaction {
                 self.faceIndex = other.faceIndex
                 self.material = other.material
                 self.mediumInterface = other.mediumInterface
+                self.bsdf = other.bsdf
         }
 
         var valid: Bool
@@ -49,6 +52,8 @@ struct SurfaceInteraction: Interaction {
         var areaLight: AreaLight?
         var material: MaterialIndex
         var mediumInterface: MediumInterface?
+
+        var bsdf: GlobalBsdf
 }
 
 extension SurfaceInteraction: CustomStringConvertible {

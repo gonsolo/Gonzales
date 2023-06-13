@@ -6,7 +6,7 @@ final class Conductor: Material {
                 self.roughness = roughness
         }
 
-        func getGlobalBsdf(interaction: SurfaceInteraction) -> GlobalBsdf {
+        func setBsdf(interaction: inout SurfaceInteraction) {
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnel = FresnelConductor(
@@ -19,7 +19,7 @@ final class Conductor: Material {
                         distribution: trowbridge,
                         fresnel: fresnel,
                         bsdfFrame: bsdfFrame)
-                return microfaceReflectionBsdf
+                interaction.bsdf = microfaceReflectionBsdf
         }
 
         var eta: RGBSpectrum
