@@ -130,7 +130,6 @@ final class VolumePathIntegrator {
         private func sampleGlobalBsdf(
                 light: Light,
                 interaction: Interaction,
-                bsdf: GlobalBsdf,
                 sampler: Sampler
         ) throws -> RGBSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
@@ -179,12 +178,10 @@ final class VolumePathIntegrator {
                 //return try sampleLight(
                 //        light: light,
                 //        interaction: interaction,
-                //        bsdf: bsdf,
                 //        sampler: sampler)
                 //return try sampleGlobalBsdf(
                 //        light: light,
                 //        interaction: interaction,
-                //        bsdf: bsdf,
                 //        sampler: sampler)
 
                 return try sampleMultipleImportance(
