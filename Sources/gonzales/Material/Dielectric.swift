@@ -10,7 +10,7 @@ final class Dielectric: Material {
                 self.remapRoughness = remapRoughness
         }
 
-        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
+        func getGlobalBsdf(interaction: SurfaceInteraction) -> GlobalBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)

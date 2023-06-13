@@ -4,7 +4,7 @@ enum MeasuredError: Error {
 
 final class Measured: Material {
 
-        func getGlobalBsdf(interaction: Interaction) -> GlobalBsdf {
+        func getGlobalBsdf(interaction: SurfaceInteraction) -> GlobalBsdf {
                 // TODO: Implement this some day
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let diffuseBsdf = DiffuseBsdf(bsdfFrame: bsdfFrame)
