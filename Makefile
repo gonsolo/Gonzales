@@ -54,8 +54,10 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = book.pbrt
 #SCENE_DIR = sanmiguel
 #SCENE_NAME = sanmiguel-courtyard-second.pbrt
-SCENE_DIR = smoke-plume
-SCENE_NAME = plume.pbrt
+#SCENE_DIR = smoke-plume
+#SCENE_NAME = plume.pbrt
+SCENE_DIR = sportscar
+SCENE_NAME = sportscar-area-lights.pbrt
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 IMAGE_PBRT = $(IMAGE)

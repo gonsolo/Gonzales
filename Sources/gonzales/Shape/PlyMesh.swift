@@ -62,7 +62,7 @@ struct PlyMesh {
 
         struct Property {
                 enum PropertyType { case float, int }
-                enum PropertyName { case x, y, z, nx, ny, nz, u, v }
+                enum PropertyName { case x, y, z, nx, ny, nz, s, t, u, v }
                 let type: PropertyType
                 let name: PropertyName
         }
@@ -90,7 +90,7 @@ struct PlyMesh {
                                 break
                         case "format":
                                 guard words[1] == "binary_little_endian" else {
-                                        throw ApiError.ply(message: "binary little endian")
+                                        throw ApiError.ply(message: "Format is not binary little endian")
                                 }
                                 guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
                         case "element":
@@ -135,6 +135,12 @@ struct PlyMesh {
                                         case "nz":
                                                 plyHeader.vertexProperties.append(
                                                         Property(type: .float, name: .nz))
+                                        case "s":
+                                                plyHeader.vertexProperties.append(
+                                                        Property(type: .float, name: .s))
+                                        case "t":
+                                                plyHeader.vertexProperties.append(
+                                                        Property(type: .float, name: .t))
                                         case "u":
                                                 plyHeader.vertexProperties.append(
                                                         Property(type: .float, name: .u))
@@ -238,8 +244,10 @@ struct PlyMesh {
                                         && properties[3].name == Property.PropertyName.nx
                                         && properties[4].name == Property.PropertyName.ny
                                         && properties[5].name == Property.PropertyName.nz
-                                        && properties[6].name == Property.PropertyName.u
-                                        && properties[7].name == Property.PropertyName.v
+                                        && (properties[6].name == Property.PropertyName.u
+                                                || properties[6].name == Property.PropertyName.s)
+                                        && (properties[7].name == Property.PropertyName.v
+                                                || properties[7].name == Property.PropertyName.t)
                                 {
                                         appendPoint(from: data)
                                         appendNormal(from: data)
@@ -276,13 +284,14 @@ struct PlyMesh {
                                 let value: UInt32 = readValue(in: data, at: &dataIndex)
                                 numberIndices = value
                         default:
-                                fatalError("argh!")
+                                throw ApiError.ply(message: "Only 8 and 32 bits supported")
                         }
                         if numberIndices != 3 {
-                                throw ApiError.ply(
-                                        message:
-                                                "Number of indices must be 3 but is \(numberIndices)"
-                                )
+                                warning("Number of indices is not 3 but \(numberIndices)")
+                                //throw ApiError.ply(
+                                //        message:
+                                //                "Number of indices must be 3 but is \(numberIndices)"
+                                //)
                         }
                         for _ in 0..<numberIndices {
                                 let index: Int32 = readValue(in: data, at: &dataIndex)
