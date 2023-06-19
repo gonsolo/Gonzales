@@ -57,7 +57,22 @@ struct PlyMesh {
                         data.withUnsafeBytes { (dataPointer) -> Void in
                                 let source = dataPointer.baseAddress! + index
                                 let destination = valuePointer.baseAddress!
-                                memcpy(destination, source, size)
+                                switch endianness {
+                                case .little:
+                                        memcpy(destination, source, size)
+                                case .big:
+                                        switch size {
+                                        case 1:
+                                                memcpy(destination, source, size)
+                                        case 4:
+                                                memcpy(destination + 3, source + 0, 1)
+                                                memcpy(destination + 2, source + 1, 1)
+                                                memcpy(destination + 1, source + 2, 1)
+                                                memcpy(destination + 0, source + 3, 1)
+                                        default:
+                                                fatalError("Unknown size in endian conversion!")
+                                        }
+                                }
                         }
                 }
                 if !peek {
@@ -105,8 +120,6 @@ struct PlyMesh {
                                 case "binary_big_endian":
                                         endianness = .big
                                         guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
-                                        let message = "Big endian format in ply."
-                                        throw ApiError.ply(message: message)
                                 default:
                                         let message = "Unknown endian format in ply."
                                         throw ApiError.ply(message: message)
