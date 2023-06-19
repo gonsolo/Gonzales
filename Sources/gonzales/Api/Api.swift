@@ -397,6 +397,7 @@ struct Api {
                 }
                 var texture: Texture
                 switch textureClass {
+                // bilerp missing
                 case "checkerboard":
                         let textureEven = try parameters.findRGBSpectrumTexture(name: "tex1")
                         let textureOdd = try parameters.findRGBSpectrumTexture(name: "tex2")
@@ -414,29 +415,37 @@ struct Api {
                         default:
                                 unimplemented()
                         }
+                // directionmix missing
+                // dots missing
+                // fbm missing
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName, type: type)
+                // marble missing
+                case "mix":
+                        switch type {
+                        case "spectrum", "color":
+                                let tex1 = try parameters.findRGBSpectrumTexture(name: "tex1")
+                                let tex2 = try parameters.findRGBSpectrumTexture(name: "tex2")
+                                let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                                texture = MixTexture<RGBSpectrum>(textures: (tex1, tex2), amount: amount)
+                        case "float":
+                                let tex1 = try parameters.findFloatXTexture(name: "tex1")
+                                let tex2 = try parameters.findFloatXTexture(name: "tex2")
+                                let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                                texture = MixTexture<FloatX>(textures: (tex1, tex2), amount: amount)
+                        default:
+                                unimplemented()
+                        }
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
-                        //print(name)
-                        //print(parameters)
-                        //let scale = try parameters.findOneFloatX(called: "scale", else: 1)
-                        //print("scale: ", scale)
-                        //let scaleTexture = try parameters.findTexture(name: "scale")
-                        //print("scaleTexture: ", scaleTexture)
                         let scale = try parameters.findFloatXTexture(name: "scale")
-                        //print("scale: ", scale)
-
                         let tex = try parameters.findRGBSpectrumTexture(name: "tex")
-                        //print("tex: ", tex)
-
-                        //guard let unscaledTexture = state.textures[tex] else {
-                        //        throw ApiError.unknownTexture(name: tex)
-                        //}
                         texture = ScaledTexture(scale: scale, texture: tex)
+                // windy missing
+                // wrinkled missing
                 default:
                         warning("Unimplemented texture class: \(textureClass)")
                         return

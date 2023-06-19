@@ -18,7 +18,7 @@ PTEXMEM = --ptexmem 1 # GB
 #IMAGE =  $(SCENE_NAME).exr
 #IMAGE_PBRT = $(IMAGE)
 
-# Render 22/27 scenes
+# Render 25/27 scenes
 PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion 		 1/27
 #SCENE_NAME = pavilion-day.pbrt
@@ -58,8 +58,16 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = plume.pbrt
 #SCENE_DIR = sportscar
 #SCENE_NAME = sportscar-area-lights.pbrt
-SCENE_DIR = sssdragon
-SCENE_NAME = dragon_10.pbrt
+#SCENE_DIR = sssdragon
+#SCENE_NAME = dragon_10.pbrt
+#SCENE_DIR = transparent-machines
+#SCENE_NAME = frame1266.pbrt
+#SCENE_DIR = villa
+#SCENE_NAME = villa-daylight.pbrt
+SCENE_DIR = watercolor
+SCENE_NAME = camera-1.pbrt
+# watercolor 	26
+# zero-day 	27
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
 IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 IMAGE_PBRT = $(IMAGE)
