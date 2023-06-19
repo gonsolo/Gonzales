@@ -22,42 +22,6 @@ extension Float32: DefaultInitializable {}
 extension Point: DefaultInitializable {}
 extension Normal: DefaultInitializable {}
 
-func convert<T: DefaultInitializable>(data: Data, at index: inout Data.Index, peek: Bool = false)
-        -> T
-{
-        var value = T()
-        let size = MemoryLayout<T>.size
-        withUnsafeMutableBytes(of: &value) { (valuePointer) -> Void in
-                data.withUnsafeBytes { (dataPointer) -> Void in
-                        let source = dataPointer.baseAddress! + index
-                        let destination = valuePointer.baseAddress!
-                        memcpy(destination, source, size)
-                }
-        }
-        if !peek {
-                index += size
-        }
-        return value
-}
-
-func readValue<T: DefaultInitializable>(in data: Data, at index: inout Data.Index) -> T {
-        return convert(data: data, at: &index)
-}
-
-func peekValue<T: DefaultInitializable>(in data: Data, at index: inout Data.Index) -> T {
-        return convert(data: data, at: &index, peek: true)
-}
-
-func readCharacter(in data: Data, at index: inout Data.Index) -> Character {
-        let c = Character(UnicodeScalar(data[index]))
-        index += 1
-        return c
-}
-
-func peekCharacter(in data: Data, at index: inout Data.Index) -> Character {
-        return Character(UnicodeScalar(data[index]))
-}
-
 struct PlyMesh {
 
         struct Property {
@@ -82,6 +46,44 @@ struct PlyMesh {
 
         var endianness = Endianness.little
 
+        private func convert<T: DefaultInitializable>(
+                data: Data,
+                at index: inout Data.Index,
+                peek: Bool = false
+        ) -> T {
+                var value = T()
+                let size = MemoryLayout<T>.size
+                withUnsafeMutableBytes(of: &value) { (valuePointer) -> Void in
+                        data.withUnsafeBytes { (dataPointer) -> Void in
+                                let source = dataPointer.baseAddress! + index
+                                let destination = valuePointer.baseAddress!
+                                memcpy(destination, source, size)
+                        }
+                }
+                if !peek {
+                        index += size
+                }
+                return value
+        }
+
+        private func readValue<T: DefaultInitializable>(in data: Data, at index: inout Data.Index) -> T {
+                return convert(data: data, at: &index)
+        }
+
+        private func peekValue<T: DefaultInitializable>(in data: Data, at index: inout Data.Index) -> T {
+                return convert(data: data, at: &index, peek: true)
+        }
+
+        private func readCharacter(in data: Data, at index: inout Data.Index) -> Character {
+                let c = Character(UnicodeScalar(data[index]))
+                index += 1
+                return c
+        }
+
+        private func peekCharacter(in data: Data, at index: inout Data.Index) -> Character {
+                return Character(UnicodeScalar(data[index]))
+        }
+
         mutating func readPlyHeader(from data: Data) throws {
                 enum HeaderState { case vertex, face, none }
                 var headerState = HeaderState.none
@@ -101,7 +103,9 @@ struct PlyMesh {
                                         endianness = .little
                                         guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
                                 case "binary_big_endian":
-                                        let message = "Big endian ply is not supported."
+                                        endianness = .big
+                                        guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
+                                        let message = "Big endian format in ply."
                                         throw ApiError.ply(message: message)
                                 default:
                                         let message = "Unknown endian format in ply."
