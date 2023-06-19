@@ -75,6 +75,13 @@ struct PlyMesh {
 
         var listBits = 8
 
+        enum Endianness {
+                case little
+                case big
+        }
+
+        var endianness = Endianness.little
+
         mutating func readPlyHeader(from data: Data) throws {
                 enum HeaderState { case vertex, face, none }
                 var headerState = HeaderState.none
@@ -89,10 +96,17 @@ struct PlyMesh {
                         case "comment":
                                 break
                         case "format":
-                                guard words[1] == "binary_little_endian" else {
-                                        throw ApiError.ply(message: "Format is not binary little endian")
+                                switch words[1] {
+                                case "binary_little_endian":
+                                        endianness = .little
+                                        guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
+                                case "binary_big_endian":
+                                        let message = "Big endian ply is not supported."
+                                        throw ApiError.ply(message: message)
+                                default:
+                                        let message = "Unknown endian format in ply."
+                                        throw ApiError.ply(message: message)
                                 }
-                                guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
                         case "element":
                                 switch words[1] {
                                 case "vertex":
