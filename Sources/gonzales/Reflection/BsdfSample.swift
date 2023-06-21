@@ -1,7 +1,7 @@
 struct BsdfSample {
 
         init(
-                _ estimate: RGBSpectrum = black,
+                _ estimate: RgbSpectrum = black,
                 _ incoming: Vector = nullVector,
                 _ probabilityDensity: FloatX = 0
         ) {
@@ -10,7 +10,7 @@ struct BsdfSample {
                 self.probabilityDensity = probabilityDensity
         }
 
-        func throughputWeight(normal: Normal = upNormal) -> RGBSpectrum {
+        func throughputWeight(normal: Normal = upNormal) -> RgbSpectrum {
                 estimate * absDot(incoming, normal) / probabilityDensity
         }
 
@@ -26,7 +26,7 @@ struct BsdfSample {
                 return !isReflection(wo: wo)
         }
 
-        var estimate: RGBSpectrum
+        var estimate: RgbSpectrum
         let incoming: Vector
         var probabilityDensity: FloatX
 }

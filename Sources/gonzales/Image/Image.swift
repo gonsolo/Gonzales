@@ -25,7 +25,7 @@ struct Image {
         }
 
         mutating func addPixel(
-                withColor color: RGBSpectrum,
+                withColor color: RgbSpectrum,
                 withWeight weight: FloatX,
                 atLocation location: Point2I
         ) {

@@ -2,7 +2,7 @@ final class CoatedDiffuse: Material {
 
         init(
                 roughness: (FloatX, FloatX),
-                reflectance: RGBSpectrumTexture,
+                reflectance: RgbSpectrumTexture,
                 refractiveIndex: FloatTexture,
                 remapRoughness: Bool
         ) {
@@ -14,7 +14,7 @@ final class CoatedDiffuse: Material {
 
         func setBsdf(interaction: inout SurfaceInteraction) {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
-                let reflectanceAtInteraction = reflectance.evaluateRGBSpectrum(at: interaction)
+                let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let coatedDiffuseBsdf = CoatedDiffuseBsdf(
                         reflectance: reflectanceAtInteraction,
@@ -25,7 +25,7 @@ final class CoatedDiffuse: Material {
                 interaction.bsdf = coatedDiffuseBsdf
         }
 
-        var reflectance: RGBSpectrumTexture
+        var reflectance: RgbSpectrumTexture
         var refractiveIndex: FloatTexture
         var roughness: (FloatX, FloatX)
         var remapRoughness: Bool
@@ -39,7 +39,7 @@ func createCoatedDiffuse(parameters: ParameterDictionary) throws -> CoatedDiffus
         let vRoughness =
                 try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
         let roughness = (uRoughness, vRoughness)
-        let reflectance = try parameters.findRGBSpectrumTexture(name: "reflectance")
+        let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance")
         let refractiveIndex = try parameters.findFloatXTexture(name: "eta", else: 1.5)
         return CoatedDiffuse(
                 roughness: roughness,

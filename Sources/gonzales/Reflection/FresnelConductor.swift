@@ -3,10 +3,10 @@ struct FresnelConductor: Fresnel {
 
         private func fresnelConductor(
                 cosTheta: FloatX,
-                etaI: RGBSpectrum,
-                etaT: RGBSpectrum,
-                k: RGBSpectrum
-        ) -> RGBSpectrum {
+                etaI: RgbSpectrum,
+                etaT: RgbSpectrum,
+                k: RgbSpectrum
+        ) -> RgbSpectrum {
                 let cosThetaClamped = clamp(value: cosTheta, low: -1, high: 1)
                 let eta = etaT / etaI
                 let etak = k / etaI
@@ -26,11 +26,11 @@ struct FresnelConductor: Fresnel {
                 return 0.5 * (rp + rs)
         }
 
-        func evaluate(cosTheta: FloatX) -> RGBSpectrum {
+        func evaluate(cosTheta: FloatX) -> RgbSpectrum {
                 return fresnelConductor(cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, k: k)
         }
 
-        let etaI: RGBSpectrum
-        let etaT: RGBSpectrum
-        let k: RGBSpectrum
+        let etaI: RgbSpectrum
+        let etaT: RgbSpectrum
+        let k: RgbSpectrum
 }

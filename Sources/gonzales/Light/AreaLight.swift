@@ -2,20 +2,20 @@ import Foundation
 
 struct AreaLight: Light, Boundable, Intersectable, Material {
 
-        init(brightness: RGBSpectrum, shape: Shape, alpha: FloatX) {
+        init(brightness: RgbSpectrum, shape: Shape, alpha: FloatX) {
                 self.brightness = brightness
                 self.shape = shape
                 self.alpha = alpha
         }
 
         func emittedRadiance(from interaction: Interaction, inDirection direction: Vector)
-                -> RGBSpectrum
+                -> RgbSpectrum
         {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
         func sample(for ref: Interaction, u: TwoRandomVariables) -> (
-                radiance: RGBSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
+                radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - ref.position)
@@ -32,7 +32,7 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
                         samplingDirection: direction, from: reference)
         }
 
-        func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
+        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
         func power() -> Measurement<UnitPower> {
                 return Measurement(
@@ -71,6 +71,6 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
         }
 
         let shape: Shape
-        let brightness: RGBSpectrum
+        let brightness: RgbSpectrum
         let alpha: FloatX
 }

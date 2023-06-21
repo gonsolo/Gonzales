@@ -7,9 +7,9 @@ final class Hair: Material {
         private func absorptionFrom(
                 eumelaninConcentration: FloatX,
                 pheomelaninConcentration: FloatX = 0
-        ) -> RGBSpectrum {
-                let eumelaninAbsorptionCoefficient = RGBSpectrum(r: 0.419, g: 0.697, b: 1.37)
-                let pheomelaninAbsorptionCoefficient = RGBSpectrum(r: 0.187, g: 0.4, b: 1.05)
+        ) -> RgbSpectrum {
+                let eumelaninAbsorptionCoefficient = RgbSpectrum(r: 0.419, g: 0.697, b: 1.37)
+                let pheomelaninAbsorptionCoefficient = RgbSpectrum(r: 0.187, g: 0.4, b: 1.05)
                 let eumelaninAbsorption = eumelaninConcentration * eumelaninAbsorptionCoefficient
                 let pheomelaninAbsorption = pheomelaninConcentration * pheomelaninAbsorptionCoefficient
                 return eumelaninAbsorption + pheomelaninAbsorption

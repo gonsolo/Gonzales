@@ -3,7 +3,7 @@ protocol Interaction {
         func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX)
         func spawnRay(inDirection direction: Vector) -> Ray
 
-        func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum
+        func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum
         func sampleDistributionFunction(sampler: Sampler) -> BsdfSample
         func evaluateProbabilityDensity(wi: Vector) -> FloatX
 

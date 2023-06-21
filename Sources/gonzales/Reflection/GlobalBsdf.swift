@@ -1,7 +1,7 @@
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
 protocol GlobalBsdf: BsdfFrameProtocol, LocalBsdf {
-        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum
+        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum
         func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
@@ -9,7 +9,7 @@ protocol GlobalBsdf: BsdfFrameProtocol, LocalBsdf {
 
 extension GlobalBsdf {
 
-        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RGBSpectrum {
+        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
                 var totalLightScattered = black
                 let woLocal = worldToLocal(world: woWorld)
                 let wiLocal = worldToLocal(world: wiWorld)

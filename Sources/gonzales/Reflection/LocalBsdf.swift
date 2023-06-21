@@ -3,8 +3,8 @@
 ///        Distribution Functions).
 protocol LocalBsdf {
 
-        func albedo() -> RGBSpectrum
-        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum
+        func albedo() -> RgbSpectrum
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum
         func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX
         func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample
 
@@ -17,7 +17,7 @@ extension LocalBsdf {
         func sampleLocal(
                 wo: Vector,
                 u: ThreeRandomVariables,
-                evaluate: (Vector, Vector) -> RGBSpectrum
+                evaluate: (Vector, Vector) -> RgbSpectrum
         ) -> BsdfSample {
                 var wi = cosineSampleHemisphere(u: TwoRandomVariables(u.0, u.1))
                 if wo.z < 0 { wi.z = -wi.z }

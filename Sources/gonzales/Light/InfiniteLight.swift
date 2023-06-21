@@ -8,7 +8,7 @@ struct InfiniteLight: Light {
 
         init(
                 lightToWorld: Transform,
-                brightness: RGBSpectrum,
+                brightness: RgbSpectrum,
                 texture: Texture
         ) {
                 self.lightToWorld = lightToWorld
@@ -17,7 +17,7 @@ struct InfiniteLight: Light {
         }
 
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
-                radiance: RGBSpectrum,
+                radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
                 visibility: Visibility
@@ -35,7 +35,7 @@ struct InfiniteLight: Light {
                 let visibility = Visibility(from: reference, to: distantPoint)
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                guard let color = texture.evaluate(at: interaction) as? RGBSpectrum else {
+                guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         warning("Unsupported texture type!")
                         return (black, direction, pdf, visibility)
                 }
@@ -101,10 +101,10 @@ struct InfiniteLight: Light {
                 return Point2F(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
         }
 
-        func radianceFromInfinity(for ray: Ray) -> RGBSpectrum {
+        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 let uv = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                guard let radiance = texture.evaluate(at: interaction) as? RGBSpectrum else {
+                guard let radiance = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         warning("Unsupported texture type!")
                         return black
                 }
@@ -122,7 +122,7 @@ struct InfiniteLight: Light {
 
         var worldToLight: Transform { return lightToWorld.inverse }
 
-        let brightness: RGBSpectrum
+        let brightness: RgbSpectrum
         let texture: Texture
         let lightToWorld: Transform
 }
@@ -131,7 +131,7 @@ func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionar
         -> InfiniteLight
 {
         guard let mapname = try parameters.findString(called: "filename") else {
-                let brightness = try parameters.findSpectrum(name: "L") as? RGBSpectrum ?? white
+                let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
                 let texture = ConstantTexture(value: brightness)
                 return InfiniteLight(
                         lightToWorld: lightToWorld,

@@ -52,7 +52,7 @@ func gammaLinearToSrgb(value: FloatX) -> FloatX {
 
 func square(_ x: FloatX) -> FloatX { return x * x }
 
-func square(_ x: RGBSpectrum) -> RGBSpectrum { return x * x }
+func square(_ x: RgbSpectrum) -> RgbSpectrum { return x * x }
 
 func gammaSrgbToLinear(value: FloatX) -> FloatX {
         if value <= 0.04045 {
@@ -66,7 +66,7 @@ func lerp(with t: FloatX, between first: FloatX, and second: FloatX) -> FloatX {
         return (1 - t) * first + t * second
 }
 
-func lerp(with t: RGBSpectrum, between first: RGBSpectrum, and second: RGBSpectrum) -> RGBSpectrum {
+func lerp(with t: RgbSpectrum, between first: RgbSpectrum, and second: RgbSpectrum) -> RgbSpectrum {
         return (white - t) * first + t * second
 }
 

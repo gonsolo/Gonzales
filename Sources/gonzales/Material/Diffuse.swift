@@ -14,9 +14,9 @@ final class Diffuse: Material {
                 var reflectance = black
                 let reflectanceFloat = evaluation as? FloatX
                 if reflectanceFloat != nil {
-                        reflectance = RGBSpectrum(intensity: reflectanceFloat!)
+                        reflectance = RgbSpectrum(intensity: reflectanceFloat!)
                 }
-                let reflectanceRgb = evaluation as? RGBSpectrum
+                let reflectanceRgb = evaluation as? RgbSpectrum
                 if reflectanceRgb != nil {
                         reflectance = reflectanceRgb!
                 }
@@ -35,15 +35,15 @@ func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
                 if let floatTexture = state.textures[reflectanceTextureName] as? FloatTexture {
                         texture = floatTexture
                 }
-                if let rgbTexture = state.textures[reflectanceTextureName] as? RGBSpectrumTexture {
+                if let rgbTexture = state.textures[reflectanceTextureName] as? RgbSpectrumTexture {
                         texture = rgbTexture
                 }
                 return Diffuse(reflectance: texture)
         }
         if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: nil)
-                as? RGBSpectrum
+                as? RgbSpectrum
         {
-                let reflectanceConstant = ConstantTexture<RGBSpectrum>(value: reflectanceSpectrum)
+                let reflectanceConstant = ConstantTexture<RgbSpectrum>(value: reflectanceSpectrum)
                 return Diffuse(reflectance: reflectanceConstant)
         }
         throw DiffuseError.noReflectance

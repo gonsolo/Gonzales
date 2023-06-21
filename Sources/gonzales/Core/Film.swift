@@ -62,7 +62,7 @@ final class Film {
                                         location: sample.location,
                                         image: &albedoImage)
                                 add(
-                                        value: RGBSpectrum(from: sample.normal),
+                                        value: RgbSpectrum(from: sample.normal),
                                         weight: sample.weight,
                                         location: sample.location,
                                         image: &normalImage)
@@ -101,7 +101,7 @@ final class Film {
                 sample: Point2F,
                 pixel: Point2I,
                 image: inout Image,
-                value: RGBSpectrum,
+                value: RgbSpectrum,
                 weight: FloatX
         ) {
                 if isWithin(location: pixel, resolution: image.fullResolution) {
@@ -120,7 +120,7 @@ final class Film {
                 }
         }
 
-        private func add(value: RGBSpectrum, weight: FloatX, location: Point2F, image: inout Image) {
+        private func add(value: RgbSpectrum, weight: FloatX, location: Point2F, image: inout Image) {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {

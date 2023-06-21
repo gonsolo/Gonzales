@@ -4,11 +4,11 @@ protocol Spectrum {
         static func * (lhs: Self, rhs: Self) -> Self
 
         // Temporary: We adopt a step-by-step strategy to convert the renderer to spectral
-        // rendering; first, convert the old Spectrum class to RGBSpectrum (done), then make
+        // rendering; first, convert the old Spectrum class to RgbSpectrum (done), then make
         // Spectrum a protocol (done), add additional classes like PiecewiseLinearSpectrum
-        // (done) and facilities to convert to RGBSpectrum (here). After that a SampledSpectrum
+        // (done) and facilities to convert to RgbSpectrum (here). After that a SampledSpectrum
         // class can be added and all computation converted to this one.
-        func asRgb() -> RGBSpectrum
+        func asRgb() -> RgbSpectrum
 }
 
 struct PiecewiseLinearSpectrum: Spectrum {
@@ -22,11 +22,11 @@ struct PiecewiseLinearSpectrum: Spectrum {
                 return lambdas.count - 1
         }
 
-        func asRgb() -> RGBSpectrum {
+        func asRgb() -> RgbSpectrum {
                 let red = values[findIndex(wavelength: 630)]
                 let green = values[findIndex(wavelength: 532)]
                 let blue = values[findIndex(wavelength: 465)]
-                return RGBSpectrum(r: red, g: green, b: blue)
+                return RgbSpectrum(r: red, g: green, b: blue)
         }
 
         let lambdas: [FloatX]
@@ -141,7 +141,7 @@ var namedSpectra: [String: any Spectrum] = [
         "metal-Cu-k": copperExtinctionCoefficients,
 ]
 
-public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Three {
+public struct BaseRgbSpectrum<T: FloatingPoint>: Initializable, Three {
 
         init() {
                 self.init(r: 0, g: 0, b: 0)
@@ -182,7 +182,7 @@ public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Three {
         var y: T
         var z: T
 
-        // Convenience accessors for RGBSpectrum
+        // Convenience accessors for RgbSpectrum
         var r: T {
                 get { return x }
                 set { x = newValue }
@@ -199,73 +199,73 @@ public struct BaseRGBSpectrum<T: FloatingPoint>: Initializable, Three {
         }
 }
 
-extension BaseRGBSpectrum: CustomStringConvertible {
+extension BaseRgbSpectrum: CustomStringConvertible {
 
         public var description: String {
                 return "[ \(r) \(g) \(b) ]"
         }
 }
 
-extension BaseRGBSpectrum {
+extension BaseRgbSpectrum {
 
         var isBlack: Bool {
                 return r == 0 && g == 0 && b == 0
         }
 }
 
-extension BaseRGBSpectrum where T: FloatingPoint {
+extension BaseRgbSpectrum where T: FloatingPoint {
 
-        public static func * (mul: T, spectrum: BaseRGBSpectrum<T>) -> BaseRGBSpectrum {
-                return BaseRGBSpectrum(
+        public static func * (mul: T, spectrum: BaseRgbSpectrum<T>) -> BaseRgbSpectrum {
+                return BaseRgbSpectrum(
                         r: mul * spectrum.x,
                         g: mul * spectrum.y,
                         b: mul * spectrum.z)
         }
 
-        public static func * (spectrum: BaseRGBSpectrum<T>, mul: T) -> BaseRGBSpectrum {
+        public static func * (spectrum: BaseRgbSpectrum<T>, mul: T) -> BaseRgbSpectrum {
                 return mul * spectrum
         }
 
-        public static func *= (left: inout BaseRGBSpectrum<T>, right: BaseRGBSpectrum<T>) {
+        public static func *= (left: inout BaseRgbSpectrum<T>, right: BaseRgbSpectrum<T>) {
                 left.x *= right.x
                 left.y *= right.y
                 left.z *= right.z
         }
 
-        public static func + (spectrum: BaseRGBSpectrum<T>, value: T) -> BaseRGBSpectrum {
-                return BaseRGBSpectrum(
+        public static func + (spectrum: BaseRgbSpectrum<T>, value: T) -> BaseRgbSpectrum {
+                return BaseRgbSpectrum(
                         r: spectrum.r + value,
                         g: spectrum.g + value,
                         b: spectrum.b + value)
         }
 
-        public static func - (spectrum: BaseRGBSpectrum<T>, value: T) -> BaseRGBSpectrum {
-                return BaseRGBSpectrum(
+        public static func - (spectrum: BaseRgbSpectrum<T>, value: T) -> BaseRgbSpectrum {
+                return BaseRgbSpectrum(
                         r: spectrum.r - value,
                         g: spectrum.g - value,
                         b: spectrum.b - value)
         }
 
         public static func / (
-                numerator: BaseRGBSpectrum<T>,
-                denominator: BaseRGBSpectrum<T>
-        ) -> BaseRGBSpectrum {
-                return BaseRGBSpectrum(
+                numerator: BaseRgbSpectrum<T>,
+                denominator: BaseRgbSpectrum<T>
+        ) -> BaseRgbSpectrum {
+                return BaseRgbSpectrum(
                         r: numerator.r / denominator.r,
                         g: numerator.g / denominator.g,
                         b: numerator.b / denominator.b)
         }
 
-        public static func == (a: BaseRGBSpectrum<T>, b: BaseRGBSpectrum<T>) -> Bool {
+        public static func == (a: BaseRgbSpectrum<T>, b: BaseRgbSpectrum<T>) -> Bool {
                 return a.r == b.r && a.g == b.g && a.b == b.b
         }
 
-        public static func != (a: BaseRGBSpectrum<T>, b: BaseRGBSpectrum<T>) -> Bool {
+        public static func != (a: BaseRgbSpectrum<T>, b: BaseRgbSpectrum<T>) -> Bool {
                 return !(a == b)
         }
 
-        public func squareRoot() -> BaseRGBSpectrum {
-                return BaseRGBSpectrum(
+        public func squareRoot() -> BaseRgbSpectrum {
+                return BaseRgbSpectrum(
                         r: r.squareRoot(),
                         g: g.squareRoot(),
                         b: b.squareRoot())
@@ -300,10 +300,10 @@ extension BaseRGBSpectrum where T: FloatingPoint {
 
 }
 
-extension BaseRGBSpectrum where T: BinaryFloatingPoint {
+extension BaseRgbSpectrum where T: BinaryFloatingPoint {
 
-        func asRgb() -> RGBSpectrum {
-                return RGBSpectrum(r: FloatX(r), g: FloatX(g), b: FloatX(b))
+        func asRgb() -> RgbSpectrum {
+                return RgbSpectrum(r: FloatX(r), g: FloatX(g), b: FloatX(b))
         }
 
         var luminance: T {
@@ -314,7 +314,7 @@ extension BaseRGBSpectrum where T: BinaryFloatingPoint {
         }
 }
 
-extension BaseRGBSpectrum where T: FloatingPoint {
+extension BaseRgbSpectrum where T: FloatingPoint {
 
         init(from normal: Normal3<T>) {
                 let normal = normalized(normal)
@@ -322,41 +322,41 @@ extension BaseRGBSpectrum where T: FloatingPoint {
         }
 }
 
-typealias RGBSpectrum = BaseRGBSpectrum<FloatX>
+typealias RgbSpectrum = BaseRgbSpectrum<FloatX>
 
-extension RGBSpectrum: Spectrum {}
+extension RgbSpectrum: Spectrum {}
 
-let black = RGBSpectrum(intensity: 0)
-let gray = RGBSpectrum(intensity: 0.5)
-let white = RGBSpectrum(intensity: 1)
-let red = RGBSpectrum(r: 1, g: 0, b: 0)
-let blue = RGBSpectrum(r: 0, g: 0, b: 1)
-let green = RGBSpectrum(r: 0, g: 1, b: 0)
+let black = RgbSpectrum(intensity: 0)
+let gray = RgbSpectrum(intensity: 0.5)
+let white = RgbSpectrum(intensity: 1)
+let red = RgbSpectrum(r: 1, g: 0, b: 0)
+let blue = RgbSpectrum(r: 0, g: 0, b: 1)
+let green = RgbSpectrum(r: 0, g: 1, b: 0)
 
-func pow(base: RGBSpectrum, exp: FloatX) -> RGBSpectrum {
-        return RGBSpectrum(
+func pow(base: RgbSpectrum, exp: FloatX) -> RgbSpectrum {
+        return RgbSpectrum(
                 r: pow(base.r, exp),
                 g: pow(base.g, exp),
                 b: pow(base.b, exp))
 }
 
-func exp(_ x: RGBSpectrum) -> RGBSpectrum {
-        return RGBSpectrum(
+func exp(_ x: RgbSpectrum) -> RgbSpectrum {
+        return RgbSpectrum(
                 r: exp(x.r),
                 g: exp(x.g),
                 b: exp(x.b))
 }
 
-func gammaLinearToSrgb(light: RGBSpectrum) -> RGBSpectrum {
-        var converted = RGBSpectrum()
+func gammaLinearToSrgb(light: RgbSpectrum) -> RgbSpectrum {
+        var converted = RgbSpectrum()
         converted.r = gammaLinearToSrgb(value: light.r)
         converted.g = gammaLinearToSrgb(value: light.g)
         converted.b = gammaLinearToSrgb(value: light.b)
         return converted
 }
 
-func gammaSrgbToLinear(light: RGBSpectrum) -> RGBSpectrum {
-        var converted = RGBSpectrum()
+func gammaSrgbToLinear(light: RgbSpectrum) -> RgbSpectrum {
+        var converted = RgbSpectrum()
         converted.r = gammaSrgbToLinear(value: light.r)
         converted.g = gammaSrgbToLinear(value: light.g)
         converted.b = gammaSrgbToLinear(value: light.b)

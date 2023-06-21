@@ -1,8 +1,8 @@
 final class DiffuseTransmission: Material {
 
         init(
-                reflectance: RGBSpectrumTexture,
-                transmittance: RGBSpectrumTexture,
+                reflectance: RgbSpectrumTexture,
+                transmittance: RgbSpectrumTexture,
                 scale: FloatTexture
         ) {
                 self.reflectance = reflectance
@@ -11,7 +11,7 @@ final class DiffuseTransmission: Material {
         }
 
         func setBsdf(interaction: inout SurfaceInteraction) {
-                let reflectance = reflectance.evaluateRGBSpectrum(at: interaction)
+                let reflectance = reflectance.evaluateRgbSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)
                 // TODO: check same hemisphere and transmission
                 // TODO: transmittance
@@ -22,18 +22,18 @@ final class DiffuseTransmission: Material {
                 interaction.bsdf = diffuseBsdf
         }
 
-        var reflectance: RGBSpectrumTexture
-        var transmittance: RGBSpectrumTexture
+        var reflectance: RgbSpectrumTexture
+        var transmittance: RgbSpectrumTexture
         var scale: FloatTexture
 }
 
 func createDiffuseTransmission(parameters: ParameterDictionary) throws -> DiffuseTransmission {
-        let reflectance = try parameters.findRGBSpectrumTexture(
+        let reflectance = try parameters.findRgbSpectrumTexture(
                 name: "reflectance",
-                else: RGBSpectrum(intensity: 1))
-        let transmittance = try parameters.findRGBSpectrumTexture(
+                else: RgbSpectrum(intensity: 1))
+        let transmittance = try parameters.findRgbSpectrumTexture(
                 name: "transmittance",
-                else: RGBSpectrum(intensity: 1))
+                else: RgbSpectrum(intensity: 1))
         let scale = try parameters.findFloatXTexture(name: "scale", else: 1.0)
         return DiffuseTransmission(
                 reflectance: reflectance,

@@ -198,9 +198,9 @@ struct Api {
                 case "homogeneous":
                         let scale = try parameters.findOneFloatX(called: "scale", else: 1)
                         let absorption =
-                                try parameters.findSpectrum(name: "sigma_a", else: white) as! RGBSpectrum
+                                try parameters.findSpectrum(name: "sigma_a", else: white) as! RgbSpectrum
                         let scattering =
-                                try parameters.findSpectrum(name: "sigma_s", else: white) as! RGBSpectrum
+                                try parameters.findSpectrum(name: "sigma_s", else: white) as! RgbSpectrum
                         state.namedMedia[name] = Homogeneous(
                                 scale: scale,
                                 absorption: absorption,
@@ -294,7 +294,7 @@ struct Api {
                                 guard
                                         let brightness =
                                                 try state.areaLightParameters.findSpectrum(
-                                                        name: "L") as? RGBSpectrum
+                                                        name: "L") as? RgbSpectrum
                                 else {
                                         throw ParameterError.missing(parameter: "L", function: #function)
                                 }
@@ -399,8 +399,8 @@ struct Api {
                 switch textureClass {
                 // bilerp missing
                 case "checkerboard":
-                        let textureEven = try parameters.findRGBSpectrumTexture(name: "tex1")
-                        let textureOdd = try parameters.findRGBSpectrumTexture(name: "tex2")
+                        let textureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
+                        let textureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
                         let textures = (textureEven, textureOdd)
                         let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
                         let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
@@ -409,7 +409,7 @@ struct Api {
                 case "constant":
                         switch type {
                         case "spectrum", "color":
-                                texture = try parameters.findRGBSpectrumTexture(name: "value")
+                                texture = try parameters.findRgbSpectrumTexture(name: "value")
                         case "float":
                                 texture = try parameters.findFloatXTexture(name: "value")
                         default:
@@ -424,16 +424,16 @@ struct Api {
                 // marble missing
                 case "mix":
                         switch type {
-                        case "spectrum", "color":
-                                let tex1 = try parameters.findRGBSpectrumTexture(name: "tex1")
-                                let tex2 = try parameters.findRGBSpectrumTexture(name: "tex2")
+                        case "color", "spectrum":
+                                let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
+                                let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
                                 let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                texture = MixTexture<RGBSpectrum>(textures: (tex1, tex2), amount: amount)
+                                texture = RgbSpectrumMixTexture(textures: (tex1, tex2), amount: amount)
                         case "float":
                                 let tex1 = try parameters.findFloatXTexture(name: "tex1")
                                 let tex2 = try parameters.findFloatXTexture(name: "tex2")
                                 let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                texture = MixTexture<FloatX>(textures: (tex1, tex2), amount: amount)
+                                texture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
                         default:
                                 unimplemented()
                         }
@@ -442,7 +442,7 @@ struct Api {
                         texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
                         let scale = try parameters.findFloatXTexture(name: "scale")
-                        let tex = try parameters.findRGBSpectrumTexture(name: "tex")
+                        let tex = try parameters.findRgbSpectrumTexture(name: "tex")
                         texture = ScaledTexture(scale: scale, texture: tex)
                 // windy missing
                 // wrinkled missing

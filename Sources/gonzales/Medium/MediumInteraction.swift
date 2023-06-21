@@ -1,14 +1,14 @@
 struct MediumInteraction: Interaction {
 
-        func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum {
+        func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum {
                 let phase = phase.evaluate(wo: wo, wi: wi)
-                let scatter = RGBSpectrum(intensity: phase)
+                let scatter = RgbSpectrum(intensity: phase)
                 return scatter
         }
 
         func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
                 let (value, wi) = phase.samplePhase(wo: wo, sampler: sampler)
-                return BsdfSample(RGBSpectrum(intensity: value), wi, value)
+                return BsdfSample(RgbSpectrum(intensity: value), wi, value)
         }
 
         func evaluateProbabilityDensity(wi: Vector) -> FloatX {

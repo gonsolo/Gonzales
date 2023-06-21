@@ -5,7 +5,7 @@ import Foundation
 protocol Light {
 
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
-                radiance: RGBSpectrum,
+                radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
                 visibility: Visibility
@@ -14,7 +14,7 @@ protocol Light {
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
 
-        func radianceFromInfinity(for ray: Ray) -> RGBSpectrum
+        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum
 
         func power() -> Measurement<UnitPower>
 

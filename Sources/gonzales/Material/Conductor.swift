@@ -1,6 +1,6 @@
 final class Conductor: Material {
 
-        init(eta: RGBSpectrum, k: RGBSpectrum, roughness: (FloatX, FloatX)) {
+        init(eta: RgbSpectrum, k: RgbSpectrum, roughness: (FloatX, FloatX)) {
                 self.eta = eta
                 self.k = k
                 self.roughness = roughness
@@ -22,8 +22,8 @@ final class Conductor: Material {
                 interaction.bsdf = microfaceReflectionBsdf
         }
 
-        var eta: RGBSpectrum
-        var k: RGBSpectrum
+        var eta: RgbSpectrum
+        var k: RgbSpectrum
         var roughness: (FloatX, FloatX)
 }
 

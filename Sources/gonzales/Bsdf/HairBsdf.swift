@@ -2,7 +2,7 @@ import Foundation  // atan2
 
 struct HairBsdf: GlobalBsdf {
 
-        init(alpha: FloatX, h: FloatX, absorption: RGBSpectrum, bsdfFrame: BsdfFrame) {
+        init(alpha: FloatX, h: FloatX, absorption: RgbSpectrum, bsdfFrame: BsdfFrame) {
                 self.h = h
                 self.absorption = absorption
                 let sqrtPiOver8: FloatX = 0.626657069
@@ -35,8 +35,8 @@ struct HairBsdf: GlobalBsdf {
                 cosThetaO: FloatX,
                 indexRefraction: FloatX,
                 h: FloatX,
-                transmittance: RGBSpectrum
-        ) -> [RGBSpectrum] {
+                transmittance: RgbSpectrum
+        ) -> [RgbSpectrum] {
                 var attenuation = Array(repeating: black, count: pMax + 1)
                 let cosGammaO = (1 - h * h).squareRoot()
                 let cosTheta = cosThetaO * cosGammaO
@@ -44,13 +44,13 @@ struct HairBsdf: GlobalBsdf {
                         cosThetaI: cosTheta,
                         refractiveIndex: indexRefraction)
                 let fresnelTransmitted = 1 - fresnelReflected
-                attenuation[0] = RGBSpectrum(intensity: fresnelReflected)
+                attenuation[0] = RgbSpectrum(intensity: fresnelReflected)
                 attenuation[1] = square(fresnelTransmitted) * transmittance
                 for p in 2..<pMax {
                         attenuation[p] = attenuation[p - 1] * transmittance * fresnelReflected
                 }
-                let enumerator: RGBSpectrum = attenuation[pMax - 1] * fresnelReflected * transmittance
-                let denominator: RGBSpectrum = white - transmittance * fresnelReflected
+                let enumerator: RgbSpectrum = attenuation[pMax - 1] * fresnelReflected * transmittance
+                let denominator: RgbSpectrum = white - transmittance * fresnelReflected
                 attenuation[pMax] = enumerator / denominator
                 return attenuation
         }
@@ -173,7 +173,7 @@ struct HairBsdf: GlobalBsdf {
                 return (longitudinalScattering, azimuthalScattering)
         }
 
-        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
 
                 let sinThetaO = wo.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
@@ -311,8 +311,8 @@ struct HairBsdf: GlobalBsdf {
                 return clamp(value: x, low: a, high: b)
         }
 
-        func sampleLocal(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RGBSpectrum) -> (
-                RGBSpectrum, Vector, FloatX
+        func sampleLocal(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RgbSpectrum) -> (
+                RgbSpectrum, Vector, FloatX
         ) {
                 let sinThetaO = wo.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
@@ -378,13 +378,13 @@ struct HairBsdf: GlobalBsdf {
                 return (radiance, wi, pdf)
         }
 
-        func albedo() -> RGBSpectrum {
+        func albedo() -> RgbSpectrum {
                 // Not correct but should be ok
                 return absorption
         }
 
         let pMax = 3
-        var absorption: RGBSpectrum
+        var absorption: RgbSpectrum
         let indexRefraction: FloatX = 1.55
         let gammaO: FloatX
         let h: FloatX

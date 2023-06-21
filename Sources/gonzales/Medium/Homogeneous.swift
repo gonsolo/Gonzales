@@ -2,13 +2,13 @@ import Foundation
 
 final class Homogeneous: Medium {
 
-        init(scale: FloatX, absorption: RGBSpectrum, scattering: RGBSpectrum) {
+        init(scale: FloatX, absorption: RgbSpectrum, scattering: RgbSpectrum) {
                 self.scale = scale
                 self.absorption = absorption
                 self.scattering = scattering
         }
 
-        func sample(ray: Ray, tHit: FloatX, sampler: Sampler) -> (RGBSpectrum, MediumInteraction?) {
+        func sample(ray: Ray, tHit: FloatX, sampler: Sampler) -> (RgbSpectrum, MediumInteraction?) {
                 let channel = Int(sampler.get1D() * 3)
                 let transmission = absorption + scattering
                 let transmissionChannel = transmission[channel]
@@ -29,6 +29,6 @@ final class Homogeneous: Medium {
         }
 
         let scale: FloatX
-        let absorption: RGBSpectrum
-        let scattering: RGBSpectrum
+        let absorption: RgbSpectrum
+        let scattering: RgbSpectrum
 }

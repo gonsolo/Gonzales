@@ -1,6 +1,6 @@
 struct SurfaceInteraction: Interaction {
 
-        func evaluateDistributionFunction(wi: Vector) -> RGBSpectrum {
+        func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum {
                 let reflected = bsdf.evaluateWorld(wo: wo, wi: wi)
                 let dot = absDot(wi, Vector(normal: shadingNormal))
                 let scatter = reflected * dot

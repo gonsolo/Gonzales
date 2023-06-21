@@ -1,6 +1,6 @@
 import Foundation
 
-final class OpenImageIOTexture: FloatTexture, RGBSpectrumTexture {
+final class OpenImageIOTexture: FloatTexture, RgbSpectrumTexture {
 
         enum TextureType {
                 case float
@@ -36,7 +36,7 @@ final class OpenImageIOTexture: FloatTexture, RGBSpectrumTexture {
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
 
-        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
+        func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
@@ -46,7 +46,7 @@ final class OpenImageIOTexture: FloatTexture, RGBSpectrumTexture {
                 case .float:
                         return evaluateFloat(at: interaction)
                 case .rgb:
-                        return evaluateRGBSpectrum(at: interaction)
+                        return evaluateRgbSpectrum(at: interaction)
                 }
         }
 

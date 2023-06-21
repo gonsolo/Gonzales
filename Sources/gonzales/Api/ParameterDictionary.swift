@@ -39,25 +39,25 @@ extension ParameterDictionary {
                 return try findString(called: name) ?? ""
         }
 
-        func findRGBSpectrumTexture(
+        func findRgbSpectrumTexture(
                 name: String,
-                else spectrum: RGBSpectrum = RGBSpectrum(intensity: 1)
+                else spectrum: RgbSpectrum = RgbSpectrum(intensity: 1)
         )
-                throws -> RGBSpectrumTexture
+                throws -> RgbSpectrumTexture
         {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = state.textures[textureName] as? RGBSpectrumTexture
+                        guard let texture = state.textures[textureName] as? RgbSpectrumTexture
                         else {
                                 warning("Could not find texture \(textureName)")
-                                return ConstantTexture<RGBSpectrum>(value: red)
+                                return ConstantTexture<RgbSpectrum>(value: red)
                         }
                         return texture
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
                                 fatalError()
                         }
-                        guard let rgbSpectrum = spectrum as? RGBSpectrum else {
+                        guard let rgbSpectrum = spectrum as? RgbSpectrum else {
                                 fatalError()
                         }
                         return ConstantTexture(value: rgbSpectrum)

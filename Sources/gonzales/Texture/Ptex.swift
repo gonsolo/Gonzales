@@ -7,19 +7,19 @@ struct PtexCache {
         }
 }
 
-final class Ptex: RGBSpectrumTexture {
+final class Ptex: RgbSpectrumTexture {
 
         init(path: String) {
                 self.path = path
                 initPtexTexture(path)
         }
 
-        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
+        func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluatePtex(
                         path, interaction.faceIndex, Float(interaction.uv[0]),
                         Float(interaction.uv[1]), pointer)
-                let spectrum = RGBSpectrum(
+                let spectrum = RgbSpectrum(
                         r: FloatX(pointer[0]), g: FloatX(pointer[1]), b: FloatX(pointer[2]))
                 return gammaSrgbToLinear(light: spectrum)
         }

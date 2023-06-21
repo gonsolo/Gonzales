@@ -14,7 +14,7 @@ struct MultipleImportanceSampler {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
-        ) throws -> RGBSpectrum {
+        ) throws -> RgbSpectrum {
 
                 func evaluate(
                         first: MISSampler,
@@ -22,7 +22,7 @@ struct MultipleImportanceSampler {
                         light: Light,
                         interaction: Interaction,
                         sampler: Sampler
-                ) throws -> RGBSpectrum {
+                ) throws -> RgbSpectrum {
                         let thisSample = try first.sample(
                                 light, interaction, sampler)
                         let otherDensity = try second.density(

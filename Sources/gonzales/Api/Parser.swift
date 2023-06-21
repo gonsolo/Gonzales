@@ -218,23 +218,23 @@ final class Parser {
                 } else {
                         warning("Unknown named spectrum \(string)!")
                         warning("Returning default spectrum!")
-                        return RGBSpectrum(rgb: (1, 1, 1))
+                        return RgbSpectrum(rgb: (1, 1, 1))
                 }
         }
 
-        private func parseRGBSpectrum() throws -> (any Spectrum)? {
+        private func parseRgbSpectrum() throws -> (any Spectrum)? {
                 if let namedSpectrum = try parseNamedSpectrum() {
                         return namedSpectrum
                 }
                 guard let threeFloats = try parseThreeFloatXs() else {
                         return nil
                 }
-                return RGBSpectrum(rgb: threeFloats)
+                return RgbSpectrum(rgb: threeFloats)
         }
 
         private func parseRGBSpectra() throws -> [any Spectrum] {
                 var spectra = [any Spectrum]()
-                while let spectrum = try parseRGBSpectrum() {
+                while let spectrum = try parseRgbSpectrum() {
                         spectra.append(spectrum)
                 }
                 return spectra
@@ -328,7 +328,7 @@ final class Parser {
                         }
                         return [value]
                 case "rgb", "color", "spectrum":
-                        guard let value = try parseRGBSpectrum() else {
+                        guard let value = try parseRgbSpectrum() else {
                                 try bail(message: "RGB spectrum expected!")
                         }
                         return [value]
@@ -350,7 +350,7 @@ final class Parser {
                 }
         }
 
-        private func blackBodyDummy(value: FloatX) -> [RGBSpectrum] {
+        private func blackBodyDummy(value: FloatX) -> [RgbSpectrum] {
                 warning("Blackbody emission is not implemented!")
                 return [gray]
         }

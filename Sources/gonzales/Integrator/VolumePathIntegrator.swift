@@ -41,7 +41,7 @@ final class VolumePathIntegrator {
                 ray: Ray,
                 tHit: inout FloatX,
                 bounce: Int,
-                estimate: inout RGBSpectrum,
+                estimate: inout RgbSpectrum,
                 interaction: inout SurfaceInteraction
         ) throws {
                 try scene.intersect(
@@ -113,7 +113,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
-        ) throws -> RGBSpectrum {
+        ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
@@ -131,7 +131,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
-        ) throws -> RGBSpectrum {
+        ) throws -> RgbSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
                         light: light,
                         interaction: interaction,
@@ -149,7 +149,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
-        ) throws -> RGBSpectrum {
+        ) throws -> RgbSpectrum {
                 let lightSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleLightSource, density: lightDensity)
                 let brdfSampler = MultipleImportanceSampler.MISSampler(
@@ -167,7 +167,7 @@ final class VolumePathIntegrator {
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
-        ) throws -> RGBSpectrum {
+        ) throws -> RgbSpectrum {
                 if light.isDelta {
                         return try sampleLight(
                                 light: light,
@@ -194,7 +194,7 @@ final class VolumePathIntegrator {
                 at interaction: Interaction,
                 with sampler: Sampler,
                 lightSampler: LightSampler
-        ) throws -> RGBSpectrum {
+        ) throws -> RgbSpectrum {
                 guard scene.lights.count > 0 else { return black }
                 let (light, lightPdf) = try chooseLight(
                         sampler: sampler,
@@ -206,7 +206,7 @@ final class VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
-        private func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RGBSpectrum) -> Bool {
+        private func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum) -> Bool {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
                         let roulette = FloatX.random(in: 0..<1)
@@ -219,12 +219,12 @@ final class VolumePathIntegrator {
         }
 
         private func sampleMedium(
-                pathThroughputWeight: RGBSpectrum,
+                pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
                 sampler: Sampler,
                 lightSampler: LightSampler,
                 ray: Ray
-        ) throws -> (RGBSpectrum, Ray) {
+        ) throws -> (RgbSpectrum, Ray) {
                 let estimate =
                         try pathThroughputWeight
                         * sampleOneLight(
@@ -244,7 +244,7 @@ final class VolumePathIntegrator {
                 with sampler: Sampler,
                 lightSampler: LightSampler
         ) throws
-                -> (estimate: RGBSpectrum, albedo: RGBSpectrum, normal: Normal)
+                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
         {
                 var estimate = black
 
@@ -351,7 +351,7 @@ final class VolumePathIntegrator {
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
         // denoiser can't read. Make white a little colorful
-        private func intelHack(_ albedo: inout RGBSpectrum) {
+        private func intelHack(_ albedo: inout RgbSpectrum) {
                 if albedo.r == albedo.g && albedo.r == albedo.b {
                         albedo.r += 0.01
                 }

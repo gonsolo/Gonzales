@@ -2,13 +2,13 @@ import Foundation
 
 struct PointLight: Light {
 
-        init(lightToWorld: Transform, intensity: RGBSpectrum) {
+        init(lightToWorld: Transform, intensity: RgbSpectrum) {
                 position = lightToWorld * origin
                 self.intensity = intensity
         }
 
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
-                radiance: RGBSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
+                radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let direction: Vector = normalized(position - reference.position)
                 let pdf: FloatX = 1.0
@@ -25,7 +25,7 @@ struct PointLight: Light {
                 return 0
         }
 
-        func radianceFromInfinity(for ray: Ray) -> RGBSpectrum { return black }
+        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
         func power() -> Measurement<UnitPower> {
                 return Measurement(value: Double(intensity.average() * 4 * FloatX.pi), unit: UnitPower.watts)
@@ -34,14 +34,14 @@ struct PointLight: Light {
         var isDelta: Bool { return true }
 
         let position: Point
-        let intensity: RGBSpectrum
+        let intensity: RgbSpectrum
 }
 
 func createPointLight(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight {
-        guard let intensity = try parameters.findSpectrum(name: "I") as? RGBSpectrum else {
+        guard let intensity = try parameters.findSpectrum(name: "I") as? RgbSpectrum else {
                 throw ParameterError.missing(parameter: "I", function: #function)
         }
-        guard let scale = try parameters.findSpectrum(name: "scale", else: white) as? RGBSpectrum
+        guard let scale = try parameters.findSpectrum(name: "scale", else: white) as? RgbSpectrum
         else {
                 throw ParameterError.missing(parameter: "scale", function: #function)
         }

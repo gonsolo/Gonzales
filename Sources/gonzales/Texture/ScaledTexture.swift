@@ -1,17 +1,17 @@
 import Foundation
 
-final class ScaledTexture: RGBSpectrumTexture {
+final class ScaledTexture: RgbSpectrumTexture {
 
         init(scale: Texture, texture: Texture) {
                 self.scale = scale
                 self.texture = texture
         }
 
-        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
+        func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 guard let scale = scale.evaluate(at: interaction) as? FloatX else {
                         return black
                 }
-                guard let spectrum = texture.evaluate(at: interaction) as? RGBSpectrum else {
+                guard let spectrum = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         return black
                 }
                 return scale * spectrum

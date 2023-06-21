@@ -1,10 +1,10 @@
 struct MicrofacetReflection: GlobalBsdf {
 
-        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
                 let cosThetaO = absCosTheta(wo)
                 let cosThetaI = absCosTheta(wi)
                 var half = wo + wi
-                if cosThetaO == 0 || cosThetaI == 0 { return RGBSpectrum() }
+                if cosThetaO == 0 || cosThetaI == 0 { return RgbSpectrum() }
                 guard !half.isZero else { return black }
                 half.normalize()
                 let f = fresnel.evaluate(cosTheta: dot(wi, half))
@@ -30,9 +30,9 @@ struct MicrofacetReflection: GlobalBsdf {
                 return distribution.probabilityDensity(wo: wo, half: half) / (4 * dot(wo, half))
         }
 
-        func albedo() -> RGBSpectrum { return white }
+        func albedo() -> RgbSpectrum { return white }
 
-        var reflectance: RGBSpectrum
+        var reflectance: RgbSpectrum
         var distribution: MicrofacetDistribution
         var fresnel: Fresnel
 

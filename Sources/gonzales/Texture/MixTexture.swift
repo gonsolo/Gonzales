@@ -1,29 +1,33 @@
 import Foundation
 
-final class MixTexture<T: TextureEvaluation>: Texture {
+final class FloatMixTexture: FloatTexture {
 
-        init(textures: (Texture, Texture), amount: FloatX) {
+        init(textures: (FloatTexture, FloatTexture), amount: FloatX) {
                 self.textures = textures
                 self.amount = amount
         }
 
-        func evaluate(at: Interaction) -> TextureEvaluation {
+        func evaluateFloat(at: Interaction) -> Float {
                 // TODO
                 return FloatX(1.0)
         }
 
-        let textures: (Texture, Texture)
+        let textures: (FloatTexture, FloatTexture)
         let amount: FloatX
 }
 
-extension MixTexture: RGBSpectrumTexture where T == RGBSpectrum {
-        func evaluateRGBSpectrum(at interaction: Interaction) -> RGBSpectrum {
-                return evaluate(at: interaction) as! RGBSpectrum
-        }
-}
+final class RgbSpectrumMixTexture: RgbSpectrumTexture {
 
-extension MixTexture: FloatTexture where T == FloatX {
-        func evaluateFloat(at interaction: Interaction) -> FloatX {
-                return evaluate(at: interaction) as! FloatX
+        init(textures: (RgbSpectrumTexture, RgbSpectrumTexture), amount: FloatX) {
+                self.textures = textures
+                self.amount = amount
         }
+
+        func evaluateRgbSpectrum(at: Interaction) -> RgbSpectrum {
+                // TODO
+                return white
+        }
+
+        let textures: (RgbSpectrumTexture, RgbSpectrumTexture)
+        let amount: FloatX
 }

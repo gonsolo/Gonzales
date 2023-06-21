@@ -29,10 +29,10 @@ final class OpenImageIOTextureSystem {
                 return result
         }
 
-        func evaluate(filename: String, s: Float, t: Float) -> RGBSpectrum {
+        func evaluate(filename: String, s: Float, t: Float) -> RgbSpectrum {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)
-                let result = RGBSpectrum(r: pointer[0], g: pointer[1], b: pointer[2])
+                let result = RgbSpectrum(r: pointer[0], g: pointer[1], b: pointer[2])
                 return result
         }
 

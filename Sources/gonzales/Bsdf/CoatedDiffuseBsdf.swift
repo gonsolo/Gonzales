@@ -3,7 +3,7 @@ import Foundation  // exp
 struct CoatedDiffuseBsdf: GlobalBsdf {
 
         init(
-                reflectance: RGBSpectrum,
+                reflectance: RgbSpectrum,
                 refractiveIndex: FloatX,
                 roughness: (FloatX, FloatX),
                 remapRoughness: Bool,
@@ -25,14 +25,14 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
 
         private func evaluateNextEvent(
                 depth: Int,
-                pathThroughputWeight: inout RGBSpectrum,
+                pathThroughputWeight: inout RgbSpectrum,
                 sampler: Sampler,
                 z: inout FloatX,
                 w: inout Vector,
                 exitZ: FloatX,
                 wis: BsdfSample,
                 wi: Vector
-        ) -> RGBSpectrum? {
+        ) -> RgbSpectrum? {
                 var estimate = black
                 if depth > 3 && pathThroughputWeight.maxValue < 0.25 {
                         let q = max(0, 1 - pathThroughputWeight.maxValue)
@@ -111,7 +111,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 wo: Vector,
                 wi: Vector,
                 exitZ: FloatX,
-                estimate: inout RGBSpectrum
+                estimate: inout RgbSpectrum
         ) {
                 let wos = topBxdf.sampleLocal(wo: wo, u: sampler.get3D())
                 if !wos.isValid {
@@ -145,7 +145,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
 
         }
 
-        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
                 assert(wo.z > 0)
                 assert(sameHemisphere(wi, wo))
 
@@ -298,7 +298,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 }
         }
 
-        func albedo() -> RGBSpectrum { return reflectance }
+        func albedo() -> RgbSpectrum { return reflectance }
 
         let thickness: FloatX = 0.1
 
@@ -307,7 +307,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         // g in PBRT
         let asymmetry: FloatX = 0
 
-        let reflectance: RGBSpectrum
+        let reflectance: RgbSpectrum
         let roughness: (FloatX, FloatX)
 
         let topBxdf: DielectricBsdf

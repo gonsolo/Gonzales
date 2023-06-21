@@ -1,3 +1,3 @@
 protocol TextureEvaluation {}
-extension RGBSpectrum: TextureEvaluation {}
+extension RgbSpectrum: TextureEvaluation {}
 extension FloatX: TextureEvaluation {}

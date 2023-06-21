@@ -4,7 +4,7 @@ struct DielectricBsdf: GlobalBsdf {
                 return dot(half, wi) * cosTheta(wi) < 0 || dot(half, wo) * cosTheta(wo) < 0
         }
 
-        func evaluateLocal(wo: Vector, wi: Vector) -> RGBSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return black
                 }
@@ -32,7 +32,7 @@ struct DielectricBsdf: GlobalBsdf {
                         let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
                         let enumerator = differentialArea * visibleFraction
                         let denominator = abs(4 * cosThetaI * cosThetaO)
-                        let estimate = RGBSpectrum(intensity: enumerator / denominator)
+                        let estimate = RgbSpectrum(intensity: enumerator / denominator)
                         return estimate
                 } else {
                         let denominator = square(dot(wi, half) + dot(wo, half) / etap) * cosThetaI * cosThetaO
@@ -45,7 +45,7 @@ struct DielectricBsdf: GlobalBsdf {
                         var enumerator = differentialArea * fresnelTransmitted * visibleFraction * absDotIO
                         // radiance transport
                         enumerator /= square(etap)
-                        let estimate = RGBSpectrum(intensity: enumerator / denominator)
+                        let estimate = RgbSpectrum(intensity: enumerator / denominator)
                         return estimate
                 }
         }
@@ -54,7 +54,7 @@ struct DielectricBsdf: GlobalBsdf {
                 -> BsdfSample
         {
                 let wi = mirror(wo)
-                let estimate = RGBSpectrum(intensity: reflected / absCosTheta(wi))
+                let estimate = RgbSpectrum(intensity: reflected / absCosTheta(wi))
                 return BsdfSample(estimate, wi, probabilityReflected)
         }
 
@@ -67,7 +67,7 @@ struct DielectricBsdf: GlobalBsdf {
                 guard let (wi, etap) = refract(wi: wo, normal: up, eta: refractiveIndex) else {
                         return BsdfSample()
                 }
-                var estimate = RGBSpectrum(intensity: transmitted / absCosTheta(wi))
+                var estimate = RgbSpectrum(intensity: transmitted / absCosTheta(wi))
                 // transport mode radiance
                 estimate /= square(etap)
                 return BsdfSample(estimate, wi, probabilityTransmitted)
@@ -111,7 +111,7 @@ struct DielectricBsdf: GlobalBsdf {
                 let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
                 let enumerator = differentialArea * visibleFraction * reflected
                 let denominator = 4 * cosTheta(wi) * cosTheta(wo)
-                let estimate = RGBSpectrum(intensity: enumerator / denominator)
+                let estimate = RgbSpectrum(intensity: enumerator / denominator)
                 return BsdfSample(estimate, wi, probabilityDensity)
         }
 
@@ -133,7 +133,7 @@ struct DielectricBsdf: GlobalBsdf {
                         distribution.probabilityDensity(wo: wo, half: wm) * dwmDwi * probabilityTransmitted
                 let differentialArea = distribution.differentialArea(withNormal: wm)
                 let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
-                var estimate = RGBSpectrum(
+                var estimate = RgbSpectrum(
                         intensity:
                                 transmitted * differentialArea * visibleFraction
                                 * abs(dot(wi, wm) * dot(wo, wm) / cosTheta(wi) * cosTheta(wo) * denom))
@@ -212,7 +212,7 @@ struct DielectricBsdf: GlobalBsdf {
                 return pdf
         }
 
-        func albedo() -> RGBSpectrum { return white }
+        func albedo() -> RgbSpectrum { return white }
 
         var isSpecular: Bool {
                 return distribution.isSmooth
