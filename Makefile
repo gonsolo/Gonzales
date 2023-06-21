@@ -66,6 +66,8 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = villa-daylight.pbrt
 SCENE_DIR = watercolor
 SCENE_NAME = camera-1.pbrt
+#SCENE_DIR = zero-day
+#SCENE_NAME = frame120.pbrt
 # watercolor 	26 works
 # zero-day 	27
 SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)

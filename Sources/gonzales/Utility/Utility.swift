@@ -70,6 +70,11 @@ func lerp(with t: RgbSpectrum, between first: RgbSpectrum, and second: RgbSpectr
         return (white - t) * first + t * second
 }
 
+func lerp(with t: FloatX, between first: RgbSpectrum, and second: RgbSpectrum) -> RgbSpectrum {
+        let t = RgbSpectrum(intensity: t)
+        return (white - t) * first + t * second
+}
+
 @available(macOS 10.13, *)
 func shell(_ launchPath: String, _ arguments: [String] = []) -> (String?, Int32) {
         let task = Process()
