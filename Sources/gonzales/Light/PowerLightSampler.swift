@@ -22,9 +22,7 @@ final class PowerLightSampler: LightSampler {
         init(sampler: Sampler, lights: [Light]) {
                 self.sampler = sampler
                 self.lights = lights
-                totalPower = lights.reduce(
-                        Measurement(value: 0, unit: UnitPower.watts),
-                        { total, light in total + light.power() })
+                totalPower = lights.reduce(0, { total, light in total + light.power() })
                 for (i, light) in lights.enumerated() {
                         if i == 0 {
                                 cumulativePowers.append(light.power())
@@ -37,15 +35,15 @@ final class PowerLightSampler: LightSampler {
         func chooseLight() -> (Light, FloatX) {
                 assert(lights.count > 0)
                 let u = sampler.get1D()
-                let powerIndex = Double(u) * totalPower  //FloatX(totalPower.value)
+                let powerIndex = u * totalPower
                 let (i, _) = lowerBound(cumulativePowers, key: powerIndex)
                 let light = lights[i]
-                let probabilityDensity = FloatX(light.power().value / totalPower.value)
+                let probabilityDensity = light.power() / totalPower
                 return (light, probabilityDensity)
         }
 
         let sampler: Sampler
         let lights: [Light]
-        var cumulativePowers: [Measurement<UnitPower>] = []
-        let totalPower: Measurement<UnitPower>
+        var cumulativePowers: [FloatX] = []
+        let totalPower: FloatX
 }

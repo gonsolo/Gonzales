@@ -111,11 +111,9 @@ struct InfiniteLight: Light {
                 return radiance
         }
 
-        func power() -> Measurement<UnitPower> {
+        func power() -> FloatX {
                 let worldRadius = sceneDiameter / 2
-                return Measurement(
-                        value: Double(FloatX.pi * square(worldRadius) * brightness.average()),
-                        unit: UnitPower.watts)
+                return FloatX.pi * square(worldRadius) * brightness.average()
         }
 
         var isDelta: Bool { return false }

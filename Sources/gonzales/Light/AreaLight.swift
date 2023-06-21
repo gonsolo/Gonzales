@@ -34,10 +34,8 @@ struct AreaLight: Light, Boundable, Intersectable, Material {
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
-        func power() -> Measurement<UnitPower> {
-                return Measurement(
-                        value: Double(brightness.average() * shape.area() * FloatX.pi),
-                        unit: UnitPower.watts)
+        func power() -> FloatX {
+                return brightness.average() * shape.area() * FloatX.pi
         }
 
         var isDelta: Bool { return false }

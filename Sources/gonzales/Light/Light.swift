@@ -16,7 +16,7 @@ protocol Light {
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum
 
-        func power() -> Measurement<UnitPower>
+        func power() -> FloatX
 
         var isDelta: Bool { get }
 }

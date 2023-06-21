@@ -27,8 +27,8 @@ struct PointLight: Light {
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
-        func power() -> Measurement<UnitPower> {
-                return Measurement(value: Double(intensity.average() * 4 * FloatX.pi), unit: UnitPower.watts)
+        func power() -> FloatX {
+                return intensity.average() * 4 * FloatX.pi
         }
 
         var isDelta: Bool { return true }
