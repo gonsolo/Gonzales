@@ -3,7 +3,7 @@ all: d
 #SINGLERAY = --single 68 2
 #SYNC = --sync
 #VERBOSE = --verbose
-QUICK = --quick
+#QUICK = --quick
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
 
@@ -12,11 +12,11 @@ PTEXMEM = --ptexmem 1 # GB
 # dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
-#BITTERLI = ~/src/bitterli
-#SCENE_NAME = cornell-box
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-#IMAGE =  $(SCENE_NAME).exr
-#IMAGE_PBRT = $(IMAGE)
+BITTERLI = ~/src/bitterli
+SCENE_NAME = dining-room
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+IMAGE =  $(SCENE_NAME).exr
+IMAGE_PBRT = $(IMAGE)
 
 # Render 27/27 scenes
 PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
@@ -27,7 +27,6 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = dambreak
 #SCENE_NAME = dambreak0.pbrt
 #SCENE_NAME = dambreak1.pbrt
-
 #SCENE_DIR = bmw-m6
 #SCENE_DIR = bunny-cloud
 #SCENE_DIR = bunny-fur
@@ -68,9 +67,9 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_NAME = camera-1.pbrt
 #SCENE_DIR = zero-day 				27/27
 #SCENE_NAME = frame120.pbrt
-SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
-IMAGE =  $(SCENE_NAME:.pbrt=.exr)
-IMAGE_PBRT = $(IMAGE)
+#SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
+#IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+#IMAGE_PBRT = $(IMAGE)
 
 #SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
 #IMAGE = gonzales.exr

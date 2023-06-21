@@ -119,10 +119,8 @@ final class VolumePathIntegrator {
                         interaction: interaction,
                         sampler: sampler)
                 if lightSample.probabilityDensity == 0 {
-                        print("light: black")
                         return black
                 } else {
-                        print("light: ", lightSample)
                         return lightSample.estimate / lightSample.probabilityDensity
                 }
         }
@@ -137,10 +135,8 @@ final class VolumePathIntegrator {
                         interaction: interaction,
                         sampler: sampler)
                 if bsdfSample.probabilityDensity == 0 {
-                        print("light: black")
                         return black
                 } else {
-                        print("light: ", bsdfSample)
                         return bsdfSample.estimate / bsdfSample.probabilityDensity
                 }
         }
