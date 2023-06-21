@@ -76,6 +76,30 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
+                try intersect(
+                        originX: ray.origin.x,
+                        originY: ray.origin.y,
+                        originZ: ray.origin.z,
+                        directionX: ray.direction.x,
+                        directionY: ray.direction.y,
+                        directionZ: ray.direction.z,
+                        tHit: &tHit,
+                        material: material,
+                        interaction: &interaction)
+        }
+
+        //@_noAllocation
+        func intersect(
+                originX: FloatX,
+                originY: FloatX,
+                originZ: FloatX,
+                directionX: FloatX,
+                directionY: FloatX,
+                directionZ: FloatX,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
 
                 let empty = { (line: Int) in
                         //print("No triangle intersection at line ", line)
@@ -87,18 +111,30 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
 
                 let rtcInvalidGeometryId = UInt32.max
 
-                var rayhit = RTCRayHit()
-                rayhit.ray.org_x = ray.origin.x
-                rayhit.ray.org_y = ray.origin.y
-                rayhit.ray.org_z = ray.origin.z
-                rayhit.ray.dir_x = ray.direction.x
-                rayhit.ray.dir_y = ray.direction.y
-                rayhit.ray.dir_z = ray.direction.z
-                rayhit.ray.tnear = 0
-                rayhit.ray.tfar = tHit
-                rayhit.hit.geomID = rtcInvalidGeometryId
-                rayhit.hit.instID = rtcInvalidGeometryId
+                let rtcRay = RTCRay(
+                        org_x: originX,
+                        org_y: originY,
+                        org_z: originZ,
+                        tnear: 0,
+                        dir_x: directionX,
+                        dir_y: directionY,
+                        dir_z: directionZ,
+                        time: 0,
+                        tfar: tHit,
+                        mask: 0,
+                        id: 0,
+                        flags: 0)
+                let rtcHit = RTCHit(
+                        Ng_x: 0,
+                        Ng_y: 0,
+                        Ng_z: 0,
+                        u: 0,
+                        v: 0,
+                        primID: 0,
+                        geomID: rtcInvalidGeometryId,
+                        instID: rtcInvalidGeometryId)
 
+                var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
                 var context = RTCIntersectContext()
                 rtcInitIntersectContext(&context)
                 rtcIntersect1(rtcScene, &context, &rayhit)
@@ -141,14 +177,18 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                         y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
                 )
                 interaction.valid = true
-                interaction.position = ray.origin + tout * ray.direction
+                interaction.position.x = originX + tout * directionX
+                interaction.position.y = originY + tout * directionY
+                interaction.position.z = originZ + tout * directionZ
                 interaction.normal = normalized(
                         Normal(
                                 x: rayhit.hit.Ng_x,
                                 y: rayhit.hit.Ng_y,
                                 z: rayhit.hit.Ng_z))
                 interaction.shadingNormal = interaction.normal
-                interaction.wo = -ray.direction
+                interaction.wo.x = -directionX
+                interaction.wo.y = -directionY
+                interaction.wo.z = -directionZ
                 interaction.uv = uv
 
                 let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
