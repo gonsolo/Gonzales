@@ -38,6 +38,7 @@ final class Embree: EmbreeBase {
         var rtcDevice: OpaquePointer?
 }
 
+//@_semantics("arc.immortal")
 final class EmbreeAccelerator: Accelerator, EmbreeBase {
 
         init(
@@ -135,9 +136,11 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                         instID: rtcInvalidGeometryId)
 
                 var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
-                var context = RTCIntersectContext()
-                rtcInitIntersectContext(&context)
-                rtcIntersect1(rtcScene, &context, &rayhit)
+                _unsafePerformance {
+                        var context = RTCIntersectContext()
+                        rtcInitIntersectContext(&context)
+                        rtcIntersect1(rtcScene, &context, &rayhit)
+                }
 
                 guard rayhit.hit.geomID != rtcInvalidGeometryId else {
                         return empty(#line)
