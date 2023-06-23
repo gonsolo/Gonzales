@@ -2,8 +2,8 @@ var intersectionTests = 0
 
 struct Scene {
 
-        init(accelerator: Accelerator, lights: [Light]) {
-                self.accelerator = accelerator
+        init(acceleratorIndex: AcceleratorIndex, lights: [Light]) {
+                self.acceleratorIndex = acceleratorIndex
                 self.lights = lights
                 infiniteLights = lights.compactMap { $0 as? InfiniteLight }
                 sceneDiameter = diameter()
@@ -15,7 +15,7 @@ struct Scene {
                 interaction: inout SurfaceInteraction
         ) throws {
                 intersectionTests += 1
-                try accelerator.intersect(
+                try accelerators[acceleratorIndex].intersect(
                         ray: ray,
                         tHit: &tHit,
                         material: -1,
@@ -23,7 +23,7 @@ struct Scene {
         }
 
         func bound() -> Bounds3f {
-                return accelerator.worldBound()
+                return accelerators[acceleratorIndex].worldBound()
         }
 
         func diameter() -> FloatX {
@@ -34,7 +34,7 @@ struct Scene {
                 print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
-        var accelerator: Accelerator
+        var acceleratorIndex: AcceleratorIndex
         var lights: [Light]
         var infiniteLights: [Light]
 }

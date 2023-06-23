@@ -211,9 +211,10 @@ class Options {
                 let sampler = try makeSampler(film: camera.film)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try makeAccelerator(primitives: primitives)
+                let acceleratorIndex = addAccelerator(accelerator: accelerator)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let scene = makeScene(accelerator: accelerator)
+                let scene = makeScene(acceleratorIndex: acceleratorIndex)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = PowerLightSampler(sampler: sampler, lights: lights)
@@ -227,7 +228,7 @@ class Options {
                 )
         }
 
-        func makeScene(accelerator: Accelerator) -> Scene {
-                return Scene(accelerator: accelerator, lights: lights)
+        func makeScene(acceleratorIndex: AcceleratorIndex) -> Scene {
+                return Scene(acceleratorIndex: acceleratorIndex, lights: lights)
         }
 }

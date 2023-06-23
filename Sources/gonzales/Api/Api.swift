@@ -1,5 +1,14 @@
 import Foundation
 
+var accelerators = [Accelerator]()
+typealias AcceleratorIndex = Int
+
+func addAccelerator(accelerator: Accelerator) -> AcceleratorIndex {
+        let index: AcceleratorIndex = accelerators.count
+        accelerators.append(accelerator)
+        return index
+}
+
 func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
@@ -247,8 +256,9 @@ struct Api {
                 let accelerator = try makeAccelerator(primitives: primitives)
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
+                let index = addAccelerator(accelerator: accelerator)
                 instance = TransformedPrimitive(
-                        accelerator: accelerator,
+                        acceleratorIndex: index,
                         transform: currentTransform)
                 options.primitives.append(instance)
         }

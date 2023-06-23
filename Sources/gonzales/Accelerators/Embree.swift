@@ -48,7 +48,7 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 mediumInterfaces: [UInt32: MediumInterface?],
                 areaLights: [UInt32: AreaLight],
                 triangleUVs: [UInt32: (Vector2F, Vector2F, Vector2F)],
-                instanceMap: [UInt32: EmbreeAccelerator]
+                instanceMap: [UInt32: AcceleratorIndex]
         ) {
                 self.bounds = bounds
                 self.rtcScene = rtcScene
@@ -151,10 +151,14 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
 
                 var scene = self
                 if rayhit.hit.instID != rtcInvalidGeometryId {
-                        guard let sceneOpt = instanceMap[rayhit.hit.instID] else {
+                        guard let acceleratorIndex = instanceMap[rayhit.hit.instID] else {
                                 embreeError("No scene in instanceMap, instID: \(rayhit.hit.instID)")
                         }
-                        scene = sceneOpt
+                        guard let accelerator = accelerators[acceleratorIndex] as? EmbreeAccelerator else {
+                                embreeError("Expected EmbreeAccelerator!")
+
+                        }
+                        scene = accelerator
                 }
 
                 if let areaLight = scene.areaLights[geomID] {
@@ -217,7 +221,7 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
         private var mediumInterfaces = [UInt32: MediumInterface?]()
         private var areaLights = [UInt32: AreaLight]()
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
-        private var instanceMap = [UInt32: EmbreeAccelerator]()
+        private var instanceMap = [UInt32: AcceleratorIndex]()
 }
 
 final class EmbreeBuilder: EmbreeBase {
@@ -288,8 +292,9 @@ final class EmbreeBuilder: EmbreeBase {
                                         embreeError("Unknown shape in AreaLight.")
                                 }
                         case let transformedPrimitive as TransformedPrimitive:
+                                let acceleratorIndex = transformedPrimitive.acceleratorIndex
                                 guard
-                                        let embreeAccelerator = transformedPrimitive.accelerator
+                                        let embreeAccelerator = accelerators[acceleratorIndex]
                                                 as? EmbreeAccelerator
                                 else {
                                         embreeError("Expected EmbreeAccelerator!")
@@ -300,7 +305,7 @@ final class EmbreeBuilder: EmbreeBase {
 
                                 rtcAttachGeometryByID(rtcScene, instance, geomID)
 
-                                instanceMap[geomID] = embreeAccelerator
+                                instanceMap[geomID] = acceleratorIndex
 
                                 rtcReleaseGeometry(instance)
 
@@ -507,7 +512,7 @@ final class EmbreeBuilder: EmbreeBase {
         private var mediumInterfaces = [UInt32: MediumInterface?]()
         private var areaLights = [UInt32: AreaLight]()
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
-        private var instanceMap = [UInt32: EmbreeAccelerator]()
+        private var instanceMap = [UInt32: AcceleratorIndex]()
 
         private var bounds = Bounds3f()
 
