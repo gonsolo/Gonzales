@@ -248,7 +248,7 @@ struct Api {
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
                 instance = TransformedPrimitive(
-                        primitive: accelerator,
+                        accelerator: accelerator,
                         transform: currentTransform)
                 options.primitives.append(instance)
         }

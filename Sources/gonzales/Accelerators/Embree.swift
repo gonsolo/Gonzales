@@ -289,8 +289,8 @@ final class EmbreeBuilder: EmbreeBase {
                                 }
                         case let transformedPrimitive as TransformedPrimitive:
                                 guard
-                                        let embreeAccelerator =
-                                                transformedPrimitive.primitive as? EmbreeAccelerator
+                                        let embreeAccelerator = transformedPrimitive.accelerator
+                                                as? EmbreeAccelerator
                                 else {
                                         embreeError("Expected EmbreeAccelerator!")
                                 }

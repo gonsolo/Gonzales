@@ -2,8 +2,8 @@ import Foundation
 
 final class TransformedPrimitive: Boundable & Intersectable {
 
-        init(primitive: Boundable & Intersectable, transform: Transform) {
-                self.primitive = primitive
+        init(accelerator: Accelerator, transform: Transform) {
+                self.accelerator = accelerator
                 self.transform = transform
         }
 
@@ -15,7 +15,7 @@ final class TransformedPrimitive: Boundable & Intersectable {
         ) throws {
                 let localRay = transform.inverse * ray
                 // TODO: transform tHit?
-                try primitive.intersect(
+                try accelerator.intersect(
                         ray: localRay,
                         tHit: &tHit,
                         material: material,
@@ -27,7 +27,7 @@ final class TransformedPrimitive: Boundable & Intersectable {
         }
 
         func worldBound() -> Bounds3f {
-                let bound = transform * primitive.worldBound()
+                let bound = transform * accelerator.worldBound()
                 return bound
         }
 
@@ -35,6 +35,6 @@ final class TransformedPrimitive: Boundable & Intersectable {
                 unimplemented()
         }
 
-        let primitive: Boundable & Intersectable
+        let accelerator: Accelerator
         let transform: Transform
 }
