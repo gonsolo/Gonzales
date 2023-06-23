@@ -244,22 +244,12 @@ struct Api {
                         return
                 }
                 var instance: Boundable & Intersectable
-                if primitives.count > 1 {
-                        let accelerator = try makeAccelerator(primitives: primitives)
-                        primitives.removeAll()
-                        options.objects[name] = [accelerator]
-                        instance = TransformedPrimitive(
-                                primitive: accelerator,
-                                transform: currentTransform)
-                } else {
-                        guard let first = primitives.first else {
-                                warning("No primitive in objectInstance!")
-                                return
-                        }
-                        instance = TransformedPrimitive(
-                                primitive: first,
-                                transform: currentTransform)
-                }
+                let accelerator = try makeAccelerator(primitives: primitives)
+                primitives.removeAll()
+                options.objects[name] = [accelerator]
+                instance = TransformedPrimitive(
+                        primitive: accelerator,
+                        transform: currentTransform)
                 options.primitives.append(instance)
         }
 
