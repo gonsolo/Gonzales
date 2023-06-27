@@ -27,6 +27,7 @@ final class Tile {
                 return samples
         }
 
+        //@_noAllocation
         func renderPixel(
                 pixel: Point2I,
                 reporter: ProgressReporter,

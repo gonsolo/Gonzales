@@ -1,5 +1,7 @@
 var intersectionTests = 0
 
+typealias AcceleratorIndex = Int
+
 struct Scene {
 
         init(acceleratorIndex: AcceleratorIndex, lights: [Light]) {
@@ -9,6 +11,7 @@ struct Scene {
                 sceneDiameter = diameter()
         }
 
+        //@_noAllocation
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,

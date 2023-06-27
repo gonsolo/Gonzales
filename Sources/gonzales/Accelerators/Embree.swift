@@ -38,8 +38,8 @@ final class Embree: EmbreeBase {
         var rtcDevice: OpaquePointer?
 }
 
-//@_semantics("arc.immortal")
-final class EmbreeAccelerator: Accelerator, EmbreeBase {
+//final class EmbreeAccelerator: EmbreeBase {
+struct EmbreeAccelerator: EmbreeBase {
 
         init(
                 bounds: Bounds3f,
@@ -59,9 +59,9 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                 self.instanceMap = instanceMap
         }
 
-        deinit {
-                rtcReleaseScene(rtcScene)
-        }
+        //deinit {
+        //        rtcReleaseScene(rtcScene)
+        //}
 
         func worldBound() -> Bounds3f {
                 return bounds
@@ -135,12 +135,12 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                         geomID: rtcInvalidGeometryId,
                         instID: rtcInvalidGeometryId)
 
+                //_unsafePerformance {
                 var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
-                _unsafePerformance {
-                        var context = RTCIntersectContext()
-                        rtcInitIntersectContext(&context)
-                        rtcIntersect1(rtcScene, &context, &rayhit)
-                }
+                var context = RTCIntersectContext()
+                rtcInitIntersectContext(&context)
+                rtcIntersect1(rtcScene, &context, &rayhit)
+                //}
 
                 guard rayhit.hit.geomID != rtcInvalidGeometryId else {
                         return empty(#line)
@@ -154,11 +154,13 @@ final class EmbreeAccelerator: Accelerator, EmbreeBase {
                         guard let acceleratorIndex = instanceMap[rayhit.hit.instID] else {
                                 embreeError("No scene in instanceMap, instID: \(rayhit.hit.instID)")
                         }
-                        guard let accelerator = accelerators[acceleratorIndex] as? EmbreeAccelerator else {
-                                embreeError("Expected EmbreeAccelerator!")
-
+                        let accelerator = accelerators[acceleratorIndex]
+                        switch accelerator {
+                        case .embree(let embree):
+                                scene = embree
+                        default:
+                                fatalError("Embree expected!")
                         }
-                        scene = accelerator
                 }
 
                 if let areaLight = scene.areaLights[geomID] {
@@ -293,11 +295,13 @@ final class EmbreeBuilder: EmbreeBase {
                                 }
                         case let transformedPrimitive as TransformedPrimitive:
                                 let acceleratorIndex = transformedPrimitive.acceleratorIndex
-                                guard
-                                        let embreeAccelerator = accelerators[acceleratorIndex]
-                                                as? EmbreeAccelerator
-                                else {
-                                        embreeError("Expected EmbreeAccelerator!")
+                                let accelerator = accelerators[acceleratorIndex]
+                                var embreeAccelerator: EmbreeAccelerator
+                                switch accelerator {
+                                case .embree(let embree):
+                                        embreeAccelerator = embree
+                                case .boundingHierarchy:
+                                        embreeError("Embree accelerator expected!")
                                 }
                                 let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
                                 rtcSetGeometryInstancedScene(instance, embreeAccelerator.rtcScene)

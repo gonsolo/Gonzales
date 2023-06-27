@@ -1,4 +1,4 @@
-struct BoundingHierarchy: Accelerator, Boundable, Intersectable {
+struct BoundingHierarchy: Boundable, Intersectable {
 
         func intersect(
                 ray: Ray,

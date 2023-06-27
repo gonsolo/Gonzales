@@ -1,8 +1,5 @@
 import Foundation
 
-var accelerators = [Accelerator]()
-typealias AcceleratorIndex = Int
-
 func addAccelerator(accelerator: Accelerator) -> AcceleratorIndex {
         let index: AcceleratorIndex = accelerators.count
         accelerators.append(accelerator)
@@ -13,10 +10,14 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
         switch acceleratorName {
         case "bvh":
                 let builder = BoundingHierarchyBuilder(primitives: primitives)
-                return try builder.getBoundingHierarchy()
+                let boundingHierarchy = try builder.getBoundingHierarchy()
+                let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
+                return accelerator
         case "embree":
                 let builder = EmbreeBuilder(primitives: primitives)
-                return builder.getAccelerator()
+                let embree = builder.getAccelerator()
+                let accelerator = Accelerator.embree(embree)
+                return accelerator
         default:
                 throw ApiError.accelerator
         }
