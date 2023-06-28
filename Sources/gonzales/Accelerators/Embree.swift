@@ -1,6 +1,15 @@
 import Foundation
 import embree3
 
+@_silgen_name("_swift_stdlib_immortalize")
+func _swift_stdlib_immortalize(_ p: UnsafeMutableRawPointer)
+
+func immortalize(_ o: AnyObject) {
+        withExtendedLifetime(o) {
+                _swift_stdlib_immortalize(Unmanaged.passUnretained(o).toOpaque())
+        }
+}
+
 let embree = Embree()
 
 protocol EmbreeBase {
@@ -38,8 +47,7 @@ final class Embree: EmbreeBase {
         var rtcDevice: OpaquePointer?
 }
 
-//final class EmbreeAccelerator: EmbreeBase {
-struct EmbreeAccelerator: EmbreeBase {
+final class EmbreeAccelerator: EmbreeBase {
 
         init(
                 bounds: Bounds3f,
@@ -59,9 +67,9 @@ struct EmbreeAccelerator: EmbreeBase {
                 self.instanceMap = instanceMap
         }
 
-        //deinit {
-        //        rtcReleaseScene(rtcScene)
-        //}
+        deinit {
+                rtcReleaseScene(rtcScene)
+        }
 
         func worldBound() -> Bounds3f {
                 return bounds
@@ -218,7 +226,6 @@ struct EmbreeAccelerator: EmbreeBase {
 
         private var bounds = Bounds3f()
         var rtcScene: OpaquePointer?
-
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()
         private var areaLights = [UInt32: AreaLight]()
@@ -235,7 +242,7 @@ final class EmbreeBuilder: EmbreeBase {
         }
 
         func getAccelerator() -> EmbreeAccelerator {
-                return EmbreeAccelerator(
+                let embreeAccelerator = EmbreeAccelerator(
                         bounds: bounds,
                         rtcScene: rtcScene,
                         materials: materials,
@@ -244,6 +251,8 @@ final class EmbreeBuilder: EmbreeBase {
                         triangleUVs: triangleUVs,
                         instanceMap: instanceMap
                 )
+                immortalize(embreeAccelerator)
+                return embreeAccelerator
         }
 
         private func setIDs(id: UInt32, primitive: GeometricPrimitive) {
