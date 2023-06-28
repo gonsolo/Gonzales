@@ -183,8 +183,9 @@ final class EmbreeAccelerator: EmbreeBase {
                 var uvs = (Vector2F(), Vector2F(), Vector2F())
                 let uvsOpt = scene.triangleUVs[geomID]
                 if uvsOpt == nil {
-                        var message = "TriangleUVs is nil: \(geomID)"
-                        message += " in scene \(String(describing: rtcScene))"
+                        //let message = "TriangleUVs is nil: \(geomID)"
+                        //embreeError(message)
+                        //message += " in scene \(String(describing: rtcScene))"
                 } else {
                         uvs = uvsOpt!
                 }

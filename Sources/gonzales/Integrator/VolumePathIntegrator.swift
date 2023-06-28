@@ -186,12 +186,12 @@ final class VolumePathIntegrator {
                         sampler: sampler)
         }
 
+        //@_noAllocation
         private func sampleOneLight(
                 at interaction: Interaction,
                 with sampler: Sampler,
                 lightSampler: LightSampler
         ) throws -> RgbSpectrum {
-                guard scene.lights.count > 0 else { return black }
                 let (light, lightPdf) = try chooseLight(
                         sampler: sampler,
                         lightSampler: lightSampler)
