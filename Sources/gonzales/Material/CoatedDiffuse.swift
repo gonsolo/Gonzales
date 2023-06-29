@@ -1,4 +1,4 @@
-final class CoatedDiffuse {
+struct CoatedDiffuse {
 
         init(
                 roughness: (FloatX, FloatX),

@@ -1,4 +1,4 @@
-final class Hair {
+struct Hair {
 
         init(eumelanin: FloatTexture) {
                 self.eumelanin = eumelanin

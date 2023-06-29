@@ -1,4 +1,4 @@
-final class Dielectric {
+struct Dielectric {
 
         init(
                 refractiveIndex: FloatTexture = ConstantTexture(value: FloatX(1)),

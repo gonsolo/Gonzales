@@ -1,4 +1,4 @@
-final class DiffuseTransmission {
+struct DiffuseTransmission {
 
         init(
                 reflectance: RgbSpectrumTexture,

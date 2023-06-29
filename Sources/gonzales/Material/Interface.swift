@@ -1,4 +1,4 @@
-final class Interface {
+struct Interface {
 
         func setBsdf(interaction: inout SurfaceInteraction) {
                 // Unimplemented by design

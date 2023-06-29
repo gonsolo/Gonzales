@@ -3,7 +3,7 @@ enum DiffuseError: Error {
         case noTexture
 }
 
-final class Diffuse {
+struct Diffuse {
 
         init(reflectance: Texture) {
                 self.reflectance = reflectance
