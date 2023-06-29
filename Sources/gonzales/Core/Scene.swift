@@ -7,7 +7,14 @@ struct Scene {
         init(acceleratorIndex: AcceleratorIndex, lights: [Light]) {
                 self.acceleratorIndex = acceleratorIndex
                 self.lights = lights
-                infiniteLights = lights.compactMap { $0 as? InfiniteLight }
+                infiniteLights = lights.compactMap {
+                        switch $0 {
+                        case .infinite(let infiniteLight):
+                                return infiniteLight
+                        default:
+                                return nil
+                        }
+                }
                 sceneDiameter = diameter()
         }
 
@@ -39,5 +46,5 @@ struct Scene {
 
         var acceleratorIndex: AcceleratorIndex
         var lights: [Light]
-        var infiniteLights: [Light]
+        var infiniteLights: [InfiniteLight]
 }

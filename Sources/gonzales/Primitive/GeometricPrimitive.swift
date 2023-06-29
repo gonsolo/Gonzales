@@ -1,4 +1,4 @@
-struct GeometricPrimitive: Boundable, Intersectable, Material {
+struct GeometricPrimitive: Boundable, Intersectable {
 
         func intersect(
                 ray: Ray,

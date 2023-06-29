@@ -1,4 +1,4 @@
-final class DiffuseTransmission: Material {
+final class DiffuseTransmission {
 
         init(
                 reflectance: RgbSpectrumTexture,

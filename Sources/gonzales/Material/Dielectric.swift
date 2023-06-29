@@ -1,4 +1,4 @@
-final class Dielectric: Material {
+final class Dielectric {
 
         init(
                 refractiveIndex: FloatTexture = ConstantTexture(value: FloatX(1)),

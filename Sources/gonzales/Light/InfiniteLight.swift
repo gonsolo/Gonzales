@@ -4,7 +4,7 @@ import Foundation  // sin, cos
 // TODO: Move somewhere reasonable.
 var sceneDiameter: FloatX = 100.0
 
-struct InfiniteLight: Light {
+struct InfiniteLight {
 
         init(
                 lightToWorld: Transform,

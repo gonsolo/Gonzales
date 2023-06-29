@@ -1,4 +1,4 @@
-final class CoatedDiffuse: Material {
+final class CoatedDiffuse {
 
         init(
                 roughness: (FloatX, FloatX),

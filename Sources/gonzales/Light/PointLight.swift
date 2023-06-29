@@ -1,6 +1,6 @@
 import Foundation
 
-struct PointLight: Light {
+struct PointLight {
 
         init(lightToWorld: Transform, intensity: RgbSpectrum) {
                 position = lightToWorld * origin

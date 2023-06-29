@@ -1,4 +1,4 @@
-final class Hair: Material {
+final class Hair {
 
         init(eumelanin: FloatTexture) {
                 self.eumelanin = eumelanin

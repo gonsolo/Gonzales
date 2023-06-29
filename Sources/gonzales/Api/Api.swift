@@ -275,7 +275,7 @@ struct Api {
         }
 
         func shape(name: String, parameters: ParameterDictionary) throws {
-                var areaLights = [AreaLight]()
+                var areaLights = [Light]()
                 var prims = [Boundable & Intersectable]()
                 let shapes = try makeShapes(
                         name: name,
@@ -300,7 +300,8 @@ struct Api {
                                         throw ParameterError.missing(parameter: "L", function: #function)
                                 }
                                 let areaLight = AreaLight(brightness: brightness, shape: shape, alpha: alpha)
-                                areaLights.append(areaLight)
+                                let light = Light.area(areaLight)
+                                areaLights.append(light)
                                 prims.append(areaLight)
                         }
                 } else {
@@ -526,17 +527,20 @@ struct Api {
         {
                 switch name {
                 case "distant":
-                        return try createDistantLight(
+                        let distantLight = try createDistantLight(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
+                        return Light.distant(distantLight)
                 case "infinite":
-                        return try createInfiniteLight(
+                        let infiniteLight = try createInfiniteLight(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
+                        return Light.infinite(infiniteLight)
                 case "point":
-                        return try createPointLight(
+                        let pointLight = try createPointLight(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
+                        return Light.point(pointLight)
                 default:
                         throw ApiError.makeLight(message: name)
                 }
@@ -546,7 +550,8 @@ struct Api {
                 warnOnce("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
                 parameters["reflectance"] = [gray]
-                return try createDiffuse(parameters: parameters)
+                let diffuse = try createDiffuse(parameters: parameters)
+                return Material.diffuse(diffuse)
         }
 
         func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
@@ -554,22 +559,30 @@ struct Api {
                 var material: Material
                 switch type {
                 case "coateddiffuse":
-                        material = try createCoatedDiffuse(parameters: parameters)
+                        let coatedDiffuse = try createCoatedDiffuse(parameters: parameters)
+                        material = Material.coatedDiffuse(coatedDiffuse)
                 // coatedconductor missing
                 case "conductor":
-                        material = try createConductor(parameters: parameters)
+                        let conductor = try createConductor(parameters: parameters)
+                        material = Material.conductor(conductor)
                 case "dielectric":
-                        material = try createDielectric(parameters: parameters)
+                        let dielectric = try createDielectric(parameters: parameters)
+                        material = Material.dielectric(dielectric)
                 case "diffuse":
-                        material = try createDiffuse(parameters: parameters)
+                        let diffuse = try createDiffuse(parameters: parameters)
+                        material = Material.diffuse(diffuse)
                 case "diffusetransmission":
-                        material = try createDiffuseTransmission(parameters: parameters)
+                        let diffuseTransmission = try createDiffuseTransmission(parameters: parameters)
+                        material = Material.diffuseTransmission(diffuseTransmission)
                 case "hair":
-                        material = try createHair(parameters: parameters)
+                        let hair = try createHair(parameters: parameters)
+                        material = Material.hair(hair)
                 case "interface":
-                        material = try createInterface(parameters: parameters)
+                        let interface = try createInterface(parameters: parameters)
+                        material = Material.interface(interface)
                 case "measured":
-                        material = try createMeasured(parameters: parameters)
+                        let measured = try createMeasured(parameters: parameters)
+                        material = Material.measured(measured)
                 // mix missing
                 // subsurface missing
                 // thindielectric missing

@@ -100,10 +100,13 @@ final class VolumePathIntegrator {
                         return zero
                 }
                 for light in scene.lights {
-                        if light is InfiniteLight {
-                                let radiance = light.radianceFromInfinity(for: ray)
+                        switch light {
+                        case .infinite(let infiniteLight):
+                                let radiance = infiniteLight.radianceFromInfinity(for: ray)
                                 bsdfSample.estimate *= radiance
                                 return bsdfSample  // TODO: Just one infinite light?
+                        default:
+                                break
                         }
                 }
                 return zero
@@ -299,7 +302,7 @@ final class VolumePathIntegrator {
                                 guard let material = materials[surfaceInteraction.material] else {
                                         break
                                 }
-                                if material is Interface {
+                                if material.isInterface {
                                         var spawnedRay = surfaceInteraction.spawnRay(
                                                 inDirection: ray.direction)
                                         if let interface = surfaceInteraction.mediumInterface {

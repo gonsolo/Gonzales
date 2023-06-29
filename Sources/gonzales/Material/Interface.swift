@@ -1,4 +1,4 @@
-final class Interface: Material {
+final class Interface {
 
         func setBsdf(interaction: inout SurfaceInteraction) {
                 // Unimplemented by design

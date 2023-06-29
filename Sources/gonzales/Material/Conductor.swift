@@ -1,4 +1,4 @@
-final class Conductor: Material {
+final class Conductor {
 
         init(eta: RgbSpectrum, k: RgbSpectrum, roughness: (FloatX, FloatX)) {
                 self.eta = eta

@@ -2,7 +2,7 @@ enum MeasuredError: Error {
         case emptyFileName
 }
 
-final class Measured: Material {
+final class Measured {
 
         func setBsdf(interaction: inout SurfaceInteraction) {
                 // TODO: Implement this some day

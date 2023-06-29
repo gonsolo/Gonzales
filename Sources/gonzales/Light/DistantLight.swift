@@ -1,6 +1,6 @@
 import Foundation
 
-struct DistantLight: Light {
+struct DistantLight {
 
         init(lightToWorld: Transform, brightness: RgbSpectrum, direction: Vector) {
                 self.brightness = brightness
