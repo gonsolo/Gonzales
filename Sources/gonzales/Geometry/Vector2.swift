@@ -30,6 +30,7 @@ public struct Vector2<T> {
 }
 
 public typealias Vector2F = Vector2<FloatX>
+extension Vector2F: GetFloatXY {}
 
 extension Vector2 where T: FloatingPoint {
         public init() {

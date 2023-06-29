@@ -1,3 +1,8 @@
+protocol GetFloatXY {
+        var x: FloatX { get }
+        var y: FloatX { get }
+}
+
 public struct Point2<T> {
 
         public init(x: T, y: T) {
@@ -52,6 +57,8 @@ extension Point2 where T: BinaryInteger {
 
 public typealias Point2I = Point2<Int>
 public typealias Point2F = Point2<FloatX>
+
+extension Point2F: GetFloatXY {}
 
 extension Point2 where T: BinaryInteger {
 
