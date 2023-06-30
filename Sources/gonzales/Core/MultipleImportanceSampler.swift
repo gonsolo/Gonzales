@@ -47,6 +47,5 @@ struct MultipleImportanceSampler {
                 return a + b
         }
 
-        let scene: Scene
         let samplers: (MISSampler, MISSampler)
 }

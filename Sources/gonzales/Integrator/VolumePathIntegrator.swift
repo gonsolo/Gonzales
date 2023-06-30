@@ -154,7 +154,6 @@ final class VolumePathIntegrator {
                 let brdfSampler = MultipleImportanceSampler.MISSampler(
                         sample: sampleDistributionFunction, density: brdfDensity)
                 let misSampler = MultipleImportanceSampler(
-                        scene: scene,
                         samplers: (lightSampler, brdfSampler))
                 return try misSampler.evaluate(
                         light: light,
