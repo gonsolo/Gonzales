@@ -105,23 +105,25 @@ class Options {
         func makeFilter(name: String, parameters: ParameterDictionary) throws -> Filter {
 
                 func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F {
-                        let xwidth = try parameters.findOneFloatX(called: "xwidth", else: support.0)
-                        let ywidth = try parameters.findOneFloatX(called: "ywidth", else: support.1)
+                        let xwidth = try parameters.findOneFloatX(called: "xradius", else: support.0)
+                        let ywidth = try parameters.findOneFloatX(called: "yradius", else: support.1)
                         return Vector2F(x: xwidth, y: ywidth)
                 }
 
                 var filter: Filter
                 switch name {
-                case "triangle":
-                        let support = try makeSupport()
-                        filter = TriangleFilter(support: support)
                 case "box":
                         let support = try makeSupport(withDefault: (0.5, 0.5))
                         filter = BoxFilter(support: support)
                 case "gaussian":
-                        let support = try makeSupport()
+                        let support = try makeSupport(withDefault: (1.5, 1.5))
                         let alpha = try parameters.findOneFloatX(called: "alpha", else: 2)
                         filter = GaussianFilter(withSupport: support, withAlpha: alpha)
+                // mitchell missing
+                // sinc missing
+                case "triangle":
+                        let support = try makeSupport(withDefault: (2, 2))
+                        filter = TriangleFilter(support: support)
                 default:
                         fatalError("Unknown pixel filter!")
                 }
