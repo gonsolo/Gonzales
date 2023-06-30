@@ -10,7 +10,7 @@ Brute-force path tracing written in Swift.
 ### Moana
 
 ~~2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 GB of memory.
-Memory usage was around 50GB.~~
+Memory usage was around 50GB.~~ This was 2021.
 
 With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Threadripper 1920x 12 cores 24 threads, 64GB RAM, 80GB swap)
 
@@ -26,7 +26,8 @@ With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Thread
 ### Try it out
 
 - Get scenes from https://benedikt-bitterli.me/resources in pbrt v4 format and try them out.
-- Get scenes from https://github.com/mmp/pbrt-v4-scenes and try them. Not all of them work out of the box.
+- Get scenes from https://github.com/mmp/pbrt-v4-scenes and try them. All of them should be parsed correctly, not all of them work because an algorithm
+  (subsurface scattering, volume rendering, ...) is missing.
 
 ### Acknowledgments
 
