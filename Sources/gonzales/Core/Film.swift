@@ -88,7 +88,9 @@ final class Film {
                 return Bounds2i(pMin: pMin, pMax: pMax)
         }
 
-        private func isWithin(location: Point2I, resolution: Point2I) -> Bool {
+        private func isWithin<Point: GetIntXY>(location: Point, resolution: Point)
+                -> Bool
+        {
                 return location.x >= 0 && location.y >= 0 && location.x < resolution.x
                         && location.y < resolution.y
         }
