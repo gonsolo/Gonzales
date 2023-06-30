@@ -69,7 +69,7 @@ class Options {
         var integratorParameters = ParameterDictionary()
         var samplerName = "random"
         var samplerParameters = ParameterDictionary()
-        var filterName = "box"
+        var filterName = "gaussian"
         var filterParameters = ParameterDictionary()
         var lights = [Light]()
         var primitives = [Boundable & Intersectable]()
@@ -117,8 +117,8 @@ class Options {
                         filter = BoxFilter(support: support)
                 case "gaussian":
                         let support = try makeSupport(withDefault: (1.5, 1.5))
-                        let alpha = try parameters.findOneFloatX(called: "alpha", else: 2)
-                        filter = GaussianFilter(withSupport: support, withAlpha: alpha)
+                        let sigma = try parameters.findOneFloatX(called: "sigma", else: 0.5)
+                        filter = GaussianFilter(withSupport: support, withSigma: sigma)
                 // mitchell missing
                 // sinc missing
                 case "triangle":
