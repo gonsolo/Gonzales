@@ -20,7 +20,7 @@ With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Thread
 
 - Install swift from https://www.swiftlang.xyz.
 - Install libopenimageio-dev and libembree-dev.
-- Install ptex from https://mentors.debian.net/package/ptex.
+- Install [ptex](https://drive.google.com/file/d/1hQ7ml9Nf7tk6vDtsavbQyVHQQcyPQBS_/view?usp=sharing)
 - Type make
 
 ### Try it out
