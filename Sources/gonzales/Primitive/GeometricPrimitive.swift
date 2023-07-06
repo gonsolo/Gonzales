@@ -27,7 +27,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
         }
 
         func setBsdf(interaction: inout SurfaceInteraction) {
-                materials[material]!.setBsdf(interaction: &interaction)
+                materials[material].setBsdf(interaction: &interaction)
         }
 
         var shape: Shape
@@ -38,5 +38,4 @@ struct GeometricPrimitive: Boundable, Intersectable {
 
 typealias MaterialIndex = Int
 let noMaterial = -1
-var materials: [Int: Material] = [:]
-var materialCounter: MaterialIndex = 0
+var materials: [Material] = []

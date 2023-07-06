@@ -315,9 +315,7 @@ final class VolumePathIntegrator {
                                 if surfaceInteraction.material == noMaterial {
                                         break
                                 }
-                                guard let material = materials[surfaceInteraction.material] else {
-                                        break
-                                }
+                                let material = materials[surfaceInteraction.material]
                                 if material.isInterface {
                                         var spawnedRay = surfaceInteraction.spawnRay(
                                                 inDirection: ray.direction)

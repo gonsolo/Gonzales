@@ -5,10 +5,6 @@ enum DiffuseError: Error {
 
 struct Diffuse {
 
-        init(reflectance: Texture) {
-                self.reflectance = reflectance
-        }
-
         func setBsdf(interaction: inout SurfaceInteraction) {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black

@@ -305,7 +305,8 @@ struct Api {
                                 prims.append(areaLight)
                         }
                 } else {
-                        materials[materialCounter] = material
+                        let materialCounter = materials.count
+                        materials.append(material)
                         for shape in shapes {
                                 let geometricPrimitive = GeometricPrimitive(
                                         shape: shape,
@@ -314,7 +315,6 @@ struct Api {
                                         alpha: alpha)
                                 prims.append(geometricPrimitive)
                         }
-                        materialCounter = materialCounter + 1
                 }
                 if let objectName = state.objectName {
                         if options.objects[objectName] == nil {
