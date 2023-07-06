@@ -117,6 +117,10 @@ else
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
 	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
+
+	# Should not be needed since there is only one module
+	# CROSS 			= -Xswiftc -cross-module-optimization
+
 	CXX_INTEROP 		= -Xswiftc -enable-experimental-cxx-interop
 	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
 	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)

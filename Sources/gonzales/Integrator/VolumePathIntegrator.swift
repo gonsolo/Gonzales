@@ -63,15 +63,13 @@ final class VolumePathIntegrator {
                 interaction: Interaction,
                 sampler: Sampler
         ) throws -> BsdfSample {
-                let zero = BsdfSample()
-
                 let (radiance, wi, lightDensity, visibility) = light.sample(
                         for: interaction, u: sampler.get2D())
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
-                        return zero
+                        return invalidBsdfSample
                 }
                 guard try visibility.unoccluded(scene: scene) else {
-                        return zero
+                        return invalidBsdfSample
                 }
                 let scatter = interaction.evaluateDistributionFunction(wi: wi)
                 let estimate = scatter * radiance
@@ -144,21 +142,40 @@ final class VolumePathIntegrator {
                 }
         }
 
+        //@_noAllocation
         private func sampleMultipleImportance(
                 light: Light,
                 interaction: Interaction,
                 sampler: Sampler
         ) throws -> RgbSpectrum {
-                let lightSampler = MultipleImportanceSampler.MISSampler(
-                        sample: sampleLightSource, density: lightDensity)
-                let brdfSampler = MultipleImportanceSampler.MISSampler(
-                        sample: sampleDistributionFunction, density: brdfDensity)
-                let misSampler = MultipleImportanceSampler(
-                        samplers: (lightSampler, brdfSampler))
-                return try misSampler.evaluate(
+
+                let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         sampler: sampler)
+                let brdfDensity = brdfDensity(
+                        light: light,
+                        interaction: interaction,
+                        sample: lightSample.incoming)
+                let lightWeight = powerHeuristic(f: lightSample.probabilityDensity, g: brdfDensity)
+                let a =
+                        lightSample.probabilityDensity == 0
+                        ? black : lightSample.estimate * lightWeight / lightSample.probabilityDensity
+
+                let brdfSample = try sampleDistributionFunction(
+                        light: light,
+                        interaction: interaction,
+                        sampler: sampler)
+                let lightDensity = try lightDensity(
+                        light: light,
+                        interaction: interaction,
+                        sample: brdfSample.incoming)
+                let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)
+                let b =
+                        brdfSample.probabilityDensity == 0
+                        ? black : brdfSample.estimate * brdfWeight / brdfSample.probabilityDensity
+
+                return a + b
         }
 
         private func estimateDirect(
