@@ -1,6 +1,6 @@
 struct Interface {
 
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf() -> GlobalBsdf {
                 // Unimplemented by design
                 unimplemented()
         }

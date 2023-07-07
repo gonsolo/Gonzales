@@ -1,6 +1,6 @@
 import Foundation
 
-final class OpenImageIOTexture: FloatTexture, RgbSpectrumTexture {
+struct OpenImageIOTexture {
 
         enum TextureType {
                 case float

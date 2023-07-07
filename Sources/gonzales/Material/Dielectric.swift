@@ -1,7 +1,7 @@
 struct Dielectric {
 
         init(
-                refractiveIndex: FloatTexture = ConstantTexture(value: FloatX(1)),
+                refractiveIndex: FloatTexture = FloatTexture.constantTexture(ConstantTexture<FloatX>(value: FloatX(1))),
                 roughness: (FloatX, FloatX),
                 remapRoughness: Bool
         ) {
@@ -10,7 +10,7 @@ struct Dielectric {
                 self.remapRoughness = remapRoughness
         }
 
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
@@ -19,7 +19,7 @@ struct Dielectric {
                         distribution: distribution,
                         refractiveIndex: refractiveIndex,
                         bsdfFrame: bsdfFrame)
-                interaction.bsdf = dielectricBsdf
+                return dielectricBsdf
         }
 
         let refractiveIndex: FloatTexture

@@ -4,11 +4,11 @@ enum MeasuredError: Error {
 
 struct Measured {
 
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 // TODO: Implement this some day
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let diffuseBsdf = DiffuseBsdf(bsdfFrame: bsdfFrame)
-                interaction.bsdf = diffuseBsdf
+                return diffuseBsdf
         }
 }
 

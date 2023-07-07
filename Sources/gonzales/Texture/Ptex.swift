@@ -7,7 +7,7 @@ struct PtexCache {
         }
 }
 
-final class Ptex: RgbSpectrumTexture {
+struct Ptex {
 
         init(path: String) {
                 self.path = path

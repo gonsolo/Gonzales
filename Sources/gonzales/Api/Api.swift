@@ -401,19 +401,25 @@ struct Api {
                 switch textureClass {
                 // bilerp missing
                 case "checkerboard":
-                        let textureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
-                        let textureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
+                        let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
+                        let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
+                        let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
+                        let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
                         let textures = (textureEven, textureOdd)
                         let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
                         let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
                         let scale = (uscale, vscale)
-                        texture = Checkerboard(textures: textures, scale: scale)
+                        let checkerboard = Checkerboard(textures: textures, scale: scale)
+                        let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
+                        texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 case "constant":
                         switch type {
                         case "spectrum", "color":
-                                texture = try parameters.findRgbSpectrumTexture(name: "value")
+                                let rgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "value")
+                                texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
-                                texture = try parameters.findFloatXTexture(name: "value")
+                                let floatTexture = try parameters.findFloatXTexture(name: "value")
+                                texture = Texture.floatTexture(floatTexture)
                         default:
                                 unimplemented()
                         }
@@ -430,12 +436,18 @@ struct Api {
                                 let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
                                 let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
                                 let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                texture = RgbSpectrumMixTexture(textures: (tex1, tex2), amount: amount)
+                                let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
+                                        textures: (tex1, tex2), amount: amount)
+                                let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
+                                        rgbSpectrumMixTexture)
+                                texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
                                 let tex1 = try parameters.findFloatXTexture(name: "tex1")
                                 let tex2 = try parameters.findFloatXTexture(name: "tex2")
                                 let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                texture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
+                                let floatMixTexture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
+                                let floatTexture = FloatTexture.floatMixTexture(floatMixTexture)
+                                texture = Texture.floatTexture(floatTexture)
                         default:
                                 unimplemented()
                         }
@@ -443,9 +455,13 @@ struct Api {
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
-                        let scale = try parameters.findFloatXTexture(name: "scale")
-                        let tex = try parameters.findRgbSpectrumTexture(name: "tex")
-                        texture = ScaledTexture(scale: scale, texture: tex)
+                        let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
+                        let scale = Texture.floatTexture(scaleFloatTexture)
+                        let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
+                        let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
+                        let scaledTexture = ScaledTexture(scale: scale, texture: tex)
+                        let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
+                        texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 // windy missing
                 // wrinkled missing
                 default:
@@ -641,14 +657,21 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
                 warning("Can't find texture file: \(absoluteFileName)")
-                return ConstantTexture(value: gray)
+                return Texture.rgbSpectrumTexture(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
         }
         let suffix = absoluteFileName.suffix(4)
         switch suffix {
         case ".ptx":
-                return Ptex(path: absoluteFileName)
+                return Texture.rgbSpectrumTexture(RgbSpectrumTexture.ptex(Ptex(path: absoluteFileName)))
         case ".exr", ".pfm", ".png", ".tga":
-                return OpenImageIOTexture(path: absoluteFileName, type: type)
+                switch type {
+                case "spectrum", "color":
+                        return Texture.rgbSpectrumTexture(RgbSpectrumTexture.openImageIoTexture(OpenImageIOTexture(path: absoluteFileName, type: type)))
+                case "float":
+                        return Texture.floatTexture(FloatTexture.openImageIoTexture(OpenImageIOTexture(path: absoluteFileName, type: type)))
+                default:
+                        unimplemented()
+                }
         default:
                 throw ApiError.unknownTextureFormat(suffix: String(suffix))
         }

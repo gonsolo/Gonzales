@@ -47,12 +47,18 @@ extension ParameterDictionary {
         {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = state.textures[textureName] as? RgbSpectrumTexture
-                        else {
-                                warning("Could not find texture \(textureName)")
-                                return ConstantTexture<RgbSpectrum>(value: red)
+                        guard let texture = state.textures[textureName] else {
+                                fatalError("Could not find texture!")
                         }
-                        return texture
+                        switch texture {
+                        case .floatTexture:
+                                warning("Could not find texture \(textureName)")
+                                let constantTexture = ConstantTexture<RgbSpectrum>(value: red)
+                                let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
+                                return rgbSpectrumTexture
+                        case .rgbSpectrumTexture(let rgbSpectrumTexture):
+                                return rgbSpectrumTexture
+                        }
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
                                 fatalError()
@@ -60,7 +66,8 @@ extension ParameterDictionary {
                         guard let rgbSpectrum = spectrum as? RgbSpectrum else {
                                 fatalError()
                         }
-                        return ConstantTexture(value: rgbSpectrum)
+                        let constantTexture = ConstantTexture(value: rgbSpectrum)
+                        return RgbSpectrumTexture.constantTexture(constantTexture)
                 }
         }
 
@@ -71,14 +78,16 @@ extension ParameterDictionary {
                                 print("No named texture \"\(textureName)\"")
                                 fatalError()
                         }
-                        guard let floatTexture = texture as? FloatTexture else {
+                        switch texture {
+                        case .floatTexture(let floatTexture):
+                                return floatTexture
+                        case .rgbSpectrumTexture:
                                 print("No named float texture \"\(textureName)\"")
                                 fatalError()
                         }
-                        return floatTexture
                 } else {
                         let value = try findOneFloatX(called: name, else: value)
-                        return ConstantTexture<FloatX>(value: value)
+                        return FloatTexture.constantTexture(ConstantTexture<FloatX>(value: value))
                 }
         }
 

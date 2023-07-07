@@ -1,12 +1,6 @@
 struct Conductor {
 
-        init(eta: RgbSpectrum, k: RgbSpectrum, roughness: (FloatX, FloatX)) {
-                self.eta = eta
-                self.k = k
-                self.roughness = roughness
-        }
-
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnel = FresnelConductor(
@@ -19,7 +13,7 @@ struct Conductor {
                         distribution: trowbridge,
                         fresnel: fresnel,
                         bsdfFrame: bsdfFrame)
-                interaction.bsdf = microfaceReflectionBsdf
+                return microfaceReflectionBsdf
         }
 
         var eta: RgbSpectrum

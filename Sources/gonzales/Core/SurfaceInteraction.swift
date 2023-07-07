@@ -17,6 +17,10 @@ struct SurfaceInteraction: Interaction {
                 return bsdf.probabilityDensityWorld(wo: wo, wi: wi)
         }
 
+        mutating func setBsdf() {
+                bsdf = materials[material].getBsdf(interaction: self)
+        }
+
         var valid = false
         var position = Point()
         var normal = Normal()

@@ -12,28 +12,28 @@ enum Material {
         case interface(Interface)
         case measured(Measured)
 
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 switch self {
                 case .areaLight(let areaLight):
-                        areaLight.setBsdf(interaction: &interaction)
+                        return areaLight.getBsdf(interaction: interaction)
                 case .coatedDiffuse(let coatedDiffuse):
-                        coatedDiffuse.setBsdf(interaction: &interaction)
+                        return coatedDiffuse.getBsdf(interaction: interaction)
                 case .conductor(let conductor):
-                        conductor.setBsdf(interaction: &interaction)
+                        return conductor.getBsdf(interaction: interaction)
                 case .dielectric(let dielectric):
-                        dielectric.setBsdf(interaction: &interaction)
+                        return dielectric.getBsdf(interaction: interaction)
                 case .diffuse(let diffuse):
-                        diffuse.setBsdf(interaction: &interaction)
+                        return diffuse.getBsdf(interaction: interaction)
                 case .diffuseTransmission(let diffuseTransmission):
-                        diffuseTransmission.setBsdf(interaction: &interaction)
+                        return diffuseTransmission.getBsdf(interaction: interaction)
                 case .geometricPrimitive(let geometricPrimitive):
-                        geometricPrimitive.setBsdf(interaction: &interaction)
+                        return geometricPrimitive.getBsdf(interaction: interaction)
                 case .hair(let hair):
-                        hair.setBsdf(interaction: &interaction)
+                        return hair.getBsdf(interaction: interaction)
                 case .interface(let interface):
-                        interface.setBsdf(interaction: &interaction)
+                        return interface.getBsdf()
                 case .measured(let measured):
-                        measured.setBsdf(interaction: &interaction)
+                        return measured.getBsdf(interaction: interaction)
                 }
         }
 

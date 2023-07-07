@@ -253,6 +253,7 @@ final class VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
+        //@_noAllocation
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
@@ -315,8 +316,7 @@ final class VolumePathIntegrator {
                                 if surfaceInteraction.material == noMaterial {
                                         break
                                 }
-                                let material = materials[surfaceInteraction.material]
-                                if material.isInterface {
+                                if materials[surfaceInteraction.material].isInterface {
                                         var spawnedRay = surfaceInteraction.spawnRay(
                                                 inDirection: ray.direction)
                                         if let interface = surfaceInteraction.mediumInterface {
@@ -325,7 +325,7 @@ final class VolumePathIntegrator {
                                         ray = spawnedRay
                                         continue
                                 }
-                                material.setBsdf(interaction: &surfaceInteraction)
+                                surfaceInteraction.setBsdf()
                                 if bounce == 0 {
                                         albedo = surfaceInteraction.bsdf.albedo()
                                         firstNormal = surfaceInteraction.normal

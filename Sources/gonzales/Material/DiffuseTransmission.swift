@@ -1,16 +1,6 @@
 struct DiffuseTransmission {
 
-        init(
-                reflectance: RgbSpectrumTexture,
-                transmittance: RgbSpectrumTexture,
-                scale: FloatTexture
-        ) {
-                self.reflectance = reflectance
-                self.transmittance = transmittance
-                self.scale = scale
-        }
-
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let reflectance = reflectance.evaluateRgbSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)
                 // TODO: check same hemisphere and transmission
@@ -19,7 +9,7 @@ struct DiffuseTransmission {
                 let diffuseBsdf = DiffuseBsdf(
                         reflectance: scale * reflectance,
                         bsdfFrame: bsdfFrame)
-                interaction.bsdf = diffuseBsdf
+                return diffuseBsdf
         }
 
         var reflectance: RgbSpectrumTexture

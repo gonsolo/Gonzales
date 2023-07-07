@@ -1,9 +1,4 @@
-final class RgbSpectrumMixTexture: RgbSpectrumTexture {
-
-        init(textures: (RgbSpectrumTexture, RgbSpectrumTexture), amount: FloatX) {
-                self.textures = textures
-                self.amount = amount
-        }
+struct RgbSpectrumMixTexture {
 
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let value0 = textures.0.evaluateRgbSpectrum(at: interaction)

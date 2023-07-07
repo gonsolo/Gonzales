@@ -1,8 +1,4 @@
-final class ConstantTexture<T: TextureEvaluation>: Texture {
-
-        init(value: T) {
-                self.value = value
-        }
+struct ConstantTexture<T: TextureEvaluation> {
 
         func evaluate(at: Interaction) -> TextureEvaluation {
                 return value
@@ -11,13 +7,13 @@ final class ConstantTexture<T: TextureEvaluation>: Texture {
         var value: T
 }
 
-extension ConstantTexture: RgbSpectrumTexture where T == RgbSpectrum {
+extension ConstantTexture where T == RgbSpectrum {
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 return evaluate(at: interaction) as! RgbSpectrum
         }
 }
 
-extension ConstantTexture: FloatTexture where T == FloatX {
+extension ConstantTexture where T == FloatX {
         func evaluateFloat(at interaction: Interaction) -> FloatX {
                 return evaluate(at: interaction) as! FloatX
         }

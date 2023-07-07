@@ -1,11 +1,6 @@
 import Foundation
 
-final class Checkerboard: RgbSpectrumTexture {
-
-        init(textures: (Texture, Texture), scale: (FloatX, FloatX)) {
-                self.textures = textures
-                self.scale = scale
-        }
+struct Checkerboard {
 
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 guard let textureEven = textures.0.evaluate(at: interaction) as? RgbSpectrum else {

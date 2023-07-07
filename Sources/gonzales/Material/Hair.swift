@@ -1,9 +1,5 @@
 struct Hair {
 
-        init(eumelanin: FloatTexture) {
-                self.eumelanin = eumelanin
-        }
-
         private func absorptionFrom(
                 eumelaninConcentration: FloatX,
                 pheomelaninConcentration: FloatX = 0
@@ -15,7 +11,7 @@ struct Hair {
                 return eumelaninAbsorption + pheomelaninAbsorption
         }
 
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
                 let absorption = absorptionFrom(eumelaninConcentration: eumelanin)
                 // Embree already provides values from -1 to 1 for flat bspline curves
@@ -27,7 +23,7 @@ struct Hair {
                         h: h,
                         absorption: absorption,
                         bsdfFrame: bsdfFrame)
-                interaction.bsdf = hairBsdf
+                return hairBsdf
         }
 
         var eumelanin: FloatTexture

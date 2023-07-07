@@ -5,7 +5,7 @@ enum DiffuseError: Error {
 
 struct Diffuse {
 
-        func setBsdf(interaction: inout SurfaceInteraction) {
+        func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black
                 let reflectanceFloat = evaluation as? FloatX
@@ -18,7 +18,7 @@ struct Diffuse {
                 }
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let diffuseBsdf = DiffuseBsdf(reflectance: reflectance, bsdfFrame: bsdfFrame)
-                interaction.bsdf = diffuseBsdf
+                return diffuseBsdf
         }
 
         let reflectance: Texture
@@ -27,20 +27,17 @@ struct Diffuse {
 func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {
-                var texture: Texture = ConstantTexture(value: black)
-                if let floatTexture = state.textures[reflectanceTextureName] as? FloatTexture {
-                        texture = floatTexture
-                }
-                if let rgbTexture = state.textures[reflectanceTextureName] as? RgbSpectrumTexture {
-                        texture = rgbTexture
-                }
+                let texture: Texture = state.textures[reflectanceTextureName] ??
+                        Texture.rgbSpectrumTexture(RgbSpectrumTexture.constantTexture(ConstantTexture(value: black)))
                 return Diffuse(reflectance: texture)
         }
         if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: gray)
                 as? RgbSpectrum
         {
-                let reflectanceConstant = ConstantTexture<RgbSpectrum>(value: reflectanceSpectrum)
-                return Diffuse(reflectance: reflectanceConstant)
+                let constantTexture = ConstantTexture<RgbSpectrum>(value: reflectanceSpectrum)
+                let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
+                let texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                return Diffuse(reflectance: texture)
         }
         throw DiffuseError.noReflectance
 }
