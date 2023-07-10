@@ -2,22 +2,11 @@
 // "James Kajiya: The Rendering Equation"
 // DOI: 10.1145/15922.15902
 
-import Foundation  // exit
-
 final class VolumePathIntegrator {
 
         init(scene: Scene, maxDepth: Int) {
                 self.scene = scene
                 self.maxDepth = maxDepth
-        }
-
-        private func lightDensity(
-                light: Light,
-                interaction: Interaction,
-                sample: Vector
-        ) throws -> FloatX {
-                return try light.probabilityDensityFor(
-                        samplingDirection: sample, from: interaction)
         }
 
         private func brdfDensity(
@@ -166,10 +155,9 @@ final class VolumePathIntegrator {
                         light: light,
                         interaction: interaction,
                         sampler: sampler)
-                let lightDensity = try lightDensity(
-                        light: light,
-                        interaction: interaction,
-                        sample: brdfSample.incoming)
+                let lightDensity = try light.probabilityDensityFor(
+                        samplingDirection: brdfSample.incoming,
+                        from: interaction)
                 let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)
                 let b =
                         brdfSample.probabilityDensity == 0

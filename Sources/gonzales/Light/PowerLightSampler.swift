@@ -17,7 +17,7 @@ public func lowerBound<T: Comparable>(_ a: [T], key: T) -> (Int, T) {
         return (lowerBound, a[lowerBound])
 }
 
-final class PowerLightSampler: LightSampler {
+final class PowerLightSampler {
 
         init(sampler: Sampler, lights: [Light]) {
                 self.sampler = sampler

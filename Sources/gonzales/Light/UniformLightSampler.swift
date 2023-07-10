@@ -1,4 +1,4 @@
-final class UniformLightSampler: LightSampler {
+final class UniformLightSampler {
 
         init(sampler: Sampler, lights: [Light]) {
                 self.sampler = sampler

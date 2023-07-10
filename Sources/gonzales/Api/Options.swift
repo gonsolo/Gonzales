@@ -219,7 +219,8 @@ class Options {
                 let scene = makeScene(acceleratorIndex: acceleratorIndex)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
-                let lightSampler = PowerLightSampler(sampler: sampler, lights: lights)
+                let powerLightSampler = PowerLightSampler(sampler: sampler, lights: lights)
+                let lightSampler = LightSampler.power(powerLightSampler)
                 return Renderer(
                         accelerator: accelerator,
                         camera: camera,
