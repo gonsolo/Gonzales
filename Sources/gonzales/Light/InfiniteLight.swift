@@ -11,8 +11,8 @@ struct InfiniteLight {
                 brightness: RgbSpectrum,
                 texture: Texture
         ) {
-                self.lightToWorld = lightToWorld
                 self.brightness = brightness
+                self.lightToWorld = lightToWorld
                 self.texture = texture
         }
 
@@ -116,13 +116,13 @@ struct InfiniteLight {
                 return FloatX.pi * square(worldRadius) * brightness.average()
         }
 
-        var isDelta: Bool { return false }
-
-        var worldToLight: Transform { return lightToWorld.inverse }
+        var worldToLight: Transform {
+                return lightToWorld.inverse
+        }
 
         let brightness: RgbSpectrum
-        let texture: Texture
         let lightToWorld: Transform
+        let texture: Texture
 }
 
 func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary) throws

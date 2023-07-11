@@ -38,8 +38,6 @@ struct AreaLight: Boundable, Intersectable {
                 return brightness.average() * shape.area() * FloatX.pi
         }
 
-        var isDelta: Bool { return false }
-
         func worldBound() -> Bounds3f {
                 return shape.worldBound()
         }

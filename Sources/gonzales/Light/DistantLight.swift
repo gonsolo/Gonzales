@@ -29,8 +29,6 @@ struct DistantLight {
                 return value
         }
 
-        var isDelta: Bool { return true }
-
         let direction: Vector
         let brightness: RgbSpectrum
         let worldRadius: FloatX = 100.0  // TODO

@@ -31,8 +31,6 @@ struct PointLight {
                 return intensity.average() * 4 * FloatX.pi
         }
 
-        var isDelta: Bool { return true }
-
         let position: Point
         let intensity: RgbSpectrum
 }

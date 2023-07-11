@@ -335,6 +335,14 @@ final class EmbreeBuilder: EmbreeBase {
                                         xfm)
 
                                 rtcCommitGeometry(instance)
+                        //case let accelerator as Accelerator:
+                        //        print("Accelerator")
+                        //        switch accelerator {
+                        //        case .embree:
+                        //                print("Embree")
+                        //        case .boundingHierarchy:
+                        //                print("Bounding hierarchy")
+                        //        }
                         default:
                                 embreeError("Unknown primitive \(primitive).")
                         }

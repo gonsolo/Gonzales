@@ -25,6 +25,7 @@ enum Light {
                 }
         }
 
+        //@_noAllocation
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
         {
@@ -76,14 +77,14 @@ enum Light {
 
         var isDelta: Bool {
                 switch self {
-                case .area(let areaLight):
-                        return areaLight.isDelta
-                case .infinite(let infiniteLight):
-                        return infiniteLight.isDelta
-                case .distant(let distantLight):
-                        return distantLight.isDelta
-                case .point(let pointLight):
-                        return pointLight.isDelta
+                case .area:
+                        return true
+                case .infinite:
+                        return false
+                case .distant:
+                        return true
+                case .point:
+                        return true
                 }
         }
 }
