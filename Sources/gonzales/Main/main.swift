@@ -85,6 +85,7 @@ func parseArguments() throws -> String {
 }
 
 func main() {
+        printCudaDevices()
         do {
                 let sceneName = try parseArguments()
                 guard let sceneNameURL = URL(string: sceneName) else {

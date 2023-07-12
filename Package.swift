@@ -16,6 +16,7 @@ let package = Package(
                                 "SWCompression",
                                 "embree3",
                                 "openImageIOBridge",
+                                "cuda",
                                 "ptexBridge",
                         ]
                 ),
@@ -29,6 +30,7 @@ let package = Package(
                 ),
                 .systemLibrary(name: "embree3"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
+                .systemLibrary(name: "cuda", pkgConfig: "cuda-12.2"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
         cxxLanguageStandard: .cxx20

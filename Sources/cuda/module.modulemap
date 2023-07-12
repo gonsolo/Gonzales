@@ -1,0 +1,5 @@
+module cuda {
+        umbrella header "cuda.h"
+	link "cudart"
+}
+
