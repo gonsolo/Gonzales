@@ -85,28 +85,29 @@ func parseArguments() throws -> String {
 }
 
 func main() {
-        printCudaDevices()
-        do {
-                let sceneName = try parseArguments()
-                guard let sceneNameURL = URL(string: sceneName) else {
-                        throw RenderError.noSceneSpecified
-                }
-                let sceneNameLast = sceneNameURL.lastPathComponent
-                var absoluteSceneName = ""
-                if sceneName.starts(with: "/") {
-                        absoluteSceneName = sceneName
-                } else {
-                        let fileManager = FileManager.default
-                        let currentDirectory = fileManager.currentDirectoryPath
-                        absoluteSceneName = currentDirectory + "/" + sceneName
-                }
-                let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
-                sceneDirectory = url.path
-                api.start()
-                try api.include(file: sceneNameLast, render: true)
-        } catch let error {
-                handle(error)
-        }
+        let optix = Optix()
+        optix.printCudaDevices()
+        //do {
+        //        let sceneName = try parseArguments()
+        //        guard let sceneNameURL = URL(string: sceneName) else {
+        //                throw RenderError.noSceneSpecified
+        //        }
+        //        let sceneNameLast = sceneNameURL.lastPathComponent
+        //        var absoluteSceneName = ""
+        //        if sceneName.starts(with: "/") {
+        //                absoluteSceneName = sceneName
+        //        } else {
+        //                let fileManager = FileManager.default
+        //                let currentDirectory = fileManager.currentDirectoryPath
+        //                absoluteSceneName = currentDirectory + "/" + sceneName
+        //        }
+        //        let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
+        //        sceneDirectory = url.path
+        //        api.start()
+        //        try api.include(file: sceneNameLast, render: true)
+        //} catch let error {
+        //        handle(error)
+        //}
 }
 
 main()
