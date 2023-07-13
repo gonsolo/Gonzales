@@ -47,6 +47,11 @@ class Optix {
                 let optixResult = optixInit()
                 optixCheck(optixResult)
                 print("Initializing Optix ok.")
+
+                var cudaError: cudaError_t
+                var stream: cudaStream_t?
+                cudaError = cudaStreamCreate(&stream)
+                cudaCheck(cudaError)
         }
 
         func dummy() {}
