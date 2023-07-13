@@ -52,44 +52,42 @@ jobs:
           sudo apt-get update
           sudo apt-get -y install cuda
 
-            #- name: Cache swift
-            #  id: cache-swift
-            #  uses: actions/cache@v3
-            #  with:
-            #    path: |
-            #      libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-            #      swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-            #    key: ${{ runner.os }}-cache-swift
+      - name: Cache swift
+        id: cache-swift
+        uses: actions/cache@v3
+        with:
+          path: |
+            libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
+            swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
+          key: ${{ runner.os }}-cache-swift
 
-            #- name: Download swift
-            #  if: steps.cache-swift.outputs.cache-hit != 'true'
-            #  run: |
-            #    wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-            #    wget https://archive.swiftlang.xyz/ubuntu/pool/main/s/swiftlang/swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
+      - name: Download swift
+        if: steps.cache-swift.outputs.cache-hit != 'true'
+        run: |
+          wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
+          wget https://archive.swiftlang.xyz/ubuntu/pool/main/s/swiftlang/swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
 
-            #- name: Cache ptex
-            #  id: cache-ptex
-            #  uses: actions/cache@v3
-            #  with:
-            #    path: |
-            #      ptex_2.4.2-1ubuntu6_amd64.deb
-            #    key: ${{ runner.os }}-cache-ptex
-            #  
-            #- name: Download and build ptex
-            #  if: steps.cache-ptex.outputs.cache-hit != 'true'
-            #  run: |
-            #    dget -u https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
-            #    cd ptex-2.4.2
-            #    debuild -d -i -us -uc
-            #    cd ..
+      - name: Cache ptex
+        id: cache-ptex
+        uses: actions/cache@v3
+        with:
+          path: |
+            ptex_2.4.2-1ubuntu6_amd64.deb
+          key: ${{ runner.os }}-cache-ptex
+ 
+      - name: Download and build ptex
+        if: steps.cache-ptex.outputs.cache-hit != 'true'
+        run: |
+          dget -u https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
+          cd ptex-2.4.2
+          debuild -d -i -us -uc
+          cd ..
 
-            #- name: Install deb
-            #  run: |
-            #    sudo dpkg -i libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-            #    sudo dpkg -i swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-            #    sudo dpkg -i ptex_2.4.2-1ubuntu6_amd64.deb
-            #    
-            #    
-            #    
-            #- name: Compile debug
-            #  run: make debug
+      - name: Install deb
+        run: |
+          sudo dpkg -i libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
+          sudo dpkg -i swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
+          sudo dpkg -i ptex_2.4.2-1ubuntu6_amd64.deb
+          
+      - name: Compile debug
+        run: make debug
