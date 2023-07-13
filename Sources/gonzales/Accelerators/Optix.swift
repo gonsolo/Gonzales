@@ -2,6 +2,11 @@ import cuda
 
 class Optix {
 
+        init() {
+                printCudaDevice()
+                initializeOptix()
+        }
+
         private func cudaCheck(_ cudaError: cudaError_t) {
                 if cudaError != cudaSuccess {
                         print("Cuda error: \(cudaError)")
@@ -41,5 +46,10 @@ class Optix {
         func initializeOptix() {
                 let optixResult = optixInit()
                 optixCheck(optixResult)
+                print("Initializing Optix ok.")
         }
+
+        func dummy() {}
+
+        static let shared = Optix()
 }

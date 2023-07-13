@@ -18,6 +18,9 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 let embree = builder.getAccelerator()
                 let accelerator = Accelerator.embree(embree)
                 return accelerator
+        case "optix":
+                Optix.shared.dummy()
+                exit(0)
         default:
                 throw ApiError.accelerator
         }
@@ -170,6 +173,8 @@ struct Api {
                         acceleratorName = "bvh"
                 case "embree":
                         acceleratorName = "embree"
+                case "optix":
+                        acceleratorName = "optix"
                 default:
                         throw ApiError.accelerator
                 }
