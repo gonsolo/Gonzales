@@ -1,10 +1,18 @@
 import cuda
 
+enum OptixError: Error {
+        case noDevice
+}
+
 class Optix {
 
         init() {
-                printCudaDevice()
-                initializeOptix()
+                do {
+                        try initializeCuda()
+                        initializeOptix()
+                } catch(let error) {
+                        fatalError("OptixError: \(error)")
+                }
         }
 
         private func cudaCheck(_ cudaError: cudaError_t) {
@@ -19,12 +27,14 @@ class Optix {
                 }
         }
 
-        func printCudaDevice() {
+        func initializeCuda() throws {
                 var numDevices: Int32 = 0
                 var cudaError: cudaError_t
                 cudaError = cudaGetDeviceCount(&numDevices)
                 cudaCheck(cudaError)
-                //print("Cuda device count: \(numDevices)")
+                guard numDevices == 1 else {
+                        throw OptixError.noDevice
+                }
 
                 var cudaDevice: Int32 = 0
                 cudaError = cudaGetDevice(&cudaDevice)
