@@ -1,5 +1,5 @@
 module cuda {
-        umbrella header "cuda.h"
+        umbrella header "gonzales_cuda.h"
 	link "cudart"
 }
 

@@ -86,7 +86,9 @@ func parseArguments() throws -> String {
 
 func main() {
         let optix = Optix()
-        optix.printCudaDevices()
+        optix.printCudaDevice()
+        optix.initializeOptix()
+
         //do {
         //        let sceneName = try parseArguments()
         //        guard let sceneNameURL = URL(string: sceneName) else {

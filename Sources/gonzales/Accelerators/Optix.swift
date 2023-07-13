@@ -8,7 +8,13 @@ class Optix {
                 }
         }
 
-        func printCudaDevices() {
+        private func optixCheck(_ optixResult: OptixResult) {
+                if optixResult != OPTIX_SUCCESS {
+                        print("Optix error: \(optixResult)")
+                }
+        }
+
+        func printCudaDevice() {
                 var numDevices: Int32 = 0
                 var cudaError: cudaError_t
                 cudaError = cudaGetDeviceCount(&numDevices)
@@ -30,5 +36,10 @@ class Optix {
                         }
                 }
                 print(deviceName)
+        }
+
+        func initializeOptix() {
+                let optixResult = optixInit()
+                optixCheck(optixResult)
         }
 }

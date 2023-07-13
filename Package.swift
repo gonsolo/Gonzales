@@ -17,6 +17,7 @@ let package = Package(
                                 "embree3",
                                 "openImageIOBridge",
                                 "cuda",
+                                "cudaBridge",
                                 "ptexBridge",
                         ]
                 ),
@@ -27,6 +28,10 @@ let package = Package(
                 .target(
                         name: "ptexBridge",
                         dependencies: ["ptex"]
+                ),
+                .target(
+                        name: "cudaBridge",
+                        dependencies: ["cuda"]
                 ),
                 .systemLibrary(name: "embree3"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
