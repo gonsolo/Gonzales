@@ -12,6 +12,7 @@ class Optix {
                 do {
                         try initializeCuda()
                         try initializeOptix()
+                        try createContext()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -19,6 +20,12 @@ class Optix {
 
         private func cudaCheck(_ cudaError: cudaError_t) throws {
                 if cudaError != cudaSuccess {
+                        throw OptixError.cudaCheck
+                }
+        }
+
+        private func cudaCheck(_ cudaResult: CUresult) throws {
+                if cudaResult != CUDA_SUCCESS {
                         throw OptixError.cudaCheck
                 }
         }
@@ -68,16 +75,29 @@ class Optix {
                 let optixResult = optixInit()
                 try optixCheck(optixResult)
                 printGreen("Initializing Optix ok.")
+        }
 
+        func createContext() throws {
                 var cudaError: cudaError_t
-                var stream: cudaStream_t?
                 cudaError = cudaStreamCreate(&stream)
                 try cudaCheck(cudaError)
                 printGreen("Cuda stream created.")
 
+                var cudaResult: CUresult
+                cudaResult = cuCtxGetCurrent(&cudaContext)
+                try cudaCheck(cudaResult)
+                printGreen("Cuda context ok.")
+
+                let optixResult = optixDeviceContextCreate(cudaContext, nil, &optixContext)
+                try optixCheck(optixResult)
+                printGreen("Optix context ok.")
         }
 
         func dummy() {}
 
         static let shared = Optix()
+
+        var stream: cudaStream_t?
+        var cudaContext: CUcontext?
+        var optixContext: OptixDeviceContext?
 }
