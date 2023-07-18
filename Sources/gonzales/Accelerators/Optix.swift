@@ -1,7 +1,9 @@
 import cuda
 
 enum OptixError: Error {
+        case cudaCheck
         case noDevice
+        case optixCheck
 }
 
 class Optix {
@@ -9,21 +11,21 @@ class Optix {
         init() {
                 do {
                         try initializeCuda()
-                        initializeOptix()
-                } catch(let error) {
+                        try initializeOptix()
+                } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
         }
 
-        private func cudaCheck(_ cudaError: cudaError_t) {
+        private func cudaCheck(_ cudaError: cudaError_t) throws {
                 if cudaError != cudaSuccess {
-                        print("Cuda error: \(cudaError)")
+                        throw OptixError.cudaCheck
                 }
         }
 
-        private func optixCheck(_ optixResult: OptixResult) {
+        private func optixCheck(_ optixResult: OptixResult) throws {
                 if optixResult != OPTIX_SUCCESS {
-                        print("Optix error: \(optixResult)")
+                        throw OptixError.optixCheck
                 }
         }
 
@@ -31,19 +33,19 @@ class Optix {
                 var numDevices: Int32 = 0
                 var cudaError: cudaError_t
                 cudaError = cudaGetDeviceCount(&numDevices)
-                cudaCheck(cudaError)
+                try cudaCheck(cudaError)
                 guard numDevices == 1 else {
                         throw OptixError.noDevice
                 }
 
                 var cudaDevice: Int32 = 0
                 cudaError = cudaGetDevice(&cudaDevice)
-                cudaCheck(cudaError)
+                try cudaCheck(cudaError)
                 //print("Cuda device used: \(cudaDevice)")
 
                 var cudaDeviceProperties: cudaDeviceProp = cudaDeviceProp()
                 cudaError = cudaGetDeviceProperties_v2(&cudaDeviceProperties, cudaDevice)
-                cudaCheck(cudaError)
+                try cudaCheck(cudaError)
 
                 let deviceName = withUnsafePointer(to: cudaDeviceProperties.name) {
                         $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout.size(ofValue: $0)) {
@@ -53,15 +55,16 @@ class Optix {
                 print(deviceName)
         }
 
-        func initializeOptix() {
+        func initializeOptix() throws {
                 let optixResult = optixInit()
-                optixCheck(optixResult)
+                try optixCheck(optixResult)
                 print("Initializing Optix ok.")
 
                 var cudaError: cudaError_t
                 var stream: cudaStream_t?
                 cudaError = cudaStreamCreate(&stream)
-                cudaCheck(cudaError)
+                try cudaCheck(cudaError)
+                print("Cuda stream created.")
         }
 
         func dummy() {}
