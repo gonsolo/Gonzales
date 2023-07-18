@@ -55,16 +55,26 @@ class Optix {
                 print(deviceName)
         }
 
+        func printGreen(_ message: String) {
+                let escape = "\u{001B}"
+                let bold = "1"
+                let green = "32"
+                let ansiEscapeGreen = escape + "[" + bold + ";" + green + "m"
+                let ansiEscapeReset = escape + "[" + "0" + "m"
+                print(ansiEscapeGreen + message + ansiEscapeReset)
+        }
+
         func initializeOptix() throws {
                 let optixResult = optixInit()
                 try optixCheck(optixResult)
-                print("Initializing Optix ok.")
+                printGreen("Initializing Optix ok.")
 
                 var cudaError: cudaError_t
                 var stream: cudaStream_t?
                 cudaError = cudaStreamCreate(&stream)
                 try cudaCheck(cudaError)
-                print("Cuda stream created.")
+                printGreen("Cuda stream created.")
+
         }
 
         func dummy() {}
