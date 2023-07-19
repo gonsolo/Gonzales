@@ -13,6 +13,7 @@ class Optix {
                         try initializeCuda()
                         try initializeOptix()
                         try createContext()
+                        try createModule()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -32,6 +33,7 @@ class Optix {
 
         private func optixCheck(_ optixResult: OptixResult) throws {
                 if optixResult != OPTIX_SUCCESS {
+                        print("OptixError, result: \(optixResult)")
                         throw OptixError.optixCheck
                 }
         }
@@ -91,6 +93,26 @@ class Optix {
                 let optixResult = optixDeviceContextCreate(cudaContext, nil, &optixContext)
                 try optixCheck(optixResult)
                 printGreen("Optix context ok.")
+        }
+
+        func createModule() throws {
+                var moduleOptions = OptixModuleCompileOptions()
+                var pipelineOptions = OptixPipelineCompileOptions()
+                let input = ""
+                let inputSize = input.count
+                var logSize = 0
+                var module: OptixModule? = nil
+                let optixResult = optixModuleCreate(
+                        optixContext,
+                        &moduleOptions,
+                        &pipelineOptions,
+                        input,
+                        inputSize,
+                        nil,
+                        &logSize,
+                        &module)
+                try optixCheck(optixResult)
+
         }
 
         func dummy() {}
