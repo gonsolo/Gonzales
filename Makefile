@@ -151,11 +151,13 @@ editScene:
 em: editMakefile
 editMakefile:
 	@vi Makefile
+optix:
+	cd Sources; nvcc --optix-ir bla.cu; cd -
 r: release
-release:
+release: optix
 	@$(BUILD_RELEASE)
 d: debug
-debug:
+debug: optix
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug
