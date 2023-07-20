@@ -6,9 +6,16 @@ struct LaunchParams {
         let dummy = 0
 }
 
-struct HitgroupRecord {
+struct MissRecord {
+        // force alignment of 16
+        let dummy1 = 0
+        let dummy2 = 0
+}
 
-        var dummy: Int = 0
+struct HitgroupRecord {
+        // force alignment of 16
+        let dummy1 = 0
+        let dummy2 = 0
 }
 
 enum OptixError: Error {
@@ -19,8 +26,10 @@ enum OptixError: Error {
 }
 
 struct RaygenRecord {
-
-        var data: UnsafeMutableRawPointer? = nil
+        // force alignment of 16
+        let dummy1 = 0
+        let dummy2 = 0
+        //var data: UnsafeMutableRawPointer? = nil
 }
 
 func cudaCheck(_ cudaError: cudaError_t) throws {
@@ -74,6 +83,7 @@ class Optix {
                         try createContext()
                         try createModule()
                         try createRaygenPrograms()
+                        try createMissPrograms()
                         try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
@@ -223,6 +233,27 @@ class Optix {
                 printGreen("Optix raygen ok.")
         }
 
+        private func createMissPrograms() throws {
+
+                var options = OptixProgramGroupOptions()
+                var description = OptixProgramGroupDesc()
+                description.kind = OPTIX_PROGRAM_GROUP_KIND_MISS
+                description.miss.module = module
+                let missRadiance = "__miss__radiance"
+                missRadiance.withCString {
+                        description.miss.entryFunctionName = $0
+                }
+                let result = optixProgramGroupCreate(
+                        optixContext,
+                        &description,
+                        1,
+                        &options,
+                        nil,
+                        nil,
+                        &missProgramGroup)
+                try optixCheck(result)
+        }
+
         private func createHitgroupPrograms() throws {
 
                 var options = OptixProgramGroupOptions()
@@ -270,11 +301,23 @@ class Optix {
 
         private func buildShaderBindingTable() throws {
                 var raygenRecord = RaygenRecord()
-                let result = optixSbtRecordPackHeader(raygenProgramGroup, &raygenRecord)
+                var result = optixSbtRecordPackHeader(raygenProgramGroup, &raygenRecord)
                 try optixCheck(result)
-                raygenRecord.data = nil
+                //raygenRecord.data = nil
                 try raygenRecordsBuffer.allocAndUpload(raygenRecord)
                 shaderBindingTable.raygenRecord = raygenRecordsBuffer.devicePointer
+
+                shaderBindingTable.callablesRecordStrideInBytes = 16
+
+                var missRecord = MissRecord()
+                result = optixSbtRecordPackHeader(missProgramGroup, &missRecord)
+                try optixCheck(result)
+                try missRecordsBuffer.allocAndUpload(missRecord)
+                shaderBindingTable.missRecordBase = missRecordsBuffer.devicePointer
+                print("miss stride: \(MemoryLayout<MissRecord>.stride)")
+                shaderBindingTable.missRecordStrideInBytes = UInt32(MemoryLayout<MissRecord>.stride)
+                shaderBindingTable.missRecordCount = 1
+
                 var hitgroupRecord = HitgroupRecord()
                 let result2 = optixSbtRecordPackHeader(hitgroupProgramGroup, &hitgroupRecord)
                 try optixCheck(result2)
@@ -314,11 +357,16 @@ class Optix {
         var optixContext: OptixDeviceContext?
         var pipeline: OptixPipeline?
         var module: OptixModule?
+
         var raygenProgramGroup: OptixProgramGroup?
+        var missProgramGroup: OptixProgramGroup?
+        var hitgroupProgramGroup: OptixProgramGroup?
+
         var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
+        var missRecordsBuffer = CudaBuffer<MissRecord>()
+        let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
+        let launchParamsBuffer = CudaBuffer<LaunchParams>()
+
         var shaderBindingTable = OptixShaderBindingTable()
         let launchParams = LaunchParams()
-        let launchParamsBuffer = CudaBuffer<LaunchParams>()
-        var hitgroupProgramGroup: OptixProgramGroup?
-        let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
 }
