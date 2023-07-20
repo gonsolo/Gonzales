@@ -46,6 +46,13 @@ class CudaBuffer<T> {
                 try upload(t)
         }
 
+        var devicePointer: CUdeviceptr {
+                guard let nonNilAddress = pointer else {
+                        fatalError("Nil!")
+                }
+                return CUdeviceptr(UInt(bitPattern: nonNilAddress))
+        }
+
         var sizeInBytes = 0
         var pointer: UnsafeMutableRawPointer? = nil
 }
@@ -225,10 +232,7 @@ class Optix {
                 try optixCheck(result)
                 raygenRecord.data = nil
                 try raygenRecordsBuffer.allocAndUpload(raygenRecord)
-                guard let nonNilAddress = raygenRecordsBuffer.pointer else {
-                        fatalError("Nil!")
-                }
-                shaderBindingTable.raygenRecord = CUdeviceptr(UInt(bitPattern: nonNilAddress))
+                shaderBindingTable.raygenRecord = raygenRecordsBuffer.devicePointer
                 printGreen("Optix shader binding table ok.")
         }
 
@@ -240,16 +244,11 @@ class Optix {
                 let height: UInt32 = 10
                 let depth: UInt32 = 1
 
-                guard let nonNilAddress = launchParamsBuffer.pointer else {
-                        fatalError("Nil!")
-                }
-                let pointer = CUdeviceptr(UInt(bitPattern: nonNilAddress))
-
                 let result = optixLaunch(
                         pipeline,
                         stream,
-                        pointer,  // pipelineParams: CUdeviceptr
-                        0,  // pipelineParamsSize
+                        launchParamsBuffer.devicePointer,
+                        launchParamsBuffer.sizeInBytes,
                         &shaderBindingTable,
                         width,
                         height,
