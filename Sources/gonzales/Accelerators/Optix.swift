@@ -16,6 +16,7 @@ class Optix {
                         try initializeOptix()
                         try createContext()
                         try createModule()
+                        try createRaygenPrograms()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -123,7 +124,6 @@ class Optix {
                 try data.withUnsafeBytes { input in
                         let inputSize = data.count
                         var logSize = 0
-                        var module: OptixModule? = nil
                         let optixResult = optixModuleCreate(
                                 optixContext,
                                 &moduleOptions,
@@ -138,11 +138,32 @@ class Optix {
                 printGreen("Optix module creation ok.")
         }
 
-        func dummy() {}
+        func createRaygenPrograms() throws {
+                var options = OptixProgramGroupOptions()
+                var description = OptixProgramGroupDesc()
+                description.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN
+                description.raygen.module = module
+                let raygenEntry = "__raygen__renderFrame"
+                raygenEntry.withCString {
+                        description.raygen.entryFunctionName = $0
+                }
+                let result = optixProgramGroupCreate(
+                        optixContext,
+                        &description,
+                        1,
+                        &options,
+                        nil,
+                        nil,
+                        &raygenProgramGroup)
+                try optixCheck(result)
+                printGreen("Optix raygen creation ok.")
+        }
 
         static let shared = Optix()
 
         var stream: cudaStream_t?
         var cudaContext: CUcontext?
         var optixContext: OptixDeviceContext?
+        var module: OptixModule?
+        var raygenProgramGroup: OptixProgramGroup?
 }
