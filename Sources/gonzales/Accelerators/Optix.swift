@@ -80,14 +80,14 @@ class Optix {
         func initializeOptix() throws {
                 let optixResult = optixInit()
                 try optixCheck(optixResult)
-                printGreen("Initializing Optix ok.")
+                printGreen("Optix initialization ok.")
         }
 
         func createContext() throws {
                 var cudaError: cudaError_t
                 cudaError = cudaStreamCreate(&stream)
                 try cudaCheck(cudaError)
-                printGreen("Cuda stream created.")
+                printGreen("Cuda stream ok.")
 
                 var cudaResult: CUresult
                 cudaResult = cuCtxGetCurrent(&cudaContext)
@@ -121,7 +121,6 @@ class Optix {
                 moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE
 
                 var pipelineCompileOptions = getPipelineCompileOptions()
-                pipelineLinkOptions.maxTraceDepth = 2
 
                 let fileManager = FileManager.default
                 let urlString = "file://" + fileManager.currentDirectoryPath + "/.build/kernels.optixir"
@@ -143,7 +142,7 @@ class Optix {
                                 &module)
                         try optixCheck(optixResult)
                 }
-                printGreen("Optix module creation ok.")
+                printGreen("Optix module ok.")
         }
 
         func createRaygenPrograms() throws {
@@ -164,11 +163,14 @@ class Optix {
                         nil,
                         &raygenProgramGroup)
                 try optixCheck(result)
-                printGreen("Optix raygen creation ok.")
+                printGreen("Optix raygen ok.")
         }
 
         func createPipeline() throws {
                 var pipelineCompileOptions = getPipelineCompileOptions()
+                var pipelineLinkOptions = OptixPipelineLinkOptions()
+                pipelineLinkOptions.maxTraceDepth = 2
+
                 let result = optixPipelineCreate(
                         optixContext,
                         &pipelineCompileOptions,
@@ -179,7 +181,7 @@ class Optix {
                         nil,
                         &pipeline)
                 try optixCheck(result)
-                printGreen("Optix pipeline creation ok.")
+                printGreen("Optix pipeline ok.")
         }
 
         static let shared = Optix()
@@ -187,7 +189,6 @@ class Optix {
         var stream: cudaStream_t?
         var cudaContext: CUcontext?
         var optixContext: OptixDeviceContext?
-        var pipelineLinkOptions = OptixPipelineLinkOptions()
         var pipeline: OptixPipeline?
         var module: OptixModule?
         var raygenProgramGroup: OptixProgramGroup?
