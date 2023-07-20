@@ -1,7 +1,9 @@
 import Foundation
 import cuda
 
-struct LaunchParams {}
+struct LaunchParams {
+        let dummy = 0
+}
 
 struct HitgroupRecord {
 
@@ -281,8 +283,8 @@ class Optix {
                 printGreen("Optix render.")
                 try launchParamsBuffer.upload(launchParams)
 
-                let width: UInt32 = 10
-                let height: UInt32 = 10
+                let width: UInt32 = 16
+                let height: UInt32 = 16
                 let depth: UInt32 = 1
 
                 let result = optixLaunch(
