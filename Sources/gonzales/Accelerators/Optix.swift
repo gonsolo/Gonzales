@@ -17,6 +17,7 @@ class Optix {
                         try createContext()
                         try createModule()
                         try createRaygenPrograms()
+                        try createPipeline()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -98,22 +99,29 @@ class Optix {
                 printGreen("Optix context ok.")
         }
 
+        private func getPipelineCompileOptions() -> OptixPipelineCompileOptions {
+                var pipelineCompileOptions = OptixPipelineCompileOptions()
+                pipelineCompileOptions.traversableGraphFlags =
+                        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS.rawValue
+                pipelineCompileOptions.usesMotionBlur = Int32(truncating: false)
+                pipelineCompileOptions.numPayloadValues = 2
+                pipelineCompileOptions.numAttributeValues = 2
+                pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE.rawValue
+                let optixLaunchParams = "optixLaunchParams"
+                optixLaunchParams.withCString {
+                        pipelineCompileOptions.pipelineLaunchParamsVariableName = $0
+                }
+                return pipelineCompileOptions
+        }
+
         func createModule() throws {
                 var moduleOptions = OptixModuleCompileOptions()
                 moduleOptions.maxRegisterCount = 50
                 moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT
                 moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE
 
-                var pipelineOptions = OptixPipelineCompileOptions()
-                pipelineOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS.rawValue
-                pipelineOptions.usesMotionBlur = Int32(truncating: false)
-                pipelineOptions.numPayloadValues = 2
-                pipelineOptions.numAttributeValues = 2
-                pipelineOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE.rawValue
-                let optixLaunchParams = "optixLaunchParams"
-                optixLaunchParams.withCString {
-                        pipelineOptions.pipelineLaunchParamsVariableName = $0
-                }
+                var pipelineCompileOptions = getPipelineCompileOptions()
+                pipelineLinkOptions.maxTraceDepth = 2
 
                 let fileManager = FileManager.default
                 let urlString = "file://" + fileManager.currentDirectoryPath + "/.build/kernels.optixir"
@@ -127,7 +135,7 @@ class Optix {
                         let optixResult = optixModuleCreate(
                                 optixContext,
                                 &moduleOptions,
-                                &pipelineOptions,
+                                &pipelineCompileOptions,
                                 input.bindMemory(to: UInt8.self).baseAddress!,
                                 inputSize,
                                 nil,
@@ -159,11 +167,28 @@ class Optix {
                 printGreen("Optix raygen creation ok.")
         }
 
+        func createPipeline() throws {
+                var pipelineCompileOptions = getPipelineCompileOptions()
+                let result = optixPipelineCreate(
+                        optixContext,
+                        &pipelineCompileOptions,
+                        &pipelineLinkOptions,
+                        &raygenProgramGroup,
+                        1,
+                        nil,
+                        nil,
+                        &pipeline)
+                try optixCheck(result)
+                printGreen("Optix pipeline creation ok.")
+        }
+
         static let shared = Optix()
 
         var stream: cudaStream_t?
         var cudaContext: CUcontext?
         var optixContext: OptixDeviceContext?
+        var pipelineLinkOptions = OptixPipelineLinkOptions()
+        var pipeline: OptixPipeline?
         var module: OptixModule?
         var raygenProgramGroup: OptixProgramGroup?
 }
