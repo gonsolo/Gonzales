@@ -8,6 +8,46 @@ enum OptixError: Error {
         case optixCheck
 }
 
+struct RaygenRecord {
+
+        var data: UnsafeMutableRawPointer? = nil
+}
+
+func cudaCheck(_ cudaError: cudaError_t) throws {
+        if cudaError != cudaSuccess {
+                throw OptixError.cudaCheck
+        }
+}
+
+func cudaCheck(_ cudaResult: CUresult) throws {
+        if cudaResult != CUDA_SUCCESS {
+                throw OptixError.cudaCheck
+        }
+}
+
+class CudaBuffer<T> {
+
+        func alloc(size: Int) throws {
+                sizeInBytes = size
+                let error = cudaMalloc(&pointer, sizeInBytes)
+                try cudaCheck(error)
+        }
+
+        func upload(_ t: T) throws {
+                var t = t
+                let error = cudaMemcpy(pointer, &t, 1, cudaMemcpyHostToDevice)
+                try cudaCheck(error)
+        }
+
+        func allocAndUpload(_ t: T) throws {
+                try alloc(size: MemoryLayout<T>.stride)
+                try upload(t)
+        }
+
+        var sizeInBytes = 0
+        var pointer: UnsafeMutableRawPointer? = nil
+}
+
 class Optix {
 
         init() {
@@ -18,20 +58,9 @@ class Optix {
                         try createModule()
                         try createRaygenPrograms()
                         try createPipeline()
+                        try buildShaderBindingTable()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
-                }
-        }
-
-        private func cudaCheck(_ cudaError: cudaError_t) throws {
-                if cudaError != cudaSuccess {
-                        throw OptixError.cudaCheck
-                }
-        }
-
-        private func cudaCheck(_ cudaResult: CUresult) throws {
-                if cudaResult != CUDA_SUCCESS {
-                        throw OptixError.cudaCheck
                 }
         }
 
@@ -184,6 +213,18 @@ class Optix {
                 printGreen("Optix pipeline ok.")
         }
 
+        func buildShaderBindingTable() throws {
+                var raygenRecord = RaygenRecord()
+                let result = optixSbtRecordPackHeader(raygenProgramGroup, &raygenRecord)
+                try optixCheck(result)
+                raygenRecord.data = nil
+                try raygenRecordsBuffer.allocAndUpload(raygenRecord)
+                guard let nonNilAddress = raygenRecordsBuffer.pointer else {
+                        fatalError("Nil!")
+                }
+                shaderBindingTable.raygenRecord = CUdeviceptr(UInt(bitPattern: nonNilAddress))
+        }
+
         static let shared = Optix()
 
         var stream: cudaStream_t?
@@ -192,4 +233,6 @@ class Optix {
         var pipeline: OptixPipeline?
         var module: OptixModule?
         var raygenProgramGroup: OptixProgramGroup?
+        var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
+        var shaderBindingTable = OptixShaderBindingTable()
 }
