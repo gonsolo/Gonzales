@@ -152,7 +152,7 @@ em: editMakefile
 editMakefile:
 	@vi Makefile
 optix:
-	cd Sources; nvcc --optix-ir bla.cu; cd -
+	@cd Sources/optix; nvcc --optix-ir kernels.cu -o ../../.build/kernels.optixir; cd -
 r: release
 release: optix
 	@$(BUILD_RELEASE)

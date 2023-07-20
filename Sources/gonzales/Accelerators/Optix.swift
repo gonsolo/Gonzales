@@ -115,7 +115,7 @@ class Optix {
                 }
 
                 let fileManager = FileManager.default
-                let urlString = "file://" + fileManager.currentDirectoryPath + "/Sources/bla.optixir"
+                let urlString = "file://" + fileManager.currentDirectoryPath + "/.build/kernels.optixir"
                 guard let url = URL(string: urlString) else {
                         throw OptixError.noFile
                 }
@@ -135,6 +135,7 @@ class Optix {
                                 &module)
                         try optixCheck(optixResult)
                 }
+                printGreen("Optix module creation ok.")
         }
 
         func dummy() {}
