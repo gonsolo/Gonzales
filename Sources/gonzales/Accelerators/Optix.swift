@@ -1,5 +1,6 @@
 import Foundation
 import cuda
+import cudaBridge
 
 struct LaunchParams {
         let dummy = 0
@@ -144,8 +145,14 @@ class Optix {
                 try cudaCheck(cudaResult)
                 printGreen("Cuda context ok.")
 
-                let optixResult = optixDeviceContextCreate(cudaContext, nil, &optixContext)
-                try optixCheck(optixResult)
+                var result = optixDeviceContextCreate(cudaContext, nil, &optixContext)
+                try optixCheck(result)
+                result = optixDeviceContextSetLogCallback(
+                        optixContext,
+                        contextLogCallback,
+                        nil,
+                        4)
+
                 printGreen("Optix context ok.")
         }
 
