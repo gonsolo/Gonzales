@@ -3,6 +3,11 @@ import cuda
 
 struct LaunchParams {}
 
+struct HitgroupRecord {
+
+        var dummy: Int = 0
+}
+
 enum OptixError: Error {
         case cudaCheck
         case noDevice
@@ -66,6 +71,7 @@ class Optix {
                         try createContext()
                         try createModule()
                         try createRaygenPrograms()
+                        try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
                         try launchParamsBuffer.alloc(size: MemoryLayout<LaunchParams>.stride)
@@ -208,6 +214,33 @@ class Optix {
                 printGreen("Optix raygen ok.")
         }
 
+        private func createHitgroupPrograms() throws {
+
+                var options = OptixProgramGroupOptions()
+                var description = OptixProgramGroupDesc()
+                description.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP
+                description.hitgroup.moduleCH = module
+                let closesthitRadiance = "__closesthit__radiance"
+                closesthitRadiance.withCString {
+                        description.hitgroup.entryFunctionNameCH = $0
+                }
+                description.hitgroup.moduleAH = module
+                let anyhitRadiance = "__anyhit__radiance"
+                anyhitRadiance.withCString {
+                        description.hitgroup.entryFunctionNameAH = $0
+                }
+                let result = optixProgramGroupCreate(
+                        optixContext,
+                        &description,
+                        1,
+                        &options,
+                        nil,
+                        nil,
+                        &hitgroupProgramGroup)
+                try optixCheck(result)
+                printGreen("Optix hitgroup ok.")
+        }
+
         private func createPipeline() throws {
                 var pipelineCompileOptions = getPipelineCompileOptions()
                 var pipelineLinkOptions = OptixPipelineLinkOptions()
@@ -233,6 +266,14 @@ class Optix {
                 raygenRecord.data = nil
                 try raygenRecordsBuffer.allocAndUpload(raygenRecord)
                 shaderBindingTable.raygenRecord = raygenRecordsBuffer.devicePointer
+                var hitgroupRecord = HitgroupRecord()
+                let result2 = optixSbtRecordPackHeader(hitgroupProgramGroup, &hitgroupRecord)
+                try optixCheck(result2)
+                //hitgroupRecord.objectID = 0
+                try hitgroupRecordsBuffer.allocAndUpload(hitgroupRecord)
+                shaderBindingTable.hitgroupRecordBase = hitgroupRecordsBuffer.devicePointer
+                shaderBindingTable.hitgroupRecordStrideInBytes = UInt32(MemoryLayout<HitgroupRecord>.stride)
+                shaderBindingTable.hitgroupRecordCount = 1
                 printGreen("Optix shader binding table ok.")
         }
 
@@ -269,4 +310,6 @@ class Optix {
         var shaderBindingTable = OptixShaderBindingTable()
         let launchParams = LaunchParams()
         let launchParamsBuffer = CudaBuffer<LaunchParams>()
+        var hitgroupProgramGroup: OptixProgramGroup?
+        let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
 }
