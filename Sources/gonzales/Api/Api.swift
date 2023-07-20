@@ -19,7 +19,8 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 let accelerator = Accelerator.embree(embree)
                 return accelerator
         case "optix":
-                let _ = Optix.shared
+                let optix = Optix.shared
+                try optix.render()
                 exit(0)
         default:
                 throw ApiError.accelerator

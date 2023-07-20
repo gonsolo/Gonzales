@@ -1,6 +1,8 @@
 import Foundation
 import cuda
 
+struct LaunchParams {}
+
 enum OptixError: Error {
         case cudaCheck
         case noDevice
@@ -59,6 +61,7 @@ class Optix {
                         try createRaygenPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
+                        try launchParamsBuffer.alloc(size: MemoryLayout<LaunchParams>.stride)
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -66,12 +69,20 @@ class Optix {
 
         private func optixCheck(_ optixResult: OptixResult) throws {
                 if optixResult != OPTIX_SUCCESS {
-                        print("OptixError, result: \(optixResult)")
+                        print("OptixError: \(optixResult)")
                         throw OptixError.optixCheck
                 }
         }
 
-        func initializeCuda() throws {
+        private func cStringToString<T>(_ cString: T) -> String {
+                return withUnsafePointer(to: cString) {
+                        $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout.size(ofValue: $0)) {
+                                String(cString: $0)
+                        }
+                }
+        }
+
+        private func initializeCuda() throws {
                 var numDevices: Int32 = 0
                 var cudaError: cudaError_t
                 cudaError = cudaGetDeviceCount(&numDevices)
@@ -83,21 +94,16 @@ class Optix {
                 var cudaDevice: Int32 = 0
                 cudaError = cudaGetDevice(&cudaDevice)
                 try cudaCheck(cudaError)
-                //print("Cuda device used: \(cudaDevice)")
 
                 var cudaDeviceProperties: cudaDeviceProp = cudaDeviceProp()
                 cudaError = cudaGetDeviceProperties_v2(&cudaDeviceProperties, cudaDevice)
                 try cudaCheck(cudaError)
 
-                let deviceName = withUnsafePointer(to: cudaDeviceProperties.name) {
-                        $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout.size(ofValue: $0)) {
-                                String(cString: $0)
-                        }
-                }
+                let deviceName = cStringToString(cudaDeviceProperties.name)
                 print(deviceName)
         }
 
-        func printGreen(_ message: String) {
+        private func printGreen(_ message: String) {
                 let escape = "\u{001B}"
                 let bold = "1"
                 let green = "32"
@@ -106,13 +112,13 @@ class Optix {
                 print(ansiEscapeGreen + message + ansiEscapeReset)
         }
 
-        func initializeOptix() throws {
+        private func initializeOptix() throws {
                 let optixResult = optixInit()
                 try optixCheck(optixResult)
                 printGreen("Optix initialization ok.")
         }
 
-        func createContext() throws {
+        private func createContext() throws {
                 var cudaError: cudaError_t
                 cudaError = cudaStreamCreate(&stream)
                 try cudaCheck(cudaError)
@@ -143,7 +149,7 @@ class Optix {
                 return pipelineCompileOptions
         }
 
-        func createModule() throws {
+        private func createModule() throws {
                 var moduleOptions = OptixModuleCompileOptions()
                 moduleOptions.maxRegisterCount = 50
                 moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT
@@ -174,7 +180,7 @@ class Optix {
                 printGreen("Optix module ok.")
         }
 
-        func createRaygenPrograms() throws {
+        private func createRaygenPrograms() throws {
                 var options = OptixProgramGroupOptions()
                 var description = OptixProgramGroupDesc()
                 description.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN
@@ -195,7 +201,7 @@ class Optix {
                 printGreen("Optix raygen ok.")
         }
 
-        func createPipeline() throws {
+        private func createPipeline() throws {
                 var pipelineCompileOptions = getPipelineCompileOptions()
                 var pipelineLinkOptions = OptixPipelineLinkOptions()
                 pipelineLinkOptions.maxTraceDepth = 2
@@ -213,7 +219,7 @@ class Optix {
                 printGreen("Optix pipeline ok.")
         }
 
-        func buildShaderBindingTable() throws {
+        private func buildShaderBindingTable() throws {
                 var raygenRecord = RaygenRecord()
                 let result = optixSbtRecordPackHeader(raygenProgramGroup, &raygenRecord)
                 try optixCheck(result)
@@ -223,6 +229,33 @@ class Optix {
                         fatalError("Nil!")
                 }
                 shaderBindingTable.raygenRecord = CUdeviceptr(UInt(bitPattern: nonNilAddress))
+                printGreen("Optix shader binding table ok.")
+        }
+
+        func render() throws {
+                printGreen("Optix render.")
+                try launchParamsBuffer.upload(launchParams)
+
+                let width: UInt32 = 10
+                let height: UInt32 = 10
+                let depth: UInt32 = 1
+
+                guard let nonNilAddress = launchParamsBuffer.pointer else {
+                        fatalError("Nil!")
+                }
+                let pointer = CUdeviceptr(UInt(bitPattern: nonNilAddress))
+
+                let result = optixLaunch(
+                        pipeline,
+                        stream,
+                        pointer,  // pipelineParams: CUdeviceptr
+                        0,  // pipelineParamsSize
+                        &shaderBindingTable,
+                        width,
+                        height,
+                        depth)
+                try optixCheck(result)
+                printGreen("Optix render ok.")
         }
 
         static let shared = Optix()
@@ -235,4 +268,6 @@ class Optix {
         var raygenProgramGroup: OptixProgramGroup?
         var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
         var shaderBindingTable = OptixShaderBindingTable()
+        let launchParams = LaunchParams()
+        let launchParamsBuffer = CudaBuffer<LaunchParams>()
 }
