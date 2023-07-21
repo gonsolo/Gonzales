@@ -2,9 +2,9 @@ import Foundation
 import cuda
 import cudaBridge
 
-struct LaunchParams {
-        let dummy = 0
-}
+//struct LaunchParams {
+//        let dummy = 0
+//}
 
 struct MissRecord {
         // force alignment of 16
@@ -87,7 +87,7 @@ class Optix {
                         try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
-                        try launchParamsBuffer.alloc(size: MemoryLayout<LaunchParams>.stride)
+                        try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -174,8 +174,8 @@ class Optix {
                 pipelineCompileOptions.numPayloadValues = 2
                 pipelineCompileOptions.numAttributeValues = 2
                 pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE.rawValue
-                let optixLaunchParams = "optixLaunchParams"
-                optixLaunchParams.withCString {
+                let launchParameters = "launchParameters"
+                launchParameters.withCString {
                         pipelineCompileOptions.pipelineLaunchParamsVariableName = $0
                 }
                 return pipelineCompileOptions
@@ -314,7 +314,7 @@ class Optix {
                 try optixCheck(result)
                 try missRecordsBuffer.allocAndUpload(missRecord)
                 shaderBindingTable.missRecordBase = missRecordsBuffer.devicePointer
-                print("miss stride: \(MemoryLayout<MissRecord>.stride)")
+                //print("miss stride: \(MemoryLayout<MissRecord>.stride)")
                 shaderBindingTable.missRecordStrideInBytes = UInt32(MemoryLayout<MissRecord>.stride)
                 shaderBindingTable.missRecordCount = 1
 
@@ -331,7 +331,8 @@ class Optix {
 
         func render() throws {
                 printGreen("Optix render.")
-                try launchParamsBuffer.upload(launchParams)
+                try launchParametersBuffer.upload(launchParameters)
+                launchParameters.frameID += 1
 
                 let width: UInt32 = 16
                 let height: UInt32 = 16
@@ -340,8 +341,8 @@ class Optix {
                 let result = optixLaunch(
                         pipeline,
                         stream,
-                        launchParamsBuffer.devicePointer,
-                        launchParamsBuffer.sizeInBytes,
+                        launchParametersBuffer.devicePointer,
+                        launchParametersBuffer.sizeInBytes,
                         &shaderBindingTable,
                         width,
                         height,
@@ -365,8 +366,8 @@ class Optix {
         var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
         var missRecordsBuffer = CudaBuffer<MissRecord>()
         let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
-        let launchParamsBuffer = CudaBuffer<LaunchParams>()
+        let launchParametersBuffer = CudaBuffer<LaunchParameters>()
 
         var shaderBindingTable = OptixShaderBindingTable()
-        let launchParams = LaunchParams()
+        var launchParameters = LaunchParameters()
 }
