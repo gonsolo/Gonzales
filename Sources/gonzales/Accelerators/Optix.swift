@@ -309,6 +309,8 @@ class Optix {
                 try raygenRecordsBuffer.allocAndUpload(raygenRecord)
                 shaderBindingTable.raygenRecord = raygenRecordsBuffer.devicePointer
 
+                shaderBindingTable.callablesRecordBase = 0
+                shaderBindingTable.callablesRecordCount = 0
                 shaderBindingTable.callablesRecordStrideInBytes = 16
 
                 var missRecord = MissRecord()
@@ -334,7 +336,7 @@ class Optix {
         func render() throws {
                 printGreen("Optix render.")
                 try launchParametersBuffer.upload(launchParameters)
-                launchParameters.frameID += 1
+                launchParameters.frameId += 1
 
                 let width: UInt32 = 16
                 let height: UInt32 = 16

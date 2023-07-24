@@ -1,3 +1,3 @@
 struct LaunchParameters {
-	int frameID { 0 };
+	int frameId { 0 };
 };
