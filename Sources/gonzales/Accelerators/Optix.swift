@@ -32,6 +32,29 @@ struct RaygenRecord {
         //var data: UnsafeMutableRawPointer? = nil
 }
 
+struct SimplePixel {
+        let red: UInt8 = 0
+        let green: UInt8 = 0
+        let blue: UInt8 = 0
+        let alpha: UInt8 = 0
+}
+
+struct PixelBlock2x2 {
+        let pixels = (SimplePixel(), SimplePixel(), SimplePixel(), SimplePixel())
+}
+
+struct PixelBlock4x4 {
+        let blocks = (PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2())
+}
+
+struct PixelBlock8x8 {
+        let blocks = (PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4())
+}
+
+struct PixelBlock16x16 {
+        let blocks = (PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8())
+}
+
 func cudaCheck(_ cudaError: cudaError_t) throws {
         if cudaError != cudaSuccess {
                 throw OptixError.cudaCheck
@@ -50,6 +73,13 @@ class CudaBuffer<T> {
                 sizeInBytes = size
                 let error = cudaMalloc(&pointer, sizeInBytes)
                 try cudaCheck(error)
+        }
+
+        func download(_ t: inout T) throws {
+                var t = t
+                let error = cudaMemcpy(&t, pointer, 1, cudaMemcpyDeviceToHost)
+                try cudaCheck(error)
+
         }
 
         func upload(_ t: T) throws {
@@ -88,6 +118,8 @@ class Optix {
                         try createPipeline()
                         try buildShaderBindingTable()
                         try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
+                        try colorBuffer.alloc(size: MemoryLayout<PixelBlock16x16>.stride)
+                        launchParameters.pointerToPixels = colorBuffer.pointer!
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -176,8 +208,8 @@ class Optix {
                 pipelineCompileOptions.numPayloadValues = 2
                 pipelineCompileOptions.numAttributeValues = 2
                 pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE.rawValue
-                let launchParameters = "launchParameters"
-                launchParameters.withCString {
+                let launchParametersString = "launchParameters"
+                launchParametersString.withCString {
                         pipelineCompileOptions.pipelineLaunchParamsVariableName = $0
                 }
                 return pipelineCompileOptions
@@ -353,6 +385,14 @@ class Optix {
                         depth)
                 try optixCheck(result)
                 printGreen("Optix render ok.")
+
+                cudaDeviceSynchronize()
+                let error = cudaGetLastError()
+                try cudaCheck(error)
+
+                var pixelBlock16x16 = PixelBlock16x16()
+                try colorBuffer.download(&pixelBlock16x16)
+                print(pixelBlock16x16.blocks.0.blocks.0.blocks.0.pixels.0.red)
         }
 
         static let shared = Optix()
@@ -371,6 +411,8 @@ class Optix {
         var missRecordsBuffer = CudaBuffer<MissRecord>()
         let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
         let launchParametersBuffer = CudaBuffer<LaunchParameters>()
+
+        let colorBuffer = CudaBuffer<PixelBlock16x16>()
 
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()

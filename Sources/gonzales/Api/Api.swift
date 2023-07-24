@@ -21,7 +21,6 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
         case "optix":
                 let optix = Optix.shared
                 try optix.render()
-                try optix.render()
                 exit(0)
         default:
                 throw ApiError.accelerator
