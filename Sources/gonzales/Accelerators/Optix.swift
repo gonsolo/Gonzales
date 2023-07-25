@@ -117,9 +117,9 @@ class Optix {
                         try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
-                        try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
+                        //try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                         try colorBuffer.alloc(size: MemoryLayout<PixelBlock16x16>.stride)
-                        launchParameters.pointerToPixels = colorBuffer.pointer!
+                        //launchParameters.pointerToPixels = colorBuffer.pointer!
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -341,6 +341,7 @@ class Optix {
                 try raygenRecordsBuffer.allocAndUpload(raygenRecord)
                 shaderBindingTable.raygenRecord = raygenRecordsBuffer.devicePointer
 
+                shaderBindingTable.exceptionRecord = 0
                 shaderBindingTable.callablesRecordBase = 0
                 shaderBindingTable.callablesRecordCount = 0
                 shaderBindingTable.callablesRecordStrideInBytes = 16
@@ -367,7 +368,20 @@ class Optix {
 
         func render() throws {
                 printGreen("Optix render.")
-                try launchParametersBuffer.upload(launchParameters)
+
+                //let colorBuffer = CudaBuffer<UInt32>()
+                //try colorBuffer.alloc(size: 16 * 16 * MemoryLayout<UInt32>.stride)
+                //let opaquePointer = OpaquePointer(colorBuffer.pointer!)
+                //let uint32Pointer = UnsafeMutablePointer<UInt32>(opaquePointer)
+                //try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
+
+                //var blaPointer: UnsafeMutableRawPointer? = nil
+                //let blaError = cudaMalloc(&blaPointer, 16 * 16 * 16)
+                //try cudaCheck(blaError)
+                //launchParameters.pointerToPixels = blaPointer
+                let bla = buildLaunch()
+                //launchParameters.frameId = 133
+                //try launchParametersBuffer.upload(launchParameters)
                 launchParameters.frameId += 1
 
                 let width: UInt32 = 16
@@ -377,8 +391,10 @@ class Optix {
                 let result = optixLaunch(
                         pipeline,
                         stream,
-                        launchParametersBuffer.devicePointer,
-                        launchParametersBuffer.sizeInBytes,
+                        //launchParametersBuffer.devicePointer,
+                        //launchParametersBuffer.sizeInBytes,
+                        bla,
+                        16,
                         &shaderBindingTable,
                         width,
                         height,
@@ -386,13 +402,16 @@ class Optix {
                 try optixCheck(result)
                 printGreen("Optix render ok.")
 
+                let color = getColor()
+                print("color: ", color)
+
                 cudaDeviceSynchronize()
                 let error = cudaGetLastError()
                 try cudaCheck(error)
 
-                var pixelBlock16x16 = PixelBlock16x16()
-                try colorBuffer.download(&pixelBlock16x16)
-                print(pixelBlock16x16.blocks.0.blocks.0.blocks.0.pixels.0.red)
+                //var pixelBlock16x16 = PixelBlock16x16()
+                //try colorBuffer.download(&pixelBlock16x16)
+                //print(pixelBlock16x16.blocks.0.blocks.0.blocks.0.pixels.0.red)
         }
 
         static let shared = Optix()
@@ -410,7 +429,7 @@ class Optix {
         var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
         var missRecordsBuffer = CudaBuffer<MissRecord>()
         let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
-        let launchParametersBuffer = CudaBuffer<LaunchParameters>()
+        //let launchParametersBuffer = CudaBuffer<LaunchParameters>()
 
         let colorBuffer = CudaBuffer<PixelBlock16x16>()
 
