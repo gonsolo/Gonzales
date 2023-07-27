@@ -151,8 +151,13 @@ editScene:
 em: editMakefile
 editMakefile:
 	@vi Makefile
+
+OPTIX_INCLUDE_DIR = ../../External/Optix/7.7.0/include
+OPTIX_OUTPUT = ../../.build/kernels.optixir
+NVCC_OPTIONS = -I../cuda -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
 optix:
-	@cd Sources/optix; nvcc -I../cuda -I../../External/Optix/7.7.0/include -rdc=true --optix-ir kernels.cu -o ../../.build/kernels.optixir; cd -
+	@cd Sources/optix; nvcc $(NVCC_OPTIONS) kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
+
 r: release
 release: optix
 	@$(BUILD_RELEASE)
