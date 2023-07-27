@@ -459,4 +459,6 @@ class Optix {
 
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
+
+        var colorPointer: UnsafeMutableRawPointer?
 }

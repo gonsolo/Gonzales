@@ -9,4 +9,3 @@ struct LaunchParameters {
 	void *pointerToPixels;
 };
 
-void* colorPointer;
