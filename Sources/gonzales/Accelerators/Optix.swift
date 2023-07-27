@@ -34,19 +34,55 @@ struct SimplePixel {
         let alpha: UInt8 = 0
 }
 
-struct PixelBlock2x2 {
+struct PixelBlock2x2: CustomStringConvertible {
+
+        var description: String {
+                return "2x2:\n  \(pixels.0)\n  \(pixels.1)\n  \(pixels.2)\n  \(pixels.3)"
+        }
+
+        var width: Int32 { 2 }
+        var height: Int32 { 2 }
+        var depth: Int32 { 1 }
+
         let pixels = (SimplePixel(), SimplePixel(), SimplePixel(), SimplePixel())
 }
 
-struct PixelBlock4x4 {
+struct PixelBlock4x4: CustomStringConvertible {
+
+        var description: String {
+                return "4x4:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
+        }
+
+        var width: Int32 { 2 * blocks.0.width }
+        var height: Int32 { 2 * blocks.0.height }
+        var depth: Int32 { 1 }
+
         let blocks = (PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2())
 }
 
-struct PixelBlock8x8 {
+struct PixelBlock8x8: CustomStringConvertible {
+
+        var description: String {
+                return "8x8:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
+        }
+
+        var width: Int32 { 2 * blocks.0.width }
+        var height: Int32 { 2 * blocks.0.height }
+        var depth: Int32 { 1 }
+
         let blocks = (PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4())
 }
 
-struct PixelBlock16x16 {
+struct PixelBlock16x16: CustomStringConvertible {
+
+        var description: String {
+                return "16x16:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
+        }
+
+        var width: Int32 { 2 * blocks.0.width }
+        var height: Int32 { 2 * blocks.0.height }
+        var depth: Int32 { 1 }
+
         let blocks = (PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8())
 }
 
@@ -90,7 +126,8 @@ class CudaBuffer<T> {
         }
 
         var sizeInBytes: Int {
-                return MemoryLayout<T>.stride
+                //return MemoryLayout<T>.stride
+                return MemoryLayout<T>.size
         }
 
         var devicePointer: CUdeviceptr {
@@ -108,7 +145,7 @@ class Optix {
                         missRecordsBuffer = try CudaBuffer<MissRecord>()
                         hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
                         launchParametersBuffer = try CudaBuffer<LaunchParameters>()
-                        colorBuffer = try CudaBuffer<PixelBlock16x16>()
+                        colorBuffer = try CudaBuffer<PixelBlock>()
                         try initializeCuda()
                         try initializeOptix()
                         try createContext()
@@ -377,9 +414,9 @@ class Optix {
                         launchParametersBuffer.devicePointer,
                         launchParametersBuffer.sizeInBytes,
                         &shaderBindingTable,
-                        UInt32(frameBufferWidth),
-                        UInt32(frameBufferHeight),
-                        UInt32(frameBufferDepth))
+                        UInt32(pixelBlock.width),
+                        UInt32(pixelBlock.height),
+                        UInt32(pixelBlock.depth))
                 try optixCheck(result)
                 printGreen("Optix render ok.")
 
@@ -391,20 +428,19 @@ class Optix {
         }
 
         func printColors() throws {
-                var pixelBlock = PixelBlock16x16()
                 let error = cudaMemcpy(
                         &pixelBlock,
                         colorBuffer.pointer,
                         colorBuffer.sizeInBytes,
                         cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
-                let block = pixelBlock.blocks.0.blocks.0.blocks.0
-                let pixel = block.pixels.0
-                print(pixel)
+                print(pixelBlock)
         }
 
         func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
+                launchParameters.width = pixelBlock.width
+                launchParameters.height = pixelBlock.height
                 launchParameters.pointerToPixels = colorBuffer.pointer
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
@@ -431,12 +467,10 @@ class Optix {
         var hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>
         var launchParametersBuffer: CudaBuffer<LaunchParameters>
 
-        var colorBuffer: CudaBuffer<PixelBlock16x16>
-
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
 
-        let frameBufferWidth = 16
-        let frameBufferHeight = 16
-        let frameBufferDepth = 1
+        typealias PixelBlock = PixelBlock8x8
+        var pixelBlock = PixelBlock()
+        var colorBuffer: CudaBuffer<PixelBlock>
 }
