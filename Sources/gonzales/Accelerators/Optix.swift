@@ -110,8 +110,7 @@ class Optix {
                         try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
-                        try colorBuffer.alloc(size: MemoryLayout<PixelBlock16x16>.stride)
-                        try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
+                        try allocateBuffers()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -347,19 +346,26 @@ class Optix {
                 try optixCheck(result)
                 try missRecordsBuffer.allocAndUpload(missRecord)
                 shaderBindingTable.missRecordBase = missRecordsBuffer.devicePointer
-                //print("miss stride: \(MemoryLayout<MissRecord>.stride)")
                 shaderBindingTable.missRecordStrideInBytes = UInt32(MemoryLayout<MissRecord>.stride)
                 shaderBindingTable.missRecordCount = 1
 
                 var hitgroupRecord = HitgroupRecord()
                 let result2 = optixSbtRecordPackHeader(hitgroupProgramGroup, &hitgroupRecord)
                 try optixCheck(result2)
-                //hitgroupRecord.objectID = 0
                 try hitgroupRecordsBuffer.allocAndUpload(hitgroupRecord)
                 shaderBindingTable.hitgroupRecordBase = hitgroupRecordsBuffer.devicePointer
                 shaderBindingTable.hitgroupRecordStrideInBytes = UInt32(MemoryLayout<HitgroupRecord>.stride)
                 shaderBindingTable.hitgroupRecordCount = 1
                 printGreen("Optix shader binding table ok.")
+        }
+
+        func allocateBuffers() throws {
+                try colorBuffer.alloc(size: MemoryLayout<PixelBlock16x16>.stride)
+                try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
+                let frameBufferPixels = frameBufferWidth * frameBufferHeight * frameBufferDepth
+                let frameBufferSize = frameBufferPixels * MemoryLayout<UInt32>.stride
+                let colorError = cudaMalloc(&colorPointer, frameBufferSize)
+                try cudaCheck(colorError)
         }
 
         func render() throws {
@@ -368,19 +374,15 @@ class Optix {
                 try buildLaunch()
                 launchParameters.frameId += 1
 
-                let width: UInt32 = 16
-                let height: UInt32 = 16
-                let depth: UInt32 = 1
-
                 let result = optixLaunch(
                         pipeline,
                         stream,
                         launchParametersBuffer.devicePointer,
                         launchParametersBuffer.sizeInBytes,
                         &shaderBindingTable,
-                        width,
-                        height,
-                        depth)
+                        UInt32(frameBufferWidth),
+                        UInt32(frameBufferHeight),
+                        UInt32(frameBufferDepth))
                 try optixCheck(result)
                 printGreen("Optix render ok.")
 
@@ -405,8 +407,6 @@ class Optix {
 
         func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
-                let colorError = cudaMalloc(&colorPointer, 16)
-                try cudaCheck(colorError)
                 launchParameters.pointerToPixels = colorPointer
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
@@ -439,4 +439,8 @@ class Optix {
         var launchParameters = LaunchParameters()
 
         var colorPointer: UnsafeMutableRawPointer?
+
+        let frameBufferWidth = 16
+        let frameBufferHeight = 16
+        let frameBufferDepth = 1
 }
