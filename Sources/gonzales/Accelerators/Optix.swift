@@ -93,6 +93,7 @@ class CudaBuffer<T> {
         var sizeInBytes: Int {
                 return MemoryLayout<T>.stride
         }
+
         var devicePointer: CUdeviceptr {
                 return UInt64(bitPattern: Int64(Int(bitPattern: pointer)))
         }
@@ -109,7 +110,7 @@ class Optix {
                         hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
                         launchParametersBuffer = try CudaBuffer<LaunchParameters>()
                         colorBuffer = try CudaBuffer<PixelBlock16x16>()
-
+                        try allocateBuffers()
                         try initializeCuda()
                         try initializeOptix()
                         try createContext()
@@ -119,8 +120,6 @@ class Optix {
                         try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
-                        try allocateBuffers()
-
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -368,7 +367,7 @@ class Optix {
                 printGreen("Optix shader binding table ok.")
         }
 
-        func allocateBuffers() throws {
+        private func allocateBuffers() throws {
                 let frameBufferPixels = frameBufferWidth * frameBufferHeight * frameBufferDepth
                 let frameBufferSize = frameBufferPixels * MemoryLayout<UInt32>.stride
                 let colorError = cudaMalloc(&colorPointer, frameBufferSize)
@@ -437,9 +436,9 @@ class Optix {
 
         var raygenRecordsBuffer: CudaBuffer<RaygenRecord>
         var missRecordsBuffer: CudaBuffer<MissRecord>
-        let hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>
-        let launchParametersBuffer: CudaBuffer<LaunchParameters>
-        let colorBuffer: CudaBuffer<PixelBlock16x16>
+        var hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>
+        var launchParametersBuffer: CudaBuffer<LaunchParameters>
+        var colorBuffer: CudaBuffer<PixelBlock16x16>
 
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
