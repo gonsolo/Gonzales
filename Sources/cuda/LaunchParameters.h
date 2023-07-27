@@ -28,10 +28,10 @@ CUdeviceptr buildLaunch() {
 	return (CUdeviceptr)launchPointer;
 }
 
-uint32_t getColor() {
-	uint32_t i;
-	auto error = cudaMemcpy(&i, colorPointer, sizeof(uint32_t), cudaMemcpyDeviceToHost);
-	std::cerr << error << std::endl;
-	return i;
-}
+//uint32_t getColor() {
+//	uint32_t i;
+//	auto error = cudaMemcpy(&i, colorPointer, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+//	std::cerr << error << std::endl;
+//	return i;
+//}
 

@@ -402,16 +402,23 @@ class Optix {
                 try optixCheck(result)
                 printGreen("Optix render ok.")
 
-                let color = getColor()
-                print("color: ", color)
-
                 cudaDeviceSynchronize()
                 let error = cudaGetLastError()
                 try cudaCheck(error)
 
+                let color = getColor()
+                print("color: ", color)
+
                 //var pixelBlock16x16 = PixelBlock16x16()
                 //try colorBuffer.download(&pixelBlock16x16)
                 //print(pixelBlock16x16.blocks.0.blocks.0.blocks.0.pixels.0.red)
+        }
+
+        func getColor() -> UInt32 {
+                var i: UInt32 = 0
+                let error = cudaMemcpy(&i, colorPointer, MemoryLayout<UInt32>.stride, cudaMemcpyDeviceToHost)
+                print("getColor error: \(error)")
+                return i
         }
 
         static let shared = Optix()
