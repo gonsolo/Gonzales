@@ -65,10 +65,16 @@ func cudaCheck(_ cudaResult: CUresult) throws {
 
 class CudaBuffer<T> {
 
-        func alloc(size: Int) throws {
-                sizeInBytes = size
+        init() throws {
                 let error = cudaMalloc(&pointer, sizeInBytes)
                 try cudaCheck(error)
+        }
+
+        deinit {
+                let error = cudaFree(&pointer)
+                if error != cudaSuccess {
+                        print("Error in deinit: cudaFree!")
+                }
         }
 
         func download(_ t: inout T) throws {
@@ -84,16 +90,13 @@ class CudaBuffer<T> {
                 try cudaCheck(error)
         }
 
-        func allocAndUpload(_ t: T) throws {
-                try alloc(size: MemoryLayout<T>.stride)
-                try upload(t)
+        var sizeInBytes: Int {
+                return MemoryLayout<T>.stride
         }
-
         var devicePointer: CUdeviceptr {
                 return UInt64(bitPattern: Int64(Int(bitPattern: pointer)))
         }
 
-        var sizeInBytes = 0
         var pointer: UnsafeMutableRawPointer? = nil
 }
 
@@ -101,6 +104,12 @@ class Optix {
 
         init() {
                 do {
+                        raygenRecordsBuffer = try CudaBuffer<RaygenRecord>()
+                        missRecordsBuffer = try CudaBuffer<MissRecord>()
+                        hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
+                        launchParametersBuffer = try CudaBuffer<LaunchParameters>()
+                        colorBuffer = try CudaBuffer<PixelBlock16x16>()
+
                         try initializeCuda()
                         try initializeOptix()
                         try createContext()
@@ -111,6 +120,7 @@ class Optix {
                         try createPipeline()
                         try buildShaderBindingTable()
                         try allocateBuffers()
+
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -332,8 +342,7 @@ class Optix {
                 var raygenRecord = RaygenRecord()
                 var result = optixSbtRecordPackHeader(raygenProgramGroup, &raygenRecord)
                 try optixCheck(result)
-                //raygenRecord.data = nil
-                try raygenRecordsBuffer.allocAndUpload(raygenRecord)
+                try raygenRecordsBuffer.upload(raygenRecord)
                 shaderBindingTable.raygenRecord = raygenRecordsBuffer.devicePointer
 
                 shaderBindingTable.exceptionRecord = 0
@@ -344,7 +353,7 @@ class Optix {
                 var missRecord = MissRecord()
                 result = optixSbtRecordPackHeader(missProgramGroup, &missRecord)
                 try optixCheck(result)
-                try missRecordsBuffer.allocAndUpload(missRecord)
+                try missRecordsBuffer.upload(missRecord)
                 shaderBindingTable.missRecordBase = missRecordsBuffer.devicePointer
                 shaderBindingTable.missRecordStrideInBytes = UInt32(MemoryLayout<MissRecord>.stride)
                 shaderBindingTable.missRecordCount = 1
@@ -352,7 +361,7 @@ class Optix {
                 var hitgroupRecord = HitgroupRecord()
                 let result2 = optixSbtRecordPackHeader(hitgroupProgramGroup, &hitgroupRecord)
                 try optixCheck(result2)
-                try hitgroupRecordsBuffer.allocAndUpload(hitgroupRecord)
+                try hitgroupRecordsBuffer.upload(hitgroupRecord)
                 shaderBindingTable.hitgroupRecordBase = hitgroupRecordsBuffer.devicePointer
                 shaderBindingTable.hitgroupRecordStrideInBytes = UInt32(MemoryLayout<HitgroupRecord>.stride)
                 shaderBindingTable.hitgroupRecordCount = 1
@@ -360,8 +369,6 @@ class Optix {
         }
 
         func allocateBuffers() throws {
-                try colorBuffer.alloc(size: MemoryLayout<PixelBlock16x16>.stride)
-                try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                 let frameBufferPixels = frameBufferWidth * frameBufferHeight * frameBufferDepth
                 let frameBufferSize = frameBufferPixels * MemoryLayout<UInt32>.stride
                 let colorError = cudaMalloc(&colorPointer, frameBufferSize)
@@ -428,12 +435,11 @@ class Optix {
         var missProgramGroup: OptixProgramGroup?
         var hitgroupProgramGroup: OptixProgramGroup?
 
-        var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
-        var missRecordsBuffer = CudaBuffer<MissRecord>()
-        let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
-        let launchParametersBuffer = CudaBuffer<LaunchParameters>()
-
-        let colorBuffer = CudaBuffer<PixelBlock16x16>()
+        var raygenRecordsBuffer: CudaBuffer<RaygenRecord>
+        var missRecordsBuffer: CudaBuffer<MissRecord>
+        let hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>
+        let launchParametersBuffer: CudaBuffer<LaunchParameters>
+        let colorBuffer: CudaBuffer<PixelBlock16x16>
 
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
