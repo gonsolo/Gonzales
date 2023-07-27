@@ -399,14 +399,8 @@ class Optix {
                         cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
                 let block = pixelBlock.blocks.0.blocks.0.blocks.0
-                let pixel0 = block.pixels.0
-                print(pixel0.red, pixel0.green, pixel0.blue, pixel0.alpha)
-                let pixel1 = block.pixels.1
-                print(pixel1.red, pixel1.green, pixel1.blue, pixel1.alpha)
-                let pixel2 = block.pixels.2
-                print(pixel2.red, pixel2.green, pixel2.blue, pixel2.alpha)
-                let pixel3 = block.pixels.3
-                print(pixel3.red, pixel3.green, pixel3.blue, pixel3.alpha)
+                let pixel = block.pixels.0
+                print(pixel)
         }
 
         func buildLaunch() throws {
