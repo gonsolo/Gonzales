@@ -421,6 +421,22 @@ class Optix {
                 return i
         }
 
+        func buildLaunch() -> CUdeviceptr {
+                var launchParameters = LaunchParameters()
+                let colorError = cudaMalloc(&colorPointer, 16)
+                print("colorError: \(colorError)")
+                launchParameters.pointerToPixels = colorPointer
+                let launchError = cudaMalloc(&launchPointer, MemoryLayout<LaunchParameters>.stride)
+                print("launchError: \(launchError)")
+                let uploadError = cudaMemcpy(
+                        launchPointer,
+                        &launchParameters,
+                        MemoryLayout<LaunchParameters>.stride,
+                        cudaMemcpyHostToDevice)
+                print("uploadError: \(uploadError)")
+                return UInt64(bitPattern: Int64(Int(bitPattern: launchPointer)))
+        }
+
         static let shared = Optix()
 
         var stream: cudaStream_t?
