@@ -410,7 +410,6 @@ class Optix {
                         MemoryLayout<LaunchParameters>.stride,
                         cudaMemcpyHostToDevice)
                 try cudaCheck(uploadError)
-                launchDevicePointer = launchParametersBuffer.devicePointer
         }
 
         static let shared = Optix()
@@ -436,5 +435,4 @@ class Optix {
         var launchParameters = LaunchParameters()
 
         var colorPointer: UnsafeMutableRawPointer?
-        var launchDevicePointer: CUdeviceptr = 0
 }
