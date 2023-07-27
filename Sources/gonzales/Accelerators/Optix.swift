@@ -388,11 +388,10 @@ class Optix {
                 let error = cudaGetLastError()
                 try cudaCheck(error)
 
-                let color = try getColor()
-                print("color: ", color)
+                try printColors()
         }
 
-        func getColor() throws -> UInt32 {
+        func printColors() throws {
                 var pixelBlock = PixelBlock16x16()
                 let error = cudaMemcpy(
                         &pixelBlock,
@@ -400,7 +399,10 @@ class Optix {
                         colorBuffer.sizeInBytes,
                         cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
-                return pixelBlock.blocks.0.blocks.0.blocks.0.pixels.0.rgba
+                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.0.rgba)
+                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.1.rgba)
+                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.2.rgba)
+                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.3.rgba)
         }
 
         func buildLaunch() throws {
