@@ -25,14 +25,14 @@ struct RaygenRecord {
         // force alignment of 16
         let dummy1 = 0
         let dummy2 = 0
-        //var data: UnsafeMutableRawPointer? = nil
 }
 
 struct SimplePixel {
-        let red: UInt8 = 0
-        let green: UInt8 = 0
-        let blue: UInt8 = 0
-        let alpha: UInt8 = 0
+        let rgba: UInt32 = 0
+        //let red: UInt8 = 0
+        //let green: UInt8 = 0
+        //let blue: UInt8 = 0
+        //let alpha: UInt8 = 0
 }
 
 struct PixelBlock2x2 {
@@ -110,7 +110,6 @@ class Optix {
                         hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
                         launchParametersBuffer = try CudaBuffer<LaunchParameters>()
                         colorBuffer = try CudaBuffer<PixelBlock16x16>()
-                        try allocateBuffers()
                         try initializeCuda()
                         try initializeOptix()
                         try createContext()
@@ -367,13 +366,6 @@ class Optix {
                 printGreen("Optix shader binding table ok.")
         }
 
-        private func allocateBuffers() throws {
-                let frameBufferPixels = frameBufferWidth * frameBufferHeight * frameBufferDepth
-                let frameBufferSize = frameBufferPixels * MemoryLayout<UInt32>.stride
-                let colorError = cudaMalloc(&colorPointer, frameBufferSize)
-                try cudaCheck(colorError)
-        }
-
         func render() throws {
                 printGreen("Optix render.")
 
@@ -398,22 +390,22 @@ class Optix {
 
                 let color = try getColor()
                 print("color: ", color)
-
-                //var pixelBlock16x16 = PixelBlock16x16()
-                //try colorBuffer.download(&pixelBlock16x16)
-                //print(pixelBlock16x16.blocks.0.blocks.0.blocks.0.pixels.0.red)
         }
 
         func getColor() throws -> UInt32 {
-                var i: UInt32 = 0
-                let error = cudaMemcpy(&i, colorPointer, MemoryLayout<UInt32>.stride, cudaMemcpyDeviceToHost)
+                var pixelBlock = PixelBlock16x16()
+                let error = cudaMemcpy(
+                        &pixelBlock,
+                        colorBuffer.pointer,
+                        colorBuffer.sizeInBytes,
+                        cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
-                return i
+                return pixelBlock.blocks.0.blocks.0.blocks.0.pixels.0.rgba
         }
 
         func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
-                launchParameters.pointerToPixels = colorPointer
+                launchParameters.pointerToPixels = colorBuffer.pointer
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
                         &launchParameters,
@@ -438,12 +430,11 @@ class Optix {
         var missRecordsBuffer: CudaBuffer<MissRecord>
         var hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>
         var launchParametersBuffer: CudaBuffer<LaunchParameters>
+
         var colorBuffer: CudaBuffer<PixelBlock16x16>
 
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
-
-        var colorPointer: UnsafeMutableRawPointer?
 
         let frameBufferWidth = 16
         let frameBufferHeight = 16
