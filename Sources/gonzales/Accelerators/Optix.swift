@@ -90,13 +90,6 @@ class CudaBuffer<T> {
         }
 
         var devicePointer: CUdeviceptr {
-                guard let nonNilAddress = pointer else {
-                        fatalError("Nil!")
-                }
-                return CUdeviceptr(UInt(bitPattern: nonNilAddress))
-        }
-
-        func getDevicePointer() -> CUdeviceptr {
                 return UInt64(bitPattern: Int64(Int(bitPattern: pointer)))
         }
 
@@ -422,7 +415,7 @@ class Optix {
                         MemoryLayout<LaunchParameters>.stride,
                         cudaMemcpyHostToDevice)
                 try cudaCheck(uploadError)
-                launchDevicePointer = launchParametersBuffer.getDevicePointer()
+                launchDevicePointer = launchParametersBuffer.devicePointer
         }
 
         static let shared = Optix()
