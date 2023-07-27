@@ -28,11 +28,10 @@ struct RaygenRecord {
 }
 
 struct SimplePixel {
-        let rgba: UInt32 = 0
-        //let red: UInt8 = 0
-        //let green: UInt8 = 0
-        //let blue: UInt8 = 0
-        //let alpha: UInt8 = 0
+        let red: UInt8 = 0
+        let green: UInt8 = 0
+        let blue: UInt8 = 0
+        let alpha: UInt8 = 0
 }
 
 struct PixelBlock2x2 {
@@ -399,10 +398,15 @@ class Optix {
                         colorBuffer.sizeInBytes,
                         cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
-                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.0.rgba)
-                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.1.rgba)
-                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.2.rgba)
-                print(pixelBlock.blocks.0.blocks.0.blocks.0.pixels.3.rgba)
+                let block = pixelBlock.blocks.0.blocks.0.blocks.0
+                let pixel0 = block.pixels.0
+                print(pixel0.red, pixel0.green, pixel0.blue, pixel0.alpha)
+                let pixel1 = block.pixels.1
+                print(pixel1.red, pixel1.green, pixel1.blue, pixel1.alpha)
+                let pixel2 = block.pixels.2
+                print(pixel2.red, pixel2.green, pixel2.blue, pixel2.alpha)
+                let pixel3 = block.pixels.3
+                print(pixel3.red, pixel3.green, pixel3.blue, pixel3.alpha)
         }
 
         func buildLaunch() throws {
