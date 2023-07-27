@@ -96,6 +96,10 @@ class CudaBuffer<T> {
                 return CUdeviceptr(UInt(bitPattern: nonNilAddress))
         }
 
+        func getDevicePointer() -> CUdeviceptr {
+                return UInt64(bitPattern: Int64(Int(bitPattern: pointer)))
+        }
+
         var sizeInBytes = 0
         var pointer: UnsafeMutableRawPointer? = nil
 }
@@ -410,18 +414,15 @@ class Optix {
                 let colorError = cudaMalloc(&colorPointer, 16)
                 try cudaCheck(colorError)
                 launchParameters.pointerToPixels = colorPointer
-
-                var launchPointer: UnsafeMutableRawPointer?
-                let launchError = cudaMalloc(&launchPointer, MemoryLayout<LaunchParameters>.stride)
-
-                try cudaCheck(launchError)
+                let launchParametersBuffer = CudaBuffer<LaunchParameters>()
+                try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                 let uploadError = cudaMemcpy(
-                        launchPointer,
+                        launchParametersBuffer.pointer,
                         &launchParameters,
                         MemoryLayout<LaunchParameters>.stride,
                         cudaMemcpyHostToDevice)
                 try cudaCheck(uploadError)
-                launchDevicePointer = UInt64(bitPattern: Int64(Int(bitPattern: launchPointer)))
+                launchDevicePointer = launchParametersBuffer.getDevicePointer()
         }
 
         static let shared = Optix()
