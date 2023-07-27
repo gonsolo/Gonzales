@@ -10,5 +10,3 @@ struct LaunchParameters {
 };
 
 void* colorPointer;
-void* launchPointer;
-

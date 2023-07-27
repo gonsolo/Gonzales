@@ -379,7 +379,7 @@ class Optix {
                 //let blaError = cudaMalloc(&blaPointer, 16 * 16 * 16)
                 //try cudaCheck(blaError)
                 //launchParameters.pointerToPixels = blaPointer
-                let bla = buildLaunch()
+                let bla = try buildLaunch()
                 //launchParameters.frameId = 133
                 //try launchParametersBuffer.upload(launchParameters)
                 launchParameters.frameId += 1
@@ -421,19 +421,20 @@ class Optix {
                 return i
         }
 
-        func buildLaunch() -> CUdeviceptr {
+        func buildLaunch() throws -> CUdeviceptr {
                 var launchParameters = LaunchParameters()
                 let colorError = cudaMalloc(&colorPointer, 16)
-                print("colorError: \(colorError)")
+                try cudaCheck(colorError)
                 launchParameters.pointerToPixels = colorPointer
+                var launchPointer: UnsafeMutableRawPointer?
                 let launchError = cudaMalloc(&launchPointer, MemoryLayout<LaunchParameters>.stride)
-                print("launchError: \(launchError)")
+                try cudaCheck(launchError)
                 let uploadError = cudaMemcpy(
                         launchPointer,
                         &launchParameters,
                         MemoryLayout<LaunchParameters>.stride,
                         cudaMemcpyHostToDevice)
-                print("uploadError: \(uploadError)")
+                try cudaCheck(uploadError)
                 return UInt64(bitPattern: Int64(Int(bitPattern: launchPointer)))
         }
 
