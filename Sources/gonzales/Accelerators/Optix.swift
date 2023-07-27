@@ -114,14 +114,14 @@ class CudaBuffer<T> {
 
         func download(_ t: inout T) throws {
                 var t = t
-                let error = cudaMemcpy(&t, pointer, 1, cudaMemcpyDeviceToHost)
+                let error = cudaMemcpy(&t, pointer, sizeInBytes, cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
 
         }
 
         func upload(_ t: T) throws {
                 var t = t
-                let error = cudaMemcpy(pointer, &t, 1, cudaMemcpyHostToDevice)
+                let error = cudaMemcpy(pointer, &t, sizeInBytes, cudaMemcpyHostToDevice)
                 try cudaCheck(error)
         }
 
@@ -470,6 +470,7 @@ class Optix {
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
 
+        //typealias PixelBlock = PixelBlock16x16
         typealias PixelBlock = PixelBlock8x8
         var pixelBlock = PixelBlock()
         var colorBuffer: CudaBuffer<PixelBlock>
