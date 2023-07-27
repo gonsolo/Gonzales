@@ -2,10 +2,6 @@ import Foundation
 import cuda
 import cudaBridge
 
-//struct LaunchParams {
-//        let dummy = 0
-//}
-
 struct MissRecord {
         // force alignment of 16
         let dummy1 = 0
@@ -369,19 +365,7 @@ class Optix {
         func render() throws {
                 printGreen("Optix render.")
 
-                //let colorBuffer = CudaBuffer<UInt32>()
-                //try colorBuffer.alloc(size: 16 * 16 * MemoryLayout<UInt32>.stride)
-                //let opaquePointer = OpaquePointer(colorBuffer.pointer!)
-                //let uint32Pointer = UnsafeMutablePointer<UInt32>(opaquePointer)
-                //try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
-
-                //var blaPointer: UnsafeMutableRawPointer? = nil
-                //let blaError = cudaMalloc(&blaPointer, 16 * 16 * 16)
-                //try cudaCheck(blaError)
-                //launchParameters.pointerToPixels = blaPointer
-                let bla = try buildLaunch()
-                //launchParameters.frameId = 133
-                //try launchParametersBuffer.upload(launchParameters)
+                try buildLaunch()
                 launchParameters.frameId += 1
 
                 let width: UInt32 = 16
@@ -393,7 +377,7 @@ class Optix {
                         stream,
                         //launchParametersBuffer.devicePointer,
                         //launchParametersBuffer.sizeInBytes,
-                        bla,
+                        launchDevicePointer,
                         16,
                         &shaderBindingTable,
                         width,
@@ -421,13 +405,15 @@ class Optix {
                 return i
         }
 
-        func buildLaunch() throws -> CUdeviceptr {
+        func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
                 let colorError = cudaMalloc(&colorPointer, 16)
                 try cudaCheck(colorError)
                 launchParameters.pointerToPixels = colorPointer
+
                 var launchPointer: UnsafeMutableRawPointer?
                 let launchError = cudaMalloc(&launchPointer, MemoryLayout<LaunchParameters>.stride)
+
                 try cudaCheck(launchError)
                 let uploadError = cudaMemcpy(
                         launchPointer,
@@ -435,7 +421,7 @@ class Optix {
                         MemoryLayout<LaunchParameters>.stride,
                         cudaMemcpyHostToDevice)
                 try cudaCheck(uploadError)
-                return UInt64(bitPattern: Int64(Int(bitPattern: launchPointer)))
+                launchDevicePointer = UInt64(bitPattern: Int64(Int(bitPattern: launchPointer)))
         }
 
         static let shared = Optix()
@@ -461,4 +447,5 @@ class Optix {
         var launchParameters = LaunchParameters()
 
         var colorPointer: UnsafeMutableRawPointer?
+        var launchDevicePointer: CUdeviceptr = 0
 }

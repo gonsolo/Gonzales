@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <cstdint>
 #include "optix_device.h"
 #include "LaunchParameters.h"
 
