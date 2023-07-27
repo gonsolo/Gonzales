@@ -110,9 +110,8 @@ class Optix {
                         try createHitgroupPrograms()
                         try createPipeline()
                         try buildShaderBindingTable()
-                        //try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                         try colorBuffer.alloc(size: MemoryLayout<PixelBlock16x16>.stride)
-                        //launchParameters.pointerToPixels = colorBuffer.pointer!
+                        try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -372,10 +371,8 @@ class Optix {
                 let result = optixLaunch(
                         pipeline,
                         stream,
-                        //launchParametersBuffer.devicePointer,
-                        //launchParametersBuffer.sizeInBytes,
-                        launchDevicePointer,
-                        16,
+                        launchParametersBuffer.devicePointer,
+                        launchParametersBuffer.sizeInBytes,
                         &shaderBindingTable,
                         width,
                         height,
@@ -387,7 +384,7 @@ class Optix {
                 let error = cudaGetLastError()
                 try cudaCheck(error)
 
-                let color = getColor()
+                let color = try getColor()
                 print("color: ", color)
 
                 //var pixelBlock16x16 = PixelBlock16x16()
@@ -395,10 +392,10 @@ class Optix {
                 //print(pixelBlock16x16.blocks.0.blocks.0.blocks.0.pixels.0.red)
         }
 
-        func getColor() -> UInt32 {
+        func getColor() throws -> UInt32 {
                 var i: UInt32 = 0
                 let error = cudaMemcpy(&i, colorPointer, MemoryLayout<UInt32>.stride, cudaMemcpyDeviceToHost)
-                print("getColor error: \(error)")
+                try cudaCheck(error)
                 return i
         }
 
@@ -407,8 +404,6 @@ class Optix {
                 let colorError = cudaMalloc(&colorPointer, 16)
                 try cudaCheck(colorError)
                 launchParameters.pointerToPixels = colorPointer
-                let launchParametersBuffer = CudaBuffer<LaunchParameters>()
-                try launchParametersBuffer.alloc(size: MemoryLayout<LaunchParameters>.stride)
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
                         &launchParameters,
@@ -433,7 +428,7 @@ class Optix {
         var raygenRecordsBuffer = CudaBuffer<RaygenRecord>()
         var missRecordsBuffer = CudaBuffer<MissRecord>()
         let hitgroupRecordsBuffer = CudaBuffer<HitgroupRecord>()
-        //let launchParametersBuffer = CudaBuffer<LaunchParameters>()
+        let launchParametersBuffer = CudaBuffer<LaunchParameters>()
 
         let colorBuffer = CudaBuffer<PixelBlock16x16>()
 
