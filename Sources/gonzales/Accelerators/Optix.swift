@@ -139,6 +139,42 @@ struct SimplePixel64: CustomStringConvertible {
         let blocks = (SimplePixel16(), SimplePixel16(), SimplePixel16(), SimplePixel16())
 }
 
+struct SimplePixel256: CustomStringConvertible {
+
+        var description: String {
+                return "SimplePixel256:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
+        }
+
+        subscript(x: Int, y: Int) -> SimplePixel {
+                get {
+                        let index = y * dimension + x
+                        return self[index]
+                }
+        }
+
+        subscript(index: Int) -> SimplePixel {
+                get {
+                        let quotient = index / 64
+                        let remainder = index % 64
+
+                        switch quotient {
+                        case 0: return blocks.0[remainder]
+                        case 1: return blocks.1[remainder]
+                        case 2: return blocks.2[remainder]
+                        case 3: return blocks.3[remainder]
+                        default: fatalError("SimplePixel256: \(index) \(dimension) \(quotient) \(remainder)")
+                        }
+                }
+        }
+
+        var dimension: Int { 2 * blocks.0.dimension }
+        var width: Int { dimension }
+        var height: Int { dimension }
+        var depth: Int { 1 }
+
+        let blocks = (SimplePixel64(), SimplePixel64(), SimplePixel64(), SimplePixel64())
+}
+
 func cudaCheck(_ cudaError: cudaError_t) throws {
         if cudaError != cudaSuccess {
                 throw OptixError.cudaCheck
@@ -501,9 +537,6 @@ class Optix {
                 }
                 let imageWriter = OpenImageIOWriter()
                 try imageWriter.write(fileName: "optix.exr", image: image)
-                //print(pixelBlock[0, 3])
-                //print(pixelBlock.blocks.1.pixels.0)
-                //print(pixelBlock)
         }
 
         func buildLaunch() throws {
@@ -539,7 +572,7 @@ class Optix {
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
 
-        typealias PixelBlock = SimplePixel64
+        typealias PixelBlock = SimplePixel256
         var pixelBlock = PixelBlock()
         var colorBuffer: CudaBuffer<PixelBlock>
 }
