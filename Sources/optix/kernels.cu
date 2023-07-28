@@ -16,7 +16,7 @@ extern "C" __global__ void __raygen__renderFrame() {
 	//}
 
 	const uint8_t r = 255 * x / launchParameters.width;
-	const uint8_t g = 0;
+	const uint8_t g = 255 * y / launchParameters.height;
 	const uint8_t b = 0;
 	const uint8_t a = 255;
 	const int components = 4;
