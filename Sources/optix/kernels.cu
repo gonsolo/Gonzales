@@ -18,23 +18,15 @@ extern "C" __global__ void __raygen__renderFrame() {
 			launchParameters.frameId);
 	}
 
-
 	const uint8_t r = 255;
 	const uint8_t g = 128;
 	const uint8_t b = 10;
 	const uint8_t a = 255;
 	const int components = 4;
-	const uint8_t index = y * launchParameters.width * components + x * components;
-
-	//printf("x: %i y: %i index: %i!\n", x, y, index);
-
-	const uint8_t indexRed = index + 0;
-	const uint8_t indexGreen = index + 1;
-	const uint8_t indexBlue = index + 2;
-	const uint8_t indexAlpha = index + 3;
+	const int index = y * launchParameters.width * components + x * components;
 	uint8_t* p = (uint8_t*)launchParameters.pointerToPixels;
-	p[indexRed] = r;
-	p[indexGreen] = g;
-	p[indexBlue] = b;
-	p[indexAlpha] = a;
+	p[index + 0] = r;
+	p[index + 1] = g;
+	p[index + 2] = b;
+	p[index + 3] = a;
 }

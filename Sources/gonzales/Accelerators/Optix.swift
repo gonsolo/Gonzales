@@ -404,10 +404,8 @@ class Optix {
 
         func render() throws {
                 printGreen("Optix render.")
-
                 try buildLaunch()
                 launchParameters.frameId += 1
-
                 let result = optixLaunch(
                         pipeline,
                         stream,
@@ -419,11 +417,9 @@ class Optix {
                         UInt32(pixelBlock.depth))
                 try optixCheck(result)
                 printGreen("Optix render ok.")
-
                 cudaDeviceSynchronize()
                 let error = cudaGetLastError()
                 try cudaCheck(error)
-
                 try printColors()
         }
 
@@ -470,8 +466,8 @@ class Optix {
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
 
-        //typealias PixelBlock = PixelBlock16x16
-        typealias PixelBlock = PixelBlock8x8
+        typealias PixelBlock = PixelBlock16x16
+        //typealias PixelBlock = PixelBlock8x8
         var pixelBlock = PixelBlock()
         var colorBuffer: CudaBuffer<PixelBlock>
 }
