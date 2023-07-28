@@ -8,13 +8,15 @@ extern "C" __constant__ LaunchParameters launchParameters;
 extern "C" __global__ void __closesthit__radiance() {}
 extern "C" __global__ void __anyhit__radiance() {}
 extern "C" __global__ void __miss__radiance() {}
+
+__device__ void greet() {
+	printf("Render frame kernel!\n");
+}
+
 extern "C" __global__ void __raygen__renderFrame() {
 	const int x = optixGetLaunchIndex().x;
 	const int y = optixGetLaunchIndex().y;
-	//if (x == 0 && y  == 0) {
-	//	printf("Render frame kernel, x, y: %i %i!\n", x, y);
-	//}
-
+	//if (x == 0 && y  == 0) { greet(); }
 	const uint8_t r = 255 * x / launchParameters.width;
 	const uint8_t g = 255 * y / launchParameters.height;
 	const uint8_t b = 0;
