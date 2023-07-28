@@ -15,7 +15,7 @@ extern "C" __global__ void __raygen__renderFrame() {
 	//	printf("Render frame kernel, x, y: %i %i!\n", x, y);
 	//}
 
-	const uint8_t r = x * 16;
+	const uint8_t r = 255 * x / launchParameters.width;
 	const uint8_t g = 0;
 	const uint8_t b = 0;
 	const uint8_t a = 255;

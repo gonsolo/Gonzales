@@ -126,8 +126,10 @@ struct PixelBlock8x8: CustomStringConvertible {
 
         var dimension: Int { 2 * blocks.0.dimension }
         var halfDimension: Int { dimension / 2 }
-        var width: Int32 { Int32(dimension) }
-        var height: Int32 { Int32(dimension) }
+        var width: Int { dimension }
+        var height: Int { dimension }
+        var width32: Int32 { Int32(dimension) }
+        var height32: Int32 { Int32(dimension) }
         var depth: Int32 { 1 }
 
         let blocks = (PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4())
@@ -511,10 +513,10 @@ class Optix {
                         cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
 
-                let resolution = Point2I(x: 16, y: 16)
+                let resolution = Point2I(x: pixelBlock.width, y: pixelBlock.height)
                 var image = Image(resolution: resolution)
-                for y in 0..<16 {
-                        for x in 0..<16 {
+                for y in 0..<pixelBlock.height {
+                        for x in 0..<pixelBlock.width {
                                 let color = RgbSpectrum(
                                         r: Float(pixelBlock[x, y].red) / 255,
                                         g: Float(pixelBlock[x, y].green) / 255,
@@ -527,15 +529,14 @@ class Optix {
                         }
                 }
                 let imageWriter = OpenImageIOWriter()
-                let crop = Bounds2i(pMin: Point2I(x: 0, y: 0), pMax: Point2I(x: 15, y: 15))
-                try imageWriter.write(fileName: "optix.exr", crop: crop, image: image)
+                try imageWriter.write(fileName: "optix.exr", image: image)
                 //print(pixelBlock)
         }
 
         func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
-                launchParameters.width = pixelBlock.width
-                launchParameters.height = pixelBlock.height
+                launchParameters.width = pixelBlock.width32
+                launchParameters.height = pixelBlock.height32
                 launchParameters.pointerToPixels = colorBuffer.pointer
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
@@ -565,8 +566,8 @@ class Optix {
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
 
-        typealias PixelBlock = PixelBlock16x16
-        //typealias PixelBlock = PixelBlock8x8
+        //typealias PixelBlock = PixelBlock16x16
+        typealias PixelBlock = PixelBlock8x8
         var pixelBlock = PixelBlock()
         var colorBuffer: CudaBuffer<PixelBlock>
 }
