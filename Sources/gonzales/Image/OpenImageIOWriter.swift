@@ -30,9 +30,7 @@ final class OpenImageIOWriter: ImageWriter {
         func write(fileName: String, image: Image) throws {
                 let crop = Bounds2i(
                         pMin: Point2I(x: 0, y: 0),
-                        pMax: Point2I(
-                                x: image.fullResolution.x - 1,
-                                y: image.fullResolution.y - 1))
+                        pMax: image.fullResolution)
                 try write(fileName: fileName, crop: crop, image: image)
         }
 

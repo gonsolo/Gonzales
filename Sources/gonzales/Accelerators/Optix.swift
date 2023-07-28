@@ -60,9 +60,9 @@ struct PixelBlock2x2: CustomStringConvertible {
 
         var dimension: Int { 2 }
         var halfDimension: Int { dimension / 2 }
-        var width: Int32 { Int32(dimension) }
-        var height: Int32 { Int32(dimension) }
-        var depth: Int32 { 1 }
+        var width: Int { dimension }
+        var height: Int { dimension }
+        var depth: Int { 1 }
 
         let pixels = (SimplePixel(), SimplePixel(), SimplePixel(), SimplePixel())
 }
@@ -93,9 +93,9 @@ struct PixelBlock4x4: CustomStringConvertible {
 
         var dimension: Int { 2 * blocks.0.dimension }
         var halfDimension: Int { dimension / 2 }
-        var width: Int32 { Int32(dimension) }
-        var height: Int32 { Int32(dimension) }
-        var depth: Int32 { 1 }
+        var width: Int { dimension }
+        var height: Int { dimension }
+        var depth: Int { 1 }
 
         let blocks = (PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2())
 }
@@ -128,9 +128,7 @@ struct PixelBlock8x8: CustomStringConvertible {
         var halfDimension: Int { dimension / 2 }
         var width: Int { dimension }
         var height: Int { dimension }
-        var width32: Int32 { Int32(dimension) }
-        var height32: Int32 { Int32(dimension) }
-        var depth: Int32 { 1 }
+        var depth: Int { 1 }
 
         let blocks = (PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4())
 }
@@ -161,9 +159,9 @@ struct PixelBlock16x16: CustomStringConvertible {
 
         var dimension: Int { 2 * blocks.0.dimension }
         var halfDimension: Int { dimension / 2 }
-        var width: Int32 { Int32(dimension) }
-        var height: Int32 { Int32(dimension) }
-        var depth: Int32 { 1 }
+        var width: Int { dimension }
+        var height: Int { dimension }
+        var depth: Int { 1 }
 
         let blocks = (PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8())
 }
@@ -535,8 +533,8 @@ class Optix {
 
         func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
-                launchParameters.width = pixelBlock.width32
-                launchParameters.height = pixelBlock.height32
+                launchParameters.width = Int32(pixelBlock.width)
+                launchParameters.height = Int32(pixelBlock.height)
                 launchParameters.pointerToPixels = colorBuffer.pointer
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
@@ -567,7 +565,8 @@ class Optix {
         var launchParameters = LaunchParameters()
 
         //typealias PixelBlock = PixelBlock16x16
-        typealias PixelBlock = PixelBlock8x8
+        //typealias PixelBlock = PixelBlock8x8
+        typealias PixelBlock = PixelBlock4x4
         var pixelBlock = PixelBlock()
         var colorBuffer: CudaBuffer<PixelBlock>
 }
