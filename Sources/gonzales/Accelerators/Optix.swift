@@ -40,8 +40,28 @@ struct PixelBlock2x2: CustomStringConvertible {
                 return "2x2:\n  \(pixels.0)\n  \(pixels.1)\n  \(pixels.2)\n  \(pixels.3)"
         }
 
-        var width: Int32 { 2 }
-        var height: Int32 { 2 }
+        subscript(row: Int, column: Int) -> SimplePixel {
+                get {
+                        if row < halfDimension {
+                                if column < halfDimension {
+                                        return pixels.0
+                                } else {
+                                        return pixels.1
+                                }
+                        } else {
+                                if column < halfDimension {
+                                        return pixels.2
+                                } else {
+                                        return pixels.3
+                                }
+                        }
+                }
+        }
+
+        var dimension: Int { 2 }
+        var halfDimension: Int { dimension / 2 }
+        var width: Int32 { Int32(dimension) }
+        var height: Int32 { Int32(dimension) }
         var depth: Int32 { 1 }
 
         let pixels = (SimplePixel(), SimplePixel(), SimplePixel(), SimplePixel())
@@ -53,8 +73,28 @@ struct PixelBlock4x4: CustomStringConvertible {
                 return "4x4:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
         }
 
-        var width: Int32 { 2 * blocks.0.width }
-        var height: Int32 { 2 * blocks.0.height }
+        subscript(row: Int, column: Int) -> SimplePixel {
+                get {
+                        if row < halfDimension {
+                                if column < halfDimension {
+                                        return blocks.0[row, column]
+                                } else {
+                                        return blocks.1[row, column - halfDimension]
+                                }
+                        } else {
+                                if column < halfDimension {
+                                        return blocks.2[row - halfDimension, column]
+                                } else {
+                                        return blocks.3[row - halfDimension, column - halfDimension]
+                                }
+                        }
+                }
+        }
+
+        var dimension: Int { 2 * blocks.0.dimension }
+        var halfDimension: Int { dimension / 2 }
+        var width: Int32 { Int32(dimension) }
+        var height: Int32 { Int32(dimension) }
         var depth: Int32 { 1 }
 
         let blocks = (PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2(), PixelBlock2x2())
@@ -66,8 +106,28 @@ struct PixelBlock8x8: CustomStringConvertible {
                 return "8x8:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
         }
 
-        var width: Int32 { 2 * blocks.0.width }
-        var height: Int32 { 2 * blocks.0.height }
+        subscript(row: Int, column: Int) -> SimplePixel {
+                get {
+                        if row < halfDimension {
+                                if column < halfDimension {
+                                        return blocks.0[row, column]
+                                } else {
+                                        return blocks.1[row, column - halfDimension]
+                                }
+                        } else {
+                                if column < halfDimension {
+                                        return blocks.2[row - halfDimension, column]
+                                } else {
+                                        return blocks.3[row - halfDimension, column - halfDimension]
+                                }
+                        }
+                }
+        }
+
+        var dimension: Int { 2 * blocks.0.dimension }
+        var halfDimension: Int { dimension / 2 }
+        var width: Int32 { Int32(dimension) }
+        var height: Int32 { Int32(dimension) }
         var depth: Int32 { 1 }
 
         let blocks = (PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4(), PixelBlock4x4())
@@ -79,8 +139,28 @@ struct PixelBlock16x16: CustomStringConvertible {
                 return "16x16:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
         }
 
-        var width: Int32 { 2 * blocks.0.width }
-        var height: Int32 { 2 * blocks.0.height }
+        subscript(row: Int, column: Int) -> SimplePixel {
+                get {
+                        if row < halfDimension {
+                                if column < halfDimension {
+                                        return blocks.0[row, column]
+                                } else {
+                                        return blocks.1[row, column - halfDimension]
+                                }
+                        } else {
+                                if column < halfDimension {
+                                        return blocks.2[row - halfDimension, column]
+                                } else {
+                                        return blocks.3[row - halfDimension, column - halfDimension]
+                                }
+                        }
+                }
+        }
+
+        var dimension: Int { 2 * blocks.0.dimension }
+        var halfDimension: Int { dimension / 2 }
+        var width: Int32 { Int32(dimension) }
+        var height: Int32 { Int32(dimension) }
         var depth: Int32 { 1 }
 
         let blocks = (PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8(), PixelBlock8x8())
@@ -430,7 +510,26 @@ class Optix {
                         colorBuffer.sizeInBytes,
                         cudaMemcpyDeviceToHost)
                 try cudaCheck(error)
-                print(pixelBlock)
+
+                let resolution = Point2I(x: 16, y: 16)
+                var image = Image(resolution: resolution)
+                for y in 0..<16 {
+                        for x in 0..<16 {
+                                let color = RgbSpectrum(
+                                        r: Float(pixelBlock[x, y].red) / 255,
+                                        g: Float(pixelBlock[x, y].green) / 255,
+                                        b: Float(pixelBlock[x, y].blue) / 255)
+                                let pixel = Point2I(x: x, y: y)
+                                image.addPixel(
+                                        withColor: color,
+                                        withWeight: 1,
+                                        atLocation: pixel)
+                        }
+                }
+                let imageWriter = OpenImageIOWriter()
+                let crop = Bounds2i(pMin: Point2I(x: 0, y: 0), pMax: Point2I(x: 15, y: 15))
+                try imageWriter.write(fileName: "optix.exr", crop: crop, image: image)
+                //print(pixelBlock)
         }
 
         func buildLaunch() throws {
