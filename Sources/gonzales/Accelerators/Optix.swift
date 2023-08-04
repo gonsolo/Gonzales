@@ -187,6 +187,11 @@ func cudaCheck(_ cudaResult: CUresult) throws {
         }
 }
 
+func optixError(_ message: String = "") -> Never {
+        print("optixError: \(message)")
+        exit(-1)
+}
+
 class CudaBuffer<T> {
 
         init() throws {
@@ -247,6 +252,36 @@ class Optix {
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
+        }
+
+        var triangleCount = 0
+
+        private func add(triangle: Triangle) {
+                triangleCount += 1
+                let points = triangle.getWorldPoints()
+                _ = points
+                // TODO: upload vertex buffer
+                // TODO: upload index buffer
+                // TODO: ...
+        }
+
+        func add(primitives: [Boundable & Intersectable]) {
+                for primitive in primitives {
+                        switch primitive {
+                        case let geometricPrimitive as GeometricPrimitive:
+                                switch geometricPrimitive.shape {
+                                case let triangle as Triangle:
+                                        add(triangle: triangle)
+                                default:
+                                        var message = "Unknown shape in geometric primitive: "
+                                        message += "\(geometricPrimitive.shape)"
+                                        warnOnce(message)
+                                }
+                        default:
+                                optixError("Unknown primitive \(primitive).")
+                        }
+                }
+                print("Optix: Added \(triangleCount) triangles.")
         }
 
         private func optixCheck(_ optixResult: OptixResult) throws {

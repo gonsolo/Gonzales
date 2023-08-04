@@ -20,6 +20,7 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 return accelerator
         case "optix":
                 let optix = Optix.shared
+                optix.add(primitives: primitives)
                 try optix.render()
                 exit(0)
         default:
