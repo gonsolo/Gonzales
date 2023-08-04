@@ -197,7 +197,7 @@ class CudaBuffer<T> {
         deinit {
                 let error = cudaFree(&pointer)
                 if error != cudaSuccess {
-                        print("Error in deinit: cudaFree!")
+                        print("Error in \(self) deinit: cudaFree \(error)!")
                 }
         }
 
@@ -300,6 +300,15 @@ class Optix {
                 printGreen("Optix initialization ok.")
         }
 
+        private func setLogger() throws {
+                let logResult = optixDeviceContextSetLogCallback(
+                        optixContext,
+                        contextLogCallback,
+                        nil,
+                        4)
+                try optixCheck(logResult)
+        }
+
         private func createContext() throws {
                 var cudaError: cudaError_t
                 cudaError = cudaStreamCreate(&stream)
@@ -319,12 +328,7 @@ class Optix {
                         &deviceContextOptions,
                         &optixContext)
                 try optixCheck(contextResult)
-                //let logResult = optixDeviceContextSetLogCallback(
-                //        optixContext,
-                //        contextLogCallback,
-                //        nil,
-                //        4)
-                //try optixCheck(logResult)
+                //try setLogger()
                 printGreen("Optix context ok.")
         }
 
