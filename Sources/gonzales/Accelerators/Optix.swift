@@ -279,17 +279,18 @@ class Optix {
         var triangleCount = 0
 
         private func add<Points>(points: Points) throws {
-                //let pointBuffer = try CudaBuffer<Points>()
-                //try pointBuffer.upload(points)
+                let pointBuffer = try CudaBuffer<Points>()
+                try pointBuffer.upload(points)
         }
 
         private func add(triangle: Triangle) throws {
                 triangleCount += 1
                 let points = triangle.getWorldPoints()
                 try add(points: points)
-                // TODO: upload vertex buffer
-                // TODO: upload index buffer
-                // TODO: ...
+                typealias IndexTuple = (Int32, Int32, Int32)
+                let indices: IndexTuple = (0, 1, 2)
+                let indexBuffer = try CudaBuffer<IndexTuple>()
+                try indexBuffer.upload(indices)
         }
 
         func add(primitives: [Boundable & Intersectable]) throws {
