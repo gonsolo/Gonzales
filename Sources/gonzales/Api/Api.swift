@@ -19,10 +19,17 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 let accelerator = Accelerator.embree(embree)
                 return accelerator
         case "optix":
-                let optix = Optix.shared
-                optix.add(primitives: primitives)
+                //let optix = Optix.shared
+                let optix = try Optix()
+                try optix.add(primitives: primitives)
                 try optix.render()
-                exit(0)
+
+                // Temporary
+                let builder = EmbreeBuilder(primitives: [])
+                let embree = builder.getAccelerator()
+                let accelerator = Accelerator.embree(embree)
+                return accelerator
+
         default:
                 throw ApiError.accelerator
         }

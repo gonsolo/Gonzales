@@ -195,15 +195,19 @@ func optixError(_ message: String = "") -> Never {
 class CudaBuffer<T> {
 
         init() throws {
-                let error = cudaMalloc(&pointer, sizeInBytes)
-                try cudaCheck(error)
+                try allocate()
         }
 
         deinit {
-                let error = cudaFree(&pointer)
+                let error = cudaFree(pointer)
                 if error != cudaSuccess {
                         print("Error in \(self) deinit: cudaFree \(error)!")
                 }
+        }
+
+        private func allocate() throws {
+                let error = cudaMalloc(&pointer, sizeInBytes)
+                try cudaCheck(error)
         }
 
         func download(_ t: inout T) throws {
@@ -233,14 +237,32 @@ class CudaBuffer<T> {
 
 class Optix {
 
-        init() {
+        func test() {
+                print("test")
+                var bla: UnsafeMutableRawPointer? = nil
+                var error = cudaMalloc(&bla, 128)
+                if error != cudaSuccess {
+                        print("Error in test: cudaMalloc \(error)!")
+                }
+                error = cudaFree(bla)
+                if error != cudaSuccess {
+                        print("Error in test: cudaFree \(error)!")
+                }
+                print("end test")
+        }
+
+        private func initializeBuffers() throws {
+                raygenRecordsBuffer = try CudaBuffer<RaygenRecord>()
+                missRecordsBuffer = try CudaBuffer<MissRecord>()
+                hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
+                launchParametersBuffer = try CudaBuffer<LaunchParameters>()
+                colorBuffer = try CudaBuffer<PixelBlock>()
+        }
+
+        init() throws {
                 do {
-                        raygenRecordsBuffer = try CudaBuffer<RaygenRecord>()
-                        missRecordsBuffer = try CudaBuffer<MissRecord>()
-                        hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
-                        launchParametersBuffer = try CudaBuffer<LaunchParameters>()
-                        colorBuffer = try CudaBuffer<PixelBlock>()
                         try initializeCuda()
+                        try initializeBuffers()
                         try initializeOptix()
                         try createContext()
                         try createModule()
@@ -256,26 +278,38 @@ class Optix {
 
         var triangleCount = 0
 
-        private func add(triangle: Triangle) {
+        private func add<Points>(points: Points) throws {
+                //let pointBuffer = try CudaBuffer<Points>()
+                //try pointBuffer.upload(points)
+        }
+
+        private func add(triangle: Triangle) throws {
                 triangleCount += 1
                 let points = triangle.getWorldPoints()
-                _ = points
+                try add(points: points)
                 // TODO: upload vertex buffer
                 // TODO: upload index buffer
                 // TODO: ...
         }
 
-        func add(primitives: [Boundable & Intersectable]) {
+        func add(primitives: [Boundable & Intersectable]) throws {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
-                                        add(triangle: triangle)
+                                        try add(triangle: triangle)
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
                                         warnOnce(message)
+                                }
+                        case let areaLight as AreaLight:
+                                switch areaLight.shape {
+                                case let triangle as Triangle:
+                                        _ = triangle  // TODO
+                                default:
+                                        optixError("Unknown shape in AreaLight.")
                                 }
                         default:
                                 optixError("Unknown primitive \(primitive).")
@@ -300,6 +334,9 @@ class Optix {
         }
 
         private func initializeCuda() throws {
+
+                cudaFree(nil)
+
                 var numDevices: Int32 = 0
                 var cudaError: cudaError_t
                 cudaError = cudaGetDeviceCount(&numDevices)
@@ -311,6 +348,8 @@ class Optix {
                 var cudaDevice: Int32 = 0
                 cudaError = cudaGetDevice(&cudaDevice)
                 try cudaCheck(cudaError)
+                cudaError = cudaSetDevice(cudaDevice)
+                try cudaCheck(cudaError)
 
                 var cudaDeviceProperties: cudaDeviceProp = cudaDeviceProp()
                 cudaError = cudaGetDeviceProperties_v2(&cudaDeviceProperties, cudaDevice)
@@ -318,6 +357,14 @@ class Optix {
 
                 let deviceName = cStringToString(cudaDeviceProperties.name)
                 print(deviceName)
+
+                raygenRecordsBuffer = try CudaBuffer<RaygenRecord>()
+                missRecordsBuffer = try CudaBuffer<MissRecord>()
+                hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
+                launchParametersBuffer = try CudaBuffer<LaunchParameters>()
+                colorBuffer = try CudaBuffer<PixelBlock>()
+
+                //test()
         }
 
         private func printGreen(_ message: String) {
@@ -591,8 +638,6 @@ class Optix {
                 try cudaCheck(uploadError)
         }
 
-        static let shared = Optix()
-
         var stream: cudaStream_t?
         var cudaContext: CUcontext?
         var optixContext: OptixDeviceContext?
@@ -603,15 +648,15 @@ class Optix {
         var missProgramGroup: OptixProgramGroup?
         var hitgroupProgramGroup: OptixProgramGroup?
 
-        var raygenRecordsBuffer: CudaBuffer<RaygenRecord>
-        var missRecordsBuffer: CudaBuffer<MissRecord>
-        var hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>
-        var launchParametersBuffer: CudaBuffer<LaunchParameters>
+        var raygenRecordsBuffer: CudaBuffer<RaygenRecord>! = nil
+        var missRecordsBuffer: CudaBuffer<MissRecord>! = nil
+        var hitgroupRecordsBuffer: CudaBuffer<HitgroupRecord>! = nil
+        var launchParametersBuffer: CudaBuffer<LaunchParameters>! = nil
+        var colorBuffer: CudaBuffer<PixelBlock>! = nil
 
         var shaderBindingTable = OptixShaderBindingTable()
         var launchParameters = LaunchParameters()
 
         typealias PixelBlock = SimplePixel256
         var pixelBlock = PixelBlock()
-        var colorBuffer: CudaBuffer<PixelBlock>
 }
