@@ -278,19 +278,41 @@ class Optix {
 
         var triangleCount = 0
 
-        private func add<Points>(points: Points) throws {
-                let pointBuffer = try CudaBuffer<Points>()
-                try pointBuffer.upload(points)
-        }
-
         private func add(triangle: Triangle) throws {
                 triangleCount += 1
                 let points = triangle.getWorldPoints()
-                try add(points: points)
+                typealias PointTuple = (Point, Point, Point)
+                let pointBuffer = try CudaBuffer<PointTuple>()
+                try pointBuffer.upload(points)
+
                 typealias IndexTuple = (Int32, Int32, Int32)
                 let indices: IndexTuple = (0, 1, 2)
                 let indexBuffer = try CudaBuffer<IndexTuple>()
                 try indexBuffer.upload(indices)
+
+                var triangleInput = OptixBuildInput()
+                triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
+
+                let deviceVertices = pointBuffer.devicePointer
+                let deviceIndices = indexBuffer.devicePointer
+
+                triangleInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3
+                triangleInput.triangleArray.vertexStrideInBytes = UInt32(MemoryLayout<PointTuple>.stride)
+                triangleInput.triangleArray.numVertices = 3
+                triangleInput.triangleArray.vertexBuffers = withUnsafePointer(to: deviceVertices) { $0 }
+
+                triangleInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3
+                triangleInput.triangleArray.indexStrideInBytes = UInt32(MemoryLayout<IndexTuple>.stride)
+                triangleInput.triangleArray.numIndexTriplets = 3
+                triangleInput.triangleArray.indexBuffer = deviceIndices
+
+                let triangleInputFlags: UInt32 = 0
+
+                triangleInput.triangleArray.flags = withUnsafePointer(to: triangleInputFlags) { $0 }
+                triangleInput.triangleArray.numSbtRecords = 1
+                triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
+                triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
+                triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
         }
 
         func add(primitives: [Boundable & Intersectable]) throws {
