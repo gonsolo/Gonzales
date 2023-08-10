@@ -194,7 +194,8 @@ func optixError(_ message: String = "") -> Never {
 
 class CudaBuffer<T> {
 
-        init() throws {
+        init(count: Int = 1) throws {
+                self.count = count
                 try allocate()
         }
 
@@ -224,14 +225,15 @@ class CudaBuffer<T> {
         }
 
         var sizeInBytes: Int {
-                //return MemoryLayout<T>.stride
-                return MemoryLayout<T>.size
+                //return count * MemoryLayout<T>.stride
+                return count * MemoryLayout<T>.size
         }
 
         var devicePointer: CUdeviceptr {
                 return UInt64(bitPattern: Int64(Int(bitPattern: pointer)))
         }
 
+        var count: Int = 0
         var pointer: UnsafeMutableRawPointer? = nil
 }
 
@@ -328,13 +330,47 @@ class Optix {
                 accelOptions.operation = OPTIX_BUILD_OPERATION_BUILD
 
                 var blasBufferSizes = OptixAccelBufferSizes()
-                let error = optixAccelComputeMemoryUsage(
+                let accelError = optixAccelComputeMemoryUsage(
                         optixContext,
                         &accelOptions,
                         &triangleInput,
                         1,  // num_build_inputs
                         &blasBufferSizes)
-                try optixCheck(error)
+                try optixCheck(accelError)
+
+                // Compaction
+
+                let compactedSizeBuffer = try CudaBuffer<UInt64>()
+                var emitDesc = OptixAccelEmitDesc()
+                emitDesc.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE
+                emitDesc.result = compactedSizeBuffer.devicePointer
+
+                // Execute build
+
+                let tempBuffer = try CudaBuffer<UInt8>(count: blasBufferSizes.tempSizeInBytes)
+                let outputBuffer = try CudaBuffer<UInt8>(count: blasBufferSizes.outputSizeInBytes)
+
+                var asHandle: OptixTraversableHandle = 0
+                let stream: CUstream? = nil
+
+                let buildError = optixAccelBuild(
+                        optixContext,
+                        stream,
+                        &accelOptions,
+                        &triangleInput,
+                        1,
+                        tempBuffer.devicePointer,
+                        tempBuffer.sizeInBytes,
+                        outputBuffer.devicePointer,
+                        outputBuffer.sizeInBytes,
+                        &asHandle,
+                        &emitDesc,
+                        1)
+                try optixCheck(buildError)
+
+                cudaDeviceSynchronize()
+                let lastError = cudaGetLastError()
+                try cudaCheck(lastError)
         }
 
         func add(primitives: [Boundable & Intersectable]) throws {
