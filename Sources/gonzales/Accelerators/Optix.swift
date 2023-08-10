@@ -279,7 +279,13 @@ class Optix {
         var triangleCount = 0
 
         private func add(triangle: Triangle) throws {
+
+                // Just add one triangle for now
+                if triangleCount != 0 {
+                        return
+                }
                 triangleCount += 1
+
                 let points = triangle.getWorldPoints()
                 typealias PointTuple = (Point, Point, Point)
                 let pointBuffer = try CudaBuffer<PointTuple>()
@@ -313,6 +319,22 @@ class Optix {
                 triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
                 triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
                 triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
+
+                // BLAS setup
+
+                var accelOptions = OptixAccelBuildOptions()
+                accelOptions.buildFlags = 2  // OPTIX_BUILD_FLAG_NONE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION
+                accelOptions.motionOptions.numKeys = 1
+                accelOptions.operation = OPTIX_BUILD_OPERATION_BUILD
+
+                var blasBufferSizes = OptixAccelBufferSizes()
+                let error = optixAccelComputeMemoryUsage(
+                        optixContext,
+                        &accelOptions,
+                        &triangleInput,
+                        1,  // num_build_inputs
+                        &blasBufferSizes)
+                try optixCheck(error)
         }
 
         func add(primitives: [Boundable & Intersectable]) throws {
