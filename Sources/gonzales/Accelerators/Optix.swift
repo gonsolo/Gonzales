@@ -338,7 +338,7 @@ class Optix {
                         &blasBufferSizes)
                 try optixCheck(accelError)
 
-                // Compaction
+                // Prepare compaction
 
                 let compactedSizeBuffer = try CudaBuffer<UInt64>()
                 var emitDesc = OptixAccelEmitDesc()
@@ -347,8 +347,10 @@ class Optix {
 
                 // Execute build
 
+                print("outputSizeInBytes: \(blasBufferSizes.outputSizeInBytes)")
                 let tempBuffer = try CudaBuffer<UInt8>(count: blasBufferSizes.tempSizeInBytes)
                 let outputBuffer = try CudaBuffer<UInt8>(count: blasBufferSizes.outputSizeInBytes)
+                print("outputBuffer size: \(outputBuffer.sizeInBytes)")
 
                 var asHandle: OptixTraversableHandle = 0
                 let stream: CUstream? = nil
@@ -367,7 +369,32 @@ class Optix {
                         &emitDesc,
                         1)
                 try optixCheck(buildError)
+                print("outputBuffer size: \(outputBuffer.sizeInBytes)")
 
+                try syncCheck()
+
+                // Perform compaction
+
+                var compactedSize: UInt64 = 0
+                try compactedSizeBuffer.download(&compactedSize)
+
+                print("compactSize: \(compactedSize)")
+
+                let asBuffer = try CudaBuffer<UInt8>(count: Int(compactedSize))
+                print("asBuffer size: \(asBuffer.sizeInBytes)")
+
+                let compactError = optixAccelCompact(
+                        optixContext,
+                        stream,
+                        asHandle,
+                        asBuffer.devicePointer,
+                        asBuffer.sizeInBytes,
+                        &asHandle)
+                try optixCheck(compactError)
+                try syncCheck()
+        }
+
+        private func syncCheck() throws {
                 cudaDeviceSynchronize()
                 let lastError = cudaGetLastError()
                 try cudaCheck(lastError)
@@ -491,7 +518,7 @@ class Optix {
                         &deviceContextOptions,
                         &optixContext)
                 try optixCheck(contextResult)
-                //try setLogger()
+                try setLogger()
                 printGreen("Optix context ok.")
         }
 
