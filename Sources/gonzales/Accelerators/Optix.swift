@@ -266,7 +266,7 @@ class Optix {
 
         var triangleCount = 0
 
-        private func add(triangle: Triangle) throws {
+        private func add(triangle: Triangle, triangleInput: inout OptixBuildInput) throws {
 
                 // Just add one triangle for now
                 if triangleCount != 0 {
@@ -284,7 +284,6 @@ class Optix {
                 let indexBuffer = try CudaBuffer<IndexTuple>()
                 try indexBuffer.upload(indices)
 
-                var triangleInput = OptixBuildInput()
                 triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
 
                 let deviceVertices = pointBuffer.devicePointer
@@ -307,7 +306,9 @@ class Optix {
                 triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
                 triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
                 triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
+        }
 
+        func buildAccel(triangleInput: inout OptixBuildInput) throws {
                 // BLAS setup
 
                 var accelOptions = OptixAccelBuildOptions()
@@ -387,12 +388,16 @@ class Optix {
         }
 
         func add(primitives: [Boundable & Intersectable]) throws {
+                var triangleInput = OptixBuildInput()
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
-                                        try add(triangle: triangle)
+
+                                        // Just one triangle supported right now
+                                        try add(triangle: triangle, triangleInput: &triangleInput)
+
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
@@ -410,6 +415,7 @@ class Optix {
                         }
                 }
                 print("Optix: Added \(triangleCount) triangles.")
+                try buildAccel(triangleInput: &triangleInput)
         }
 
         private func optixCheck(_ optixResult: OptixResult) throws {
