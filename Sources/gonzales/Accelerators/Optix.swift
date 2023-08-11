@@ -239,20 +239,6 @@ class CudaBuffer<T> {
 
 class Optix {
 
-        func test() {
-                print("test")
-                var bla: UnsafeMutableRawPointer? = nil
-                var error = cudaMalloc(&bla, 128)
-                if error != cudaSuccess {
-                        print("Error in test: cudaMalloc \(error)!")
-                }
-                error = cudaFree(bla)
-                if error != cudaSuccess {
-                        print("Error in test: cudaFree \(error)!")
-                }
-                print("end test")
-        }
-
         private func initializeBuffers() throws {
                 raygenRecordsBuffer = try CudaBuffer<RaygenRecord>()
                 missRecordsBuffer = try CudaBuffer<MissRecord>()
@@ -471,8 +457,6 @@ class Optix {
                 hitgroupRecordsBuffer = try CudaBuffer<HitgroupRecord>()
                 launchParametersBuffer = try CudaBuffer<LaunchParameters>()
                 colorBuffer = try CudaBuffer<PixelBlock>()
-
-                //test()
         }
 
         private func printGreen(_ message: String) {
