@@ -213,15 +213,18 @@ class CudaBuffer<T> {
 
         func download(_ t: inout T) throws {
                 var t = t
-                let error = cudaMemcpy(&t, pointer, sizeInBytes, cudaMemcpyDeviceToHost)
-                try cudaCheck(error)
-
+                try withUnsafeMutablePointer(to: &t) { t in
+                        let error = cudaMemcpy(t, pointer, sizeInBytes, cudaMemcpyDeviceToHost)
+                        try cudaCheck(error)
+                }
         }
 
         func upload(_ t: T) throws {
                 var t = t
-                let error = cudaMemcpy(pointer, &t, sizeInBytes, cudaMemcpyHostToDevice)
-                try cudaCheck(error)
+                try withUnsafePointer(to: &t) { t in
+                        let error = cudaMemcpy(pointer, t, sizeInBytes, cudaMemcpyHostToDevice)
+                        try cudaCheck(error)
+                }
         }
 
         var sizeInBytes: Int {
@@ -254,11 +257,11 @@ class Optix {
                         try initializeOptix()
                         try createContext()
                         try createModule()
-                        try createRaygenPrograms()
-                        try createMissPrograms()
-                        try createHitgroupPrograms()
-                        try createPipeline()
-                        try buildShaderBindingTable()
+                        //try createRaygenPrograms()
+                        //try createMissPrograms()
+                        //try createHitgroupPrograms()
+                        //try createPipeline()
+                        //try buildShaderBindingTable()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
