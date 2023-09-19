@@ -280,22 +280,27 @@ class Optix {
 
                 triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
 
-                let deviceVertices = pointBuffer.devicePointer
+                var deviceVertices = pointBuffer.devicePointer
                 let deviceIndices = indexBuffer.devicePointer
 
                 triangleInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3
                 triangleInput.triangleArray.vertexStrideInBytes = UInt32(MemoryLayout<PointTuple>.stride)
                 triangleInput.triangleArray.numVertices = 3
-                triangleInput.triangleArray.vertexBuffers = withUnsafePointer(to: deviceVertices) { $0 }
+                triangleInput.triangleArray.vertexBuffers = withUnsafePointer(to: &deviceVertices) {
+                        _ = $0
+                        return $0
+                }
 
                 triangleInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3
                 triangleInput.triangleArray.indexStrideInBytes = UInt32(MemoryLayout<IndexTuple>.stride)
                 triangleInput.triangleArray.numIndexTriplets = 3
                 triangleInput.triangleArray.indexBuffer = deviceIndices
 
-                let triangleInputFlags: UInt32 = 0
+                var triangleInputFlags: UInt32 = 0
 
-                triangleInput.triangleArray.flags = withUnsafePointer(to: triangleInputFlags) { $0 }
+                //triangleInput.triangleArray.flags = triangleInputFlags
+
+                triangleInput.triangleArray.flags = withUnsafePointer(to: &triangleInputFlags) { $0 }
                 triangleInput.triangleArray.numSbtRecords = 1
                 triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
                 triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0

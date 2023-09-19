@@ -1,3 +1,7 @@
+#pragma once
+
+#include <cstdint>
+
 #include "LaunchParameters.h"
 
 #ifdef __cplusplus
@@ -7,3 +11,5 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+//uint32_t triangleInputFlags[1] = { 0 };
