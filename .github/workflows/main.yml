@@ -82,13 +82,14 @@ jobs:
             ptex_2.4.2-1ubuntu6_amd64.deb
           key: ${{ runner.os }}-cache-ptex
  
-      - name: Download and build ptex
+      - name: Download ptex
         if: steps.cache-ptex.outputs.cache-hit != 'true'
         run: |
-          dget -u https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
-          cd ptex-2.4.2
-          debuild -d -i -us -uc
-          cd ..
+          #dget -u https://mentors.debian.net/debian/pool/main/p/ptex/ptex_2.4.2-1ubuntu6.dsc
+          #cd ptex-2.4.2
+          #debuild -d -i -us -uc
+          #cd ..
+          wget https://drive.google.com/file/d/1hQ7ml9Nf7tk6vDtsavbQyVHQQcyPQBS_ -O ptex_2.4.2-1ubuntu6_amd64.deb
 
       - name: Install deb
         run: |
