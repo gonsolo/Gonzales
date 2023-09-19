@@ -1,4 +1,4 @@
-// swift-tools-version:5.7
+// swift-tools-version:5.9
 
 import PackageDescription
 
@@ -23,7 +23,8 @@ let package = Package(
                 ),
                 .target(
                         name: "openImageIOBridge",
-                        dependencies: ["openimageio"]
+                        dependencies: ["openimageio"],
+                        swiftSettings: [.interoperabilityMode(.Cxx)]
                 ),
                 .target(
                         name: "ptexBridge",
@@ -31,7 +32,8 @@ let package = Package(
                 ),
                 .target(
                         name: "cudaBridge",
-                        dependencies: ["cuda"]
+                        dependencies: ["cuda"],
+                        swiftSettings: [.interoperabilityMode(.Cxx)]
                 ),
                 .systemLibrary(name: "embree3"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),

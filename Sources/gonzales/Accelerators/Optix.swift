@@ -264,15 +264,9 @@ class Optix {
                 }
         }
 
-        var triangleCount = 0
+        private func add(triangle: Triangle) throws -> OptixBuildInput {
 
-        private func add(triangle: Triangle, triangleInput: inout OptixBuildInput) throws {
-
-                // Just add one triangle for now
-                if triangleCount != 0 {
-                        return
-                }
-                triangleCount += 1
+                var triangleInput = OptixBuildInput()
 
                 let points = triangle.getWorldPoints()
                 typealias PointTuple = (Point, Point, Point)
@@ -306,10 +300,15 @@ class Optix {
                 triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
                 triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
                 triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
+
+                //try buildAccel(triangleInput: &triangleInput)
+                return triangleInput
         }
 
-        func buildAccel(triangleInput: inout OptixBuildInput) throws {
+        func buildAccel(triangleInput: OptixBuildInput) throws {
                 // BLAS setup
+
+                var triangleInput = triangleInput
 
                 var accelOptions = OptixAccelBuildOptions()
                 accelOptions.buildFlags = 2  // OPTIX_BUILD_FLAG_NONE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION
@@ -387,17 +386,21 @@ class Optix {
                 try cudaCheck(lastError)
         }
 
+        var triangleCount = 0
+
         func add(primitives: [Boundable & Intersectable]) throws {
-                var triangleInput = OptixBuildInput()
+                var triangleInput: OptixBuildInput! = nil
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
-
                                         // Just one triangle supported right now
-                                        try add(triangle: triangle, triangleInput: &triangleInput)
-
+                                        // Just add one triangle for now
+                                        if triangleCount == 0 {
+                                                triangleInput = try add(triangle: triangle)
+                                        }
+                                        triangleCount += 1
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
@@ -415,7 +418,7 @@ class Optix {
                         }
                 }
                 print("Optix: Added \(triangleCount) triangles.")
-                try buildAccel(triangleInput: &triangleInput)
+                try buildAccel(triangleInput: triangleInput)
         }
 
         private func optixCheck(_ optixResult: OptixResult) throws {

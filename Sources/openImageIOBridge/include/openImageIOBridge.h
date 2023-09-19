@@ -1,6 +1,8 @@
 #ifdef __cplusplus
 extern "C" {
+
 #endif
+#include <stdbool.h>
 
 void createTextureSystem();
 void destroyTextureSystem();
