@@ -69,10 +69,6 @@ jobs:
       - name: Install swift
         run: |
           tar xzf swift-5.9-RELEASE-ubuntu22.04.tar.gz
-          ls swift-5.9-RELEASE-ubuntu22.04
-          ls swift-5.9-RELEASE-ubuntu22.04/usr
-          ls swift-5.9-RELEASE-ubuntu22.04/usr/bin
-          file swift-5.9-RELEASE-ubuntu22.04/usr/bin/swift
 
           #- name: Install ptex
           #  run: |
@@ -83,10 +79,7 @@ jobs:
           export PATH=$PATH:/usr/local/cuda/bin
           mkdir .build
 
-          ls
-          ls swift-5.9-RELEASE-ubuntu22.04
-          ls swift-5.9-RELEASE-ubuntu22.04/usr
-          ls swift-5.9-RELEASE-ubuntu22.04/usr/bin
+          pwd
           file swift-5.9-RELEASE-ubuntu22.04/usr/bin/swift
 
           make debug
