@@ -98,4 +98,6 @@ jobs:
           sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
           
       - name: Compile debug
-        run: make debug
+        run: |
+          export PATH=$PATH:/usr/local/cuda/bin
+          make debug
