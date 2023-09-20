@@ -12,4 +12,3 @@ extern "C" {
 }
 #endif
 
-//uint32_t triangleInputFlags[1] = { 0 };

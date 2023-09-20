@@ -257,11 +257,11 @@ class Optix {
                         try initializeOptix()
                         try createContext()
                         try createModule()
-                        //try createRaygenPrograms()
-                        //try createMissPrograms()
-                        //try createHitgroupPrograms()
-                        //try createPipeline()
-                        //try buildShaderBindingTable()
+                        try createRaygenPrograms()
+                        try createMissPrograms()
+                        try createHitgroupPrograms()
+                        try createPipeline()
+                        try buildShaderBindingTable()
                 } catch (let error) {
                         fatalError("OptixError: \(error)")
                 }
@@ -284,24 +284,20 @@ class Optix {
                 triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
 
                 var deviceVertices = pointBuffer.devicePointer
-                let deviceIndices = indexBuffer.devicePointer
+                //let deviceIndices = indexBuffer.devicePointer
 
                 triangleInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3
                 triangleInput.triangleArray.vertexStrideInBytes = UInt32(MemoryLayout<PointTuple>.stride)
                 triangleInput.triangleArray.numVertices = 3
                 triangleInput.triangleArray.vertexBuffers = withUnsafePointer(to: &deviceVertices) {
-                        _ = $0
                         return $0
                 }
 
                 triangleInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3
                 triangleInput.triangleArray.indexStrideInBytes = UInt32(MemoryLayout<IndexTuple>.stride)
                 triangleInput.triangleArray.numIndexTriplets = 3
-                triangleInput.triangleArray.indexBuffer = deviceIndices
-
-                var triangleInputFlags: UInt32 = 0
-
-                //triangleInput.triangleArray.flags = triangleInputFlags
+                //triangleInput.triangleArray.indexBuffer = deviceIndices
+                triangleInput.triangleArray.indexBuffer = indexBuffer.devicePointer
 
                 triangleInput.triangleArray.flags = withUnsafePointer(to: &triangleInputFlags) { $0 }
                 triangleInput.triangleArray.numSbtRecords = 1
@@ -313,7 +309,10 @@ class Optix {
                 return triangleInput
         }
 
-        func buildAccel(triangleInput: OptixBuildInput) throws {
+        var triangleInputFlags: UInt32 = 0
+
+        private func buildAccel(triangleInput: OptixBuildInput) throws {
+
                 // BLAS setup
 
                 var triangleInput = triangleInput
@@ -349,43 +348,43 @@ class Optix {
                 var asHandle: OptixTraversableHandle = 0
                 let stream: CUstream? = nil
 
-                let buildError = optixAccelBuild(
-                        optixContext,
-                        stream,
-                        &accelOptions,
-                        &triangleInput,
-                        1,
-                        tempBuffer.devicePointer,
-                        tempBuffer.sizeInBytes,
-                        outputBuffer.devicePointer,
-                        outputBuffer.sizeInBytes,
-                        &asHandle,
-                        &emitDesc,
-                        1)
-                try optixCheck(buildError)
-                print("outputBuffer size: \(outputBuffer.sizeInBytes)")
+                //let buildError = optixAccelBuild(
+                //        optixContext,
+                //        stream,
+                //        &accelOptions,
+                //        &triangleInput,
+                //        1,
+                //        tempBuffer.devicePointer,
+                //        tempBuffer.sizeInBytes,
+                //        outputBuffer.devicePointer,
+                //        outputBuffer.sizeInBytes,
+                //        &asHandle,
+                //        &emitDesc,
+                //        1)
+                //try optixCheck(buildError)
+                //print("outputBuffer size: \(outputBuffer.sizeInBytes)")
 
-                try syncCheck()
+                //try syncCheck()
 
-                // Perform compaction
+                //// Perform compaction
 
-                var compactedSize: UInt64 = 0
-                try compactedSizeBuffer.download(&compactedSize)
+                //var compactedSize: UInt64 = 0
+                //try compactedSizeBuffer.download(&compactedSize)
 
-                print("compactSize: \(compactedSize)")
+                //print("compactSize: \(compactedSize)")
 
-                let asBuffer = try CudaBuffer<UInt8>(count: Int(compactedSize))
-                print("asBuffer size: \(asBuffer.sizeInBytes)")
+                //let asBuffer = try CudaBuffer<UInt8>(count: Int(compactedSize))
+                //print("asBuffer size: \(asBuffer.sizeInBytes)")
 
-                let compactError = optixAccelCompact(
-                        optixContext,
-                        stream,
-                        asHandle,
-                        asBuffer.devicePointer,
-                        asBuffer.sizeInBytes,
-                        &asHandle)
-                try optixCheck(compactError)
-                try syncCheck()
+                //let compactError = optixAccelCompact(
+                //        optixContext,
+                //        stream,
+                //        asHandle,
+                //        asBuffer.devicePointer,
+                //        asBuffer.sizeInBytes,
+                //        &asHandle)
+                //try optixCheck(compactError)
+                //try syncCheck()
         }
 
         private func syncCheck() throws {
@@ -425,7 +424,7 @@ class Optix {
                                 optixError("Unknown primitive \(primitive).")
                         }
                 }
-                print("Optix: Added \(triangleCount) triangles.")
+                printGreen("Optix: Added \(triangleCount) triangles.")
                 try buildAccel(triangleInput: triangleInput)
         }
 
@@ -687,24 +686,24 @@ class Optix {
         }
 
         func render() throws {
-                printGreen("Optix render.")
-                try buildLaunch()
-                launchParameters.frameId += 1
-                let result = optixLaunch(
-                        pipeline,
-                        stream,
-                        launchParametersBuffer.devicePointer,
-                        launchParametersBuffer.sizeInBytes,
-                        &shaderBindingTable,
-                        UInt32(pixelBlock.width),
-                        UInt32(pixelBlock.height),
-                        UInt32(pixelBlock.depth))
-                try optixCheck(result)
-                printGreen("Optix render ok.")
-                cudaDeviceSynchronize()
-                let error = cudaGetLastError()
-                try cudaCheck(error)
-                try printColors()
+        //        printGreen("Optix render.")
+        //        try buildLaunch()
+        //        launchParameters.frameId += 1
+        //        let result = optixLaunch(
+        //                pipeline,
+        //                stream,
+        //                launchParametersBuffer.devicePointer,
+        //                launchParametersBuffer.sizeInBytes,
+        //                &shaderBindingTable,
+        //                UInt32(pixelBlock.width),
+        //                UInt32(pixelBlock.height),
+        //                UInt32(pixelBlock.depth))
+        //        try optixCheck(result)
+        //        printGreen("Optix render ok.")
+        //        cudaDeviceSynchronize()
+        //        let error = cudaGetLastError()
+        //        try cudaCheck(error)
+        //        try printColors()
         }
 
         func printColors() throws {
@@ -734,7 +733,7 @@ class Optix {
                 try imageWriter.write(fileName: "optix.exr", image: image)
         }
 
-        func buildLaunch() throws {
+        private func buildLaunch() throws {
                 var launchParameters = LaunchParameters()
                 launchParameters.width = Int32(pixelBlock.width)
                 launchParameters.height = Int32(pixelBlock.height)

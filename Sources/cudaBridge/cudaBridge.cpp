@@ -16,3 +16,4 @@ void contextLogCallback(unsigned int level, const char *tag, const char *message
 #ifdef __cplusplus
 }
 #endif
+
