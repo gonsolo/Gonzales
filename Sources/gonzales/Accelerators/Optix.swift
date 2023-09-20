@@ -212,7 +212,6 @@ class CudaBuffer<T> {
         }
 
         func download(_ t: inout T) throws {
-                var t = t
                 try withUnsafeMutablePointer(to: &t) { t in
                         let error = cudaMemcpy(t, pointer, sizeInBytes, cudaMemcpyDeviceToHost)
                         try cudaCheck(error)
@@ -363,29 +362,26 @@ class Optix {
                         &emitDesc,
                         1)
                 try optixCheck(buildError)
-                print("outputBuffer size: \(outputBuffer.sizeInBytes)")
+                try syncCheck()
 
-                //try syncCheck()
+                // Perform compaction
 
-                //// Perform compaction
+                var compactedSize: UInt64 = 0
+                try compactedSizeBuffer.download(&compactedSize)
+                print("compactSize: \(compactedSize)")
 
-                //var compactedSize: UInt64 = 0
-                //try compactedSizeBuffer.download(&compactedSize)
+                let asBuffer = try CudaBuffer<UInt8>(count: Int(compactedSize))
+                print("asBuffer size: \(asBuffer.sizeInBytes)")
 
-                //print("compactSize: \(compactedSize)")
-
-                //let asBuffer = try CudaBuffer<UInt8>(count: Int(compactedSize))
-                //print("asBuffer size: \(asBuffer.sizeInBytes)")
-
-                //let compactError = optixAccelCompact(
-                //        optixContext,
-                //        stream,
-                //        asHandle,
-                //        asBuffer.devicePointer,
-                //        asBuffer.sizeInBytes,
-                //        &asHandle)
-                //try optixCheck(compactError)
-                //try syncCheck()
+                let compactError = optixAccelCompact(
+                        optixContext,
+                        stream,
+                        asHandle,
+                        asBuffer.devicePointer,
+                        asBuffer.sizeInBytes,
+                        &asHandle)
+                try optixCheck(compactError)
+                try syncCheck()
         }
 
         private func syncCheck() throws {
