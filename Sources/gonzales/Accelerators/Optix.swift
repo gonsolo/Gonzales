@@ -685,24 +685,24 @@ class Optix {
         }
 
         func render() throws {
-        //        printGreen("Optix render.")
-        //        try buildLaunch()
-        //        launchParameters.frameId += 1
-        //        let result = optixLaunch(
-        //                pipeline,
-        //                stream,
-        //                launchParametersBuffer.devicePointer,
-        //                launchParametersBuffer.sizeInBytes,
-        //                &shaderBindingTable,
-        //                UInt32(pixelBlock.width),
-        //                UInt32(pixelBlock.height),
-        //                UInt32(pixelBlock.depth))
-        //        try optixCheck(result)
-        //        printGreen("Optix render ok.")
-        //        cudaDeviceSynchronize()
-        //        let error = cudaGetLastError()
-        //        try cudaCheck(error)
-        //        try printColors()
+                printGreen("Optix render.")
+                try buildLaunch()
+                launchParameters.frameId += 1
+                let result = optixLaunch(
+                        pipeline,
+                        stream,
+                        launchParametersBuffer.devicePointer,
+                        launchParametersBuffer.sizeInBytes,
+                        &shaderBindingTable,
+                        UInt32(pixelBlock.width),
+                        UInt32(pixelBlock.height),
+                        UInt32(pixelBlock.depth))
+                try optixCheck(result)
+                printGreen("Optix render ok.")
+                cudaDeviceSynchronize()
+                let error = cudaGetLastError()
+                try cudaCheck(error)
+                try printColors()
         }
 
         func printColors() throws {
