@@ -109,7 +109,7 @@ else
 	else ifeq ($(HOSTNAME), Pampelmuse)
 		SWIFT		= ~/Downloads/swift-5.9-RELEASE-ubuntu22.04/usr/bin/swift
 	else
-		SWIFT		= ~/swift-5.9-RELEASE-ubuntu22.04/usr/bin/swift
+		SWIFT		= ./swift-5.9-RELEASE-ubuntu22.04/usr/bin/swift
 endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
@@ -159,7 +159,7 @@ OPTIX_INCLUDE_DIR = ../../External/Optix/7.7.0/include
 OPTIX_OUTPUT = ../../.build/kernels.optixir
 NVCC_OPTIONS = -I../cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
 optix:
-	@cd Sources/optix; nvcc $(NVCC_OPTIONS) kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
+	#@cd Sources/optix; nvcc $(NVCC_OPTIONS) kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
 
 r: release
 release: optix
