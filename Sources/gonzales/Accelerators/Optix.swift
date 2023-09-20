@@ -283,7 +283,7 @@ class Optix {
 
                 triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
 
-                var deviceVertices = pointBuffer.devicePointer
+                deviceVertices = pointBuffer.devicePointer
                 //let deviceIndices = indexBuffer.devicePointer
 
                 triangleInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3
@@ -309,6 +309,7 @@ class Optix {
                 return triangleInput
         }
 
+        var deviceVertices: CUdeviceptr = 0
         var triangleInputFlags: UInt32 = 0
 
         private func buildAccel(triangleInput: OptixBuildInput) throws {
@@ -348,21 +349,21 @@ class Optix {
                 var asHandle: OptixTraversableHandle = 0
                 let stream: CUstream? = nil
 
-                //let buildError = optixAccelBuild(
-                //        optixContext,
-                //        stream,
-                //        &accelOptions,
-                //        &triangleInput,
-                //        1,
-                //        tempBuffer.devicePointer,
-                //        tempBuffer.sizeInBytes,
-                //        outputBuffer.devicePointer,
-                //        outputBuffer.sizeInBytes,
-                //        &asHandle,
-                //        &emitDesc,
-                //        1)
-                //try optixCheck(buildError)
-                //print("outputBuffer size: \(outputBuffer.sizeInBytes)")
+                let buildError = optixAccelBuild(
+                        optixContext,
+                        stream,
+                        &accelOptions,
+                        &triangleInput,
+                        1,
+                        tempBuffer.devicePointer,
+                        tempBuffer.sizeInBytes,
+                        outputBuffer.devicePointer,
+                        outputBuffer.sizeInBytes,
+                        &asHandle,
+                        &emitDesc,
+                        1)
+                try optixCheck(buildError)
+                print("outputBuffer size: \(outputBuffer.sizeInBytes)")
 
                 //try syncCheck()
 
