@@ -304,7 +304,6 @@ class Optix {
                 triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
                 triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
 
-                //try buildAccel(triangleInput: &triangleInput)
                 return triangleInput
         }
 
