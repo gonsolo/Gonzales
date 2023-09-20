@@ -53,41 +53,27 @@ jobs:
           sudo apt-get update
           sudo apt-get -y install cuda
 
-          - name: Cache swift
-            id: cache-swift
-            uses: actions/cache@v3
-            with:
-              path: |
-                #libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-                #swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-                swift-5.9-RELEASE-ubuntu22.04.tar.gz
-              key: ${{ runner.os }}-cache-swift
+      - name: Cache swift
+        id: cache-swift
+        uses: actions/cache@v3
+        with:
+          path: |
+            swift-5.9-RELEASE-ubuntu22.04.tar.gz
+          key: ${{ runner.os }}-cache-swift
 
-          - name: Download swift
-            if: steps.cache-swift.outputs.cache-hit != 'true'
-            run: |
-              #wget https://archive.swiftlang.xyz/ubuntu/pool/main/libs/libswiftlang/libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-              #wget https://archive.swiftlang.xyz/ubuntu/pool/main/s/swiftlang/swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-              wget https://download.swift.org/swift-5.9-release/ubuntu2204/swift-5.9-RELEASE/swift-5.9-RELEASE-ubuntu22.04.tar.gz
+      - name: Download swift
+        if: steps.cache-swift.outputs.cache-hit != 'true'
+        run: |
+          wget https://download.swift.org/swift-5.9-release/ubuntu2204/swift-5.9-RELEASE/swift-5.9-RELEASE-ubuntu22.04.tar.gz
 
-          - name: Install swift
-            run: |
-              tar xzf swift-5.9-RELEASE-ubuntu22.04.tar.gz
+      - name: Install swift
+        run: |
+          tar xzf swift-5.9-RELEASE-ubuntu22.04.tar.gz
 
-          #- name: Cache ptex
-          #  id: cache-ptex
-          #  uses: actions/cache@v3
-          #  with:
-          #    path: |
-          #      ptex_2.4.2-1ubuntu6_amd64.deb
-          #    key: ${{ runner.os }}-cache-ptex
- 
-          - name: Install deb
-            run: |
-              #sudo dpkg -i libswiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-              #sudo dpkg -i swiftlang_5.8.1-1.0.0-ubuntu-jammy_amd64.deb
-              sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
-          
+      - name: Install ptex
+        run: |
+          sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
+
       - name: Compile debug
         run: |
           export PATH=$PATH:/usr/local/cuda/bin
