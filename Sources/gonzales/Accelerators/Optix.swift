@@ -340,10 +340,10 @@ class Optix {
 
                 // Execute build
 
-                print("outputSizeInBytes: \(blasBufferSizes.outputSizeInBytes)")
+                //print("outputSizeInBytes: \(blasBufferSizes.outputSizeInBytes)")
                 let tempBuffer = try CudaBuffer<UInt8>(count: blasBufferSizes.tempSizeInBytes)
                 let outputBuffer = try CudaBuffer<UInt8>(count: blasBufferSizes.outputSizeInBytes)
-                print("outputBuffer size: \(outputBuffer.sizeInBytes)")
+                //print("outputBuffer size: \(outputBuffer.sizeInBytes)")
 
                 var asHandle: OptixTraversableHandle = 0
                 let stream: CUstream? = nil
@@ -363,15 +363,16 @@ class Optix {
                         1)
                 try optixCheck(buildError)
                 try syncCheck()
+                printGreen("Accel build ok!")
 
                 // Perform compaction
 
                 var compactedSize: UInt64 = 0
                 try compactedSizeBuffer.download(&compactedSize)
-                print("compactSize: \(compactedSize)")
+                //print("compactSize: \(compactedSize)")
 
                 let asBuffer = try CudaBuffer<UInt8>(count: Int(compactedSize))
-                print("asBuffer size: \(asBuffer.sizeInBytes)")
+                //print("asBuffer size: \(asBuffer.sizeInBytes)")
 
                 let compactError = optixAccelCompact(
                         optixContext,
@@ -382,6 +383,7 @@ class Optix {
                         &asHandle)
                 try optixCheck(compactError)
                 try syncCheck()
+                printGreen("Compaction ok!")
         }
 
         private func syncCheck() throws {
