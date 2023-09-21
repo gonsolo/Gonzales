@@ -573,7 +573,7 @@ class Optix {
         }
 
         private func createRaygenPrograms() throws {
-                var options = OptixProgramGroupOptions()
+                var options = OptixProgramGroupOptions(payloadType: nil)
                 var description = OptixProgramGroupDesc()
                 description.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN
                 description.raygen.module = module
