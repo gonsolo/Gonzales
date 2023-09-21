@@ -616,7 +616,7 @@ class Optix {
 
         private func createHitgroupPrograms() throws {
 
-                var options = OptixProgramGroupOptions()
+                var options = OptixProgramGroupOptions(payloadType: nil)
                 var description = OptixProgramGroupDesc()
                 description.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP
                 description.hitgroup.moduleCH = module
