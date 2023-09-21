@@ -508,8 +508,12 @@ class Optix {
                 try cudaCheck(cudaResult)
                 printGreen("Cuda context ok.")
 
-                var deviceContextOptions = OptixDeviceContextOptions()
-                deviceContextOptions.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL
+                var deviceContextOptions = OptixDeviceContextOptions(
+                        logCallbackFunction: nil,
+                        logCallbackData: nil,
+                        logCallbackLevel: 0,
+                        validationMode: OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL
+                )
 
                 let contextResult = optixDeviceContextCreate(
                         cudaContext,
