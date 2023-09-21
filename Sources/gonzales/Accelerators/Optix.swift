@@ -310,7 +310,7 @@ class Optix {
         var deviceVertices: CUdeviceptr = 0
         var triangleInputFlags: UInt32 = 0
 
-        private func buildAccel(triangleInput: OptixBuildInput) throws {
+        private func buildAccel(triangleInput: OptixBuildInput) throws -> OptixTraversableHandle {
 
                 // BLAS setup
 
@@ -383,6 +383,7 @@ class Optix {
                 try optixCheck(compactError)
                 try syncCheck()
                 printGreen("Compaction ok!")
+                return asHandle
         }
 
         private func syncCheck() throws {
@@ -422,9 +423,11 @@ class Optix {
                                 optixError("Unknown primitive \(primitive).")
                         }
                 }
+                traversableHandle = try buildAccel(triangleInput: triangleInput)
                 printGreen("Optix: Added \(triangleCount) triangles.")
-                try buildAccel(triangleInput: triangleInput)
         }
+
+        var traversableHandle: OptixTraversableHandle = 0
 
         private func optixCheck(_ optixResult: OptixResult, _ lineNumber: Int = #line) throws {
                 if optixResult != OPTIX_SUCCESS {
@@ -742,6 +745,8 @@ class Optix {
                 launchParameters.width = Int32(pixelBlock.width)
                 launchParameters.height = Int32(pixelBlock.height)
                 launchParameters.pointerToPixels = colorBuffer.pointer
+                launchParameters.traversable = traversableHandle
+
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
                         &launchParameters,

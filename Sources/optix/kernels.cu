@@ -31,7 +31,6 @@ extern "C" __global__ void __raygen__renderFrame() {
 
 
 	// Not used yet
-	OptixTraversableHandle traversableHandle = 0;
 	float3 origin = { 0, 0, 0 };
 	float3 direction = { 0, 0, 1 };
 	float tMin = 0.f;
@@ -44,7 +43,7 @@ extern "C" __global__ void __raygen__renderFrame() {
 	uint32_t u1 = 0;
 
 	optixTrace(
-		traversableHandle,
+		launchParameters.traversable,
                 origin,
                 direction,
                 tMin,
