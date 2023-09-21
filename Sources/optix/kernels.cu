@@ -28,4 +28,32 @@ extern "C" __global__ void __raygen__renderFrame() {
 	p[index + 1] = g;
 	p[index + 2] = b;
 	p[index + 3] = a;
+
+
+	// Not used yet
+	OptixTraversableHandle traversableHandle = 0;
+	float3 origin = { 0, 0, 0 };
+	float3 direction = { 0, 0, 1 };
+	float tMin = 0.f;
+	float tMax = 1e20f;
+	float rayTime = 0.f;
+	int offset = 0;
+	int stride = 1;
+	int missIndex = 0;
+	uint32_t u0 = 0;
+	uint32_t u1 = 0;
+
+	optixTrace(
+		traversableHandle,
+                origin,
+                direction,
+                tMin,
+                tMax,
+                rayTime,
+		OptixVisibilityMask(255),
+                OPTIX_RAY_FLAG_DISABLE_ANYHIT, // OPTIX_RAY_FLAG_NONE,
+                offset,
+                stride,
+                missIndex,
+                u0, u1 );
 }
