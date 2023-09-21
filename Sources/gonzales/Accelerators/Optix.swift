@@ -426,9 +426,9 @@ class Optix {
                 try buildAccel(triangleInput: triangleInput)
         }
 
-        private func optixCheck(_ optixResult: OptixResult) throws {
+        private func optixCheck(_ optixResult: OptixResult, _ lineNumber: Int = #line) throws {
                 if optixResult != OPTIX_SUCCESS {
-                        print("OptixError: \(optixResult)")
+                        print("OptixError: \(optixResult) from line \(lineNumber)")
                         throw OptixError.optixCheck
                 }
         }
@@ -520,6 +520,7 @@ class Optix {
                 printGreen("Optix context ok.")
         }
 
+
         private func getPipelineCompileOptions() -> OptixPipelineCompileOptions {
                 var pipelineCompileOptions = OptixPipelineCompileOptions()
                 pipelineCompileOptions.traversableGraphFlags =
@@ -536,6 +537,7 @@ class Optix {
         }
 
         private func createModule() throws {
+
                 var moduleOptions = OptixModuleCompileOptions()
                 moduleOptions.maxRegisterCount = 50
                 moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT
