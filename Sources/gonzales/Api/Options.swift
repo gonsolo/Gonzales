@@ -221,7 +221,7 @@ class Options {
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let powerLightSampler = PowerLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = LightSampler.power(powerLightSampler)
-                return Renderer(
+                return TileRenderer(
                         accelerator: accelerator,
                         camera: camera,
                         integrator: integrator,

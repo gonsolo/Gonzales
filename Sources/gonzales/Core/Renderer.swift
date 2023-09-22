@@ -1,6 +1,10 @@
 import Foundation
 
-final class Renderer {
+protocol Renderer {
+        func render() throws
+}
+
+final class TileRenderer: Renderer {
 
         init(
                 accelerator: Accelerator,
@@ -18,7 +22,7 @@ final class Renderer {
                 self.lightSampler = lightSampler
         }
 
-        func generateTiles(from bounds: Bounds2i) -> [Tile] {
+        private func generateTiles(from bounds: Bounds2i) -> [Tile] {
                 var tiles: [Tile] = []
                 var y = bounds.pMin.y
                 while y < bounds.pMax.y {
@@ -40,7 +44,7 @@ final class Renderer {
                 return tiles
         }
 
-        func renderTile(tile: Tile) throws -> [Sample] {
+        private func renderTile(tile: Tile) throws -> [Sample] {
                 let tileSampler = self.sampler.clone()
                 let samples = try tile.render(
                         reporter: reporter,
@@ -74,7 +78,7 @@ final class Renderer {
                 }
         }
 
-        func doRenderTile(tile: Tile) throws {
+        private func doRenderTile(tile: Tile) throws {
                 if renderSynchronously {
                         try renderSync(tile: tile)
                 } else {
@@ -82,7 +86,7 @@ final class Renderer {
                 }
         }
 
-        func generateBounds() -> Bounds2i {
+        private func generateBounds() -> Bounds2i {
                 let sampleBounds = camera.film.getSampleBounds()
                 var bounds: Bounds2i
                 if singleRay {
@@ -94,13 +98,13 @@ final class Renderer {
                 return bounds
         }
 
-        func renderTiles(tiles: [Tile]) throws {
+        private func renderTiles(tiles: [Tile]) throws {
                 for tile in tiles {
                         try doRenderTile(tile: tile)
                 }
         }
 
-        func renderImage(bounds: Bounds2i) throws {
+        private func renderImage(bounds: Bounds2i) throws {
                 let tiles = generateTiles(from: bounds)
                 try renderTiles(tiles: tiles)
         }
