@@ -1,4 +1,4 @@
-name: Build debug
+name: Prepare and build
 
 # Controls when the action will run. 
 on:
@@ -13,8 +13,8 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
+  # This workflow contains three jobs, this one is called "prepare"
+  prepare:
     # The type of runner that the job will run on
     runs-on: ubuntu-latest
 
@@ -74,8 +74,31 @@ jobs:
         run: |
           sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
 
+          #- name: Compile debug
+          #  run: |
+          #    export PATH=$PATH:/usr/local/cuda/bin
+          #    mkdir .build
+          #    make debug
+
+  # This is the second job called "build_debug"
+  build_debug:
+    needs: prepare
+
+    steps:
       - name: Compile debug
         run: |
           export PATH=$PATH:/usr/local/cuda/bin
-          mkdir .build
+          mkdir -p .build
           make debug
+
+
+  # This is the third job called "build_release"
+  build_release:
+    needs: prepare
+
+    steps:
+      - name: Compile release
+        run: |
+          export PATH=$PATH:/usr/local/cuda/bin
+          mkdir -p .build
+          make release
