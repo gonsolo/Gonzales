@@ -87,6 +87,8 @@ jobs:
     needs: prepare
 
     steps:
+      - uses: actions/checkout@v3
+
       - name: Compile debug
         run: |
           export PATH=$PATH:/usr/local/cuda/bin
@@ -100,6 +102,8 @@ jobs:
     needs: prepare
 
     steps:
+      - uses: actions/checkout@v3
+
       - name: Compile release
         run: |
           export PATH=$PATH:/usr/local/cuda/bin
