@@ -755,6 +755,23 @@ class Optix {
                 try cudaCheck(uploadError)
         }
 
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                material: MaterialIndex,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                // TODO
+        }
+
+        func objectBound() -> Bounds3f {
+                return Bounds3f()
+        }
+
+        func worldBound() -> Bounds3f {
+                return Bounds3f()
+        }
+
         var stream: cudaStream_t?
         var cudaContext: CUcontext?
         var optixContext: OptixDeviceContext?

@@ -8,6 +8,11 @@ struct vec3f {
 	float x, y, z;
 };
 
+struct Camera {
+	vec3f position;
+	vec3f direction;
+} ;
+
 struct LaunchParameters {
 	int frameId { 0 };
 	int width { 0 };
@@ -15,7 +20,8 @@ struct LaunchParameters {
 	void *pointerToPixels;
 	OptixTraversableHandle traversable;
 
-	std::array<vec3f, 32 * 32> cameraPositions;
-	std::array<vec3f, 32 * 32> cameraDirections;
+	Camera camera;
+	//std::array<vec3f, 32 * 32> cameraPositions;
+	//std::array<vec3f, 32 * 32> cameraDirections;
 };
 
