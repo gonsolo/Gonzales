@@ -692,9 +692,9 @@ class Optix {
                 printGreen("Optix shader binding table ok.")
         }
 
-        func render() throws {
-                printGreen("Optix render.")
-                try buildLaunch()
+        func render(ray: Ray) throws {
+                //printGreen("Optix render.")
+                try buildLaunch(ray: ray)
                 launchParameters.frameId += 1
                 let result = optixLaunch(
                         pipeline,
@@ -706,7 +706,7 @@ class Optix {
                         UInt32(pixelBlock.height),
                         UInt32(pixelBlock.depth))
                 try optixCheck(result)
-                printGreen("Optix render ok.")
+                //printGreen("Optix render ok.")
                 cudaDeviceSynchronize()
                 let error = cudaGetLastError()
                 try cudaCheck(error)
@@ -740,12 +740,19 @@ class Optix {
                 try imageWriter.write(fileName: "optix.exr", image: image)
         }
 
-        private func buildLaunch() throws {
+        private func buildLaunch(ray: Ray) throws {
                 var launchParameters = LaunchParameters()
                 launchParameters.width = Int32(pixelBlock.width)
                 launchParameters.height = Int32(pixelBlock.height)
                 launchParameters.pointerToPixels = colorBuffer.pointer
                 launchParameters.traversable = traversableHandle
+
+                launchParameters.camera.position.x = ray.origin.x
+                launchParameters.camera.position.y = ray.origin.y
+                launchParameters.camera.position.z = ray.origin.z
+                launchParameters.camera.direction.x = ray.direction.x
+                launchParameters.camera.direction.y = ray.direction.y
+                launchParameters.camera.direction.z = ray.direction.z
 
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,
@@ -761,7 +768,7 @@ class Optix {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
-                // TODO
+                try render(ray: ray)
         }
 
         func objectBound() -> Bounds3f {

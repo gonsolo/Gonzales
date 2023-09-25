@@ -30,9 +30,17 @@ extern "C" __global__ void __raygen__renderFrame() {
 	p[index + 3] = a;
 
 
-	// Not used yet
-	float3 origin = { 0, 0, 0 };
-	float3 direction = { 0, 0, 1 };
+	float3 origin = { 
+		launchParameters.camera.position.x,
+		launchParameters.camera.position.y,
+		launchParameters.camera.position.z
+	};
+
+	float3 direction = {
+		launchParameters.camera.direction.x,	
+		launchParameters.camera.direction.y,
+		launchParameters.camera.direction.z
+	};
 	float tMin = 0.f;
 	float tMax = 1e20f;
 	float rayTime = 0.f;
