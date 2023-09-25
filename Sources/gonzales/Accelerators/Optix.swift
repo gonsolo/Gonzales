@@ -753,6 +753,8 @@ class Optix {
                 launchParameters.camera.direction.x = ray.direction.x
                 launchParameters.camera.direction.y = ray.direction.y
                 launchParameters.camera.direction.z = ray.direction.z
+                launchParameters.camera.pixel.x = Int32(ray.cameraSample.film.0)
+                launchParameters.camera.pixel.y = Int32(ray.cameraSample.film.1)
 
                 let uploadError = cudaMemcpy(
                         launchParametersBuffer.pointer,

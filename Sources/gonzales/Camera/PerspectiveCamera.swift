@@ -23,26 +23,27 @@ final class PerspectiveCamera: Camera, Transformable {
                 )
         }
 
-        private func depthOfField(ray: Ray, sample: CameraSample) -> Ray {
+        private func depthOfField(ray: Ray, cameraSample: CameraSample) -> Ray {
                 guard lensRadius > 0 else {
                         return ray
                 }
-                let lens = lensRadius * concentricSampleDisk(u: sample.lens)
+                let lens = lensRadius * concentricSampleDisk(u: cameraSample.lens)
                 let ft = focalDistance / ray.direction.z
                 let pFocus = ray.getPointFor(parameter: ft)
                 let origin = Point(x: lens.x, y: lens.y, z: 0)
                 let direction: Vector = normalized(pFocus - ray.origin)
-                return Ray(origin: origin, direction: direction)
+                return Ray(origin: origin, direction: direction, cameraSample: cameraSample)
         }
 
-        func generateRay(sample: CameraSample) -> Ray {
-                let rasterPoint = Point(x: sample.film.0, y: sample.film.1, z: 0)
+        func generateRay(cameraSample: CameraSample) -> Ray {
+                let rasterPoint = Point(x: cameraSample.film.0, y: cameraSample.film.1, z: 0)
                 let cameraPoint = cameraTransform.rasterToCamera * rasterPoint
                 let pinholeRay = Ray(
                         origin: origin,
-                        direction: normalized(Vector(point: cameraPoint))
+                        direction: normalized(Vector(point: cameraPoint)),
+                        cameraSample: cameraSample
                 )
-                let ray = depthOfField(ray: pinholeRay, sample: sample)
+                let ray = depthOfField(ray: pinholeRay, cameraSample: cameraSample)
                 numberCameraRays += 1
                 return objectToWorld * ray
         }

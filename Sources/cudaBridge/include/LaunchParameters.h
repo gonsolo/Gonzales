@@ -8,10 +8,15 @@ struct vec3f {
 	float x, y, z;
 };
 
+struct vec2i {
+	int x, y;
+};
+
 struct Camera {
 	vec3f position;
 	vec3f direction;
-} ;
+	vec2i pixel;
+};
 
 struct LaunchParameters {
 	int frameId { 0 };

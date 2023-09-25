@@ -38,7 +38,7 @@ final class Tile {
                 var samples = [Sample]()
                 for _ in 0..<sampler.samplesPerPixel {
                         let cameraSample = sampler.getCameraSample(pixel: pixel)
-                        let ray = camera.generateRay(sample: cameraSample)
+                        let ray = camera.generateRay(cameraSample: cameraSample)
                         var tHit = Float.infinity
                         let (radiance, albedo, normal) = try integrator.getRadianceAndAlbedo(
                                 from: ray,
