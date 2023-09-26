@@ -266,9 +266,10 @@ class Optix {
                 }
         }
 
-        private func add(triangle: Triangle) throws -> OptixBuildInput {
+        var triangleInput = OptixBuildInput()
 
-                var triangleInput = OptixBuildInput()
+        private func add(triangle: Triangle) throws {
+
 
                 let points = triangle.getWorldPoints()
                 typealias PointTuple = (Point, Point, Point)
@@ -304,17 +305,33 @@ class Optix {
                 triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
                 triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
 
-                return triangleInput
+                triangleInput.triangleArray.transformFormat = OPTIX_TRANSFORM_FORMAT_NONE
+                triangleInput.triangleArray.preTransform = 0
+                triangleInput.triangleArray.opacityMicromap.indexingMode = OPTIX_OPACITY_MICROMAP_ARRAY_INDEXING_MODE_NONE
+                triangleInput.triangleArray.opacityMicromap.opacityMicromapArray = 0
+                triangleInput.triangleArray.opacityMicromap.micromapUsageCounts = nil
+                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleBuffer = 0
+                triangleInput.triangleArray.displacementMicromap.triangleFlagsBuffer = 0
+                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexOffset = 0
+                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexStrideInBytes = 0
+                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexSizeInBytes = 0
+                triangleInput.triangleArray.displacementMicromap.vertexDirectionFormat = OPTIX_DISPLACEMENT_MICROMAP_DIRECTION_FORMAT_NONE
+                triangleInput.triangleArray.displacementMicromap.vertexDirectionStrideInBytes = 0
+                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleFormat = OPTIX_DISPLACEMENT_MICROMAP_BIAS_AND_SCALE_FORMAT_NONE
+                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleStrideInBytes = 0
+                triangleInput.triangleArray.displacementMicromap.triangleFlagsStrideInBytes = 0
+                triangleInput.triangleArray.displacementMicromap.numDisplacementMicromapUsageCounts = 0
+                triangleInput.triangleArray.displacementMicromap.displacementMicromapUsageCounts = nil
         }
 
         var deviceVertices: CUdeviceptr = 0
         var triangleInputFlags: UInt32 = 0
 
-        private func buildAccel(triangleInput: OptixBuildInput) throws -> OptixTraversableHandle {
+        private func buildAccel() throws -> OptixTraversableHandle {
 
                 // BLAS setup
 
-                var triangleInput = triangleInput
+                //var triangleInput = triangleInput
 
                 var accelOptions = OptixAccelBuildOptions()
                 accelOptions.buildFlags = 2  // OPTIX_BUILD_FLAG_NONE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION
@@ -395,7 +412,7 @@ class Optix {
         var triangleCount = 0
 
         func add(primitives: [Boundable & Intersectable]) throws {
-                var triangleInput: OptixBuildInput! = nil
+                //var triangleInput: OptixBuildInput! = nil
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
@@ -404,9 +421,9 @@ class Optix {
                                         // Just one triangle supported right now
                                         // Just add one triangle for now
                                         if triangleCount == 0 {
-                                                triangleInput = try add(triangle: triangle)
+                                                try add(triangle: triangle)
+                                                triangleCount += 1
                                         }
-                                        triangleCount += 1
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
@@ -423,7 +440,7 @@ class Optix {
                                 optixError("Unknown primitive \(primitive).")
                         }
                 }
-                traversableHandle = try buildAccel(triangleInput: triangleInput)
+                traversableHandle = try buildAccel()
                 printGreen("Optix: Added \(triangleCount) triangles.")
         }
 
@@ -750,9 +767,13 @@ class Optix {
                 launchParameters.camera.position.x = ray.origin.x
                 launchParameters.camera.position.y = ray.origin.y
                 launchParameters.camera.position.z = ray.origin.z
+
+                //print(ray.direction)
+
                 launchParameters.camera.direction.x = ray.direction.x
                 launchParameters.camera.direction.y = ray.direction.y
                 launchParameters.camera.direction.z = ray.direction.z
+
                 launchParameters.camera.pixel.x = Int32(ray.cameraSample.film.0)
                 launchParameters.camera.pixel.y = Int32(ray.cameraSample.film.1)
 

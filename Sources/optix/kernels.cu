@@ -31,13 +31,18 @@ static __forceinline__ __device__ T *getPerRayData()
 }
 
 extern "C" __global__ void __closesthit__radiance() {
-	printf("hit");
+	printf("closesthit");
 	const int   primID = optixGetPrimitiveIndex();
 	vec3f &perRayData = *(vec3f*)getPerRayData<vec3f>();
 	perRayData = {1, 1, 1};
 }
-extern "C" __global__ void __anyhit__radiance() {}
+
+extern "C" __global__ void __anyhit__radiance() {
+	printf("closesthit");
+}
+
 extern "C" __global__ void __miss__radiance() {
+	//printf("miss");
 	vec3f &perRayData = *(vec3f*)getPerRayData<vec3f>();
 	perRayData = {0, 0, 0};
 }
@@ -78,6 +83,11 @@ extern "C" __global__ void __raygen__renderFrame() {
 		launchParameters.camera.direction.y,
 		launchParameters.camera.direction.z
 	};
+	if(x == launchParameters.camera.pixel.x && y == launchParameters.camera.pixel.y) {
+		//printf("position: %f %f %f\n", launchParameters.camera.position.x, launchParameters.camera.position.y, launchParameters.camera.position.z);
+		//printf("direction: %f %f %f\n", launchParameters.camera.direction.x, launchParameters.camera.direction.y, launchParameters.camera.direction.z);
+	}
+
 	float tMin = 0.f;
 	float tMax = 1e20f;
 	float rayTime = 0.f;
