@@ -104,6 +104,7 @@ extern "C" __global__ void __raygen__renderFrame() {
                 rayTime,
 		OptixVisibilityMask(255),
                 OPTIX_RAY_FLAG_DISABLE_ANYHIT, // OPTIX_RAY_FLAG_NONE,
+                //OPTIX_RAY_FLAG_NONE,
                 offset,
                 stride,
                 missIndex,
