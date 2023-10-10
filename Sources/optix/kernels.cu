@@ -38,7 +38,7 @@ extern "C" __global__ void __closesthit__radiance() {
 }
 
 extern "C" __global__ void __anyhit__radiance() {
-	printf("closesthit");
+	printf("anyhit");
 }
 
 extern "C" __global__ void __miss__radiance() {
@@ -73,17 +73,19 @@ extern "C" __global__ void __raygen__renderFrame() {
 	packPointer( &perRayData, u0, u1 );
 
 	float3 origin = { 
-		launchParameters.camera.position.x,
-		launchParameters.camera.position.y,
-		launchParameters.camera.position.z
+		-0.5, //launchParameters.camera.position.x,
+		+1.5, //launchParameters.camera.position.y,
+		0, //launchParameters.camera.position.z
 	};
 
 	float3 direction = {
-		launchParameters.camera.direction.x,	
-		launchParameters.camera.direction.y,
-		launchParameters.camera.direction.z
+		0, //launchParameters.camera.direction.x,	
+		0, //launchParameters.camera.direction.y,
+		-1, //launchParameters.camera.direction.z
 	};
 	if(x == launchParameters.camera.pixel.x && y == launchParameters.camera.pixel.y) {
+		//printf("position: %f %f %f\n", origin.x, origin.y, origin.z);
+		//printf("direction: %f %f %f\n", direction.x, direction.y, direction.z);
 		//printf("position: %f %f %f\n", launchParameters.camera.position.x, launchParameters.camera.position.y, launchParameters.camera.position.z);
 		//printf("direction: %f %f %f\n", launchParameters.camera.direction.x, launchParameters.camera.direction.y, launchParameters.camera.direction.z);
 	}

@@ -250,78 +250,89 @@ class Optix {
         }
 
         init() throws {
-                do {
-                        try initializeCuda()
-                        try initializeBuffers()
-                        try initializeOptix()
-                        try createContext()
-                        try createModule()
-                        try createRaygenPrograms()
-                        try createMissPrograms()
-                        try createHitgroupPrograms()
-                        try createPipeline()
-                        try buildShaderBindingTable()
-                } catch (let error) {
-                        fatalError("OptixError: \(error)")
-                }
+                //do {
+                //        try initializeCuda()
+                //        try initializeBuffers()
+                //        try initializeOptix()
+                //        try createContext()
+                //        try createModule()
+                //        try createRaygenPrograms()
+                //        try createMissPrograms()
+                //        try createHitgroupPrograms()
+                //        try createPipeline()
+                //        try buildShaderBindingTable()
+                //} catch (let error) {
+                //        fatalError("OptixError: \(error)")
+                //}
         }
 
         var triangleInput = OptixBuildInput()
 
         private func add(triangle: Triangle) throws {
 
-
-                let points = triangle.getWorldPoints()
-                typealias PointTuple = (Point, Point, Point)
-                let pointBuffer = try CudaBuffer<PointTuple>()
-                try pointBuffer.upload(points)
-
-                typealias IndexTuple = (Int32, Int32, Int32)
-                let indices: IndexTuple = (0, 1, 2)
-                let indexBuffer = try CudaBuffer<IndexTuple>()
-                try indexBuffer.upload(indices)
-
-                triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
-
-                deviceVertices = pointBuffer.devicePointer
-                //let deviceIndices = indexBuffer.devicePointer
-
-                triangleInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3
-                triangleInput.triangleArray.vertexStrideInBytes = UInt32(MemoryLayout<PointTuple>.stride)
-                triangleInput.triangleArray.numVertices = 3
-                triangleInput.triangleArray.vertexBuffers = withUnsafePointer(to: &deviceVertices) {
-                        return $0
-                }
-
-                triangleInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3
-                triangleInput.triangleArray.indexStrideInBytes = UInt32(MemoryLayout<IndexTuple>.stride)
-                triangleInput.triangleArray.numIndexTriplets = 3
-                //triangleInput.triangleArray.indexBuffer = deviceIndices
-                triangleInput.triangleArray.indexBuffer = indexBuffer.devicePointer
-
-                triangleInput.triangleArray.flags = withUnsafePointer(to: &triangleInputFlags) { $0 }
-                triangleInput.triangleArray.numSbtRecords = 1
-                triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
-                triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
-                triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
-
-                triangleInput.triangleArray.transformFormat = OPTIX_TRANSFORM_FORMAT_NONE
-                triangleInput.triangleArray.preTransform = 0
-                triangleInput.triangleArray.opacityMicromap.indexingMode = OPTIX_OPACITY_MICROMAP_ARRAY_INDEXING_MODE_NONE
-                triangleInput.triangleArray.opacityMicromap.opacityMicromapArray = 0
-                triangleInput.triangleArray.opacityMicromap.micromapUsageCounts = nil
-                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleBuffer = 0
-                triangleInput.triangleArray.displacementMicromap.triangleFlagsBuffer = 0
-                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexOffset = 0
-                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexStrideInBytes = 0
-                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexSizeInBytes = 0
-                triangleInput.triangleArray.displacementMicromap.vertexDirectionFormat = OPTIX_DISPLACEMENT_MICROMAP_DIRECTION_FORMAT_NONE
-                triangleInput.triangleArray.displacementMicromap.vertexDirectionStrideInBytes = 0
-                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleFormat = OPTIX_DISPLACEMENT_MICROMAP_BIAS_AND_SCALE_FORMAT_NONE
-                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleStrideInBytes = 0
-                triangleInput.triangleArray.displacementMicromap.triangleFlagsStrideInBytes = 0
-                triangleInput.triangleArray.displacementMicromap.numDisplacementMicromapUsageCounts = 0
-                triangleInput.triangleArray.displacementMicromap.displacementMicromapUsageCounts = nil
+//                let points = triangle.getWorldPoints()
+//                print(points)
+//                typealias PointTuple = (Point, Point, Point)
+//                let pointBuffer = try CudaBuffer<PointTuple>()
+//                try pointBuffer.upload(points)
+//
+//                typealias IndexTuple = (Int32, Int32, Int32)
+//                let indices: IndexTuple = (0, 1, 2)
+//                let indexBuffer = try CudaBuffer<IndexTuple>()
+//                try indexBuffer.upload(indices)
+//
+//                triangleInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES
+//
+//                deviceVertices = pointBuffer.devicePointer
+//                //let deviceIndices = indexBuffer.devicePointer
+//
+//                triangleInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3
+//                triangleInput.triangleArray.vertexStrideInBytes = UInt32(MemoryLayout<PointTuple>.stride)
+//                triangleInput.triangleArray.numVertices = 3
+//                triangleInput.triangleArray.vertexBuffers = withUnsafePointer(to: &deviceVertices) {
+//                        return $0
+//                }
+//
+//                triangleInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3
+//                triangleInput.triangleArray.indexStrideInBytes = UInt32(MemoryLayout<IndexTuple>.stride)
+//                triangleInput.triangleArray.numIndexTriplets = 3
+//                //triangleInput.triangleArray.indexBuffer = deviceIndices
+//                triangleInput.triangleArray.indexBuffer = indexBuffer.devicePointer
+//
+//                triangleInput.triangleArray.flags = withUnsafePointer(to: &triangleInputFlags) { $0 }
+//                triangleInput.triangleArray.numSbtRecords = 1
+//                triangleInput.triangleArray.sbtIndexOffsetBuffer = 0
+//                triangleInput.triangleArray.sbtIndexOffsetSizeInBytes = 0
+//                triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0
+//
+//                triangleInput.triangleArray.transformFormat = OPTIX_TRANSFORM_FORMAT_NONE
+//                triangleInput.triangleArray.preTransform = 0
+//
+//                triangleInput.triangleArray.opacityMicromap.indexingMode = OPTIX_OPACITY_MICROMAP_ARRAY_INDEXING_MODE_NONE
+//                triangleInput.triangleArray.opacityMicromap.opacityMicromapArray = 0
+//                triangleInput.triangleArray.opacityMicromap.indexBuffer = 0
+//                triangleInput.triangleArray.opacityMicromap.indexSizeInBytes = 0
+//                triangleInput.triangleArray.opacityMicromap.indexStrideInBytes = 0
+//                triangleInput.triangleArray.opacityMicromap.indexOffset = 0
+//                triangleInput.triangleArray.opacityMicromap.numMicromapUsageCounts = 0
+//                triangleInput.triangleArray.opacityMicromap.micromapUsageCounts = nil
+//
+//                triangleInput.triangleArray.displacementMicromap.indexingMode = OPTIX_DISPLACEMENT_MICROMAP_ARRAY_INDEXING_MODE_NONE
+//                triangleInput.triangleArray.displacementMicromap.displacementMicromapArray = 0
+//                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexBuffer = 0
+//                triangleInput.triangleArray.displacementMicromap.vertexDirectionsBuffer = 0
+//                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleBuffer = 0
+//                triangleInput.triangleArray.displacementMicromap.triangleFlagsBuffer = 0
+//                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexOffset = 0
+//                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexStrideInBytes = 0
+//                triangleInput.triangleArray.displacementMicromap.displacementMicromapIndexSizeInBytes = 0
+//                triangleInput.triangleArray.displacementMicromap.vertexDirectionFormat = OPTIX_DISPLACEMENT_MICROMAP_DIRECTION_FORMAT_NONE
+//                triangleInput.triangleArray.displacementMicromap.vertexDirectionStrideInBytes = 0
+//                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleFormat = OPTIX_DISPLACEMENT_MICROMAP_BIAS_AND_SCALE_FORMAT_NONE
+//                triangleInput.triangleArray.displacementMicromap.vertexBiasAndScaleStrideInBytes = 0
+//                triangleInput.triangleArray.displacementMicromap.triangleFlagsStrideInBytes = 0
+//                triangleInput.triangleArray.displacementMicromap.numDisplacementMicromapUsageCounts = 0
+//                triangleInput.triangleArray.displacementMicromap.displacementMicromapUsageCounts = nil
         }
 
         var deviceVertices: CUdeviceptr = 0
@@ -408,36 +419,36 @@ class Optix {
         var triangleCount = 0
 
         func add(primitives: [Boundable & Intersectable]) throws {
-                //var triangleInput: OptixBuildInput! = nil
-                for primitive in primitives {
-                        switch primitive {
-                        case let geometricPrimitive as GeometricPrimitive:
-                                switch geometricPrimitive.shape {
-                                case let triangle as Triangle:
-                                        // Just one triangle supported right now
-                                        // Just add one triangle for now
-                                        if triangleCount == 0 {
-                                                try add(triangle: triangle)
-                                                triangleCount += 1
-                                        }
-                                default:
-                                        var message = "Unknown shape in geometric primitive: "
-                                        message += "\(geometricPrimitive.shape)"
-                                        warnOnce(message)
-                                }
-                        case let areaLight as AreaLight:
-                                switch areaLight.shape {
-                                case let triangle as Triangle:
-                                        _ = triangle  // TODO
-                                default:
-                                        optixError("Unknown shape in AreaLight.")
-                                }
-                        default:
-                                optixError("Unknown primitive \(primitive).")
-                        }
-                }
-                traversableHandle = try buildAccel()
-                printGreen("Optix: Added \(triangleCount) triangles.")
+        //        //var triangleInput: OptixBuildInput! = nil
+        //        for primitive in primitives {
+        //                switch primitive {
+        //                case let geometricPrimitive as GeometricPrimitive:
+        //                        switch geometricPrimitive.shape {
+        //                        case let triangle as Triangle:
+        //                                // Just one triangle supported right now
+        //                                // Just add one triangle for now
+        //                                if triangleCount == 0 {
+        //                                        try add(triangle: triangle)
+        //                                        triangleCount += 1
+        //                                }
+        //                        default:
+        //                                var message = "Unknown shape in geometric primitive: "
+        //                                message += "\(geometricPrimitive.shape)"
+        //                                warnOnce(message)
+        //                        }
+        //                case let areaLight as AreaLight:
+        //                        switch areaLight.shape {
+        //                        case let triangle as Triangle:
+        //                                _ = triangle  // TODO
+        //                        default:
+        //                                optixError("Unknown shape in AreaLight.")
+        //                        }
+        //                default:
+        //                        optixError("Unknown primitive \(primitive).")
+        //                }
+        //        }
+        //        traversableHandle = try buildAccel()
+        //        printGreen("Optix: Added \(triangleCount) triangles.")
         }
 
         var traversableHandle: OptixTraversableHandle = 0
@@ -706,24 +717,24 @@ class Optix {
         }
 
         func render(ray: Ray) throws {
-                //printGreen("Optix render.")
-                try buildLaunch(ray: ray)
-                launchParameters.frameId += 1
-                let result = optixLaunch(
-                        pipeline,
-                        stream,
-                        launchParametersBuffer.devicePointer,
-                        launchParametersBuffer.sizeInBytes,
-                        &shaderBindingTable,
-                        UInt32(pixelBlock.width),
-                        UInt32(pixelBlock.height),
-                        UInt32(pixelBlock.depth))
-                try optixCheck(result)
-                //printGreen("Optix render ok.")
-                cudaDeviceSynchronize()
-                let error = cudaGetLastError()
-                try cudaCheck(error)
-                try printColors()
+        //        //printGreen("Optix render.")
+        //        try buildLaunch(ray: ray)
+        //        launchParameters.frameId += 1
+        //        let result = optixLaunch(
+        //                pipeline,
+        //                stream,
+        //                launchParametersBuffer.devicePointer,
+        //                launchParametersBuffer.sizeInBytes,
+        //                &shaderBindingTable,
+        //                UInt32(pixelBlock.width),
+        //                UInt32(pixelBlock.height),
+        //                UInt32(pixelBlock.depth))
+        //        try optixCheck(result)
+        //        //printGreen("Optix render ok.")
+        //        cudaDeviceSynchronize()
+        //        let error = cudaGetLastError()
+        //        try cudaCheck(error)
+        //        try printColors()
         }
 
         func printColors() throws {
@@ -820,3 +831,8 @@ class Optix {
         typealias PixelBlock = SimplePixel256
         var pixelBlock = PixelBlock()
 }
+
+func optixBla() {
+        gonzoBla()
+}
+
