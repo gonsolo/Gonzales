@@ -160,9 +160,8 @@ OPTIX_OUTPUT = ../../.build/kernels.optixir
 NVCC_OPTIONS = -I../cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
 optix:
 	@cd Sources/optix; nvcc $(NVCC_OPTIONS) kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
-
-	cd Sources/cudaBridge; nvcc --ptx -Iinclude -I../../External/Optix/7.7.0/include/ devicePrograms.cu; cd -
-	cd Sources/cudaBridge; bin2c -c --padd 0 --type char --name embedded_ptx_code devicePrograms.ptx > embedded.c; cd -
+	@cd Sources/cudaBridge; nvcc --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
+	@cd Sources/cudaBridge; bin2c -c --padd 0 --type char --name embedded_ptx_code devicePrograms.ptx > embedded.c; cd - > /dev/null
 r: release
 release: optix
 	@$(BUILD_RELEASE)
