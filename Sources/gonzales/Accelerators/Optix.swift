@@ -430,12 +430,8 @@ class Optix {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
-                                        // Just one triangle supported right now
-                                        // Just add one triangle for now
-                                        if triangleCount == 0 {
                                                 try add(triangle: triangle)
                                                 triangleCount += 1
-                                        }
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
