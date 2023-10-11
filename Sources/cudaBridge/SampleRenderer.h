@@ -42,6 +42,8 @@ namespace osc {
     
     //! add aligned cube aith front-lower-left corner and size
     void addCube(const vec3f &center, const vec3f &size);
+
+    void addTriangle(float, float, float, float, float, float, float, float, float);
     
     std::vector<vec3f> vertex;
     std::vector<vec3i> index;

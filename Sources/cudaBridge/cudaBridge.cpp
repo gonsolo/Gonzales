@@ -16,13 +16,18 @@ void contextLogCallback(unsigned int level, const char *tag, const char *message
       fprintf( stderr, "[%2d][%12s]: %s\n", (int)level, tag, message );
 }
 
-void gonzoBla() {
-	puts("Bla\n");
+void gonzoBla(
+	float ax, float ay, float az,
+	float bx, float by, float bz,
+	float cx, float cy, float cz)
+{
 
+	puts("Bla!\n");
 	try {
 		osc::TriangleMesh model;
-		model.addCube(osc::vec3f(0.f,-1.5f,0.f),osc::vec3f(10.f,.1f,10.f));
-		model.addCube(osc::vec3f(0.f,0.f,0.f),osc::vec3f(2.f,2.f,2.f));
+		//model.addCube(osc::vec3f(0.f,-1.5f,0.f),osc::vec3f(10.f,.1f,10.f));
+		//model.addCube(osc::vec3f(0.f,0.f,0.f),osc::vec3f(2.f,2.f,2.f));
+		model.addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);
 		osc::Camera camera = {/*from*/osc::vec3f(-10.f,2.f,-12.f),
                           /* at */osc::vec3f(0.f,0.f,0.f),
                           /* up */osc::vec3f(0.f,1.f,0.f) };

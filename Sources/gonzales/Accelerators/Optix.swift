@@ -270,8 +270,13 @@ class Optix {
 
         private func add(triangle: Triangle) throws {
 
-//                let points = triangle.getWorldPoints()
-//                print(points)
+                let points = triangle.getWorldPoints()
+                print(points)
+                gonzoBla(
+                        points.0.x, points.0.y, points.0.z,
+                        points.1.x, points.1.y, points.1.z,
+                        points.2.x, points.2.y, points.2.z)
+
 //                typealias PointTuple = (Point, Point, Point)
 //                let pointBuffer = try CudaBuffer<PointTuple>()
 //                try pointBuffer.upload(points)
@@ -419,34 +424,34 @@ class Optix {
         var triangleCount = 0
 
         func add(primitives: [Boundable & Intersectable]) throws {
-        //        //var triangleInput: OptixBuildInput! = nil
-        //        for primitive in primitives {
-        //                switch primitive {
-        //                case let geometricPrimitive as GeometricPrimitive:
-        //                        switch geometricPrimitive.shape {
-        //                        case let triangle as Triangle:
-        //                                // Just one triangle supported right now
-        //                                // Just add one triangle for now
-        //                                if triangleCount == 0 {
-        //                                        try add(triangle: triangle)
-        //                                        triangleCount += 1
-        //                                }
-        //                        default:
-        //                                var message = "Unknown shape in geometric primitive: "
-        //                                message += "\(geometricPrimitive.shape)"
-        //                                warnOnce(message)
-        //                        }
-        //                case let areaLight as AreaLight:
-        //                        switch areaLight.shape {
-        //                        case let triangle as Triangle:
-        //                                _ = triangle  // TODO
-        //                        default:
-        //                                optixError("Unknown shape in AreaLight.")
-        //                        }
-        //                default:
-        //                        optixError("Unknown primitive \(primitive).")
-        //                }
-        //        }
+                //var triangleInput: OptixBuildInput! = nil
+                for primitive in primitives {
+                        switch primitive {
+                        case let geometricPrimitive as GeometricPrimitive:
+                                switch geometricPrimitive.shape {
+                                case let triangle as Triangle:
+                                        // Just one triangle supported right now
+                                        // Just add one triangle for now
+                                        if triangleCount == 0 {
+                                                try add(triangle: triangle)
+                                                triangleCount += 1
+                                        }
+                                default:
+                                        var message = "Unknown shape in geometric primitive: "
+                                        message += "\(geometricPrimitive.shape)"
+                                        warnOnce(message)
+                                }
+                        case let areaLight as AreaLight:
+                                switch areaLight.shape {
+                                case let triangle as Triangle:
+                                        _ = triangle  // TODO
+                                default:
+                                        optixError("Unknown shape in AreaLight.")
+                                }
+                        default:
+                                optixError("Unknown primitive \(primitive).")
+                        }
+                }
         //        traversableHandle = try buildAccel()
         //        printGreen("Optix: Added \(triangleCount) triangles.")
         }
@@ -830,9 +835,5 @@ class Optix {
 
         typealias PixelBlock = SimplePixel256
         var pixelBlock = PixelBlock()
-}
-
-func optixBla() {
-        gonzoBla()
 }
 
