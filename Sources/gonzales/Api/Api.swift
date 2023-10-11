@@ -21,7 +21,7 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
         case "optix":
                 let optix = try Optix()
                 try optix.add(primitives: primitives)
-                //try optix.render()
+                optix.renderPpm()
                 let accelerator = Accelerator.optix(optix)
                 return accelerator
 

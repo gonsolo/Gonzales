@@ -272,7 +272,7 @@ class Optix {
 
                 let points = triangle.getWorldPoints()
                 print(points)
-                gonzoBla(
+                gonzoAdd(
                         points.0.x, points.0.y, points.0.z,
                         points.1.x, points.1.y, points.1.z,
                         points.2.x, points.2.y, points.2.z)
@@ -719,6 +719,10 @@ class Optix {
                 shaderBindingTable.hitgroupRecordStrideInBytes = UInt32(MemoryLayout<HitgroupRecord>.stride)
                 shaderBindingTable.hitgroupRecordCount = 1
                 printGreen("Optix shader binding table ok.")
+        }
+
+        func renderPpm() {
+                gonzoRender()
         }
 
         func render(ray: Ray) throws {
