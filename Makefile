@@ -155,11 +155,14 @@ em: editMakefile
 editMakefile:
 	@vi Makefile
 
-OPTIX_INCLUDE_DIR = ../../External/Optix/7.7.0/include
-OPTIX_OUTPUT = ../../.build/kernels.optixir
-NVCC_OPTIONS = -I../cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
-optix: Sources/cudaBridge/embedded.c
-	@cd Sources/optix; nvcc $(NVCC_OPTIONS) kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
+OPTIX_INCLUDE_DIR = External/Optix/7.7.0/include
+OPTIX_OUTPUT = .build/kernels.optixir
+NVCC_OPTIONS = -ISources/cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
+
+optix: $(OPTIX_OUTPUT) Sources/cudaBridge/embedded.c
+
+$(OPTIX_OUTPUT): Sources/optix/kernels.cu
+	@nvcc $(NVCC_OPTIONS) Sources/optix/kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
 
 Sources/cudaBridge/devicePrograms.ptx: Sources/cudaBridge/devicePrograms.cu
 	@cd Sources/cudaBridge; nvcc --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
