@@ -109,7 +109,6 @@ namespace osc {
                                           indices[3*i+2]));
   }
     
-  
   /*! constructor - performs all setup, including initializing
     optix, creates module, pipeline, programs, SBT, etc. */
   SampleRenderer::SampleRenderer(const TriangleMesh &model)

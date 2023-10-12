@@ -718,7 +718,9 @@ class Optix {
         }
 
         func renderPpm() {
+                gonzoSetup()
                 gonzoRender()
+                gonzoWrite()
         }
 
         func render(ray: Ray) throws {

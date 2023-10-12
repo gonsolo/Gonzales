@@ -34,20 +34,43 @@ void gonzoAdd(
 	}
 }
 
+osc::SampleRenderer* sampleRenderer;
+std::vector<uint32_t> pixels;
+
+void gonzoSetup() {
+	puts("gonzoSetup!\n");
+	try {
+		osc::Camera camera = {
+			/*from*/osc::vec3f(-10.f,2.f,-12.f),
+                        /* at */osc::vec3f(0.f,0.f,0.f),
+                        /* up */osc::vec3f(0.f,1.f,0.f) };
+		//osc::SampleRenderer sampleRenderer(model);
+		sampleRenderer = new osc::SampleRenderer(model);
+		sampleRenderer->setCamera(camera);
+		osc::vec2i newSize {32, 32};
+		sampleRenderer->resize(newSize);
+		pixels.resize(newSize.x * newSize.y);
+	} catch (std::runtime_error& e) {
+		std::cout << "FATAL ERROR: " << e.what() << std::endl;
+		exit(1);
+	}
+}
+
 void gonzoRender() {
 	puts("gonzoRender!\n");
 	try {
-		osc::Camera camera = {/*from*/osc::vec3f(-10.f,2.f,-12.f),
-                          /* at */osc::vec3f(0.f,0.f,0.f),
-                          /* up */osc::vec3f(0.f,1.f,0.f) };
-		osc::SampleRenderer sampleRenderer(model);
-		sampleRenderer.setCamera(camera);
-		osc::vec2i newSize {32, 32};
-		std::vector<uint32_t> pixels;
-		sampleRenderer.resize(newSize);
-		pixels.resize(newSize.x * newSize.y);
-		sampleRenderer.render();
-		sampleRenderer.downloadPixels(pixels.data());
+		sampleRenderer->render();
+
+	} catch (std::runtime_error& e) {
+		std::cout << "FATAL ERROR: " << e.what() << std::endl;
+		exit(1);
+	}
+}
+
+void gonzoWrite() {
+	puts("gonzoRender!\n");
+	try {
+		sampleRenderer->downloadPixels(pixels.data());
 		std::ofstream bla("bla.ppm");
 		bla << "P3" << std::endl;
 		bla << "32 32 " << std::endl;
@@ -62,6 +85,7 @@ void gonzoRender() {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
 	}
+
 }
 
 #ifdef __cplusplus
