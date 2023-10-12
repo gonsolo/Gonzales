@@ -575,6 +575,9 @@ namespace osc {
     launchParams.camera.vertical
       = cosFovy * normalize(cross(launchParams.camera.horizontal,
                                   launchParams.camera.direction));
+
+    launchParams.camera.useRay = camera.useRay;
+    launchParams.camera.rayDirection = camera.rayDirection;
   }
   
   /*! resize frame buffer to given resolution */

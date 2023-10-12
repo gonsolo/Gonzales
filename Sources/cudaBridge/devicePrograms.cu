@@ -115,11 +115,15 @@ namespace osc {
     const vec2f screen(vec2f(ix+.5f,iy+.5f)
                        / vec2f(optixLaunchParams.frame.size));
     
-    // generate ray direction
-    vec3f rayDir = normalize(camera.direction
+    vec3f rayDir;
+    if (camera.useRay) {
+	rayDir = camera.rayDirection;
+    } else {
+	// generate ray direction
+	rayDir = normalize(camera.direction
                              + (screen.x - 0.5f) * camera.horizontal
                              + (screen.y - 0.5f) * camera.vertical);
-
+    }
     optixTrace(optixLaunchParams.traversable,
                camera.position,
                rayDir,

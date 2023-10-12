@@ -722,7 +722,11 @@ class Optix {
         }
 
         func optixRender() {
-                gonzoRender()
+                gonzoRender(false, 0, 0, 0, 0, 0, 0)
+        }
+
+        func optixRender(ray: Ray) {
+                gonzoRender(true, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z)
         }
 
         func optixWrite() {
@@ -730,6 +734,9 @@ class Optix {
         }
 
         func render(ray: Ray) throws {
+
+                optixRender(ray: ray);
+
         //        //printGreen("Optix render.")
         //        try buildLaunch(ray: ray)
         //        launchParameters.frameId += 1

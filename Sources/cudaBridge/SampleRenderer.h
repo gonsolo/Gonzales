@@ -31,6 +31,9 @@ namespace osc {
     vec3f at;
     /*! general up-vector */
     vec3f up;
+
+    bool useRay;
+    vec3f rayDirection;
   };
   
   /*! a simple indexed triangle mesh that our sample renderer will

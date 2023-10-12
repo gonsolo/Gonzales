@@ -34,6 +34,9 @@ namespace osc {
       vec3f direction;
       vec3f horizontal;
       vec3f vertical;
+
+      bool useRay;
+      vec3f rayDirection;
     } camera;
 
     OptixTraversableHandle traversable;

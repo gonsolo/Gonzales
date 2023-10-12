@@ -164,7 +164,7 @@ optix: $(OPTIX_OUTPUT) Sources/cudaBridge/embedded.c
 $(OPTIX_OUTPUT): Sources/optix/kernels.cu
 	@nvcc $(NVCC_OPTIONS) Sources/optix/kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
 
-Sources/cudaBridge/devicePrograms.ptx: Sources/cudaBridge/devicePrograms.cu
+Sources/cudaBridge/devicePrograms.ptx: Sources/cudaBridge/devicePrograms.cu Sources/cudaBridge/LaunchParams.h
 	@cd Sources/cudaBridge; nvcc --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
 
 Sources/cudaBridge/embedded.c: Sources/cudaBridge/devicePrograms.ptx
