@@ -717,9 +717,15 @@ class Optix {
                 printGreen("Optix shader binding table ok.")
         }
 
-        func renderPpm() {
+        func optixSetup() {
                 gonzoSetup()
+        }
+
+        func optixRender() {
                 gonzoRender()
+        }
+
+        func optixWrite() {
                 gonzoWrite()
         }
 

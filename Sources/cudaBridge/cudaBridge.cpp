@@ -68,7 +68,7 @@ void gonzoRender() {
 }
 
 void gonzoWrite() {
-	puts("gonzoRender!\n");
+	puts("gonzoWrite!\n");
 	try {
 		sampleRenderer->downloadPixels(pixels.data());
 		std::ofstream bla("bla.ppm");
@@ -85,7 +85,6 @@ void gonzoWrite() {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
 	}
-
 }
 
 #ifdef __cplusplus
