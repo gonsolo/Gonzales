@@ -17,7 +17,6 @@
 #include "SampleRenderer.h"
 // this include may only appear in a single source file:
 //#include <optix_function_table_definition.h>
-//#include "../../External/Optix/7.7.0/include/optix_function_table_definition.h"
 
 /*! \namespace osc - Optix Siggraph Course */
 namespace osc {
@@ -46,72 +45,14 @@ namespace osc {
   struct __align__( OPTIX_SBT_RECORD_ALIGNMENT ) HitgroupRecord
   {
     __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    // just a dummy value - later examples will use more interesting
-    // data here
-    int objectID;
+    TriangleMeshSBTData data;
   };
 
 
-  //! add aligned cube with front-lower-left corner and size
-  void TriangleMesh::addCube(const vec3f &center, const vec3f &size)
-  {
-    affine3f xfm;
-    xfm.p = center - 0.5f*size;
-    xfm.l.vx = vec3f(size.x,0.f,0.f);
-    xfm.l.vy = vec3f(0.f,size.y,0.f);
-    xfm.l.vz = vec3f(0.f,0.f,size.z);
-    addUnitCube(xfm);
-  }
-
-  void TriangleMesh::addTriangle(float ax, float ay, float az, float bx, float by, float bz, float cx, float cy, float cz)
-  {
-    int firstVertexID = (int)vertex.size();
-    affine3f xfm;
-    xfm.p = vec3f(0.f, 0.f, 0.f);
-    xfm.l.vx = vec3f(1.f ,0.f, 0.f);
-    xfm.l.vy = vec3f(0.f, 1.f, 0.f);
-    xfm.l.vz = vec3f(0.f, 0.f, 1.f);
-    vertex.push_back(xfmPoint(xfm, vec3f( ax, ay, az)));
-    vertex.push_back(xfmPoint(xfm, vec3f( bx, by, bz)));
-    vertex.push_back(xfmPoint(xfm, vec3f( cx, cy, cz)));
-
-    int indices[] = {0, 1, 2};
-    index.push_back(firstVertexID+vec3i(indices[0],
-                                        indices[1],
-                                        indices[2]));
-  }
-  
-  /*! add a unit cube (subject to given xfm matrix) to the current
-      triangleMesh */
-  void TriangleMesh::addUnitCube(const affine3f &xfm)
-  {
-    int firstVertexID = (int)vertex.size();
-    vertex.push_back(xfmPoint(xfm,vec3f(0.f,0.f,0.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(1.f,0.f,0.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(0.f,1.f,0.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(1.f,1.f,0.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(0.f,0.f,1.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(1.f,0.f,1.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(0.f,1.f,1.f)));
-    vertex.push_back(xfmPoint(xfm,vec3f(1.f,1.f,1.f)));
-
-
-    int indices[] = {0,1,3, 2,3,0,
-                     5,7,6, 5,6,4,
-                     0,4,5, 0,5,1,
-                     2,3,7, 2,7,6,
-                     1,5,7, 1,7,3,
-                     4,0,2, 4,2,6
-                     };
-    for (int i=0;i<12;i++)
-      index.push_back(firstVertexID+vec3i(indices[3*i+0],
-                                          indices[3*i+1],
-                                          indices[3*i+2]));
-  }
-    
   /*! constructor - performs all setup, including initializing
     optix, creates module, pipeline, programs, SBT, etc. */
-  SampleRenderer::SampleRenderer(const TriangleMesh &model)
+  SampleRenderer::SampleRenderer(const Model *model)
+    : model(model)
   {
     initOptix();
       
@@ -128,7 +69,7 @@ namespace osc {
     std::cout << "#osc: creating hitgroup programs ..." << std::endl;
     createHitgroupPrograms();
 
-    launchParams.traversable = buildAccel(model);
+    launchParams.traversable = buildAccel();
     
     std::cout << "#osc: setting up optix pipeline ..." << std::endl;
     createPipeline();
@@ -144,48 +85,63 @@ namespace osc {
     std::cout << GDT_TERMINAL_DEFAULT;
   }
 
-  OptixTraversableHandle SampleRenderer::buildAccel(const TriangleMesh &model)
+  OptixTraversableHandle SampleRenderer::buildAccel()
   {
-    // upload the model to the device: the builder
-    vertexBuffer.alloc_and_upload(model.vertex);
-    indexBuffer.alloc_and_upload(model.index);
+    const int numMeshes = (int)model->meshes.size();
+    vertexBuffer.resize(numMeshes);
+    normalBuffer.resize(numMeshes);
+    texcoordBuffer.resize(numMeshes);
+    indexBuffer.resize(numMeshes);
     
     OptixTraversableHandle asHandle { 0 };
     
     // ==================================================================
     // triangle inputs
     // ==================================================================
-    OptixBuildInput triangleInput = {};
-    triangleInput.type
-      = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
+    std::vector<OptixBuildInput> triangleInput(numMeshes);
+    std::vector<CUdeviceptr> d_vertices(numMeshes);
+    std::vector<CUdeviceptr> d_indices(numMeshes);
+    std::vector<uint32_t> triangleInputFlags(numMeshes);
 
-    // create local variables, because we need a *pointer* to the
-    // device pointers
-    CUdeviceptr d_vertices = vertexBuffer.d_pointer();
-    CUdeviceptr d_indices  = indexBuffer.d_pointer();
-      
-    triangleInput.triangleArray.vertexFormat        = OPTIX_VERTEX_FORMAT_FLOAT3;
-    triangleInput.triangleArray.vertexStrideInBytes = sizeof(vec3f);
-    triangleInput.triangleArray.numVertices         = (int)model.vertex.size();
-    triangleInput.triangleArray.vertexBuffers       = &d_vertices;
-    
-    triangleInput.triangleArray.indexFormat         = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
-    triangleInput.triangleArray.indexStrideInBytes  = sizeof(vec3i);
-    triangleInput.triangleArray.numIndexTriplets    = (int)model.index.size();
-    triangleInput.triangleArray.indexBuffer         = d_indices;
-    
-    uint32_t triangleInputFlags[1] = { 0 };
-    
-    // in this example we have one SBT entry, and no per-primitive
-    // materials:
-    triangleInput.triangleArray.flags               = triangleInputFlags;
-    triangleInput.triangleArray.numSbtRecords               = 1;
-    triangleInput.triangleArray.sbtIndexOffsetBuffer        = 0; 
-    triangleInput.triangleArray.sbtIndexOffsetSizeInBytes   = 0; 
-    triangleInput.triangleArray.sbtIndexOffsetStrideInBytes = 0; 
-      
-    std::cout << "pret: " << triangleInput.triangleArray.opacityMicromap.indexingMode << std::endl;
+    for (int meshID=0;meshID<numMeshes;meshID++) {
+      // upload the model to the device: the builder
+      TriangleMesh &mesh = *model->meshes[meshID];
+      vertexBuffer[meshID].alloc_and_upload(mesh.vertex);
+      indexBuffer[meshID].alloc_and_upload(mesh.index);
+      if (!mesh.normal.empty())
+        normalBuffer[meshID].alloc_and_upload(mesh.normal);
+      if (!mesh.texcoord.empty())
+        texcoordBuffer[meshID].alloc_and_upload(mesh.texcoord);
 
+      triangleInput[meshID] = {};
+      triangleInput[meshID].type
+        = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
+
+      // create local variables, because we need a *pointer* to the
+      // device pointers
+      d_vertices[meshID] = vertexBuffer[meshID].d_pointer();
+      d_indices[meshID]  = indexBuffer[meshID].d_pointer();
+      
+      triangleInput[meshID].triangleArray.vertexFormat        = OPTIX_VERTEX_FORMAT_FLOAT3;
+      triangleInput[meshID].triangleArray.vertexStrideInBytes = sizeof(vec3f);
+      triangleInput[meshID].triangleArray.numVertices         = (int)mesh.vertex.size();
+      triangleInput[meshID].triangleArray.vertexBuffers       = &d_vertices[meshID];
+    
+      triangleInput[meshID].triangleArray.indexFormat         = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
+      triangleInput[meshID].triangleArray.indexStrideInBytes  = sizeof(vec3i);
+      triangleInput[meshID].triangleArray.numIndexTriplets    = (int)mesh.index.size();
+      triangleInput[meshID].triangleArray.indexBuffer         = d_indices[meshID];
+    
+      triangleInputFlags[meshID] = 0 ;
+    
+      // in this example we have one SBT entry, and no per-primitive
+      // materials:
+      triangleInput[meshID].triangleArray.flags               = &triangleInputFlags[meshID];
+      triangleInput[meshID].triangleArray.numSbtRecords               = 1;
+      triangleInput[meshID].triangleArray.sbtIndexOffsetBuffer        = 0; 
+      triangleInput[meshID].triangleArray.sbtIndexOffsetSizeInBytes   = 0; 
+      triangleInput[meshID].triangleArray.sbtIndexOffsetStrideInBytes = 0; 
+    }
     // ==================================================================
     // BLAS setup
     // ==================================================================
@@ -201,8 +157,8 @@ namespace osc {
     OPTIX_CHECK(optixAccelComputeMemoryUsage
                 (optixContext,
                  &accelOptions,
-                 &triangleInput,
-                 1,  // num_build_inputs
+                 triangleInput.data(),
+                 (int)numMeshes,  // num_build_inputs
                  &blasBufferSizes
                  ));
     
@@ -230,8 +186,8 @@ namespace osc {
     OPTIX_CHECK(optixAccelBuild(optixContext,
                                 /* stream */0,
                                 &accelOptions,
-                                &triangleInput,
-                                1,  
+                                triangleInput.data(),
+                                (int)numMeshes,
                                 tempBuffer.d_pointer(),
                                 tempBuffer.sizeInBytes,
                                 
@@ -249,8 +205,7 @@ namespace osc {
     // ==================================================================
     uint64_t compactedSize;
     compactedSizeBuffer.download(&compactedSize,1);
-    std::cout << "gonzo compactedSize: " << compactedSize << std::endl;
-
+    
     asBuffer.alloc(compactedSize);
     OPTIX_CHECK(optixAccelCompact(optixContext,
                                   /*stream:*/0,
@@ -266,7 +221,7 @@ namespace osc {
     outputBuffer.free(); // << the UNcompacted, temporary output buffer
     tempBuffer.free();
     compactedSizeBuffer.free();
-
+    
     return asHandle;
   }
   
@@ -303,7 +258,7 @@ namespace osc {
   }
 
   /*! creates and configures a optix device context (in this simple
-      example, only for the primary GPU device) */
+    example, only for the primary GPU device) */
   void SampleRenderer::createContext()
   {
     // for this sample, do everything on one device
@@ -326,8 +281,8 @@ namespace osc {
 
 
   /*! creates the module that contains all the programs we are going
-      to use. in this simple example, we use a single module from a
-      single .cu file, using a single embedded ptx string */
+    to use. in this simple example, we use a single module from a
+    single .cu file, using a single embedded ptx string */
   void SampleRenderer::createModule()
   {
     moduleCompileOptions.maxRegisterCount  = 50;
@@ -416,13 +371,13 @@ namespace osc {
   {
     // for this simple example, we set up a single hit group
     hitgroupPGs.resize(1);
-      
+
     OptixProgramGroupOptions pgOptions = {};
     OptixProgramGroupDesc pgDesc    = {};
     pgDesc.kind                     = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    pgDesc.hitgroup.moduleCH            = module;           
+    pgDesc.hitgroup.moduleCH            = module;
     pgDesc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
-    pgDesc.hitgroup.moduleAH            = module;           
+    pgDesc.hitgroup.moduleAH            = module;
     pgDesc.hitgroup.entryFunctionNameAH = "__anyhit__radiance";
 
     char log[2048];
@@ -513,17 +468,25 @@ namespace osc {
     // ------------------------------------------------------------------
     // build hitgroup records
     // ------------------------------------------------------------------
-
-    // we don't actually have any objects in this example, but let's
-    // create a dummy one so the SBT doesn't have any null pointers
-    // (which the sanity checks in compilation would complain about)
-    int numObjects = 1;
+    int numObjects = (int)model->meshes.size();
     std::vector<HitgroupRecord> hitgroupRecords;
-    for (int i=0;i<numObjects;i++) {
-      int objectType = 0;
+    for (int meshID=0;meshID<numObjects;meshID++) {
+      auto mesh = model->meshes[meshID];
+      
       HitgroupRecord rec;
-      OPTIX_CHECK(optixSbtRecordPackHeader(hitgroupPGs[objectType],&rec));
-      rec.objectID = i;
+      // all meshes use the same code, so all same hit group
+      OPTIX_CHECK(optixSbtRecordPackHeader(hitgroupPGs[0],&rec));
+      rec.data.color   = mesh->diffuse;
+      if (mesh->diffuseTextureID >= 0) {
+        rec.data.hasTexture = true;
+        rec.data.texture    = textureObjects[mesh->diffuseTextureID];
+      } else {
+        rec.data.hasTexture = false;
+      }
+      rec.data.index    = (vec3i*)indexBuffer[meshID].d_pointer();
+      rec.data.vertex   = (vec3f*)vertexBuffer[meshID].d_pointer();
+      rec.data.normal   = (vec3f*)normalBuffer[meshID].d_pointer();
+      rec.data.texcoord = (vec2f*)texcoordBuffer[meshID].d_pointer();
       hitgroupRecords.push_back(rec);
     }
     hitgroupRecordsBuffer.alloc_and_upload(hitgroupRecords);
@@ -575,9 +538,6 @@ namespace osc {
     launchParams.camera.vertical
       = cosFovy * normalize(cross(launchParams.camera.horizontal,
                                   launchParams.camera.direction));
-
-    launchParams.camera.useRay = camera.useRay;
-    launchParams.camera.rayDirection = camera.rayDirection;
   }
   
   /*! resize frame buffer to given resolution */

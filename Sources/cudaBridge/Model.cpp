@@ -14,39 +14,20 @@
 // limitations under the License.                                           //
 // ======================================================================== //
 
-#pragma once
+#include "Model.h"
+#define TINYOBJLOADER_IMPLEMENTATION
+//#include "3rdParty/tiny_obj_loader.h"
 
-#include "gdt/math/vec.h"
-#include "optix7.h"
+#define STB_IMAGE_IMPLEMENTATION
+//#include "3rdParty/stb_image.h"
 
+//std
+#include <set>
+
+/*! \namespace osc - Optix Siggraph Course */
 namespace osc {
-  using namespace gdt;
-
-  struct TriangleMeshSBTData {
-    vec3f  color;
-    vec3f *vertex;
-    vec3f *normal;
-    vec2f *texcoord;
-    vec3i *index;
-    bool                hasTexture;
-    cudaTextureObject_t texture;
-  };
   
-  struct LaunchParams
-  {
-    struct {
-      uint32_t *colorBuffer;
-      vec2i     size;
-    } frame;
+
+
     
-    struct {
-      vec3f position;
-      vec3f direction;
-      vec3f horizontal;
-      vec3f vertical;
-    } camera;
-
-    OptixTraversableHandle traversable;
-  };
-
-} // ::osc
+}

@@ -16,7 +16,8 @@ void contextLogCallback(unsigned int level, const char *tag, const char *message
       fprintf( stderr, "[%2d][%12s]: %s\n", (int)level, tag, message );
 }
 
-osc::TriangleMesh model;
+osc::TriangleMesh triangleMesh;
+osc::Model model;
 
 void gonzoAdd(
 	float ax, float ay, float az,
@@ -27,7 +28,9 @@ void gonzoAdd(
 	try {
 		//model.addCube(osc::vec3f(0.f,-1.5f,0.f),osc::vec3f(10.f,.1f,10.f));
 		//model.addCube(osc::vec3f(0.f,0.f,0.f),osc::vec3f(2.f,2.f,2.f));
-		model.addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);
+
+		triangleMesh.addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);
+		model.meshes.push_back(&triangleMesh);
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -40,7 +43,7 @@ std::vector<uint32_t> pixels;
 void gonzoSetup() {
 	puts("gonzoSetup!\n");
 	try {
-		sampleRenderer = new osc::SampleRenderer(model);
+		sampleRenderer = new osc::SampleRenderer(&model);
 		osc::vec2i newSize {32, 32};
 		sampleRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
@@ -57,13 +60,13 @@ void gonzoRender(bool useRay, float ox, float oy, float oz, float dx, float dy, 
 			/*from*/osc::vec3f(-10.f,2.f,-12.f),
                         /* at */osc::vec3f(0.f,0.f,0.f),
                         /* up */osc::vec3f(0.f,1.f,0.f),
-			/* useRay */false,
-			/* dir */osc::vec3f(0.f, 0.f, 0.f)
+			// /* useRay */false,
+			// /* dir */osc::vec3f(0.f, 0.f, 0.f)
 		};
 		if (useRay) {
 			camera.from = osc::vec3f(ox, oy, oz);
-			camera.useRay = true;
-			camera.rayDirection = osc::vec3f(dx, dy, dz);
+			//camera.useRay = true;
+			//camera.rayDirection = osc::vec3f(dx, dy, dz);
 			//printf("  rayDirection: %f %f %f!\n", dx, dy, dz);
 		}
 		sampleRenderer->setCamera(camera);

@@ -19,7 +19,7 @@
 // our own classes, partly shared between host and device
 #include "CUDABuffer.h"
 #include "LaunchParams.h"
-#include "gdt/math/AffineSpace.h"
+#include "Model.h"
 
 /*! \namespace osc - Optix Siggraph Course */
 namespace osc {
@@ -31,25 +31,6 @@ namespace osc {
     vec3f at;
     /*! general up-vector */
     vec3f up;
-
-    bool useRay;
-    vec3f rayDirection;
-  };
-  
-  /*! a simple indexed triangle mesh that our sample renderer will
-      render */
-  struct TriangleMesh {
-    /*! add a unit cube (subject to given xfm matrix) to the current
-        triangleMesh */
-    void addUnitCube(const affine3f &xfm);
-    
-    //! add aligned cube aith front-lower-left corner and size
-    void addCube(const vec3f &center, const vec3f &size);
-
-    void addTriangle(float, float, float, float, float, float, float, float, float);
-    
-    std::vector<vec3f> vertex;
-    std::vector<vec3i> index;
   };
   
   /*! a sample OptiX-7 renderer that demonstrates how to set up
@@ -64,7 +45,7 @@ namespace osc {
   public:
     /*! constructor - performs all setup, including initializing
       optix, creates module, pipeline, programs, SBT, etc. */
-    SampleRenderer(const TriangleMesh &model);
+    SampleRenderer(const Model *model);
 
     /*! render one frame */
     void render();
@@ -110,8 +91,10 @@ namespace osc {
     void buildSBT();
 
     /*! build an acceleration structure for the given triangle mesh */
-    OptixTraversableHandle buildAccel(const TriangleMesh &model);
+    OptixTraversableHandle buildAccel();
 
+    /*! upload textures, and create cuda texture objects for them */
+    void createTextures();
   protected:
     /*! @{ CUDA device context and stream that optix pipeline will run
         on, as well as device properties for this device */
@@ -156,11 +139,22 @@ namespace osc {
     Camera lastSetCamera;
     
     /*! the model we are going to trace rays against */
-    const TriangleMesh model;
-    CUDABuffer vertexBuffer;
-    CUDABuffer indexBuffer;
+    const Model *model;
+    
+    /*! @{ one buffer per input mesh */
+    std::vector<CUDABuffer> vertexBuffer;
+    std::vector<CUDABuffer> normalBuffer;
+    std::vector<CUDABuffer> texcoordBuffer;
+    std::vector<CUDABuffer> indexBuffer;
+    /*! @} */
+    
     //! buffer that keeps the (final, compacted) accel structure
     CUDABuffer asBuffer;
+
+    /*! @{ one texture object and pixel array per used texture */
+    std::vector<cudaArray_t>         textureArrays;
+    std::vector<cudaTextureObject_t> textureObjects;
+    /*! @} */
   };
 
 } // ::osc
