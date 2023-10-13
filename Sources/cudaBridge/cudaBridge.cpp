@@ -39,6 +39,7 @@ void gonzoAdd(
 
 osc::SampleRenderer* sampleRenderer;
 std::vector<uint32_t> pixels;
+std::vector<gdt::vec3f> vertices;
 
 void gonzoSetup() {
 	puts("gonzoSetup!\n");
@@ -47,30 +48,39 @@ void gonzoSetup() {
 		osc::vec2i newSize {32, 32};
 		sampleRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
+		vertices.resize(newSize.x * newSize.y);
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
 	}
 }
 
-void gonzoRender(bool useRay, float ox, float oy, float oz, float dx, float dy, float dz) {
+void gonzoRender(
+		bool useRay,
+		float ox, float oy, float oz,
+		float dx, float dy, float dz
+		) {
 	puts("gonzoRender!\n");
 	try {
 		osc::Camera camera = {
 			/*from*/osc::vec3f(-10.f,2.f,-12.f),
                         /* at */osc::vec3f(0.f,0.f,0.f),
                         /* up */osc::vec3f(0.f,1.f,0.f),
-			// /* useRay */false,
-			// /* dir */osc::vec3f(0.f, 0.f, 0.f)
+			/* useRay */false,
+			/* dir */osc::vec3f(0.f, 0.f, 0.f)
 		};
 		if (useRay) {
 			camera.from = osc::vec3f(ox, oy, oz);
-			//camera.useRay = true;
-			//camera.rayDirection = osc::vec3f(dx, dy, dz);
+			camera.useRay = true;
+			camera.rayDirection = osc::vec3f(dx, dy, dz);
 			//printf("  rayDirection: %f %f %f!\n", dx, dy, dz);
 		}
 		sampleRenderer->setCamera(camera);
 		sampleRenderer->render();
+
+		sampleRenderer->downloadPixels(pixels.data(), vertices.data());
+		auto& vertex = vertices[0];
+		//std::cout << "vertex: " << vertex << std::endl;
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -80,7 +90,7 @@ void gonzoRender(bool useRay, float ox, float oy, float oz, float dx, float dy, 
 void gonzoWrite() {
 	puts("gonzoWrite!\n");
 	try {
-		sampleRenderer->downloadPixels(pixels.data());
+		sampleRenderer->downloadPixels(pixels.data(), vertices.data());
 		std::ofstream bla("bla.ppm");
 		bla << "P3" << std::endl;
 		bla << "32 32 " << std::endl;

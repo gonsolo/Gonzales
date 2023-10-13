@@ -538,6 +538,9 @@ namespace osc {
     launchParams.camera.vertical
       = cosFovy * normalize(cross(launchParams.camera.horizontal,
                                   launchParams.camera.direction));
+
+    launchParams.camera.useRay = camera.useRay;
+    launchParams.camera.rayDirection = camera.rayDirection;
   }
   
   /*! resize frame buffer to given resolution */
@@ -548,21 +551,23 @@ namespace osc {
     
     // resize our cuda frame buffer
     colorBuffer.resize(newSize.x*newSize.y*sizeof(uint32_t));
+    outVertexBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
 
     // update the launch parameters that we'll pass to the optix
     // launch:
     launchParams.frame.size  = newSize;
     launchParams.frame.colorBuffer = (uint32_t*)colorBuffer.d_pointer();
+    launchParams.frame.outVertexBuffer = (vec3f*)outVertexBuffer.d_pointer();
 
     // and re-set the camera, since aspect may have changed
     setCamera(lastSetCamera);
   }
 
   /*! download the rendered color buffer */
-  void SampleRenderer::downloadPixels(uint32_t h_pixels[])
+  void SampleRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[])
   {
-    colorBuffer.download(h_pixels,
-                         launchParams.frame.size.x*launchParams.frame.size.y);
+    colorBuffer.download(h_pixels, launchParams.frame.size.x*launchParams.frame.size.y);
+    outVertexBuffer.download(h_vertices, launchParams.frame.size.x*launchParams.frame.size.y);
   }
   
 } // ::osc

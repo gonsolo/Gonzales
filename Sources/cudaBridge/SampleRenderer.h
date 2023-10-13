@@ -31,6 +31,9 @@ namespace osc {
     vec3f at;
     /*! general up-vector */
     vec3f up;
+
+    bool useRay;
+    vec3f rayDirection;
   };
   
   /*! a sample OptiX-7 renderer that demonstrates how to set up
@@ -54,7 +57,7 @@ namespace osc {
     void resize(const vec2i &newSize);
 
     /*! download the rendered color buffer */
-    void downloadPixels(uint32_t h_pixels[]);
+    void downloadPixels(uint32_t h_pixels[], vec3f h_vertices[]);
 
     /*! set camera to render with */
     void setCamera(const Camera &camera);
@@ -134,6 +137,7 @@ namespace osc {
     /*! @} */
 
     CUDABuffer colorBuffer;
+    CUDABuffer outVertexBuffer;
 
     /*! the camera we are to render with. */
     Camera lastSetCamera;

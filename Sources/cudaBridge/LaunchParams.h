@@ -37,6 +37,8 @@ namespace osc {
     struct {
       uint32_t *colorBuffer;
       vec2i     size;
+
+      vec3f *outVertexBuffer;
     } frame;
     
     struct {
@@ -44,6 +46,9 @@ namespace osc {
       vec3f direction;
       vec3f horizontal;
       vec3f vertical;
+
+      bool useRay;
+      vec3f rayDirection;
     } camera;
 
     OptixTraversableHandle traversable;
