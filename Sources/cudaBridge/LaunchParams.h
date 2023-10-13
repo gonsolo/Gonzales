@@ -40,6 +40,7 @@ namespace osc {
 
       vec3f *outVertexBuffer;
       vec3f *outNormalBuffer;
+      int* intersected;
     } frame;
     
     struct {

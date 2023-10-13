@@ -58,6 +58,7 @@ namespace osc {
   struct PerRayData {
     vec3f intersectionPoint;
     vec3f intersectionNormal;
+    int intersected = 0;
   };
 
   //------------------------------------------------------------------------------
@@ -133,6 +134,7 @@ namespace osc {
     PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
     prd.intersectionPoint = P;
     prd.intersectionNormal = N;
+    prd.intersected = 1;
     //printf("P: %f %f %f\n", P.x, P.y, P.z);
   }
   
@@ -154,6 +156,7 @@ namespace osc {
     //vec3f &prd = *(vec3f*)getPRD<vec3f>();
     PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
     prd.intersectionPoint = vec3f(1.f);
+    prd.intersected = 0;
   }
 
   //------------------------------------------------------------------------------
@@ -170,7 +173,7 @@ namespace osc {
     // our per-ray data for this example. what we initialize it to
     // won't matter, since this value will be overwritten by either
     // the miss or hit program, anyway
-    PerRayData perRayData = { vec3f(0.f) };
+    PerRayData perRayData = { vec3f(0.f), vec3f(0.f), false };
 
     // the values we store the PRD pointer in:
     uint32_t u0, u1;
@@ -191,6 +194,7 @@ namespace osc {
                              + (screen.y - 0.5f) * camera.vertical);
 	tmax = 1e20f;
     }
+
     optixTrace(optixLaunchParams.traversable,
                camera.position,
                rayDir,
@@ -218,5 +222,6 @@ namespace osc {
     optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
     optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.intersectionPoint;
     optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;
+    optixLaunchParams.frame.intersected[0] = perRayData.intersected;
   }
 } // ::osc
