@@ -58,7 +58,7 @@ namespace osc {
     void resize(const vec2i &newSize);
 
     /*! download the rendered color buffer */
-    void downloadPixels(uint32_t h_pixels[], vec3f h_vertices[]);
+    void downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[]);
 
     /*! set camera to render with */
     void setCamera(const Camera &camera);
@@ -139,6 +139,7 @@ namespace osc {
 
     CUDABuffer colorBuffer;
     CUDABuffer outVertexBuffer;
+    CUDABuffer outNormalBuffer;
 
     /*! the camera we are to render with. */
     Camera lastSetCamera;

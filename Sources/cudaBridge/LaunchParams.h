@@ -39,6 +39,7 @@ namespace osc {
       vec2i     size;
 
       vec3f *outVertexBuffer;
+      vec3f *outNormalBuffer;
     } frame;
     
     struct {

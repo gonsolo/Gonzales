@@ -40,6 +40,7 @@ void gonzoAdd(
 osc::SampleRenderer* sampleRenderer;
 std::vector<uint32_t> pixels;
 std::vector<gdt::vec3f> vertices;
+std::vector<gdt::vec3f> normals;
 
 void gonzoSetup() {
 	puts("gonzoSetup!\n");
@@ -49,6 +50,7 @@ void gonzoSetup() {
 		sampleRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
 		vertices.resize(newSize.x * newSize.y);
+		normals.resize(newSize.x * newSize.y);
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -60,7 +62,8 @@ void gonzoRender(
 		float ox, float oy, float oz,
 		float dx, float dy, float dz,
 		float& tHit,
-		float& px, float& py, float& pz
+		float& px, float& py, float& pz,
+		float& nx, float& ny, float& nz
 		) {
 	//puts("gonzoRender!\n");
 	try {
@@ -82,12 +85,16 @@ void gonzoRender(
 		sampleRenderer->setCamera(camera);
 		sampleRenderer->render();
 
-		sampleRenderer->downloadPixels(pixels.data(), vertices.data());
+		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data());
 		auto& vertex = vertices[0];
+		auto& normal = normals[0];
 		//std::cout << "vertex: " << vertex << std::endl;
 		px = vertex.x;
 		py = vertex.y;
 		pz = vertex.z;
+		nx = normal.x;
+		ny = normal.y;
+		nz = normal.z;
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -97,7 +104,7 @@ void gonzoRender(
 void gonzoWrite() {
 	puts("gonzoWrite!\n");
 	try {
-		sampleRenderer->downloadPixels(pixels.data(), vertices.data());
+		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data());
 		std::ofstream bla("bla.ppm");
 		bla << "P3" << std::endl;
 		bla << "32 32 " << std::endl;

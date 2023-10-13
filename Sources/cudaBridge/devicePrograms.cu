@@ -56,7 +56,8 @@ namespace osc {
   }
   
   struct PerRayData {
-    vec3f pixelColor;
+    vec3f intersectionPoint;
+    vec3f intersectionNormal;
   };
 
   //------------------------------------------------------------------------------
@@ -130,7 +131,8 @@ namespace osc {
     vec3f P = (1.f-u-v) * A + u * B + v * C;
     //vec3f &prd = *(vec3f*)getPRD<vec3f>();
     PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
-    prd.pixelColor = P;
+    prd.intersectionPoint = P;
+    prd.intersectionNormal = N;
     //printf("P: %f %f %f\n", P.x, P.y, P.z);
   }
   
@@ -151,7 +153,7 @@ namespace osc {
   {
     //vec3f &prd = *(vec3f*)getPRD<vec3f>();
     PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
-    prd.pixelColor = vec3f(1.f);
+    prd.intersectionPoint = vec3f(1.f);
   }
 
   //------------------------------------------------------------------------------
@@ -168,8 +170,6 @@ namespace osc {
     // our per-ray data for this example. what we initialize it to
     // won't matter, since this value will be overwritten by either
     // the miss or hit program, anyway
-    //vec3f pixelColorPRD = vec3f(0.f);
-    //PerRayData pixelColorPRD = { vec3f(0.f) };
     PerRayData perRayData = { vec3f(0.f) };
 
     // the values we store the PRD pointer in:
@@ -204,9 +204,9 @@ namespace osc {
                SURFACE_RAY_TYPE,             // missSBTIndex 
                u0, u1 );
 
-    const int r = int(255.99f*perRayData.pixelColor.x);
-    const int g = int(255.99f*perRayData.pixelColor.y);
-    const int b = int(255.99f*perRayData.pixelColor.z);
+    const int r = int(255.99f*perRayData.intersectionPoint.x);
+    const int g = int(255.99f*perRayData.intersectionPoint.y);
+    const int b = int(255.99f*perRayData.intersectionPoint.z);
 
     // convert to 32-bit rgba value (we explicitly set alpha to 0xff
     // to make stb_image_write happy ...
@@ -216,7 +216,7 @@ namespace osc {
     // and write to frame buffer ...
     const uint32_t fbIndex = ix+iy*optixLaunchParams.frame.size.x;
     optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
-    optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.pixelColor;
+    optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.intersectionPoint;
+    optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;
   }
-  
 } // ::osc

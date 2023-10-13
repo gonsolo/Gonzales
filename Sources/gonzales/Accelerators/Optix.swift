@@ -724,33 +724,41 @@ class Optix {
         }
 
         func optixRender() {
-                var x: Float32 = 0
-                var y: Float32 = 0
-                var z: Float32 = 0
+                var px: Float32 = 0
+                var py: Float32 = 0
+                var pz: Float32 = 0
+                var nx: Float32 = 0
+                var ny: Float32 = 0
+                var nz: Float32 = 0
                 var tHit: Float = 1e20;
-                gonzoRender(false, 0, 0, 0, 0, 0, 0, &tHit, &x, &y, &z)
+                gonzoRender(false, 0, 0, 0, 0, 0, 0, &tHit, &px, &py, &pz, &nx, &ny, &nz)
         }
 
-        func optixRender(ray: Ray, tHit: inout Float) -> Point {
-                var x: Float32 = 0
-                var y: Float32 = 0
-                var z: Float32 = 0
+        func optixRender(ray: Ray, tHit: inout Float) -> (Point, Normal) {
+                var px: Float32 = 0
+                var py: Float32 = 0
+                var pz: Float32 = 0
+                var nx: Float32 = 0
+                var ny: Float32 = 0
+                var nz: Float32 = 0
                 gonzoRender(
                         true,
                         ray.origin.x, ray.origin.y, ray.origin.z,
                         ray.direction.x, ray.direction.y, ray.direction.z,
                         &tHit,
-                        &x, &y, &z
+                        &px, &py, &pz,
+                        &nx, &ny, &nz
                         )
-                let intersectionPoint = Point(x: x, y: y, z: z)
-                return intersectionPoint
+                let intersectionPoint = Point(x: px, y: py, z: pz)
+                let intersectionNormal = Normal(x: nx, y: ny, z: nz)
+                return (intersectionPoint, intersectionNormal)
         }
 
         func optixWrite() {
                 gonzoWrite()
         }
 
-        func render(ray: Ray, tHit: inout Float) throws -> Point {
+        func render(ray: Ray, tHit: inout Float) throws -> (Point, Normal) {
 
                 return optixRender(ray: ray, tHit: &tHit);
 
@@ -835,14 +843,15 @@ class Optix {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let intersectionPoint = try render(ray: ray, tHit: &tHit)
+                let (intersectionPoint, intersectionNormal) = try render(ray: ray, tHit: &tHit)
                 interaction.valid = true
                 interaction.position = intersectionPoint
-
-                //print(ray, intersectionPoint)
-                interaction.normal = Normal(x: 0, y: 0, z: 1)
-                interaction.shadingNormal = Normal(x: 0, y: 0, z: 1)
-                interaction.wo = ray.direction
+                interaction.normal = intersectionNormal
+                interaction.shadingNormal = intersectionNormal
+                interaction.wo = -ray.direction
+                // dpdu
+                // uv
+                // faceIndex
                 interaction.material = material
 
                 //interaction.valid = true
