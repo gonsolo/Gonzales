@@ -173,20 +173,21 @@ namespace osc {
                        / vec2f(optixLaunchParams.frame.size));
     
     vec3f rayDir;
-
+    float tmax;
     if (camera.useRay) {
 	rayDir = camera.rayDirection;
+	tmax = camera.tHit;
     } else {
 	rayDir = normalize(camera.direction
                              + (screen.x - 0.5f) * camera.horizontal
                              + (screen.y - 0.5f) * camera.vertical);
-
+	tmax = 1e20f;
     }
     optixTrace(optixLaunchParams.traversable,
                camera.position,
                rayDir,
                0.f,    // tmin
-               1e20f,  // tmax
+               tmax,
                0.0f,   // rayTime
                OptixVisibilityMask( 255 ),
                OPTIX_RAY_FLAG_DISABLE_ANYHIT,//OPTIX_RAY_FLAG_NONE,

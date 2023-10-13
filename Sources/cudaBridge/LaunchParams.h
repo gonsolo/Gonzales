@@ -49,6 +49,7 @@ namespace osc {
 
       bool useRay;
       vec3f rayDirection;
+      float tHit;
     } camera;
 
     OptixTraversableHandle traversable;

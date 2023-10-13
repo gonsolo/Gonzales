@@ -727,10 +727,11 @@ class Optix {
                 var x: Float32 = 0
                 var y: Float32 = 0
                 var z: Float32 = 0
-                gonzoRender(false, 0, 0, 0, 0, 0, 0, &x, &y, &z)
+                var tHit: Float = 1e20;
+                gonzoRender(false, 0, 0, 0, 0, 0, 0, &tHit, &x, &y, &z)
         }
 
-        func optixRender(ray: Ray) -> Point {
+        func optixRender(ray: Ray, tHit: inout Float) -> Point {
                 var x: Float32 = 0
                 var y: Float32 = 0
                 var z: Float32 = 0
@@ -738,6 +739,7 @@ class Optix {
                         true,
                         ray.origin.x, ray.origin.y, ray.origin.z,
                         ray.direction.x, ray.direction.y, ray.direction.z,
+                        &tHit,
                         &x, &y, &z
                         )
                 let intersectionPoint = Point(x: x, y: y, z: z)
@@ -748,9 +750,9 @@ class Optix {
                 gonzoWrite()
         }
 
-        func render(ray: Ray) throws -> Point {
+        func render(ray: Ray, tHit: inout Float) throws -> Point {
 
-                return optixRender(ray: ray);
+                return optixRender(ray: ray, tHit: &tHit);
 
         //        //printGreen("Optix render.")
         //        try buildLaunch(ray: ray)
@@ -833,15 +835,16 @@ class Optix {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let intersectionPoint = try render(ray: ray)
+                let intersectionPoint = try render(ray: ray, tHit: &tHit)
                 interaction.valid = true
                 interaction.position = intersectionPoint
 
                 //print(ray, intersectionPoint)
                 interaction.normal = Normal(x: 0, y: 0, z: 1)
                 interaction.shadingNormal = Normal(x: 0, y: 0, z: 1)
-                interaction.wo = -ray.direction
-                interaction.material = 0
+                interaction.wo = ray.direction
+                interaction.material = material
+
                 //interaction.valid = true
                 //interaction.position = objectToWorld * pHit
                 //interaction.normal = normalized(objectToWorld * normal)

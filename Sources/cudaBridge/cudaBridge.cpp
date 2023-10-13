@@ -59,6 +59,7 @@ void gonzoRender(
 		bool useRay,
 		float ox, float oy, float oz,
 		float dx, float dy, float dz,
+		float& tHit,
 		float& px, float& py, float& pz
 		) {
 	//puts("gonzoRender!\n");
@@ -68,12 +69,14 @@ void gonzoRender(
                         /* at */osc::vec3f(0.f,0.f,0.f),
                         /* up */osc::vec3f(0.f,1.f,0.f),
 			/* useRay */false,
-			/* dir */osc::vec3f(0.f, 0.f, 0.f)
+			/* dir */osc::vec3f(0.f, 0.f, 0.f),
+			/* tHit */1e20f
 		};
 		if (useRay) {
 			camera.from = osc::vec3f(ox, oy, oz);
 			camera.useRay = true;
 			camera.rayDirection = osc::vec3f(dx, dy, dz);
+			camera.tHit = tHit;
 			//printf("  rayDirection: %f %f %f!\n", dx, dy, dz);
 		}
 		sampleRenderer->setCamera(camera);

@@ -541,6 +541,7 @@ namespace osc {
 
     launchParams.camera.useRay = camera.useRay;
     launchParams.camera.rayDirection = camera.rayDirection;
+    launchParams.camera.tHit = camera.tHit;
   }
   
   /*! resize frame buffer to given resolution */

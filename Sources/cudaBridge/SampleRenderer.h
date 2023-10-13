@@ -34,6 +34,7 @@ namespace osc {
 
     bool useRay;
     vec3f rayDirection;
+    float tHit;
   };
   
   /*! a sample OptiX-7 renderer that demonstrates how to set up
