@@ -155,17 +155,20 @@ em: editMakefile
 editMakefile:
 	@vi Makefile
 
-OPTIX_INCLUDE_DIR = External/Optix/7.7.0/include
-OPTIX_OUTPUT = .build/kernels.optixir
-NVCC_OPTIONS = -ISources/cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
+#OPTIX_INCLUDE_DIR = External/Optix/7.7.0/include
+#OPTIX_OUTPUT = .build/kernels.optixir
+#NVCC_OPTIONS = -ISources/cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
 
-optix: $(OPTIX_OUTPUT) Sources/cudaBridge/embedded.c
+NVCC = nvcc
 
-$(OPTIX_OUTPUT): Sources/optix/kernels.cu
-	@nvcc $(NVCC_OPTIONS) Sources/optix/kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
+#optix: $(OPTIX_OUTPUT) Sources/cudaBridge/embedded.c
+optix: Sources/cudaBridge/embedded.c
+
+#$(OPTIX_OUTPUT): Sources/optix/kernels.cu
+#	@$(NVCC) $(NVCC_OPTIONS) Sources/optix/kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
 
 Sources/cudaBridge/devicePrograms.ptx: Sources/cudaBridge/devicePrograms.cu Sources/cudaBridge/LaunchParams.h
-	@cd Sources/cudaBridge; nvcc --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
+	@cd Sources/cudaBridge; $(NVCC) -allow-unsupported-compiler --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
 
 Sources/cudaBridge/embedded.c: Sources/cudaBridge/devicePrograms.ptx
 	@cd Sources/cudaBridge; bin2c -c --padd 0 --type char --name embedded_ptx_code devicePrograms.ptx > embedded.c; cd - > /dev/null

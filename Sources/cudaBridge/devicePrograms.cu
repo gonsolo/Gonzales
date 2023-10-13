@@ -117,6 +117,15 @@ namespace osc {
     const float cosDN  = 0.2f + .8f*fabsf(dot(rayDir,N));
     vec3f &prd = *(vec3f*)getPRD<vec3f>();
     prd = cosDN * diffuseColor;
+
+    //prd = vec3f(0.5);
+    //prd = abs(N);
+    const vec3f &A     = sbtData.vertex[index.x];
+    const vec3f &B     = sbtData.vertex[index.y];
+    const vec3f &C     = sbtData.vertex[index.z];
+    vec3f P = (1.f-u-v) * A + u * B + v * C;
+    prd = abs(P);
+    //printf("P: %f %f %f\n", P.x, P.y, P.z);
   }
   
   extern "C" __global__ void __anyhit__radiance()
