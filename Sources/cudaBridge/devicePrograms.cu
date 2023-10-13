@@ -55,6 +55,10 @@ namespace osc {
     return reinterpret_cast<T*>( unpackPointer( u0, u1 ) );
   }
   
+  struct PerRayData {
+    vec3f pixelColor;
+  };
+
   //------------------------------------------------------------------------------
   // closest hit and anyhit programs for radiance-type rays.
   //
@@ -99,24 +103,24 @@ namespace osc {
     // compute diffuse material color, including diffuse texture, if
     // available
     // ------------------------------------------------------------------
-    vec3f diffuseColor = sbtData.color;
-    if (sbtData.hasTexture && sbtData.texcoord) {
-      const vec2f tc
-        = (1.f-u-v) * sbtData.texcoord[index.x]
-        +         u * sbtData.texcoord[index.y]
-        +         v * sbtData.texcoord[index.z];
-      
-      vec4f fromTexture = tex2D<float4>(sbtData.texture,tc.x,tc.y);
-      diffuseColor *= (vec3f)fromTexture;
-    }
-    
+    //vec3f diffuseColor = sbtData.color;
+    //if (sbtData.hasTexture && sbtData.texcoord) {
+    //  const vec2f tc
+    //    = (1.f-u-v) * sbtData.texcoord[index.x]
+    //    +         u * sbtData.texcoord[index.y]
+    //    +         v * sbtData.texcoord[index.z];
+    //  
+    //  vec4f fromTexture = tex2D<float4>(sbtData.texture,tc.x,tc.y);
+    //  diffuseColor *= (vec3f)fromTexture;
+    //}
+    //
     // ------------------------------------------------------------------
     // perform some simple "NdotD" shading
     // ------------------------------------------------------------------
-    const vec3f rayDir = optixGetWorldRayDirection();
-    const float cosDN  = 0.2f + .8f*fabsf(dot(rayDir,N));
-    vec3f &prd = *(vec3f*)getPRD<vec3f>();
-    prd = cosDN * diffuseColor;
+    //const vec3f rayDir = optixGetWorldRayDirection();
+    //const float cosDN  = 0.2f + .8f*fabsf(dot(rayDir,N));
+    //vec3f &prd = *(vec3f*)getPRD<vec3f>();
+    //prd = cosDN * diffuseColor;
 
     //prd = vec3f(0.5);
     //prd = abs(N);
@@ -124,7 +128,9 @@ namespace osc {
     const vec3f &B     = sbtData.vertex[index.y];
     const vec3f &C     = sbtData.vertex[index.z];
     vec3f P = (1.f-u-v) * A + u * B + v * C;
-    prd = abs(P);
+    //vec3f &prd = *(vec3f*)getPRD<vec3f>();
+    PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
+    prd.pixelColor = P;
     //printf("P: %f %f %f\n", P.x, P.y, P.z);
   }
   
@@ -143,9 +149,9 @@ namespace osc {
   
   extern "C" __global__ void __miss__radiance()
   {
-    vec3f &prd = *(vec3f*)getPRD<vec3f>();
-    // set to constant white as background color
-    prd = vec3f(1.f);
+    //vec3f &prd = *(vec3f*)getPRD<vec3f>();
+    PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
+    prd.pixelColor = vec3f(1.f);
   }
 
   //------------------------------------------------------------------------------
@@ -162,11 +168,13 @@ namespace osc {
     // our per-ray data for this example. what we initialize it to
     // won't matter, since this value will be overwritten by either
     // the miss or hit program, anyway
-    vec3f pixelColorPRD = vec3f(0.f);
+    //vec3f pixelColorPRD = vec3f(0.f);
+    //PerRayData pixelColorPRD = { vec3f(0.f) };
+    PerRayData perRayData = { vec3f(0.f) };
 
     // the values we store the PRD pointer in:
     uint32_t u0, u1;
-    packPointer( &pixelColorPRD, u0, u1 );
+    packPointer( &perRayData, u0, u1 );
 
     // normalized screen plane position, in [0,1]^2
     const vec2f screen(vec2f(ix+.5f,iy+.5f)
@@ -196,9 +204,9 @@ namespace osc {
                SURFACE_RAY_TYPE,             // missSBTIndex 
                u0, u1 );
 
-    const int r = int(255.99f*pixelColorPRD.x);
-    const int g = int(255.99f*pixelColorPRD.y);
-    const int b = int(255.99f*pixelColorPRD.z);
+    const int r = int(255.99f*perRayData.pixelColor.x);
+    const int g = int(255.99f*perRayData.pixelColor.y);
+    const int b = int(255.99f*perRayData.pixelColor.z);
 
     // convert to 32-bit rgba value (we explicitly set alpha to 0xff
     // to make stb_image_write happy ...
@@ -208,7 +216,7 @@ namespace osc {
     // and write to frame buffer ...
     const uint32_t fbIndex = ix+iy*optixLaunchParams.frame.size.x;
     optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
-    optixLaunchParams.frame.outVertexBuffer[fbIndex] = pixelColorPRD;
+    optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.pixelColor;
   }
   
 } // ::osc
