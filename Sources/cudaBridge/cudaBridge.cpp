@@ -24,7 +24,7 @@ void gonzoAdd(
 	float bx, float by, float bz,
 	float cx, float cy, float cz)
 {
-	puts("gonzoAdd!\n");
+	//puts("gonzoAdd!\n");
 	try {
 		//model.addCube(osc::vec3f(0.f,-1.5f,0.f),osc::vec3f(10.f,.1f,10.f));
 		//model.addCube(osc::vec3f(0.f,0.f,0.f),osc::vec3f(2.f,2.f,2.f));
@@ -58,9 +58,10 @@ void gonzoSetup() {
 void gonzoRender(
 		bool useRay,
 		float ox, float oy, float oz,
-		float dx, float dy, float dz
+		float dx, float dy, float dz,
+		float& px, float& py, float& pz
 		) {
-	puts("gonzoRender!\n");
+	//puts("gonzoRender!\n");
 	try {
 		osc::Camera camera = {
 			/*from*/osc::vec3f(-10.f,2.f,-12.f),
@@ -81,6 +82,9 @@ void gonzoRender(
 		sampleRenderer->downloadPixels(pixels.data(), vertices.data());
 		auto& vertex = vertices[0];
 		//std::cout << "vertex: " << vertex << std::endl;
+		px = vertex.x;
+		py = vertex.y;
+		pz = vertex.z;
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);

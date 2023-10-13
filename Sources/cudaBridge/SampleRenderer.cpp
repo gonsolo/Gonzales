@@ -254,7 +254,7 @@ namespace osc {
                              const char *message,
                              void *)
   {
-    fprintf( stderr, "[%2d][%12s]: %s\n", (int)level, tag, message );
+    //fprintf( stderr, "[%2d][%12s]: %s\n", (int)level, tag, message );
   }
 
   /*! creates and configures a optix device context (in this simple
@@ -311,7 +311,7 @@ namespace osc {
                                          log,&sizeof_log,
                                          &module
                                          ));
-    if (sizeof_log > 1) PRINT(log);
+    //if (sizeof_log > 1) PRINT(log);
   }
     
 
@@ -338,7 +338,7 @@ namespace osc {
                                         log,&sizeof_log,
                                         &raygenPGs[0]
                                         ));
-    if (sizeof_log > 1) PRINT(log);
+    //if (sizeof_log > 1) PRINT(log);
   }
     
   /*! does all setup for the miss program(s) we are going to use */
@@ -363,7 +363,7 @@ namespace osc {
                                         log,&sizeof_log,
                                         &missPGs[0]
                                         ));
-    if (sizeof_log > 1) PRINT(log);
+    //if (sizeof_log > 1) PRINT(log);
   }
     
   /*! does all setup for the hitgroup program(s) we are going to use */
@@ -389,7 +389,7 @@ namespace osc {
                                         log,&sizeof_log,
                                         &hitgroupPGs[0]
                                         ));
-    if (sizeof_log > 1) PRINT(log);
+    //if (sizeof_log > 1) PRINT(log);
   }
     
 
@@ -414,7 +414,7 @@ namespace osc {
                                     log,&sizeof_log,
                                     &pipeline
                                     ));
-    if (sizeof_log > 1) PRINT(log);
+    //if (sizeof_log > 1) PRINT(log);
 
     OPTIX_CHECK(optixPipelineSetStackSize
                 (/* [in] The pipeline to configure the stack size for */
@@ -430,7 +430,7 @@ namespace osc {
                  /* [in] The maximum depth of a traversable graph
                     passed to trace. */
                  1));
-    if (sizeof_log > 1) PRINT(log);
+    //if (sizeof_log > 1) PRINT(log);
   }
 
 

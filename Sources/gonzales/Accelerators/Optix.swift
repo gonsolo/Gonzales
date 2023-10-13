@@ -271,7 +271,9 @@ class Optix {
         private func add(triangle: Triangle) throws {
 
                 let points = triangle.getWorldPoints()
-                print(points)
+
+                bounds = union(first: bounds, second: triangle.worldBound())
+
                 gonzoAdd(
                         points.0.x, points.0.y, points.0.z,
                         points.1.x, points.1.y, points.1.z,
@@ -722,20 +724,33 @@ class Optix {
         }
 
         func optixRender() {
-                gonzoRender(false, 0, 0, 0, 0, 0, 0)
+                var x: Float32 = 0
+                var y: Float32 = 0
+                var z: Float32 = 0
+                gonzoRender(false, 0, 0, 0, 0, 0, 0, &x, &y, &z)
         }
 
-        func optixRender(ray: Ray) {
-                gonzoRender(true, ray.origin.x, ray.origin.y, ray.origin.z, ray.direction.x, ray.direction.y, ray.direction.z)
+        func optixRender(ray: Ray) -> Point {
+                var x: Float32 = 0
+                var y: Float32 = 0
+                var z: Float32 = 0
+                gonzoRender(
+                        true,
+                        ray.origin.x, ray.origin.y, ray.origin.z,
+                        ray.direction.x, ray.direction.y, ray.direction.z,
+                        &x, &y, &z
+                        )
+                let intersectionPoint = Point(x: x, y: y, z: z)
+                return intersectionPoint
         }
 
         func optixWrite() {
                 gonzoWrite()
         }
 
-        func render(ray: Ray) throws {
+        func render(ray: Ray) throws -> Point {
 
-                optixRender(ray: ray);
+                return optixRender(ray: ray);
 
         //        //printGreen("Optix render.")
         //        try buildLaunch(ray: ray)
@@ -818,15 +833,32 @@ class Optix {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
-                try render(ray: ray)
-        }
+                let intersectionPoint = try render(ray: ray)
+                interaction.valid = true
+                interaction.position = intersectionPoint
+
+                //print(ray, intersectionPoint)
+                interaction.normal = Normal(x: 0, y: 0, z: 1)
+                interaction.shadingNormal = Normal(x: 0, y: 0, z: 1)
+                interaction.wo = -ray.direction
+                interaction.material = 0
+                //interaction.valid = true
+                //interaction.position = objectToWorld * pHit
+                //interaction.normal = normalized(objectToWorld * normal)
+                //interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
+                //interaction.wo = normalized(objectToWorld * -ray.direction)
+                //interaction.dpdu = dpdu
+                //interaction.uv = uvHit
+                //interaction.faceIndex = faceIndex
+                //interaction.material = material
+ }
 
         func objectBound() -> Bounds3f {
-                return Bounds3f()
+                return bounds
         }
 
         func worldBound() -> Bounds3f {
-                return Bounds3f()
+                return bounds
         }
 
         var stream: cudaStream_t?
@@ -850,5 +882,7 @@ class Optix {
 
         typealias PixelBlock = SimplePixel256
         var pixelBlock = PixelBlock()
+
+        var bounds = Bounds3f()
 }
 
