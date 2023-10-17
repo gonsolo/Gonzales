@@ -555,6 +555,7 @@ namespace osc {
     outVertexBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
     outNormalBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
     intersectedBuffer.resize(sizeof(int));
+    primIDBuffer.resize(sizeof(int));
 
     // update the launch parameters that we'll pass to the optix
     // launch:
@@ -563,18 +564,25 @@ namespace osc {
     launchParams.frame.outVertexBuffer = (vec3f*)outVertexBuffer.d_pointer();
     launchParams.frame.outNormalBuffer = (vec3f*)outNormalBuffer.d_pointer();
     launchParams.frame.intersected = (int*)intersectedBuffer.d_pointer();
+    launchParams.frame.primID = (int*)primIDBuffer.d_pointer();
 
     // and re-set the camera, since aspect may have changed
     setCamera(lastSetCamera);
   }
 
   /*! download the rendered color buffer */
-  void SampleRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[], int h_intersected[])
+  void SampleRenderer::downloadPixels(
+    uint32_t h_pixels[],
+    vec3f h_vertices[],
+    vec3f h_normals[],
+    int h_intersected[],
+    int h_primID[])
   {
     colorBuffer.download(h_pixels, launchParams.frame.size.x*launchParams.frame.size.y);
     outVertexBuffer.download(h_vertices, launchParams.frame.size.x*launchParams.frame.size.y);
     outNormalBuffer.download(h_normals, launchParams.frame.size.x*launchParams.frame.size.y);
     intersectedBuffer.download(h_intersected, 1);
+    primIDBuffer.download(h_primID, 1);
   }
   
 } // ::osc

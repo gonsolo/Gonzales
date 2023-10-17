@@ -41,6 +41,7 @@ std::vector<uint32_t> pixels;
 std::vector<gdt::vec3f> vertices;
 std::vector<gdt::vec3f> normals;
 std::vector<int> intersected;
+std::vector<int> primID;
 
 void gonzoSetup() {
 	puts("gonzoSetup!\n");
@@ -53,6 +54,7 @@ void gonzoSetup() {
 		vertices.resize(newSize.x * newSize.y);
 		normals.resize(newSize.x * newSize.y);
 		intersected.resize(1);
+		primID.resize(1);
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -66,7 +68,8 @@ void gonzoRender(
 		float& tHit,
 		float& px, float& py, float& pz,
 		float& nx, float& ny, float& nz,
-		int& didIntersect
+		int& didIntersect,
+		int& didPrimID
 		) {
 	//puts("gonzoRender!\n");
 	try {
@@ -88,7 +91,7 @@ void gonzoRender(
 		sampleRenderer->setCamera(camera);
 		sampleRenderer->render();
 
-		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data());
+		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data(), primID.data());
 		auto& vertex = vertices[0];
 		auto& normal = normals[0];
 		//std::cout << "vertex: " << vertex << std::endl;
@@ -99,6 +102,7 @@ void gonzoRender(
 		ny = normal.y;
 		nz = normal.z;
 		didIntersect = intersected[0];
+		didPrimID = primID[0];
 		//std::cout << didIntersect << std::endl;
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
@@ -109,7 +113,7 @@ void gonzoRender(
 void gonzoWrite() {
 	puts("gonzoWrite!\n");
 	try {
-		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data());
+		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data(), primID.data());
 		std::ofstream bla("bla.ppm");
 		bla << "P3" << std::endl;
 		bla << "32 32 " << std::endl;

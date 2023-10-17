@@ -59,6 +59,7 @@ namespace osc {
     vec3f intersectionPoint;
     vec3f intersectionNormal;
     int intersected = 0;
+    int primID = -1;
   };
 
   //------------------------------------------------------------------------------
@@ -136,6 +137,7 @@ namespace osc {
     prd.intersectionPoint = P;
     prd.intersectionNormal = N;
     prd.intersected = 1;
+    prd.primID = primID;
     //printf("P: %f %f %f\n", P.x, P.y, P.z);
   }
   
@@ -176,7 +178,7 @@ namespace osc {
     // our per-ray data for this example. what we initialize it to
     // won't matter, since this value will be overwritten by either
     // the miss or hit program, anyway
-    PerRayData perRayData = { vec3f(0.f), vec3f(0.f), false };
+    PerRayData perRayData = { vec3f(0.f), vec3f(0.f), false, -1 };
 
     // the values we store the PRD pointer in:
     uint32_t u0, u1;
@@ -239,5 +241,6 @@ namespace osc {
     optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.intersectionPoint;
     optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;
     optixLaunchParams.frame.intersected[0] = perRayData.intersected;
+    optixLaunchParams.frame.primID[0] = perRayData.primID;
   }
 } // ::osc

@@ -434,6 +434,7 @@ class Optix {
                                 case let triangle as Triangle:
                                                 try add(triangle: triangle)
                                                 triangleCount += 1
+                                                materials[triangleCount] = geometricPrimitive.material
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
@@ -732,10 +733,11 @@ class Optix {
                 var nz: Float32 = 0
                 var tHit: Float = 1e20
                 var intersected: Int32 = 0
-                gonzoRender(false, 0, 0, 0, 0, 0, 0, &tHit, &px, &py, &pz, &nx, &ny, &nz, &intersected)
+                var primID: Int32 = -1
+                gonzoRender(false, 0, 0, 0, 0, 0, 0, &tHit, &px, &py, &pz, &nx, &ny, &nz, &intersected, &primID)
         }
 
-        func optixRender(ray: Ray, tHit: inout Float) -> (Point, Normal, Bool) {
+        func optixRender(ray: Ray, tHit: inout Float) -> (Point, Normal, Bool, Int) {
                 var px: Float32 = 0
                 var py: Float32 = 0
                 var pz: Float32 = 0
@@ -743,6 +745,7 @@ class Optix {
                 var ny: Float32 = 0
                 var nz: Float32 = 0
                 var intersected: Int32 = 0
+                var primID32: Int32 = -1
                 gonzoRender(
                         true,
                         ray.origin.x, ray.origin.y, ray.origin.z,
@@ -750,21 +753,21 @@ class Optix {
                         &tHit,
                         &px, &py, &pz,
                         &nx, &ny, &nz,
-                        &intersected
+                        &intersected,
+                        &primID32
                         )
                 let intersectionPoint = Point(x: px, y: py, z: pz)
                 let intersectionNormal = Normal(x: nx, y: ny, z: nz)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
-                //print(#function, ray.direction, intersectionIntersected)
-                //exit(0)
-                return (intersectionPoint, intersectionNormal, intersectionIntersected)
+                let primID = Int(primID32)
+                return (intersectionPoint, intersectionNormal, intersectionIntersected, primID)
         }
 
         func optixWrite() {
                 gonzoWrite()
         }
 
-        func render(ray: Ray, tHit: inout Float) throws -> (Point, Normal, Bool) {
+        func render(ray: Ray, tHit: inout Float) throws -> (Point, Normal, Bool, Int) {
 
                 return optixRender(ray: ray, tHit: &tHit);
 
@@ -849,7 +852,7 @@ class Optix {
                 material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let (intersectionPoint, intersectionNormal, intersected) = try render(ray: ray, tHit: &tHit)
+                let (intersectionPoint, intersectionNormal, intersected, primID) = try render(ray: ray, tHit: &tHit)
                 if intersected {
                         interaction.valid = true
                         interaction.position = intersectionPoint
@@ -859,7 +862,7 @@ class Optix {
                         // dpdu
                         // uv
                         // faceIndex
-                        interaction.material = material
+                        interaction.material = materials[primID] ?? -1
                 }
 
                 //interaction.valid = true
@@ -904,5 +907,7 @@ class Optix {
         var pixelBlock = PixelBlock()
 
         var bounds = Bounds3f()
+
+        var materials = [Int: MaterialIndex]()
 }
 

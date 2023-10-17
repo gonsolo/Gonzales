@@ -271,11 +271,11 @@ final class VolumePathIntegrator {
                                 interaction: &interaction)
 
                         // TEMP
-                        if !interaction.valid {
-                                return (black, black, zeroNormal)
-                        } else {
-                                return (white, white, zeroNormal)
-                        }
+                        //if !interaction.valid {
+                        //        return (black, black, zeroNormal)
+                        //} else {
+                        //        return (white, white, zeroNormal)
+                        //}
                         // TEMP
 
                         if !interaction.valid {
@@ -315,11 +315,11 @@ final class VolumePathIntegrator {
                                         break
                                 }
                                 // TEMP
-                                //if !interaction.valid {
-                                //        return (black, black, zeroNormal)
-                                //} else {
-                                //        return (white, white, zeroNormal)
-                                //}
+                                if !interaction.valid {
+                                        return (black, black, zeroNormal)
+                                } else {
+                                        return (white, white, zeroNormal)
+                                }
                                 // TEMP
 
                                 if materials[surfaceInteraction.material].isInterface {
