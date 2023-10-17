@@ -310,9 +310,18 @@ final class VolumePathIntegrator {
                                                                 inDirection: surfaceInteraction.wo)
                                         }
                                 }
+
                                 if surfaceInteraction.material == noMaterial {
                                         break
                                 }
+                                // TEMP
+                                //if !interaction.valid {
+                                //        return (black, black, zeroNormal)
+                                //} else {
+                                //        return (white, white, zeroNormal)
+                                //}
+                                // TEMP
+
                                 if materials[surfaceInteraction.material].isInterface {
                                         var spawnedRay = surfaceInteraction.spawnRay(
                                                 inDirection: ray.direction)

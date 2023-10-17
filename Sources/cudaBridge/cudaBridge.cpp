@@ -30,7 +30,6 @@ void gonzoAdd(
 		//model.addCube(osc::vec3f(0.f,0.f,0.f),osc::vec3f(2.f,2.f,2.f));
 
 		triangleMesh.addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);
-		model.meshes.push_back(&triangleMesh);
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -46,6 +45,7 @@ std::vector<int> intersected;
 void gonzoSetup() {
 	puts("gonzoSetup!\n");
 	try {
+		model.meshes.push_back(&triangleMesh);
 		sampleRenderer = new osc::SampleRenderer(&model);
 		osc::vec2i newSize {32, 32};
 		sampleRenderer->resize(newSize);
