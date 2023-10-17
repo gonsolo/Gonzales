@@ -31,8 +31,9 @@ jobs:
 
       - name: Check disk space
         run: |
+          sudo dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -nr | head
           df -h .
-          for i in /*; do du -s -- "$i"; done | sort -n
+          sudo du /usr/ -hx -d 4 --threshold=1G | sort -hr | head
 
           #- name: Cache Cuda
           #  id: cache-cuda
