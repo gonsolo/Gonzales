@@ -99,6 +99,7 @@ void gonzoRender(
 		ny = normal.y;
 		nz = normal.z;
 		didIntersect = intersected[0];
+		//std::cout << didIntersect << std::endl;
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);
@@ -113,7 +114,7 @@ void gonzoWrite() {
 		bla << "P3" << std::endl;
 		bla << "32 32 " << std::endl;
 		bla << "255" << std::endl;
-		for(auto i : pixels) {
+		for (auto i : pixels) {
 			auto r = (i & 0x000000ff) >> 0;
 			auto g = (i & 0x0000ff00) >> 8;
 			auto b = (i & 0x00ff0000) >> 16;

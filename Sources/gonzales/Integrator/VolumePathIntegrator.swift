@@ -276,7 +276,6 @@ final class VolumePathIntegrator {
                         } else {
                                 return (white, white, zeroNormal)
                         }
-
                         // TEMP
 
                         if !interaction.valid {

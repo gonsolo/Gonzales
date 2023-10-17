@@ -80,6 +80,7 @@ namespace osc {
     // gather some basic hit information
     // ------------------------------------------------------------------
     const int   primID = optixGetPrimitiveIndex();
+    //printf("hit %i\n", primID);
     const vec3i index  = sbtData.index[primID];
     const float u = optixGetTriangleBarycentrics().x;
     const float v = optixGetTriangleBarycentrics().y;
@@ -153,6 +154,7 @@ namespace osc {
   
   extern "C" __global__ void __miss__radiance()
   {
+    //printf("miss\n");
     //vec3f &prd = *(vec3f*)getPRD<vec3f>();
     PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
     prd.intersectionPoint = vec3f(1.f);
@@ -164,6 +166,7 @@ namespace osc {
   //------------------------------------------------------------------------------
   extern "C" __global__ void __raygen__renderFrame()
   {
+    //printf("render\n");
     // compute a test pattern based on pixel ID
     const int ix = optixGetLaunchIndex().x;
     const int iy = optixGetLaunchIndex().y;
@@ -194,6 +197,19 @@ namespace osc {
                              + (screen.y - 0.5f) * camera.vertical);
 	tmax = 1e20f;
     }
+
+    if (ix == 0 && iy == 0) {
+	//printf("position %f %f %f\n", camera.position.x, camera.position.y, camera.position.z);
+	//printf("rayDir %f %f %f\n", rayDir.x, rayDir.y, rayDir.z);
+    }
+
+    vec3f otherRayDir = normalize(camera.direction
+                             + (screen.x - 0.5f) * camera.horizontal
+                             + (screen.y - 0.5f) * camera.vertical);
+    if (ix == 0 && iy == 0) {
+	//printf("other %f %f %f\n", otherRayDir.x, otherRayDir.y, otherRayDir.z);
+    }
+    //rayDir = otherRayDir;
 
     optixTrace(optixLaunchParams.traversable,
                camera.position,

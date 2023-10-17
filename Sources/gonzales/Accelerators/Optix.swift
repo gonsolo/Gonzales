@@ -755,6 +755,8 @@ class Optix {
                 let intersectionPoint = Point(x: px, y: py, z: pz)
                 let intersectionNormal = Normal(x: nx, y: ny, z: nz)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
+                //print(#function, ray.direction, intersectionIntersected)
+                //exit(0)
                 return (intersectionPoint, intersectionNormal, intersectionIntersected)
         }
 
@@ -848,17 +850,17 @@ class Optix {
                 interaction: inout SurfaceInteraction
         ) throws {
                 let (intersectionPoint, intersectionNormal, intersected) = try render(ray: ray, tHit: &tHit)
-                print(ray, intersectionPoint, intersected)
-
-                interaction.valid = true
-                interaction.position = intersectionPoint
-                interaction.normal = intersectionNormal
-                interaction.shadingNormal = intersectionNormal
-                interaction.wo = -ray.direction
-                // dpdu
-                // uv
-                // faceIndex
-                interaction.material = material
+                if intersected {
+                        interaction.valid = true
+                        interaction.position = intersectionPoint
+                        interaction.normal = intersectionNormal
+                        interaction.shadingNormal = intersectionNormal
+                        interaction.wo = -ray.direction
+                        // dpdu
+                        // uv
+                        // faceIndex
+                        interaction.material = material
+                }
 
                 //interaction.valid = true
                 //interaction.position = objectToWorld * pHit
