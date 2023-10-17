@@ -433,8 +433,8 @@ class Optix {
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
                                                 try add(triangle: triangle)
-                                                triangleCount += 1
                                                 materials[triangleCount] = geometricPrimitive.material
+                                                triangleCount += 1
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
@@ -443,7 +443,10 @@ class Optix {
                         case let areaLight as AreaLight:
                                 switch areaLight.shape {
                                 case let triangle as Triangle:
-                                        _ = triangle  // TODO
+                                                try add(triangle: triangle)
+                                                areaLights[triangleCount] = areaLight
+                                                triangleCount += 1
+                                        //_ = triangle  // TODO
                                 default:
                                         optixError("Unknown shape in AreaLight.")
                                 }
@@ -863,6 +866,7 @@ class Optix {
                         // uv
                         // faceIndex
                         interaction.material = materials[primID] ?? -1
+                        interaction.areaLight = areaLights[primID] ?? nil
                 }
 
                 //interaction.valid = true
@@ -909,5 +913,6 @@ class Optix {
         var bounds = Bounds3f()
 
         var materials = [Int: MaterialIndex]()
+        var areaLights = [Int: AreaLight]()
 }
 
