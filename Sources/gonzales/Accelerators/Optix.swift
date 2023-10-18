@@ -4,6 +4,11 @@ import cudaBridge
 
 class Optix {
 
+        init(primitives: [Boundable & Intersectable]) throws {
+                try add(primitives: primitives)
+                gonzoSetup()
+        }
+
         private func add(triangle: Triangle) throws {
                 let points = triangle.getWorldPoints()
                 bounds = union(first: bounds, second: triangle.worldBound())
@@ -13,7 +18,7 @@ class Optix {
                         points.2.x, points.2.y, points.2.z)
         }
 
-        func add(primitives: [Boundable & Intersectable]) throws {
+        private func add(primitives: [Boundable & Intersectable]) throws {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
@@ -40,10 +45,6 @@ class Optix {
                                 fatalError("Unknown primitive \(primitive).")
                         }
                 }
-        }
-
-        func optixSetup() {
-                gonzoSetup()
         }
 
         func optixRender(ray: Ray, tHit: inout Float) -> (Point, Normal, Bool, Int) {
