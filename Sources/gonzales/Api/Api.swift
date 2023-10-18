@@ -19,7 +19,7 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 let accelerator = Accelerator.embree(embree)
                 return accelerator
         case "optix":
-                let optix = try Optix()
+                let optix = Optix()
                 try optix.add(primitives: primitives)
                 optix.optixSetup()
                 optix.optixRender()
