@@ -29,67 +29,67 @@ jobs:
           packages: cmake debhelper devscripts libembree-dev libopenimageio-dev
           version: 1.3.0
 
-      - name: Check disk space
+      #- name: Check disk space
+      #  run: |
+      #    sudo dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -nr | head
+      #    df -h
+      #    sudo du /usr/ -hx -d 4 --threshold=1G | sort -hr | head
+      #    sudo du /mnt/ -hx -d 4 --threshold=1G | sort -hr | head
+
+      - name: Clean up
         run: |
-          sudo dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -nr | head
-          df -h
-          sudo du /usr/ -hx -d 4 --threshold=1G | sort -hr | head
-          sudo du /mnt/ -hx -d 4 --threshold=1G | sort -hr | head
+          sudo apt purge google-cloud-cli azure-cli microsoft-edge-stable dotnet-sdk-7.0 dotnet-sdk-6.0
+          sudo apt purge google-chrome-stable temurin-17-jdk temurin-11-jdk llvm-15-dev llvm-14-dev
+          sudo apt purge llvm-13-dev firefox temurin-8-jdk powershell
+          sudo rm -rf /usr/local/lib/android
 
-      #- name: Clean up
-      #  run: |
-      #    sudo apt purge google-cloud-cli azure-cli microsoft-edge-stable dotnet-sdk-7.0 dotnet-sdk-6.0
-      #    sudo apt purge google-chrome-stable temurin-17-jdk temurin-11-jdk llvm-15-dev llvm-14-dev
-      #    sudo apt purge llvm-13-dev firefox temurin-8-jdk powershell
-      #    sudo rm -rf /usr/local/lib/android
+      - name: Cache Cuda
+        id: cache-cuda
+        uses: actions/cache@v3
+        with:
+          path: |
+            cuda-ubuntu2204.pin
+            cuda-repo-ubuntu2204-12-2-local_12.2.0-535.54.03-1_amd64.deb
+          key: ${{ runner.os }}-cache-cuda
 
-      #- name: Cache Cuda
-      #  id: cache-cuda
-      #  uses: actions/cache@v3
-      #  with:
-      #    path: |
-      #      cuda-ubuntu2204.pin
-      #      cuda-repo-ubuntu2204-12-2-local_12.2.0-535.54.03-1_amd64.deb
-      #    key: ${{ runner.os }}-cache-cuda
+      - name: Download Cuda
+        if: steps.cache-cuda.outputs.cache-hit != 'true'
+        run: |
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+          wget https://developer.download.nvidia.com/compute/cuda/12.2.0/local_installers/cuda-repo-ubuntu2204-12-2-local_12.2.0-535.54.03-1_amd64.deb
 
-      #- name: Download Cuda
-      #  if: steps.cache-cuda.outputs.cache-hit != 'true'
-      #  run: |
-      #    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-      #    wget https://developer.download.nvidia.com/compute/cuda/12.2.0/local_installers/cuda-repo-ubuntu2204-12-2-local_12.2.0-535.54.03-1_amd64.deb
+      - name: Install Cuda
+        run: |
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+          sudo cp cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+          sudo dpkg -i cuda-repo-ubuntu2204-12-2-local_12.2.0-535.54.03-1_amd64.deb
+          sudo cp /var/cuda-repo-ubuntu2204-12-2-local/cuda-*-keyring.gpg /usr/share/keyrings/
+          sudo apt-get update
+          sudo apt-get -y install cuda
 
-      #- name: Install Cuda
-      #  run: |
-      #    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-      #    sudo cp cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-      #    sudo dpkg -i cuda-repo-ubuntu2204-12-2-local_12.2.0-535.54.03-1_amd64.deb
-      #    sudo cp /var/cuda-repo-ubuntu2204-12-2-local/cuda-*-keyring.gpg /usr/share/keyrings/
-      #    sudo apt-get update
-      #    sudo apt-get -y install cuda
+      - name: Cache swift
+        id: cache-swift
+        uses: actions/cache@v3
+        with:
+          path: |
+            swift-5.9-RELEASE-ubuntu22.04.tar.gz
+          key: ${{ runner.os }}-cache-swift
 
-      #- name: Cache swift
-      #  id: cache-swift
-      #  uses: actions/cache@v3
-      #  with:
-      #    path: |
-      #      swift-5.9-RELEASE-ubuntu22.04.tar.gz
-      #    key: ${{ runner.os }}-cache-swift
+      - name: Download swift
+        if: steps.cache-swift.outputs.cache-hit != 'true'
+        run: |
+          wget https://download.swift.org/swift-5.9-release/ubuntu2204/swift-5.9-RELEASE/swift-5.9-RELEASE-ubuntu22.04.tar.gz
 
-      #- name: Download swift
-      #  if: steps.cache-swift.outputs.cache-hit != 'true'
-      #  run: |
-      #    wget https://download.swift.org/swift-5.9-release/ubuntu2204/swift-5.9-RELEASE/swift-5.9-RELEASE-ubuntu22.04.tar.gz
+      - name: Install swift
+        run: |
+          tar xzf swift-5.9-RELEASE-ubuntu22.04.tar.gz
 
-      #- name: Install swift
-      #  run: |
-      #    tar xzf swift-5.9-RELEASE-ubuntu22.04.tar.gz
+      - name: Install ptex
+        run: |
+          sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
 
-      #- name: Install ptex
-      #  run: |
-      #    sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
-
-      #- name: Compile debug
-      #  run: |
-      #    export PATH=$PATH:/usr/local/cuda/bin
-      #    mkdir .build
-      #    make debug
+      - name: Compile debug
+        run: |
+          export PATH=$PATH:/usr/local/cuda/bin
+          mkdir .build
+          make debug
