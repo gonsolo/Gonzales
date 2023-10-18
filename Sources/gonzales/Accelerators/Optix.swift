@@ -2,11 +2,6 @@ import Foundation
 import cuda
 import cudaBridge
 
-func optixError(_ message: String = "") -> Never {
-        print("optixError: \(message)")
-        exit(-1)
-}
-
 class Optix {
 
         private func add(triangle: Triangle) throws {
@@ -38,12 +33,11 @@ class Optix {
                                                 try add(triangle: triangle)
                                                 areaLights[triangleCount] = areaLight
                                                 triangleCount += 1
-                                        //_ = triangle  // TODO
                                 default:
-                                        optixError("Unknown shape in AreaLight.")
+                                        fatalError("Unknown shape in AreaLight.")
                                 }
                         default:
-                                optixError("Unknown primitive \(primitive).")
+                                fatalError("Unknown primitive \(primitive).")
                         }
                 }
         }
