@@ -29,15 +29,18 @@ jobs:
           packages: cmake debhelper devscripts libembree-dev libopenimageio-dev
           version: 1.3.0
 
-      - name: Clean up
-        run: |
-          sudo apt purge google-cloud-cli azure-cli microsoft-edge-stable dotnet-sdk-7.0 dotnet-sdk-6.0
-
       - name: Check disk space
         run: |
           sudo dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -nr | head
           df -h .
           sudo du /usr/ -hx -d 4 --threshold=1G | sort -hr | head
+          mount
+
+      #- name: Clean up
+      #  run: |
+      #    sudo apt purge google-cloud-cli azure-cli microsoft-edge-stable dotnet-sdk-7.0 dotnet-sdk-6.0
+      #    sudo apt purge google-chrome-stable temurin-17-jdk temurin-11-jdk llvm-15-dev llvm-14-dev
+      #    sudo apt purge llvm-13-dev firefox temurin-8-jdk powershell
 
       #- name: Cache Cuda
       #  id: cache-cuda
