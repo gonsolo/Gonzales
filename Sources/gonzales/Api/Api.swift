@@ -22,8 +22,6 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 let optix = Optix()
                 try optix.add(primitives: primitives)
                 optix.optixSetup()
-                optix.optixRender()
-                //optix.optixWrite()
                 let accelerator = Accelerator.optix(optix)
                 return accelerator
 

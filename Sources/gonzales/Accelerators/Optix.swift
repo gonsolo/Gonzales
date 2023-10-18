@@ -46,19 +46,6 @@ class Optix {
                 gonzoSetup()
         }
 
-        func optixRender() {
-                var px: Float32 = 0
-                var py: Float32 = 0
-                var pz: Float32 = 0
-                var nx: Float32 = 0
-                var ny: Float32 = 0
-                var nz: Float32 = 0
-                var tHit: Float = 1e20
-                var intersected: Int32 = 0
-                var primID: Int32 = -1
-                gonzoRender(false, 0, 0, 0, 0, 0, 0, &tHit, &px, &py, &pz, &nx, &ny, &nz, &intersected, &primID)
-        }
-
         func optixRender(ray: Ray, tHit: inout Float) -> (Point, Normal, Bool, Int) {
                 var px: Float32 = 0
                 var py: Float32 = 0
