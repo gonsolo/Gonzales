@@ -80,7 +80,6 @@ class Optix {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 let (intersectionPoint, intersectionNormal, intersected, primID) = try render(ray: ray, tHit: &tHit)

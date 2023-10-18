@@ -10,7 +10,6 @@ final class TransformedPrimitive: Boundable & Intersectable {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 let localRay = transform.inverse * ray
@@ -18,7 +17,6 @@ final class TransformedPrimitive: Boundable & Intersectable {
                 try accelerators[acceleratorIndex].intersect(
                         ray: localRay,
                         tHit: &tHit,
-                        material: material,
                         interaction: &interaction)
                 if !interaction.valid {
                         return

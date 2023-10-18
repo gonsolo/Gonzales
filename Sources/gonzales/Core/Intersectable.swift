@@ -4,7 +4,6 @@ protocol Intersectable {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction) throws
 }
 
@@ -17,7 +16,6 @@ enum IntersectablePrimitive {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 switch self {
@@ -25,25 +23,21 @@ enum IntersectablePrimitive {
                         try areaLight.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 case .geometricPrimitive(let geometricPrimitive):
                         try geometricPrimitive.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 case .triangle(let triangle):
                         try triangle.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 case .transformedPrimitive(let transformedPrimitive):
                         try transformedPrimitive.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 }
         }

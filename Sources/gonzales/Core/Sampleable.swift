@@ -38,7 +38,7 @@ extension Sampleable where Self: Intersectable {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
                 var interaction = SurfaceInteraction()
-                try intersect(ray: ray, tHit: &tHit, material: -1, interaction: &interaction)
+                try intersect(ray: ray, tHit: &tHit, interaction: &interaction)
                 if !interaction.valid {
                         return 0
                 }

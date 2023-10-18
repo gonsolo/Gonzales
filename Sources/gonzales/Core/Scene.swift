@@ -28,7 +28,6 @@ struct Scene {
                 try accelerators[acceleratorIndex].intersect(
                         ray: ray,
                         tHit: &tHit,
-                        material: -1,
                         interaction: &interaction)
         }
 

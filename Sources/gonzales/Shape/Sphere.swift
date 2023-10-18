@@ -115,7 +115,6 @@ final class Sphere: Shape {
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 let empty = { (line: Int) in

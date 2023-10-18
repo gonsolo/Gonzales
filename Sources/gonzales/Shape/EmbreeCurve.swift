@@ -14,7 +14,6 @@ final class EmbreeCurve: Shape {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 unimplemented()

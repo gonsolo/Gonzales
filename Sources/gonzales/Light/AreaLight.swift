@@ -49,14 +49,12 @@ struct AreaLight: Boundable, Intersectable {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 if alpha == 0 { return }
                 try shape.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        material: material,
                         interaction: &interaction)
                 interaction.areaLight = self
         }

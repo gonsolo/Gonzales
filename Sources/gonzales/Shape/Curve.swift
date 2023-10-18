@@ -285,7 +285,6 @@ final class Curve: Shape {
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 let ray = worldToObject * worldRay
@@ -338,7 +337,6 @@ final class Curve: Shape {
                         depth: maxDepth)
                 tHit = interactionAndT.1
                 interaction = interactionAndT.0
-                interaction.material = material
         }
 
         func area() -> FloatX {

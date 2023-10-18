@@ -17,10 +17,8 @@ final class Disk: Shape {
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
-                //let ray = worldToObject * worldRay
                 // TODO
         }
 

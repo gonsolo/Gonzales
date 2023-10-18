@@ -3,7 +3,6 @@ struct GeometricPrimitive: Boundable, Intersectable {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 if alpha == 0 { return }
@@ -11,7 +10,6 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 try shape.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        material: self.material,
                         interaction: &interaction)
                 if interaction.valid {
                         interaction.mediumInterface = mediumInterface

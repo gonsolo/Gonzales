@@ -9,7 +9,6 @@ enum Accelerator: Boundable, Intersectable {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 switch self {
@@ -17,19 +16,16 @@ enum Accelerator: Boundable, Intersectable {
                         try boundingHierarchy.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 case .embree(let embree):
                         try embree.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 case .optix(let optix):
                         try optix.intersect(
                                 ray: ray,
                                 tHit: &tHit,
-                                material: material,
                                 interaction: &interaction)
                 }
         }

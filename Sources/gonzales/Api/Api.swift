@@ -22,7 +22,6 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
                 let optix = try Optix(primitives: primitives)
                 let accelerator = Accelerator.optix(optix)
                 return accelerator
-
         default:
                 throw ApiError.accelerator
         }

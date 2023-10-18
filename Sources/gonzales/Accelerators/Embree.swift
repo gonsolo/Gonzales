@@ -82,7 +82,6 @@ final class EmbreeAccelerator: EmbreeBase {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 try intersect(
@@ -93,7 +92,6 @@ final class EmbreeAccelerator: EmbreeBase {
                         directionY: ray.direction.y,
                         directionZ: ray.direction.z,
                         tHit: &tHit,
-                        material: material,
                         interaction: &interaction)
         }
 
@@ -106,7 +104,6 @@ final class EmbreeAccelerator: EmbreeBase {
                 directionY: FloatX,
                 directionZ: FloatX,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
 

@@ -179,7 +179,6 @@ struct Triangle: Shape {
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
-                material: MaterialIndex,
                 interaction: inout SurfaceInteraction
         ) throws {
                 let empty = { (line: Int) in
@@ -333,7 +332,6 @@ struct Triangle: Shape {
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex
-                interaction.material = material
         }
 
         private func getLocalPoint(index: Int) -> Point {
