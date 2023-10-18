@@ -26,53 +26,6 @@ func optixError(_ message: String = "") -> Never {
         exit(-1)
 }
 
-class CudaBuffer<T> {
-
-        init(count: Int = 1) throws {
-                self.count = count
-                try allocate()
-        }
-
-        deinit {
-                let error = cudaFree(pointer)
-                if error != cudaSuccess {
-                        print("Error in \(self) deinit: cudaFree \(error)!")
-                }
-        }
-
-        private func allocate() throws {
-                let error = cudaMalloc(&pointer, sizeInBytes)
-                try cudaCheck(error)
-        }
-
-        func download(_ t: inout T) throws {
-                try withUnsafeMutablePointer(to: &t) { t in
-                        let error = cudaMemcpy(t, pointer, sizeInBytes, cudaMemcpyDeviceToHost)
-                        try cudaCheck(error)
-                }
-        }
-
-        func upload(_ t: T) throws {
-                var t = t
-                try withUnsafePointer(to: &t) { t in
-                        let error = cudaMemcpy(pointer, t, sizeInBytes, cudaMemcpyHostToDevice)
-                        try cudaCheck(error)
-                }
-        }
-
-        var sizeInBytes: Int {
-                //return count * MemoryLayout<T>.stride
-                return count * MemoryLayout<T>.size
-        }
-
-        var devicePointer: CUdeviceptr {
-                return UInt64(bitPattern: Int64(Int(bitPattern: pointer)))
-        }
-
-        var count: Int = 0
-        var pointer: UnsafeMutableRawPointer? = nil
-}
-
 class Optix {
 
        var triangleInput = OptixBuildInput()
@@ -101,7 +54,6 @@ class Optix {
         var triangleCount = 0
 
         func add(primitives: [Boundable & Intersectable]) throws {
-                //var triangleInput: OptixBuildInput! = nil
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
@@ -129,51 +81,13 @@ class Optix {
                                 optixError("Unknown primitive \(primitive).")
                         }
                 }
-        //        traversableHandle = try buildAccel()
-        //        printGreen("Optix: Added \(triangleCount) triangles.")
         }
-
-        var traversableHandle: OptixTraversableHandle = 0
 
         private func optixCheck(_ optixResult: OptixResult, _ lineNumber: Int = #line) throws {
                 if optixResult != OPTIX_SUCCESS {
                         print("OptixError: \(optixResult) from line \(lineNumber)")
                         throw OptixError.optixCheck
                 }
-        }
-
-        private func cStringToString<T>(_ cString: T) -> String {
-                return withUnsafePointer(to: cString) {
-                        $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout.size(ofValue: $0)) {
-                                String(cString: $0)
-                        }
-                }
-        }
-
-        private func initializeCuda() throws {
-
-                cudaFree(nil)
-
-                var numDevices: Int32 = 0
-                var cudaError: cudaError_t
-                cudaError = cudaGetDeviceCount(&numDevices)
-                try cudaCheck(cudaError)
-                guard numDevices == 1 else {
-                        throw OptixError.noDevice
-                }
-
-                var cudaDevice: Int32 = 0
-                cudaError = cudaGetDevice(&cudaDevice)
-                try cudaCheck(cudaError)
-                cudaError = cudaSetDevice(cudaDevice)
-                try cudaCheck(cudaError)
-
-                var cudaDeviceProperties: cudaDeviceProp = cudaDeviceProp()
-                cudaError = cudaGetDeviceProperties_v2(&cudaDeviceProperties, cudaDevice)
-                try cudaCheck(cudaError)
-
-                let deviceName = cStringToString(cudaDeviceProperties.name)
-                print(deviceName)
         }
 
         private func printGreen(_ message: String) {
@@ -183,27 +97,6 @@ class Optix {
                 let ansiEscapeGreen = escape + "[" + bold + ";" + green + "m"
                 let ansiEscapeReset = escape + "[" + "0" + "m"
                 print(ansiEscapeGreen + message + ansiEscapeReset)
-        }
-
-        private func initializeOptix() throws {
-                let optixResult = optixInit()
-                try optixCheck(optixResult)
-                printGreen("Optix initialization ok.")
-        }
-
-        private func getPipelineCompileOptions() -> OptixPipelineCompileOptions {
-                var pipelineCompileOptions = OptixPipelineCompileOptions()
-                pipelineCompileOptions.traversableGraphFlags =
-                        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS.rawValue
-                pipelineCompileOptions.usesMotionBlur = Int32(truncating: false)
-                pipelineCompileOptions.numPayloadValues = 2
-                pipelineCompileOptions.numAttributeValues = 2
-                pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE.rawValue
-                let launchParametersString = "launchParameters"
-                launchParametersString.withCString {
-                        pipelineCompileOptions.pipelineLaunchParamsVariableName = $0
-                }
-                return pipelineCompileOptions
         }
 
         func optixSetup() {
@@ -286,8 +179,6 @@ class Optix {
         func worldBound() -> Bounds3f {
                 return bounds
         }
-
-        var launchParametersBuffer: CudaBuffer<LaunchParameters>! = nil
 
         var bounds = Bounds3f()
 
