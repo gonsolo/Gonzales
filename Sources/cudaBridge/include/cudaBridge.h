@@ -11,7 +11,6 @@ extern "C" {
 	void gonzoAdd(float, float, float, float, float, float, float, float, float);
 	void gonzoSetup();
 	void gonzoRender(bool, float, float, float, float, float, float, float&, float&, float&, float&, float&, float&, float&, int&, int&);
-	void gonzoWrite();
 #ifdef __cplusplus
 }
 #endif

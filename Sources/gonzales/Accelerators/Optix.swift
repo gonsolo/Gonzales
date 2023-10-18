@@ -2,25 +2,6 @@ import Foundation
 import cuda
 import cudaBridge
 
-enum OptixError: Error {
-        case cudaCheck
-        case noDevice
-        case noFile
-        case optixCheck
-}
-
-func cudaCheck(_ cudaError: cudaError_t) throws {
-        if cudaError != cudaSuccess {
-                throw OptixError.cudaCheck
-        }
-}
-
-func cudaCheck(_ cudaResult: CUresult) throws {
-        if cudaResult != CUDA_SUCCESS {
-                throw OptixError.cudaCheck
-        }
-}
-
 func optixError(_ message: String = "") -> Never {
         print("optixError: \(message)")
         exit(-1)
@@ -28,30 +9,14 @@ func optixError(_ message: String = "") -> Never {
 
 class Optix {
 
-       var triangleInput = OptixBuildInput()
-
         private func add(triangle: Triangle) throws {
-
                 let points = triangle.getWorldPoints()
-
                 bounds = union(first: bounds, second: triangle.worldBound())
-
                 gonzoAdd(
                         points.0.x, points.0.y, points.0.z,
                         points.1.x, points.1.y, points.1.z,
                         points.2.x, points.2.y, points.2.z)
         }
-
-        var deviceVertices: CUdeviceptr = 0
-        var triangleInputFlags: UInt32 = 0
-
-        private func syncCheck() throws {
-                cudaDeviceSynchronize()
-                let lastError = cudaGetLastError()
-                try cudaCheck(lastError)
-        }
-
-        var triangleCount = 0
 
         func add(primitives: [Boundable & Intersectable]) throws {
                 for primitive in primitives {
@@ -81,22 +46,6 @@ class Optix {
                                 optixError("Unknown primitive \(primitive).")
                         }
                 }
-        }
-
-        private func optixCheck(_ optixResult: OptixResult, _ lineNumber: Int = #line) throws {
-                if optixResult != OPTIX_SUCCESS {
-                        print("OptixError: \(optixResult) from line \(lineNumber)")
-                        throw OptixError.optixCheck
-                }
-        }
-
-        private func printGreen(_ message: String) {
-                let escape = "\u{001B}"
-                let bold = "1"
-                let green = "32"
-                let ansiEscapeGreen = escape + "[" + bold + ";" + green + "m"
-                let ansiEscapeReset = escape + "[" + "0" + "m"
-                print(ansiEscapeGreen + message + ansiEscapeReset)
         }
 
         func optixSetup() {
@@ -142,10 +91,6 @@ class Optix {
                 return (intersectionPoint, intersectionNormal, intersectionIntersected, primID)
         }
 
-        func optixWrite() {
-                gonzoWrite()
-        }
-
         func render(ray: Ray, tHit: inout Float) throws -> (Point, Normal, Bool, Int) {
                 return optixRender(ray: ray, tHit: &tHit);
         }
@@ -181,7 +126,7 @@ class Optix {
         }
 
         var bounds = Bounds3f()
-
+        var triangleCount = 0
         var materials = [Int: MaterialIndex]()
         var areaLights = [Int: AreaLight]()
 }

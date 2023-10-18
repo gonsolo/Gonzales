@@ -110,26 +110,6 @@ void gonzoRender(
 	}
 }
 
-void gonzoWrite() {
-	puts("gonzoWrite!\n");
-	try {
-		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data(), primID.data());
-		std::ofstream bla("bla.ppm");
-		bla << "P3" << std::endl;
-		bla << "32 32 " << std::endl;
-		bla << "255" << std::endl;
-		for (auto i : pixels) {
-			auto r = (i & 0x000000ff) >> 0;
-			auto g = (i & 0x0000ff00) >> 8;
-			auto b = (i & 0x00ff0000) >> 16;
-			bla << r << " " << g << " " << b << std::endl;
-		}
-	} catch (std::runtime_error& e) {
-		std::cout << "FATAL ERROR: " << e.what() << std::endl;
-		exit(1);
-	}
-}
-
 #ifdef __cplusplus
 }
 #endif
