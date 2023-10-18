@@ -9,154 +9,6 @@ enum OptixError: Error {
         case optixCheck
 }
 
-struct SimplePixel {
-        let red: UInt8 = 0
-        let green: UInt8 = 0
-        let blue: UInt8 = 0
-        let alpha: UInt8 = 0
-}
-
-struct SimplePixel4: CustomStringConvertible {
-
-        var description: String {
-                return "SimplePixel4:\n  \(pixels.0)\n  \(pixels.1)\n  \(pixels.2)\n  \(pixels.3)"
-        }
-
-        subscript(x: Int, y: Int) -> SimplePixel {
-                get {
-                        let index = y * dimension + x
-                        return self[index]
-                }
-        }
-
-        subscript(index: Int) -> SimplePixel {
-                get {
-                        switch index {
-                        case 0: return pixels.0
-                        case 1: return pixels.1
-                        case 2: return pixels.2
-                        case 3: return pixels.3
-                        default: fatalError("SimplePixel4: \(index)")
-                        }
-                }
-        }
-
-        var dimension: Int { 2 }
-        var width: Int { dimension }
-        var height: Int { dimension }
-        var depth: Int { 1 }
-
-        let pixels = (SimplePixel(), SimplePixel(), SimplePixel(), SimplePixel())
-}
-
-struct SimplePixel16: CustomStringConvertible {
-
-        var description: String {
-                return "SimplePixel16:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
-        }
-
-        subscript(x: Int, y: Int) -> SimplePixel {
-                get {
-                        let index = y * dimension + x
-                        return self[index]
-                }
-        }
-
-        subscript(index: Int) -> SimplePixel {
-                get {
-                        let quotient = index / 4
-                        let remainder = index % 4
-
-                        switch quotient {
-                        case 0: return blocks.0[remainder]
-                        case 1: return blocks.1[remainder]
-                        case 2: return blocks.2[remainder]
-                        case 3: return blocks.3[remainder]
-                        default: fatalError("SimplePixel16: \(quotient)")
-                        }
-                }
-        }
-
-        var dimension: Int { 2 * blocks.0.dimension }
-        var width: Int { dimension }
-        var height: Int { dimension }
-        var depth: Int { 1 }
-
-        let blocks = (SimplePixel4(), SimplePixel4(), SimplePixel4(), SimplePixel4())
-}
-
-struct SimplePixel64: CustomStringConvertible {
-
-        var description: String {
-                return "SimplePixel64:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
-        }
-
-        subscript(x: Int, y: Int) -> SimplePixel {
-                get {
-                        let index = y * dimension + x
-                        return self[index]
-                }
-        }
-
-        subscript(index: Int) -> SimplePixel {
-                get {
-                        let quotient = index / 16
-                        let remainder = index % 16
-
-                        switch quotient {
-                        case 0: return blocks.0[remainder]
-                        case 1: return blocks.1[remainder]
-                        case 2: return blocks.2[remainder]
-                        case 3: return blocks.3[remainder]
-                        default: fatalError("SimplePixel64: \(index) \(dimension) \(quotient) \(remainder)")
-                        }
-                }
-        }
-
-        var dimension: Int { 2 * blocks.0.dimension }
-        var width: Int { dimension }
-        var height: Int { dimension }
-        var depth: Int { 1 }
-
-        let blocks = (SimplePixel16(), SimplePixel16(), SimplePixel16(), SimplePixel16())
-}
-
-struct SimplePixel256: CustomStringConvertible {
-
-        var description: String {
-                return "SimplePixel256:\n  \(blocks.0)\n  \(blocks.1)\n  \(blocks.2)\n  \(blocks.3)"
-        }
-
-        subscript(x: Int, y: Int) -> SimplePixel {
-                get {
-                        let index = y * dimension + x
-                        return self[index]
-                }
-        }
-
-        subscript(index: Int) -> SimplePixel {
-                get {
-                        let quotient = index / 64
-                        let remainder = index % 64
-
-                        switch quotient {
-                        case 0: return blocks.0[remainder]
-                        case 1: return blocks.1[remainder]
-                        case 2: return blocks.2[remainder]
-                        case 3: return blocks.3[remainder]
-                        default: fatalError("SimplePixel256: \(index) \(dimension) \(quotient) \(remainder)")
-                        }
-                }
-        }
-
-        var dimension: Int { 2 * blocks.0.dimension }
-        var width: Int { dimension }
-        var height: Int { dimension }
-        var depth: Int { 1 }
-
-        let blocks = (SimplePixel64(), SimplePixel64(), SimplePixel64(), SimplePixel64())
-}
-
 func cudaCheck(_ cudaError: cudaError_t) throws {
         if cudaError != cudaSuccess {
                 throw OptixError.cudaCheck
@@ -222,10 +74,6 @@ class CudaBuffer<T> {
 }
 
 class Optix {
-
-        private func initializeBuffers() throws {
-                colorBuffer = try CudaBuffer<PixelBlock>()
-        }
 
        var triangleInput = OptixBuildInput()
 
@@ -326,8 +174,6 @@ class Optix {
 
                 let deviceName = cStringToString(cudaDeviceProperties.name)
                 print(deviceName)
-
-                colorBuffer = try CudaBuffer<PixelBlock>()
         }
 
         private func printGreen(_ message: String) {
@@ -411,59 +257,6 @@ class Optix {
                 return optixRender(ray: ray, tHit: &tHit);
         }
 
-        func printColors() throws {
-                let error = cudaMemcpy(
-                        &pixelBlock,
-                        colorBuffer.pointer,
-                        colorBuffer.sizeInBytes,
-                        cudaMemcpyDeviceToHost)
-                try cudaCheck(error)
-
-                let resolution = Point2I(x: pixelBlock.width, y: pixelBlock.height)
-                var image = Image(resolution: resolution)
-                for y in 0..<pixelBlock.height {
-                        for x in 0..<pixelBlock.width {
-                                let color = RgbSpectrum(
-                                        r: Float(pixelBlock[x, y].red) / 255,
-                                        g: Float(pixelBlock[x, y].green) / 255,
-                                        b: Float(pixelBlock[x, y].blue) / 255)
-                                let pixel = Point2I(x: x, y: y)
-                                image.addPixel(
-                                        withColor: color,
-                                        withWeight: 1,
-                                        atLocation: pixel)
-                        }
-                }
-                let imageWriter = OpenImageIOWriter()
-                try imageWriter.write(fileName: "optix.exr", image: image)
-        }
-
-        private func buildLaunch(ray: Ray) throws {
-                var launchParameters = LaunchParameters()
-                launchParameters.width = Int32(pixelBlock.width)
-                launchParameters.height = Int32(pixelBlock.height)
-                launchParameters.pointerToPixels = colorBuffer.pointer
-                launchParameters.traversable = traversableHandle
-
-                launchParameters.camera.position.x = ray.origin.x
-                launchParameters.camera.position.y = ray.origin.y
-                launchParameters.camera.position.z = ray.origin.z
-
-                launchParameters.camera.direction.x = ray.direction.x
-                launchParameters.camera.direction.y = ray.direction.y
-                launchParameters.camera.direction.z = ray.direction.z
-
-                launchParameters.camera.pixel.x = Int32(ray.cameraSample.film.0)
-                launchParameters.camera.pixel.y = Int32(ray.cameraSample.film.1)
-
-                let uploadError = cudaMemcpy(
-                        launchParametersBuffer.pointer,
-                        &launchParameters,
-                        MemoryLayout<LaunchParameters>.stride,
-                        cudaMemcpyHostToDevice)
-                try cudaCheck(uploadError)
-        }
-
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -484,16 +277,7 @@ class Optix {
                         interaction.areaLight = areaLights[primID] ?? nil
                 }
 
-                //interaction.valid = true
-                //interaction.position = objectToWorld * pHit
-                //interaction.normal = normalized(objectToWorld * normal)
-                //interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
-                //interaction.wo = normalized(objectToWorld * -ray.direction)
-                //interaction.dpdu = dpdu
-                //interaction.uv = uvHit
-                //interaction.faceIndex = faceIndex
-                //interaction.material = material
- }
+        }
 
         func objectBound() -> Bounds3f {
                 return bounds
@@ -503,15 +287,7 @@ class Optix {
                 return bounds
         }
 
-        var raygenProgramGroup: OptixProgramGroup?
-        var missProgramGroup: OptixProgramGroup?
-        var hitgroupProgramGroup: OptixProgramGroup?
-
         var launchParametersBuffer: CudaBuffer<LaunchParameters>! = nil
-        var colorBuffer: CudaBuffer<PixelBlock>! = nil
-
-        typealias PixelBlock = SimplePixel256
-        var pixelBlock = PixelBlock()
 
         var bounds = Bounds3f()
 
