@@ -161,11 +161,7 @@ editMakefile:
 
 NVCC = nvcc
 
-#optix: $(OPTIX_OUTPUT) Sources/cudaBridge/embedded.c
 optix: Sources/cudaBridge/embedded.c
-
-#$(OPTIX_OUTPUT): Sources/optix/kernels.cu
-#	@$(NVCC) $(NVCC_OPTIONS) Sources/optix/kernels.cu -o $(OPTIX_OUTPUT); cd - > /dev/null
 
 Sources/cudaBridge/devicePrograms.ptx: Sources/cudaBridge/devicePrograms.cu Sources/cudaBridge/LaunchParams.h
 	@cd Sources/cudaBridge; $(NVCC) -allow-unsupported-compiler --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
