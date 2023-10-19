@@ -61,7 +61,7 @@ void gonzoSetup() {
 	}
 }
 
-void gonzoRender(
+void optixIntersect(
 		bool useRay,
 		float ox, float oy, float oz,
 		float dx, float dy, float dz,
@@ -71,7 +71,6 @@ void gonzoRender(
 		int& didIntersect,
 		int& didPrimID
 		) {
-	//puts("gonzoRender!\n");
 	try {
 		osc::Camera camera = {
 			/*from*/osc::vec3f(-10.f,2.f,-12.f),
