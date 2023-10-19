@@ -73,16 +73,12 @@ class Optix {
                 return (intersectionPoint, intersectionNormal, intersectionIntersected, primID)
         }
 
-        func render(ray: Ray, tHit: inout Float) throws -> (Point, Normal, Bool, Int) {
-                return optixRender(ray: ray, tHit: &tHit);
-        }
-
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let (intersectionPoint, intersectionNormal, intersected, primID) = try render(ray: ray, tHit: &tHit)
+                let (intersectionPoint, intersectionNormal, intersected, primID) = optixRender(ray: ray, tHit: &tHit);
                 if intersected {
                         interaction.valid = true
                         interaction.position = intersectionPoint
