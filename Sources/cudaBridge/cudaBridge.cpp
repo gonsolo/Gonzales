@@ -16,8 +16,8 @@ void contextLogCallback(unsigned int level, const char *tag, const char *message
       fprintf( stderr, "[%2d][%12s]: %s\n", (int)level, tag, message );
 }
 
-osc::TriangleMesh triangleMesh;
-osc::Model model;
+TriangleMesh triangleMesh;
+Model model;
 
 void optixAddTriangle(
 	float ax, float ay, float az,
@@ -32,7 +32,7 @@ void optixAddTriangle(
 	}
 }
 
-osc::SampleRenderer* sampleRenderer;
+SampleRenderer* sampleRenderer;
 std::vector<uint32_t> pixels;
 std::vector<gdt::vec3f> vertices;
 std::vector<gdt::vec3f> normals;
@@ -42,8 +42,8 @@ std::vector<int> primID;
 void optixSetup() {
 	try {
 		model.meshes.push_back(&triangleMesh);
-		sampleRenderer = new osc::SampleRenderer(&model);
-		osc::vec2i newSize {32, 32};
+		sampleRenderer = new SampleRenderer(&model);
+		vec2i newSize {32, 32};
 		sampleRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
 		vertices.resize(newSize.x * newSize.y);
@@ -66,10 +66,10 @@ void optixIntersect(
 		int& didPrimID
 		) {
 	try {
-		gdt::vec3f from = osc::vec3f(ox, oy, oz);
-		gdt::vec3f dir = osc::vec3f(dx, dy, dz);
+		gdt::vec3f from = vec3f(ox, oy, oz);
+		gdt::vec3f dir = vec3f(dx, dy, dz);
 
-		osc::Camera camera = {
+		Camera camera = {
 			from,
 			dir,
 			tHit
