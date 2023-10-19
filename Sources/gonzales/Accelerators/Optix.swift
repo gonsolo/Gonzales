@@ -47,7 +47,11 @@ class Optix {
                 }
         }
 
-        func optixRender(ray: Ray, tHit: inout Float) -> (Point, Normal, Bool, Int) {
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 var px: Float32 = 0
                 var py: Float32 = 0
                 var pz: Float32 = 0
@@ -70,16 +74,7 @@ class Optix {
                 let intersectionNormal = Normal(x: nx, y: ny, z: nz)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
                 let primID = Int(primID32)
-                return (intersectionPoint, intersectionNormal, intersectionIntersected, primID)
-        }
-
-        func intersect(
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                let (intersectionPoint, intersectionNormal, intersected, primID) = optixRender(ray: ray, tHit: &tHit);
-                if intersected {
+                if intersectionIntersected {
                         interaction.valid = true
                         interaction.position = intersectionPoint
                         interaction.normal = intersectionNormal
@@ -91,7 +86,6 @@ class Optix {
                         interaction.material = materials[primID] ?? -1
                         interaction.areaLight = areaLights[primID] ?? nil
                 }
-
         }
 
         func objectBound() -> Bounds3f {
