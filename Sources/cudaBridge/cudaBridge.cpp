@@ -71,8 +71,6 @@ void optixIntersect(
 
 		osc::Camera camera = {
 			from,
-                        /* at */osc::vec3f(0.f,0.f,0.f),
-                        /* up */osc::vec3f(0.f,1.f,0.f),
 			dir,
 			tHit
 		};
