@@ -26,12 +26,6 @@ struct TriangleMesh {
 };
 
 struct Model {
-  ~Model()
-  {
-    //for (auto mesh : meshes) delete mesh;
-  }
-  
   std::vector<TriangleMesh *> meshes;
 };
 
-Model *loadOBJ(const std::string &objFile);
