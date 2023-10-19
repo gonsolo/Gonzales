@@ -1,4 +1,4 @@
-#include "SampleRenderer.h"
+#include "OptixRenderer.h"
 
 extern "C" char embedded_ptx_code[];
 
@@ -21,7 +21,7 @@ struct __align__( OPTIX_SBT_RECORD_ALIGNMENT ) HitgroupRecord
 };
 
 
-SampleRenderer::SampleRenderer(const Model *model)
+OptixRenderer::OptixRenderer(const Model *model)
   : model(model)
 {
   initOptix();
@@ -36,7 +36,7 @@ SampleRenderer::SampleRenderer(const Model *model)
   launchParamsBuffer.alloc(sizeof(launchParams));
 }
 
-OptixTraversableHandle SampleRenderer::buildAccel()
+OptixTraversableHandle OptixRenderer::buildAccel()
 {
   const int numMeshes = (int)model->meshes.size();
   vertexBuffer.resize(numMeshes);
@@ -46,16 +46,12 @@ OptixTraversableHandle SampleRenderer::buildAccel()
   
   OptixTraversableHandle asHandle { 0 };
   
-  // ==================================================================
-  // triangle inputs
-  // ==================================================================
   std::vector<OptixBuildInput> triangleInput(numMeshes);
   std::vector<CUdeviceptr> d_vertices(numMeshes);
   std::vector<CUdeviceptr> d_indices(numMeshes);
   std::vector<uint32_t> triangleInputFlags(numMeshes);
 
   for (int meshID=0;meshID<numMeshes;meshID++) {
-    // upload the model to the device: the builder
     TriangleMesh &mesh = *model->meshes[meshID];
     vertexBuffer[meshID].alloc_and_upload(mesh.vertex);
     indexBuffer[meshID].alloc_and_upload(mesh.index);
@@ -68,8 +64,6 @@ OptixTraversableHandle SampleRenderer::buildAccel()
     triangleInput[meshID].type
       = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
 
-    // create local variables, because we need a *pointer* to the
-    // device pointers
     d_vertices[meshID] = vertexBuffer[meshID].d_pointer();
     d_indices[meshID]  = indexBuffer[meshID].d_pointer();
     
@@ -85,17 +79,12 @@ OptixTraversableHandle SampleRenderer::buildAccel()
   
     triangleInputFlags[meshID] = 0 ;
   
-    // in this example we have one SBT entry, and no per-primitive
-    // materials:
     triangleInput[meshID].triangleArray.flags               = &triangleInputFlags[meshID];
     triangleInput[meshID].triangleArray.numSbtRecords               = 1;
     triangleInput[meshID].triangleArray.sbtIndexOffsetBuffer        = 0; 
     triangleInput[meshID].triangleArray.sbtIndexOffsetSizeInBytes   = 0; 
     triangleInput[meshID].triangleArray.sbtIndexOffsetStrideInBytes = 0; 
   }
-  // ==================================================================
-  // BLAS setup
-  // ==================================================================
   
   OptixAccelBuildOptions accelOptions = {};
   accelOptions.buildFlags             = OPTIX_BUILD_FLAG_NONE
@@ -109,13 +98,9 @@ OptixTraversableHandle SampleRenderer::buildAccel()
               (optixContext,
                &accelOptions,
                triangleInput.data(),
-               (int)numMeshes,  // num_build_inputs
+               (int)numMeshes,
                &blasBufferSizes
                ));
-  
-  // ==================================================================
-  // prepare compaction
-  // ==================================================================
   
   CUDABuffer compactedSizeBuffer;
   compactedSizeBuffer.alloc(sizeof(uint64_t));
@@ -123,10 +108,6 @@ OptixTraversableHandle SampleRenderer::buildAccel()
   OptixAccelEmitDesc emitDesc;
   emitDesc.type   = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
   emitDesc.result = compactedSizeBuffer.d_pointer();
-  
-  // ==================================================================
-  // execute build (main stage)
-  // ==================================================================
   
   CUDABuffer tempBuffer;
   tempBuffer.alloc(blasBufferSizes.tempSizeInBytes);
@@ -151,9 +132,6 @@ OptixTraversableHandle SampleRenderer::buildAccel()
                               ));
   CUDA_SYNC_CHECK();
   
-  // ==================================================================
-  // perform compaction
-  // ==================================================================
   uint64_t compactedSize;
   compactedSizeBuffer.download(&compactedSize,1);
   
@@ -166,18 +144,14 @@ OptixTraversableHandle SampleRenderer::buildAccel()
                                 &asHandle));
   CUDA_SYNC_CHECK();
   
-  // ==================================================================
-  // aaaaaand .... clean up
-  // ==================================================================
-  outputBuffer.free(); // << the UNcompacted, temporary output buffer
+  outputBuffer.free();
   tempBuffer.free();
   compactedSizeBuffer.free();
   
   return asHandle;
 }
 
-/*! helper function that initializes optix and checks for errors */
-void SampleRenderer::initOptix()
+void OptixRenderer::initOptix()
 {
   cudaFree(0);
   int numDevices;
@@ -186,9 +160,6 @@ void SampleRenderer::initOptix()
     throw std::runtime_error("no CUDA capable devices found!");
   std::cout << "Found " << numDevices << " CUDA devices" << std::endl;
 
-  // -------------------------------------------------------
-  // initialize optix
-  // -------------------------------------------------------
   OPTIX_CHECK( optixInit() );
   std::cout << GDT_TERMINAL_GREEN
             << "Successfully initialized optix!"
@@ -203,11 +174,8 @@ static void context_log_cb(unsigned int level,
   //fprintf( stderr, "[%2d][%12s]: %s\n", (int)level, tag, message );
 }
 
-/*! creates and configures a optix device context (in this simple
-  example, only for the primary GPU device) */
-void SampleRenderer::createContext()
+void OptixRenderer::createContext()
 {
-  // for this sample, do everything on one device
   const int deviceID = 0;
   CUDA_CHECK(SetDevice(deviceID));
   CUDA_CHECK(StreamCreate(&stream));
@@ -224,12 +192,7 @@ void SampleRenderer::createContext()
               (optixContext,context_log_cb,nullptr,4));
 }
 
-
-
-/*! creates the module that contains all the programs we are going
-  to use. in this simple example, we use a single module from a
-  single .cu file, using a single embedded ptx string */
-void SampleRenderer::createModule()
+void OptixRenderer::createModule()
 {
   moduleCompileOptions.maxRegisterCount  = 50;
   moduleCompileOptions.optLevel          = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
@@ -262,10 +225,8 @@ void SampleRenderer::createModule()
   
 
 
-/*! does all setup for the raygen program(s) we are going to use */
-void SampleRenderer::createRaygenPrograms()
+void OptixRenderer::createRaygenPrograms()
 {
-  // we do a single ray gen program in this example:
   raygenPGs.resize(1);
     
   OptixProgramGroupOptions pgOptions = {};
@@ -274,7 +235,6 @@ void SampleRenderer::createRaygenPrograms()
   pgDesc.raygen.module            = module;           
   pgDesc.raygen.entryFunctionName = "__raygen__renderFrame";
 
-  // OptixProgramGroup raypg;
   char log[2048];
   size_t sizeof_log = sizeof( log );
   OPTIX_CHECK(optixProgramGroupCreate(optixContext,
@@ -287,10 +247,8 @@ void SampleRenderer::createRaygenPrograms()
   //if (sizeof_log > 1) PRINT(log);
 }
   
-/*! does all setup for the miss program(s) we are going to use */
-void SampleRenderer::createMissPrograms()
+void OptixRenderer::createMissPrograms()
 {
-  // we do a single ray gen program in this example:
   missPGs.resize(1);
     
   OptixProgramGroupOptions pgOptions = {};
@@ -299,7 +257,6 @@ void SampleRenderer::createMissPrograms()
   pgDesc.miss.module            = module;           
   pgDesc.miss.entryFunctionName = "__miss__radiance";
 
-  // OptixProgramGroup raypg;
   char log[2048];
   size_t sizeof_log = sizeof( log );
   OPTIX_CHECK(optixProgramGroupCreate(optixContext,
@@ -312,10 +269,8 @@ void SampleRenderer::createMissPrograms()
   //if (sizeof_log > 1) PRINT(log);
 }
   
-/*! does all setup for the hitgroup program(s) we are going to use */
-void SampleRenderer::createHitgroupPrograms()
+void OptixRenderer::createHitgroupPrograms()
 {
-  // for this simple example, we set up a single hit group
   hitgroupPGs.resize(1);
 
   OptixProgramGroupOptions pgOptions = {};
@@ -339,8 +294,7 @@ void SampleRenderer::createHitgroupPrograms()
 }
   
 
-/*! assembles the full pipeline of all programs */
-void SampleRenderer::createPipeline()
+void OptixRenderer::createPipeline()
 {
   std::vector<OptixProgramGroup> programGroups;
   for (auto pg : raygenPGs)
@@ -363,29 +317,18 @@ void SampleRenderer::createPipeline()
   //if (sizeof_log > 1) PRINT(log);
 
   OPTIX_CHECK(optixPipelineSetStackSize
-              (/* [in] The pipeline to configure the stack size for */
+              (
                pipeline, 
-               /* [in] The direct stack size requirement for direct
-                  callables invoked from IS or AH. */
                2*1024,
-               /* [in] The direct stack size requirement for direct
-                  callables invoked from RG, MS, or CH.  */                 
                2*1024,
-               /* [in] The continuation stack requirement. */
                2*1024,
-               /* [in] The maximum depth of a traversable graph
-                  passed to trace. */
                1));
   //if (sizeof_log > 1) PRINT(log);
 }
 
 
-/*! constructs the shader binding table */
-void SampleRenderer::buildSBT()
+void OptixRenderer::buildSBT()
 {
-  // ------------------------------------------------------------------
-  // build raygen records
-  // ------------------------------------------------------------------
   std::vector<RaygenRecord> raygenRecords;
   for (int i=0;i<raygenPGs.size();i++) {
     RaygenRecord rec;
@@ -396,9 +339,6 @@ void SampleRenderer::buildSBT()
   raygenRecordsBuffer.alloc_and_upload(raygenRecords);
   sbt.raygenRecord = raygenRecordsBuffer.d_pointer();
 
-  // ------------------------------------------------------------------
-  // build miss records
-  // ------------------------------------------------------------------
   std::vector<MissRecord> missRecords;
   for (int i=0;i<missPGs.size();i++) {
     MissRecord rec;
@@ -411,16 +351,12 @@ void SampleRenderer::buildSBT()
   sbt.missRecordStrideInBytes = sizeof(MissRecord);
   sbt.missRecordCount         = (int)missRecords.size();
 
-  // ------------------------------------------------------------------
-  // build hitgroup records
-  // ------------------------------------------------------------------
   int numObjects = (int)model->meshes.size();
   std::vector<HitgroupRecord> hitgroupRecords;
   for (int meshID=0;meshID<numObjects;meshID++) {
     auto mesh = model->meshes[meshID];
     
     HitgroupRecord rec;
-    // all meshes use the same code, so all same hit group
     OPTIX_CHECK(optixSbtRecordPackHeader(hitgroupPGs[0],&rec));
     rec.data.color   = mesh->diffuse;
     if (mesh->diffuseTextureID >= 0) {
@@ -443,11 +379,8 @@ void SampleRenderer::buildSBT()
 
 
 
-/*! render one frame */
-void SampleRenderer::render()
+void OptixRenderer::render()
 {
-  // sanity check: make sure we launch only after first resize is
-  // already done:
   if (launchParams.frame.size.x == 0) return;
     
   launchParamsBuffer.upload(&launchParams,1);
@@ -463,15 +396,10 @@ void SampleRenderer::render()
                           launchParams.frame.size.y,
                           1
                           ));
-  // sync - make sure the frame is rendered before we download and
-  // display (obviously, for a high-performance application you
-  // want to use streams and double-buffering, but for this simple
-  // example, this will have to do)
   CUDA_SYNC_CHECK();
 }
 
-/*! set camera to render with */
-void SampleRenderer::setCamera(const Camera &camera)
+void OptixRenderer::setCamera(const Camera &camera)
 {
   lastSetCamera = camera;
   launchParams.camera.position  = camera.from;
@@ -479,21 +407,16 @@ void SampleRenderer::setCamera(const Camera &camera)
   launchParams.camera.tHit = camera.tHit;
 }
 
-/*! resize frame buffer to given resolution */
-void SampleRenderer::resize(const vec2i &newSize)
+void OptixRenderer::resize(const vec2i &newSize)
 {
-  // if window minimized
   if (newSize.x == 0 | newSize.y == 0) return;
   
-  // resize our cuda frame buffer
   colorBuffer.resize(newSize.x*newSize.y*sizeof(uint32_t));
   outVertexBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
   outNormalBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
   intersectedBuffer.resize(sizeof(int));
   primIDBuffer.resize(sizeof(int));
 
-  // update the launch parameters that we'll pass to the optix
-  // launch:
   launchParams.frame.size  = newSize;
   launchParams.frame.colorBuffer = (uint32_t*)colorBuffer.d_pointer();
   launchParams.frame.outVertexBuffer = (vec3f*)outVertexBuffer.d_pointer();
@@ -501,12 +424,10 @@ void SampleRenderer::resize(const vec2i &newSize)
   launchParams.frame.intersected = (int*)intersectedBuffer.d_pointer();
   launchParams.frame.primID = (int*)primIDBuffer.d_pointer();
 
-  // and re-set the camera, since aspect may have changed
   setCamera(lastSetCamera);
 }
 
-/*! download the rendered color buffer */
-void SampleRenderer::downloadPixels(
+void OptixRenderer::downloadPixels(
   uint32_t h_pixels[],
   vec3f h_vertices[],
   vec3f h_normals[],

@@ -10,10 +10,10 @@ struct Camera {
   float tHit;
 };
 
-class SampleRenderer
+class OptixRenderer
 {
 public:
-  SampleRenderer(const Model *model);
+  OptixRenderer(const Model *model);
 
   void render();
 

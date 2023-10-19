@@ -1,8 +1,6 @@
-// This just defines the function table.
-// Without this there are link errors.
 #include "../../External/Optix/7.7.0/include/optix_function_table_definition.h"
 
-#include "SampleRenderer.h"
+#include "OptixRenderer.h"
 #include <fstream>
 
 #ifdef __cplusplus
@@ -32,7 +30,7 @@ void optixAddTriangle(
 	}
 }
 
-SampleRenderer* sampleRenderer;
+OptixRenderer* optixRenderer;
 std::vector<uint32_t> pixels;
 std::vector<gdt::vec3f> vertices;
 std::vector<gdt::vec3f> normals;
@@ -42,9 +40,9 @@ std::vector<int> primID;
 void optixSetup() {
 	try {
 		model.meshes.push_back(&triangleMesh);
-		sampleRenderer = new SampleRenderer(&model);
+		optixRenderer = new OptixRenderer(&model);
 		vec2i newSize {32, 32};
-		sampleRenderer->resize(newSize);
+		optixRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
 		vertices.resize(newSize.x * newSize.y);
 		normals.resize(newSize.x * newSize.y);
@@ -74,10 +72,10 @@ void optixIntersect(
 			dir,
 			tHit
 		};
-		sampleRenderer->setCamera(camera);
-		sampleRenderer->render();
+		optixRenderer->setCamera(camera);
+		optixRenderer->render();
 
-		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data(), primID.data());
+		optixRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data(), primID.data());
 		auto& vertex = vertices[0];
 		auto& normal = normals[0];
 		px = vertex.x;
