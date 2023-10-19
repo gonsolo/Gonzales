@@ -19,16 +19,12 @@ void contextLogCallback(unsigned int level, const char *tag, const char *message
 osc::TriangleMesh triangleMesh;
 osc::Model model;
 
-void gonzoAdd(
+void optixAddTriangle(
 	float ax, float ay, float az,
 	float bx, float by, float bz,
 	float cx, float cy, float cz)
 {
-	//puts("gonzoAdd!\n");
 	try {
-		//model.addCube(osc::vec3f(0.f,-1.5f,0.f),osc::vec3f(10.f,.1f,10.f));
-		//model.addCube(osc::vec3f(0.f,0.f,0.f),osc::vec3f(2.f,2.f,2.f));
-
 		triangleMesh.addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;

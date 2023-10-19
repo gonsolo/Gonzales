@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 	void contextLogCallback(unsigned int level, const char *tag, const char *message, void *);
-	void gonzoAdd(float, float, float, float, float, float, float, float, float);
+	void optixAddTriangle(float, float, float, float, float, float, float, float, float);
 	void gonzoSetup();
 	void optixIntersect(bool, float, float, float, float, float, float, float&, float&, float&, float&, float&, float&, float&, int&, int&);
 #ifdef __cplusplus
