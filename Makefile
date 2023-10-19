@@ -222,8 +222,8 @@ test_pbrt:
 xcode:
 	$(SWIFT) package generate-xcodeproj --xcconfig-overrides Config.xcconfig
 
-FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cpp| egrep -v \.build | wc -l)
-LINES=$(shell wc -l $$(find Sources -name \*.swift -o -name \*.h -o -name \*.cpp) | tail -n1 | awk '{ print $$1 }')
+FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| egrep -v \.build | wc -l)
+LINES=$(shell wc -l $$(find Sources -name \*.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
 	@echo $(LINES) "lines"
