@@ -155,19 +155,18 @@ em: editMakefile
 editMakefile:
 	@vi Makefile
 
-#OPTIX_INCLUDE_DIR = External/Optix/7.7.0/include
-#OPTIX_OUTPUT = .build/kernels.optixir
-#NVCC_OPTIONS = -ISources/cudaBridge/include -I $(OPTIX_INCLUDE_DIR) -rdc=true --optix-ir
-
 NVCC = nvcc
+EMBEDDED_C = Sources/cudaBridge/embedded.c
+DEVICE_PROGRAMS_SOURCE = Sources/cudaBridge/devicePrograms.cu
+DEVICE_PROGRAMS_PTX = .build/devicePrograms.ptx
 
-optix: Sources/cudaBridge/embedded.c
+optix: $(EMBEDDED_C)
 
-Sources/cudaBridge/devicePrograms.ptx: Sources/cudaBridge/devicePrograms.cu Sources/cudaBridge/LaunchParams.h
-	@cd Sources/cudaBridge; $(NVCC) -allow-unsupported-compiler --ptx -Iinclude -I../../External/Optix/7.7.0/include/ -rdc=true devicePrograms.cu; cd - > /dev/null
+$(DEVICE_PROGRAMS_PTX): $(DEVICE_PROGRAMS_SOURCE) Sources/cudaBridge/LaunchParams.h
+	@$(NVCC) -allow-unsupported-compiler --ptx -ISources/cudaBridge/include -IExternal/Optix/7.7.0/include/ -rdc=true -o $@ $< > /dev/null
 
-Sources/cudaBridge/embedded.c: Sources/cudaBridge/devicePrograms.ptx
-	@cd Sources/cudaBridge; bin2c -c --padd 0 --type char --name embedded_ptx_code devicePrograms.ptx > embedded.c; cd - > /dev/null
+$(EMBEDDED_C): $(DEVICE_PROGRAMS_PTX)
+	@bin2c -c --padd 0 --type char --name embedded_ptx_code $(DEVICE_PROGRAMS_PTX) > $(EMBEDDED_C)
 
 r: release
 release: optix
@@ -192,6 +191,7 @@ clean:
 	@$(SWIFT) package clean
 	@rm -f cornell-box.png cornell-box.exr cornell-box.hpm cornell-box.tiff tags
 	@rm -rf gonzales.xcodeproj flame.svg perf.data perf.data.old Package.resolved
+	@rm -f $(EMBEDDED_C) .build/devicePrograms.ptx
 
 #CONVERT = magick convert
 CONVERT = convert
