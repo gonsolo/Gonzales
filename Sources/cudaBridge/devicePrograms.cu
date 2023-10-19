@@ -188,30 +188,8 @@ namespace osc {
     const vec2f screen(vec2f(ix+.5f,iy+.5f)
                        / vec2f(optixLaunchParams.frame.size));
     
-    vec3f rayDir;
-    float tmax;
-    if (camera.useRay) {
-	rayDir = camera.rayDirection;
-	tmax = camera.tHit;
-    } else {
-	rayDir = normalize(camera.direction
-                             + (screen.x - 0.5f) * camera.horizontal
-                             + (screen.y - 0.5f) * camera.vertical);
-	tmax = 1e20f;
-    }
-
-    if (ix == 0 && iy == 0) {
-	//printf("position %f %f %f\n", camera.position.x, camera.position.y, camera.position.z);
-	//printf("rayDir %f %f %f\n", rayDir.x, rayDir.y, rayDir.z);
-    }
-
-    vec3f otherRayDir = normalize(camera.direction
-                             + (screen.x - 0.5f) * camera.horizontal
-                             + (screen.y - 0.5f) * camera.vertical);
-    if (ix == 0 && iy == 0) {
-	//printf("other %f %f %f\n", otherRayDir.x, otherRayDir.y, otherRayDir.z);
-    }
-    //rayDir = otherRayDir;
+    vec3f rayDir = camera.rayDirection;
+    float tmax = camera.tHit;
 
     optixTrace(optixLaunchParams.traversable,
                camera.position,

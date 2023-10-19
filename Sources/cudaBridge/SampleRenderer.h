@@ -32,7 +32,6 @@ namespace osc {
     /*! general up-vector */
     vec3f up;
 
-    bool useRay;
     vec3f rayDirection;
     float tHit;
   };

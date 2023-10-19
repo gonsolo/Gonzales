@@ -57,7 +57,6 @@ void optixSetup() {
 }
 
 void optixIntersect(
-		bool useRay,
 		float ox, float oy, float oz,
 		float dx, float dy, float dz,
 		float& tHit,
@@ -67,28 +66,22 @@ void optixIntersect(
 		int& didPrimID
 		) {
 	try {
+		gdt::vec3f from = osc::vec3f(ox, oy, oz);
+		gdt::vec3f dir = osc::vec3f(dx, dy, dz);
+
 		osc::Camera camera = {
-			/*from*/osc::vec3f(-10.f,2.f,-12.f),
+			from,
                         /* at */osc::vec3f(0.f,0.f,0.f),
                         /* up */osc::vec3f(0.f,1.f,0.f),
-			/* useRay */false,
-			/* dir */osc::vec3f(0.f, 0.f, 0.f),
-			/* tHit */1e20f
+			dir,
+			tHit
 		};
-		if (useRay) {
-			camera.from = osc::vec3f(ox, oy, oz);
-			camera.useRay = true;
-			camera.rayDirection = osc::vec3f(dx, dy, dz);
-			camera.tHit = tHit;
-			//printf("  rayDirection: %f %f %f!\n", dx, dy, dz);
-		}
 		sampleRenderer->setCamera(camera);
 		sampleRenderer->render();
 
 		sampleRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(), intersected.data(), primID.data());
 		auto& vertex = vertices[0];
 		auto& normal = normals[0];
-		//std::cout << "vertex: " << vertex << std::endl;
 		px = vertex.x;
 		py = vertex.y;
 		pz = vertex.z;
@@ -97,7 +90,6 @@ void optixIntersect(
 		nz = normal.z;
 		didIntersect = intersected[0];
 		didPrimID = primID[0];
-		//std::cout << didIntersect << std::endl;
 	} catch (std::runtime_error& e) {
 		std::cout << "FATAL ERROR: " << e.what() << std::endl;
 		exit(1);

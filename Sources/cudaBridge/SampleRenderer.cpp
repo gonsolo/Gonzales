@@ -539,7 +539,6 @@ namespace osc {
       = cosFovy * normalize(cross(launchParams.camera.horizontal,
                                   launchParams.camera.direction));
 
-    launchParams.camera.useRay = camera.useRay;
     launchParams.camera.rayDirection = camera.rayDirection;
     launchParams.camera.tHit = camera.tHit;
   }
