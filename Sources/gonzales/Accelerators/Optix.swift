@@ -6,7 +6,7 @@ class Optix {
 
         init(primitives: [Boundable & Intersectable]) throws {
                 try add(primitives: primitives)
-                gonzoSetup()
+                optixSetup()
         }
 
         private func add(triangle: Triangle) throws {

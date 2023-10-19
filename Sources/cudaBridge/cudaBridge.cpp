@@ -39,8 +39,7 @@ std::vector<gdt::vec3f> normals;
 std::vector<int> intersected;
 std::vector<int> primID;
 
-void gonzoSetup() {
-	puts("gonzoSetup!\n");
+void optixSetup() {
 	try {
 		model.meshes.push_back(&triangleMesh);
 		sampleRenderer = new osc::SampleRenderer(&model);
