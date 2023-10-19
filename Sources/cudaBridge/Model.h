@@ -1,27 +1,26 @@
 #pragma once
 
-#include "gdt/math/vec.h"
-
 #include <vector>
+#include "vec.h"
 
 struct TriangleMesh {
-  std::vector<gdt::vec3f> vertex;
-  std::vector<gdt::vec3f> normal;
-  std::vector<gdt::vec2f> texcoord;
-  std::vector<gdt::vec3i> index;
+  std::vector<vec3f> vertex;
+  std::vector<vec3f> normal;
+  std::vector<vec2f> texcoord;
+  std::vector<vec3i> index;
 
-  gdt::vec3f              diffuse;
+  vec3f              diffuse;
   int                diffuseTextureID { -1 };
 
       void addTriangle(float ax, float ay, float az, float bx, float by, float bz, float cx, float cy, float cz)
       {
           int firstVertexID = (int)vertex.size();
-          vertex.push_back(gdt::vec3f( ax, ay, az));
-          vertex.push_back(gdt::vec3f( bx, by, bz));
-          vertex.push_back(gdt::vec3f( cx, cy, cz));
+          vertex.push_back(vec3f(ax, ay, az));
+          vertex.push_back(vec3f(bx, by, bz));
+          vertex.push_back(vec3f(cx, cy, cz));
       
           int indices[] = {0, 1, 2};
-          index.push_back(firstVertexID+gdt::vec3i(indices[0], indices[1], indices[2]));
+          index.push_back(firstVertexID + vec3i(indices[0], indices[1], indices[2]));
       }
 };
 

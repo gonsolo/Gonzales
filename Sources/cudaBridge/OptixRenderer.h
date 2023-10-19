@@ -3,10 +3,11 @@
 #include "CUDABuffer.h"
 #include "LaunchParams.h"
 #include "Model.h"
+#include "vec.h"
 
 struct Camera {
-	gdt::vec3f from;
-	gdt::vec3f rayDirection;
+	vec3f from;
+	vec3f rayDirection;
   float tHit;
 };
 
@@ -17,12 +18,12 @@ public:
 
   void render();
 
-  void resize(const gdt::vec2i &newSize);
+  void resize(const vec2i &newSize);
 
   void downloadPixels(
       uint32_t h_pixels[],
-      gdt::vec3f h_vertices[],
-      gdt::vec3f h_normals[],
+      vec3f h_vertices[],
+      vec3f h_normals[],
       int h_intersected[],
       int h_primID[]);
 

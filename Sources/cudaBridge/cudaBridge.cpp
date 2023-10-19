@@ -2,6 +2,7 @@
 
 #include "OptixRenderer.h"
 #include <fstream>
+#include <iostream>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,8 +33,8 @@ void optixAddTriangle(
 
 OptixRenderer* optixRenderer;
 std::vector<uint32_t> pixels;
-std::vector<gdt::vec3f> vertices;
-std::vector<gdt::vec3f> normals;
+std::vector<vec3f> vertices;
+std::vector<vec3f> normals;
 std::vector<int> intersected;
 std::vector<int> primID;
 
@@ -41,7 +42,7 @@ void optixSetup() {
 	try {
 		model.meshes.push_back(&triangleMesh);
 		optixRenderer = new OptixRenderer(&model);
-		gdt::vec2i newSize {32, 32};
+		vec2i newSize {32, 32};
 		optixRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
 		vertices.resize(newSize.x * newSize.y);
@@ -64,8 +65,8 @@ void optixIntersect(
 		int& didPrimID
 		) {
 	try {
-		gdt::vec3f from = gdt::vec3f(ox, oy, oz);
-		gdt::vec3f dir = gdt::vec3f(dx, dy, dz);
+		vec3f from = vec3f(ox, oy, oz);
+		vec3f dir = vec3f(dx, dy, dz);
 
 		Camera camera = {
 			from,

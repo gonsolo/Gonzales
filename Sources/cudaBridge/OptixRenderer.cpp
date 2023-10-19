@@ -1,3 +1,4 @@
+#include <iostream>
 #include "OptixRenderer.h"
 
 extern "C" char embedded_ptx_code[];
@@ -68,12 +69,12 @@ OptixTraversableHandle OptixRenderer::buildAccel()
     d_indices[meshID]  = indexBuffer[meshID].d_pointer();
     
     triangleInput[meshID].triangleArray.vertexFormat        = OPTIX_VERTEX_FORMAT_FLOAT3;
-    triangleInput[meshID].triangleArray.vertexStrideInBytes = sizeof(gdt::vec3f);
+    triangleInput[meshID].triangleArray.vertexStrideInBytes = sizeof(vec3f);
     triangleInput[meshID].triangleArray.numVertices         = (int)mesh.vertex.size();
     triangleInput[meshID].triangleArray.vertexBuffers       = &d_vertices[meshID];
   
     triangleInput[meshID].triangleArray.indexFormat         = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
-    triangleInput[meshID].triangleArray.indexStrideInBytes  = sizeof(gdt::vec3i);
+    triangleInput[meshID].triangleArray.indexStrideInBytes  = sizeof(vec3i);
     triangleInput[meshID].triangleArray.numIndexTriplets    = (int)mesh.index.size();
     triangleInput[meshID].triangleArray.indexBuffer         = d_indices[meshID];
   
@@ -158,12 +159,10 @@ void OptixRenderer::initOptix()
   cudaGetDeviceCount(&numDevices);
   if (numDevices == 0)
     throw std::runtime_error("no CUDA capable devices found!");
-  std::cout << "Found " << numDevices << " CUDA devices" << std::endl;
+  //std::cout << "Found " << numDevices << " CUDA devices" << std::endl;
 
   OPTIX_CHECK( optixInit() );
-  std::cout << GDT_TERMINAL_GREEN
-            << "Successfully initialized optix!"
-            << GDT_TERMINAL_DEFAULT << std::endl;
+  //std::cout << "Successfully initialized optix!" << std::endl;
 }
 
 static void context_log_cb(unsigned int level,
@@ -181,7 +180,7 @@ void OptixRenderer::createContext()
   CUDA_CHECK(StreamCreate(&stream));
     
   cudaGetDeviceProperties(&deviceProps, deviceID);
-  std::cout << "Running on device: " << deviceProps.name << std::endl;
+  //std::cout << "Running on device: " << deviceProps.name << std::endl;
     
   CUresult  cuRes = cuCtxGetCurrent(&cudaContext);
   if( cuRes != CUDA_SUCCESS ) 
@@ -365,10 +364,10 @@ void OptixRenderer::buildSBT()
     } else {
       rec.data.hasTexture = false;
     }
-    rec.data.index    = (gdt::vec3i*)indexBuffer[meshID].d_pointer();
-    rec.data.vertex   = (gdt::vec3f*)vertexBuffer[meshID].d_pointer();
-    rec.data.normal   = (gdt::vec3f*)normalBuffer[meshID].d_pointer();
-    rec.data.texcoord = (gdt::vec2f*)texcoordBuffer[meshID].d_pointer();
+    rec.data.index    = (vec3i*)indexBuffer[meshID].d_pointer();
+    rec.data.vertex   = (vec3f*)vertexBuffer[meshID].d_pointer();
+    rec.data.normal   = (vec3f*)normalBuffer[meshID].d_pointer();
+    rec.data.texcoord = (vec2f*)texcoordBuffer[meshID].d_pointer();
     hitgroupRecords.push_back(rec);
   }
   hitgroupRecordsBuffer.alloc_and_upload(hitgroupRecords);
@@ -407,20 +406,20 @@ void OptixRenderer::setCamera(const Camera &camera)
   launchParams.camera.tHit = camera.tHit;
 }
 
-void OptixRenderer::resize(const gdt::vec2i &newSize)
+void OptixRenderer::resize(const vec2i &newSize)
 {
   if (newSize.x == 0 | newSize.y == 0) return;
   
   colorBuffer.resize(newSize.x*newSize.y*sizeof(uint32_t));
-  outVertexBuffer.resize(newSize.x*newSize.y*sizeof(gdt::vec3f));
-  outNormalBuffer.resize(newSize.x*newSize.y*sizeof(gdt::vec3f));
+  outVertexBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
+  outNormalBuffer.resize(newSize.x*newSize.y*sizeof(vec3f));
   intersectedBuffer.resize(sizeof(int));
   primIDBuffer.resize(sizeof(int));
 
   launchParams.frame.size  = newSize;
   launchParams.frame.colorBuffer = (uint32_t*)colorBuffer.d_pointer();
-  launchParams.frame.outVertexBuffer = (gdt::vec3f*)outVertexBuffer.d_pointer();
-  launchParams.frame.outNormalBuffer = (gdt::vec3f*)outNormalBuffer.d_pointer();
+  launchParams.frame.outVertexBuffer = (vec3f*)outVertexBuffer.d_pointer();
+  launchParams.frame.outNormalBuffer = (vec3f*)outNormalBuffer.d_pointer();
   launchParams.frame.intersected = (int*)intersectedBuffer.d_pointer();
   launchParams.frame.primID = (int*)primIDBuffer.d_pointer();
 
@@ -429,8 +428,8 @@ void OptixRenderer::resize(const gdt::vec2i &newSize)
 
 void OptixRenderer::downloadPixels(
   uint32_t h_pixels[],
-  gdt::vec3f h_vertices[],
-  gdt::vec3f h_normals[],
+  vec3f h_vertices[],
+  vec3f h_normals[],
   int h_intersected[],
   int h_primID[])
 {

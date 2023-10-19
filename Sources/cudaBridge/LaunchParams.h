@@ -1,14 +1,14 @@
 #pragma once
 
-#include "gdt/math/vec.h"
 #include "optix7.h"
+#include "vec.h"
 
 struct TriangleMeshSBTData {
-        gdt::vec3f color;
-        gdt::vec3f *vertex;
-        gdt::vec3f *normal;
-        gdt::vec2f *texcoord;
-        gdt::vec3i *index;
+        vec3f color;
+        vec3f *vertex;
+        vec3f *normal;
+        vec2f *texcoord;
+        vec3i *index;
         bool hasTexture;
         cudaTextureObject_t texture;
 };
@@ -16,17 +16,17 @@ struct TriangleMeshSBTData {
 struct LaunchParams {
         struct {
                 uint32_t *colorBuffer;
-                gdt::vec2i size;
+                vec2i size;
 
-                gdt::vec3f *outVertexBuffer;
-                gdt::vec3f *outNormalBuffer;
+                vec3f *outVertexBuffer;
+                vec3f *outNormalBuffer;
                 int *intersected;
                 int *primID;
         } frame;
 
         struct {
-                gdt::vec3f position;
-                gdt::vec3f rayDirection;
+                vec3f position;
+                vec3f rayDirection;
                 float tHit;
         } camera;
 
