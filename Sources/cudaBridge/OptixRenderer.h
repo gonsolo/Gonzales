@@ -5,8 +5,8 @@
 #include "Model.h"
 
 struct Camera {
-  vec3f from;
-  vec3f rayDirection;
+	gdt::vec3f from;
+	gdt::vec3f rayDirection;
   float tHit;
 };
 
@@ -17,12 +17,12 @@ public:
 
   void render();
 
-  void resize(const vec2i &newSize);
+  void resize(const gdt::vec2i &newSize);
 
   void downloadPixels(
       uint32_t h_pixels[],
-      vec3f h_vertices[],
-      vec3f h_normals[],
+      gdt::vec3f h_vertices[],
+      gdt::vec3f h_normals[],
       int h_intersected[],
       int h_primID[]);
 

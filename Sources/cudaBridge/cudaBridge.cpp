@@ -41,7 +41,7 @@ void optixSetup() {
 	try {
 		model.meshes.push_back(&triangleMesh);
 		optixRenderer = new OptixRenderer(&model);
-		vec2i newSize {32, 32};
+		gdt::vec2i newSize {32, 32};
 		optixRenderer->resize(newSize);
 		pixels.resize(newSize.x * newSize.y);
 		vertices.resize(newSize.x * newSize.y);
@@ -64,8 +64,8 @@ void optixIntersect(
 		int& didPrimID
 		) {
 	try {
-		gdt::vec3f from = vec3f(ox, oy, oz);
-		gdt::vec3f dir = vec3f(dx, dy, dz);
+		gdt::vec3f from = gdt::vec3f(ox, oy, oz);
+		gdt::vec3f dir = gdt::vec3f(dx, dy, dz);
 
 		Camera camera = {
 			from,

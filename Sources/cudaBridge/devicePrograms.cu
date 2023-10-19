@@ -32,8 +32,8 @@ static __forceinline__ __device__ T *getPRD()
 }
 
 struct PerRayData {
-  vec3f intersectionPoint;
-  vec3f intersectionNormal;
+	gdt::vec3f intersectionPoint;
+	gdt::vec3f intersectionNormal;
   int intersected = 0;
   int primID = -1;
 };
@@ -44,27 +44,27 @@ extern "C" __global__ void __closesthit__radiance()
     = *(const TriangleMeshSBTData*)optixGetSbtDataPointer();
   
   const int   primID = optixGetPrimitiveIndex();
-  const vec3i index  = sbtData.index[primID];
+  const gdt::vec3i index  = sbtData.index[primID];
   const float u = optixGetTriangleBarycentrics().x;
   const float v = optixGetTriangleBarycentrics().y;
 
-  vec3f N;
+  gdt::vec3f N;
   if (sbtData.normal) {
     N = (1.f-u-v) * sbtData.normal[index.x]
       +         u * sbtData.normal[index.y]
       +         v * sbtData.normal[index.z];
   } else {
-    const vec3f &A     = sbtData.vertex[index.x];
-    const vec3f &B     = sbtData.vertex[index.y];
-    const vec3f &C     = sbtData.vertex[index.z];
+    const gdt::vec3f &A     = sbtData.vertex[index.x];
+    const gdt::vec3f &B     = sbtData.vertex[index.y];
+    const gdt::vec3f &C     = sbtData.vertex[index.z];
     N                  = normalize(cross(B-A,C-A));
   }
   N = normalize(N);
 
-  const vec3f &A     = sbtData.vertex[index.x];
-  const vec3f &B     = sbtData.vertex[index.y];
-  const vec3f &C     = sbtData.vertex[index.z];
-  vec3f P = (1.f-u-v) * A + u * B + v * C;
+  const gdt::vec3f &A     = sbtData.vertex[index.x];
+  const gdt::vec3f &B     = sbtData.vertex[index.y];
+  const gdt::vec3f &C     = sbtData.vertex[index.z];
+  gdt::vec3f P = (1.f-u-v) * A + u * B + v * C;
   PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
   prd.intersectionPoint = P;
   prd.intersectionNormal = N;
@@ -77,7 +77,7 @@ extern "C" __global__ void __anyhit__radiance() {}
 extern "C" __global__ void __miss__radiance()
 {
   PerRayData &prd = *(PerRayData*)getPRD<PerRayData>();
-  prd.intersectionPoint = vec3f(1.f);
+  prd.intersectionPoint = gdt::vec3f(1.f);
   prd.intersected = 0;
 }
 
@@ -88,12 +88,12 @@ extern "C" __global__ void __raygen__renderFrame()
 
   const auto &camera = optixLaunchParams.camera;
 
-  PerRayData perRayData = { vec3f(0.f), vec3f(0.f), false, -1 };
+  PerRayData perRayData = { gdt::vec3f(0.f), gdt::vec3f(0.f), false, -1 };
 
   uint32_t u0, u1;
   packPointer( &perRayData, u0, u1 );
 
-  vec3f rayDir = camera.rayDirection;
+  gdt::vec3f rayDir = camera.rayDirection;
   float tmax = camera.tHit;
 
   optixTrace(optixLaunchParams.traversable,
