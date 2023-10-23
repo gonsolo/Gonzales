@@ -390,14 +390,14 @@ final class Parser {
 
         private func parseParameter() throws -> (String, Parameter)? {
                 parseComments()
-                guard let _ = scanner.scanString("\"") else { return nil }
+                if scanner.scanString("\"") == nil { return nil }
                 guard let type = scanner.scanUpToCharactersList(from: ["\n", " "]) else {
                         try bail()
                 }
                 guard let name = scanner.scanUpToCharactersList(from: ["\""]) else {
                         try bail()
                 }
-                guard let _ = scanner.scanString("\"") else {
+                if scanner.scanString("\"") == nil {
                         try bail()
                 }
                 let singleValue = scanner.scanString("[") == nil
@@ -455,13 +455,13 @@ final class Parser {
         }
 
         private func scanTransform() throws -> [FloatX] {
-                guard let _ = scanner.scanString("[") else { try bail() }
+                if scanner.scanString("[") == nil { try bail() }
                 var values = [FloatX]()
                 for _ in 0..<16 {
                         guard let value = try parseFloatX() else { try bail() }
                         values.append(value)
                 }
-                guard let _ = scanner.scanString("]") else { try bail() }
+                if scanner.scanString("]") == nil { try bail() }
                 return values
         }
 
