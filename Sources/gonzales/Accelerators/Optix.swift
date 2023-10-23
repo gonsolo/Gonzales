@@ -12,10 +12,10 @@ class Optix {
         private func add(triangle: Triangle) throws {
                 let points = triangle.getWorldPoints()
                 bounds = union(first: bounds, second: triangle.worldBound())
-                optixAddTriangle(
-                        points.0.x, points.0.y, points.0.z,
-                        points.1.x, points.1.y, points.1.z,
-                        points.2.x, points.2.y, points.2.z)
+                let a = vec3f(points.0.x, points.0.y, points.0.z)
+                let b = vec3f(points.1.x, points.1.y, points.1.z)
+                let c = vec3f(points.2.x, points.2.y, points.2.z)
+                optixAddTriangle(a, b, c)
         }
 
         private func add(primitives: [Boundable & Intersectable]) throws {

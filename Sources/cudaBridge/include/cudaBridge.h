@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 	void contextLogCallback(unsigned int level, const char *tag, const char *message, void *);
-	void optixAddTriangle(float, float, float, float, float, float, float, float, float);
+	void optixAddTriangle(vec3f a, vec3f b, vec3f c);
 	void optixSetup();
 	void optixIntersect(
 		vec3f from,

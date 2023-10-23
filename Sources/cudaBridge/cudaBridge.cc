@@ -17,10 +17,9 @@ void contextLogCallback(unsigned int level, const char *tag, const char *message
 TriangleMesh triangleMesh;
 Model model;
 
-void optixAddTriangle(float ax, float ay, float az, float bx, float by, float bz, float cx, float cy,
-                      float cz) {
+void optixAddTriangle(vec3f a, vec3f b, vec3f c) {
         try {
-                triangleMesh.addTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);
+                triangleMesh.addTriangle(a, b, c);
         } catch (std::runtime_error &e) {
                 std::cout << "FATAL ERROR: " << e.what() << std::endl;
                 exit(1);
@@ -58,7 +57,7 @@ void optixIntersect(
                 float &py, float &pz, float &nx, float &ny, float &nz, int &didIntersect,
                 int &didPrimID) {
         try {
-                Camera camera = {from, dir, tHit};
+                OptixCamera camera = {from, dir, tHit};
                 optixRenderer->setCamera(camera);
                 optixRenderer->render();
 

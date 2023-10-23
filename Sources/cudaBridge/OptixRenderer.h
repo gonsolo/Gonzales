@@ -5,7 +5,7 @@
 #include "Model.h"
 #include "vec.h"
 
-struct Camera {
+struct OptixCamera {
         vec3f from;
         vec3f rayDirection;
         float tHit;
@@ -22,7 +22,7 @@ class OptixRenderer {
         void downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[], int h_intersected[],
                             int h_primID[]);
 
-        void setCamera(const Camera &camera);
+        void setCamera(const OptixCamera &camera);
 
       protected:
         void initOptix();
@@ -76,7 +76,7 @@ class OptixRenderer {
         CUDABuffer intersectedBuffer;
         CUDABuffer primIDBuffer;
 
-        Camera lastSetCamera;
+        OptixCamera lastSetCamera;
 
         const Model *model;
 

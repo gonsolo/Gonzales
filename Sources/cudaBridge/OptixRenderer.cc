@@ -318,7 +318,7 @@ void OptixRenderer::render() {
         CUDA_SYNC_CHECK();
 }
 
-void OptixRenderer::setCamera(const Camera &camera) {
+void OptixRenderer::setCamera(const OptixCamera &camera) {
         lastSetCamera = camera;
         launchParams.camera.position = camera.from;
         launchParams.camera.rayDirection = camera.rayDirection;
