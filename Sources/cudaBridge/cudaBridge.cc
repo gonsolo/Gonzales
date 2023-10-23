@@ -65,14 +65,8 @@ void optixIntersect(
 
                 optixRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(),
                                               intersected.data(), primID.data());
-                auto &vertex = vertices[0];
-                auto &normal = normals[0];
-                p.x = vertex.x;
-                p.y = vertex.y;
-                p.z = vertex.z;
-                n.x = normal.x;
-                n.y = normal.y;
-                n.z = normal.z;
+		p = vertices[0];
+		n = normals[0];
                 didIntersect = intersected[0];
                 didPrimID = primID[0];
         } catch (std::runtime_error &e) {
