@@ -53,8 +53,10 @@ void optixSetup() {
 void optixIntersect(
 		vec3f from,
 		vec3f dir,
-		float &tHit, float &px,
-                float &py, float &pz, float &nx, float &ny, float &nz, int &didIntersect,
+		float &tHit,
+		vec3f& p,
+		float &nx, float &ny, float &nz,
+		int &didIntersect,
                 int &didPrimID) {
         try {
                 OptixCamera camera = {from, dir, tHit};
@@ -65,9 +67,9 @@ void optixIntersect(
                                               intersected.data(), primID.data());
                 auto &vertex = vertices[0];
                 auto &normal = normals[0];
-                px = vertex.x;
-                py = vertex.y;
-                pz = vertex.z;
+                p.x = vertex.x;
+                p.y = vertex.y;
+                p.z = vertex.z;
                 nx = normal.x;
                 ny = normal.y;
                 nz = normal.z;

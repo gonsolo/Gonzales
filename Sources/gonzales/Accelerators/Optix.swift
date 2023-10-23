@@ -52,9 +52,7 @@ class Optix {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                var px: Float32 = 0
-                var py: Float32 = 0
-                var pz: Float32 = 0
+                var p = vec3f()
                 var nx: Float32 = 0
                 var ny: Float32 = 0
                 var nz: Float32 = 0
@@ -66,12 +64,12 @@ class Optix {
                         rayOrigin,
                         rayDirection,
                         &tHit,
-                        &px, &py, &pz,
+                        &p,
                         &nx, &ny, &nz,
                         &intersected,
                         &primID32
                         )
-                let intersectionPoint = Point(x: px, y: py, z: pz)
+                let intersectionPoint = Point(x: p.x, y: p.y, z: p.z)
                 let intersectionNormal = Normal(x: nx, y: ny, z: nz)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
                 let primID = Int(primID32)

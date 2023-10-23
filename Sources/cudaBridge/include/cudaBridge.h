@@ -13,7 +13,7 @@ extern "C" {
 		vec3f from,
 		vec3f dir,
 		float& tHit,
-		float& px, float& py, float& pz,
+		vec3f& p,
 		float& nx, float& ny, float& nz,
 		int& didIntersect,
 		int& didPrimID);
