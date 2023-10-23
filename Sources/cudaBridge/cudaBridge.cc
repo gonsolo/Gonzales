@@ -11,7 +11,7 @@ extern "C" {
 #include <stdio.h>
 
 void contextLogCallback(unsigned int level, const char *tag, const char *message, void *) {
-        fprintf(stderr, "[%2d][%12s]: %s\n", (int)level, tag, message);
+	fprintf(stderr, "[%2d][%12s]: %s\n", (int)level, tag, message);
 }
 
 TriangleMesh triangleMesh;
@@ -62,7 +62,6 @@ void optixIntersect(
                 OptixCamera camera = {from, dir, tHit};
                 optixRenderer->setCamera(camera);
                 optixRenderer->render();
-
                 optixRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(),
                                               intersected.data(), primID.data());
 		p = vertices[0];

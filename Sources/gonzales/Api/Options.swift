@@ -221,13 +221,27 @@ class Options {
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let powerLightSampler = PowerLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = LightSampler.power(powerLightSampler)
+
+                // The Optix renderer is not thread-safe for now; use just one tile as big as the image.
+                var tileSize = (32, 32)
+                switch accelerator {
+                case .boundingHierarchy:
+                        break
+                case .embree:
+                        break
+                case .optix:
+                        let resolution = camera.film.image.fullResolution
+                        tileSize.0 = resolution.x
+                        tileSize.1 = resolution.y
+                }
                 return TileRenderer(
                         accelerator: accelerator,
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
                         scene: scene,
-                        lightSampler: lightSampler
+                        lightSampler: lightSampler,
+                        tileSize: tileSize
                 )
         }
 

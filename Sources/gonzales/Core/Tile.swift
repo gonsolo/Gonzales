@@ -58,8 +58,6 @@ final class Tile {
                 return samples
         }
 
-        static let size = 32
-
         unowned var integrator: VolumePathIntegrator
         var bounds: Bounds2i
 }
