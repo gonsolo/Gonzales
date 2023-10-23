@@ -1,6 +1,7 @@
 import Foundation
 import embree3
 
+// swift-format-ignore: AlwaysUseLowerCamelCase
 @_silgen_name("_swift_stdlib_immortalize")
 func _swift_stdlib_immortalize(_ p: UnsafeMutableRawPointer)
 

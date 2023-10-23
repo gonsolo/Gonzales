@@ -241,7 +241,6 @@ final class VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
-        //@_noAllocation
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,

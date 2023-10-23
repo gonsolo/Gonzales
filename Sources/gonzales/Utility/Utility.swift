@@ -107,11 +107,11 @@ func demangle(symbol: String) -> String {
 }
 
 func printStack() {
-        Thread.callStackSymbols.forEach {
-                guard let dollar = $0.firstIndex(of: Character("$")) else { return }
-                let start = $0.index(after: dollar)
-                guard let plus = $0.firstIndex(of: Character("+")) else { return }
-                let symbol = String($0[start..<plus])
+        for symbol in Thread.callStackSymbols {
+                guard let dollar = symbol.firstIndex(of: Character("$")) else { return }
+                let start = symbol.index(after: dollar)
+                guard let plus = symbol.firstIndex(of: Character("+")) else { return }
+                let symbol = String(symbol[start..<plus])
                 let demangled = demangle(symbol: symbol)
                 print(demangled)
         }

@@ -309,12 +309,9 @@ void OptixRenderer::render() {
 
         launchParamsBuffer.upload(&launchParams, 1);
 
-        OPTIX_CHECK(optixLaunch(/*! pipeline we're launching launch: */
-                                pipeline, stream,
-                                /*! parameters and SBT */
-                                launchParamsBuffer.d_pointer(), launchParamsBuffer.sizeInBytes, &sbt,
-                                /*! dimensions of the launch: */
-                                launchParams.frame.size.x, launchParams.frame.size.y, 1));
+        OPTIX_CHECK(optixLaunch(pipeline, stream, launchParamsBuffer.d_pointer(),
+                                launchParamsBuffer.sizeInBytes, &sbt, launchParams.frame.size.x,
+                                launchParams.frame.size.y, 1));
         CUDA_SYNC_CHECK();
 }
 

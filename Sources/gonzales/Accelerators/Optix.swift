@@ -24,9 +24,9 @@ class Optix {
                         case let geometricPrimitive as GeometricPrimitive:
                                 switch geometricPrimitive.shape {
                                 case let triangle as Triangle:
-                                                try add(triangle: triangle)
-                                                materials[triangleCount] = geometricPrimitive.material
-                                                triangleCount += 1
+                                        try add(triangle: triangle)
+                                        materials[triangleCount] = geometricPrimitive.material
+                                        triangleCount += 1
                                 default:
                                         var message = "Unknown shape in geometric primitive: "
                                         message += "\(geometricPrimitive.shape)"
@@ -35,9 +35,9 @@ class Optix {
                         case let areaLight as AreaLight:
                                 switch areaLight.shape {
                                 case let triangle as Triangle:
-                                                try add(triangle: triangle)
-                                                areaLights[triangleCount] = areaLight
-                                                triangleCount += 1
+                                        try add(triangle: triangle)
+                                        areaLights[triangleCount] = areaLight
+                                        triangleCount += 1
                                 default:
                                         fatalError("Unknown shape in AreaLight.")
                                 }
@@ -56,8 +56,8 @@ class Optix {
                 var n = vec3f()
                 var intersected: Int32 = 0
                 var primID32: Int32 = -1
-                let rayOrigin = vec3f(ray.origin.x, ray.origin.y, ray.origin.z);
-                let rayDirection = vec3f(ray.direction.x, ray.direction.y, ray.direction.z);
+                let rayOrigin = vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+                let rayDirection = vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
                 optixIntersect(
                         rayOrigin,
                         rayDirection,
@@ -65,8 +65,7 @@ class Optix {
                         &p,
                         &n,
                         &intersected,
-                        &primID32
-                        )
+                        &primID32)
                 let intersectionPoint = Point(x: p.x, y: p.y, z: p.z)
                 let intersectionNormal = Normal(x: n.x, y: n.y, z: n.z)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
@@ -98,4 +97,3 @@ class Optix {
         var materials = [Int: MaterialIndex]()
         var areaLights = [Int: AreaLight]()
 }
-

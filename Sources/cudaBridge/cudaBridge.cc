@@ -11,7 +11,7 @@ extern "C" {
 #include <stdio.h>
 
 void contextLogCallback(unsigned int level, const char *tag, const char *message, void *) {
-	fprintf(stderr, "[%2d][%12s]: %s\n", (int)level, tag, message);
+        fprintf(stderr, "[%2d][%12s]: %s\n", (int)level, tag, message);
 }
 
 TriangleMesh triangleMesh;
@@ -50,22 +50,16 @@ void optixSetup() {
         }
 }
 
-void optixIntersect(
-		vec3f from,
-		vec3f dir,
-		float &tHit,
-		vec3f& p,
-		vec3f& n,
-		int &didIntersect,
-                int &didPrimID) {
+void optixIntersect(vec3f from, vec3f dir, float &tHit, vec3f &p, vec3f &n, int &didIntersect,
+                    int &didPrimID) {
         try {
                 OptixCamera camera = {from, dir, tHit};
                 optixRenderer->setCamera(camera);
                 optixRenderer->render();
                 optixRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(),
                                               intersected.data(), primID.data());
-		p = vertices[0];
-		n = normals[0];
+                p = vertices[0];
+                n = normals[0];
                 didIntersect = intersected[0];
                 didPrimID = primID[0];
         } catch (std::runtime_error &e) {

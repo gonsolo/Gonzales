@@ -11,7 +11,7 @@ namespace ptexBridge {
 void initCache(long int memory);
 void initTexture(const char *filename);
 void evaluate(const char *filename, long int faceIndex, float u, float v, float rgb[3]);
-}
+} // namespace ptexBridge
 
 #ifdef __cplusplus
 extern "C" {
@@ -79,4 +79,4 @@ void evaluate(const char *filename, long int faceIndex, float u, float v, float 
         texture->release();
 #endif
 }
-}
+} // namespace ptexBridge

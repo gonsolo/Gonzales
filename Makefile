@@ -262,7 +262,7 @@ flame:
 
 f: format
 format:
-	@clang-format --dry-run $(shell find -name \*.h -o -name \*.cc)
+	@clang-format --dry-run $(shell find Sources -name \*.h -o -name \*.cc)
 	@swift-format lint -r Sources/gonzales/
 
 codespell:

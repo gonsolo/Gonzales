@@ -99,15 +99,12 @@ template <typename T> inline __both__ vec3<T> normalize(const vec3<T> &v) {
 template <typename T> inline __both__ vec3<T> cross(const vec3<T> &a, const vec3<T> &b) {
         return vec3<T>(a.y * b.z - b.y * a.z, a.z * b.x - b.z * a.x, a.x * b.y - b.x * a.y);
 }
-template <typename T>
-std::ostream& operator<<(std::ostream& os, const vec3<T>& v) {
-	os << v.x << " " << v.y << " " << v.z;
-	return os;
+template <typename T> std::ostream &operator<<(std::ostream &os, const vec3<T> &v) {
+        os << v.x << " " << v.y << " " << v.z;
+        return os;
 }
 
 using vec3f = vec3<float>;
 using vec3i = vec3<int>;
 using vec2f = vec2<float>;
 using vec2i = vec2<int>;
-
-
