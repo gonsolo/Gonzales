@@ -38,7 +38,7 @@ void optixSetup() {
         try {
                 model.meshes.push_back(&triangleMesh);
                 optixRenderer = new OptixRenderer(&model);
-                vec2i newSize{32, 32};
+                vec2i newSize{1, 1};
                 optixRenderer->resize(newSize);
                 pixels.resize(newSize.x * newSize.y);
                 vertices.resize(newSize.x * newSize.y);
