@@ -55,7 +55,7 @@ void optixIntersect(
 		vec3f dir,
 		float &tHit,
 		vec3f& p,
-		float &nx, float &ny, float &nz,
+		vec3f& n,
 		int &didIntersect,
                 int &didPrimID) {
         try {
@@ -70,9 +70,9 @@ void optixIntersect(
                 p.x = vertex.x;
                 p.y = vertex.y;
                 p.z = vertex.z;
-                nx = normal.x;
-                ny = normal.y;
-                nz = normal.z;
+                n.x = normal.x;
+                n.y = normal.y;
+                n.z = normal.z;
                 didIntersect = intersected[0];
                 didPrimID = primID[0];
         } catch (std::runtime_error &e) {

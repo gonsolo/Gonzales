@@ -14,7 +14,7 @@ extern "C" {
 		vec3f dir,
 		float& tHit,
 		vec3f& p,
-		float& nx, float& ny, float& nz,
+		vec3f& n,
 		int& didIntersect,
 		int& didPrimID);
 #ifdef __cplusplus
