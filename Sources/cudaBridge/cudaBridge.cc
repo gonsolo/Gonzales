@@ -51,11 +51,11 @@ void optixSetup() {
         }
 }
 
-void optixIntersect(float ox, float oy, float oz, float dx, float dy, float dz, float &tHit, float &px,
-                    float &py, float &pz, float &nx, float &ny, float &nz, int &didIntersect,
-                    int &didPrimID) {
+void optixIntersect(vec3f from,
+		float dx, float dy, float dz, float &tHit, float &px,
+                float &py, float &pz, float &nx, float &ny, float &nz, int &didIntersect,
+                int &didPrimID) {
         try {
-                vec3f from = vec3f(ox, oy, oz);
                 vec3f dir = vec3f(dx, dy, dz);
 
                 Camera camera = {from, dir, tHit};

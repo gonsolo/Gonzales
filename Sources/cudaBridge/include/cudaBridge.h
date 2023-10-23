@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "../vec.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -9,7 +10,7 @@ extern "C" {
 	void optixAddTriangle(float, float, float, float, float, float, float, float, float);
 	void optixSetup();
 	void optixIntersect(
-		float ox, float oy, float oz,
+		vec3f from,
 		float dx, float dy, float dz,
 		float& tHit,
 		float& px, float& py, float& pz,
