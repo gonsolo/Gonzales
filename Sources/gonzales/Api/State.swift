@@ -27,7 +27,10 @@ struct State {
                         assert(currentNamedMaterial != "")
                         guard let named = namedMaterials[currentNamedMaterial] else {
                                 warning("The material \(currentNamedMaterial) was not defined!")
-                                let diffuse = Diffuse(reflectance: Texture.rgbSpectrumTexture(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray))))
+                                let diffuse = Diffuse(
+                                        reflectance: Texture.rgbSpectrumTexture(
+                                                RgbSpectrumTexture.constantTexture(
+                                                        ConstantTexture(value: gray))))
                                 return Material.diffuse(diffuse)
                         }
                         material = named

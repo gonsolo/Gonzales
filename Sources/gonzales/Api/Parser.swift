@@ -111,18 +111,18 @@ final class Parser {
         }
 
         private func parseFalse() throws {
-                guard let _ = scanner.scanString("f") else { try bail() }
-                guard let _ = scanner.scanString("a") else { try bail() }
-                guard let _ = scanner.scanString("l") else { try bail() }
-                guard let _ = scanner.scanString("s") else { try bail() }
-                guard let _ = scanner.scanString("e") else { try bail() }
+                if scanner.scanString("f") == nil { try bail() }
+                if scanner.scanString("a") == nil { try bail() }
+                if scanner.scanString("l") == nil { try bail() }
+                if scanner.scanString("s") == nil { try bail() }
+                if scanner.scanString("e") == nil { try bail() }
         }
 
         private func parseTrue() throws {
-                guard let _ = scanner.scanString("t") else { try bail() }
-                guard let _ = scanner.scanString("r") else { try bail() }
-                guard let _ = scanner.scanString("u") else { try bail() }
-                guard let _ = scanner.scanString("e") else { try bail() }
+                if scanner.scanString("t") == nil { try bail() }
+                if scanner.scanString("r") == nil { try bail() }
+                if scanner.scanString("u") == nil { try bail() }
+                if scanner.scanString("e") == nil { try bail() }
         }
 
         private func parseBool() throws -> [Bool] {

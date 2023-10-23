@@ -16,13 +16,9 @@ internal struct FixedArray16<T> {
 }
 
 extension FixedArray16 {
-        internal static var capacity: Int {
-                @inline(__always) get { return 16 }
-        }
+        internal static var capacity: Int { 16 }
 
-        internal var capacity: Int {
-                @inline(__always) get { return 16 }
-        }
+        internal var capacity: Int { 16 }
 
         internal var count: Int {
                 @inline(__always) get { return Int(truncatingIfNeeded: _count) }

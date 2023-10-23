@@ -27,8 +27,10 @@ struct Diffuse {
 func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {
-                let texture: Texture = state.textures[reflectanceTextureName] ??
-                        Texture.rgbSpectrumTexture(RgbSpectrumTexture.constantTexture(ConstantTexture(value: black)))
+                let texture: Texture =
+                        state.textures[reflectanceTextureName]
+                        ?? Texture.rgbSpectrumTexture(
+                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: black)))
                 return Diffuse(reflectance: texture)
         }
         if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: gray)

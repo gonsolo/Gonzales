@@ -1,7 +1,8 @@
 struct Dielectric {
 
         init(
-                refractiveIndex: FloatTexture = FloatTexture.constantTexture(ConstantTexture<FloatX>(value: FloatX(1))),
+                refractiveIndex: FloatTexture = FloatTexture.constantTexture(
+                        ConstantTexture<FloatX>(value: FloatX(1))),
                 roughness: (FloatX, FloatX),
                 remapRoughness: Bool
         ) {

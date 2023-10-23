@@ -60,7 +60,9 @@ struct AreaLight: Boundable, Intersectable {
         }
 
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
-                let diffuse = Diffuse(reflectance: Texture.rgbSpectrumTexture(RgbSpectrumTexture.constantTexture(ConstantTexture(value: white))))
+                let diffuse = Diffuse(
+                        reflectance: Texture.rgbSpectrumTexture(
+                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white))))
                 return diffuse.getBsdf(interaction: interaction)
         }
 

@@ -664,7 +664,8 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
                 warning("Can't find texture file: \(absoluteFileName)")
-                return Texture.rgbSpectrumTexture(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
+                return Texture.rgbSpectrumTexture(
+                        RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
         }
         let suffix = absoluteFileName.suffix(4)
         switch suffix {
@@ -673,9 +674,13 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
         case ".exr", ".pfm", ".png", ".tga":
                 switch type {
                 case "spectrum", "color":
-                        return Texture.rgbSpectrumTexture(RgbSpectrumTexture.openImageIoTexture(OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        return Texture.rgbSpectrumTexture(
+                                RgbSpectrumTexture.openImageIoTexture(
+                                        OpenImageIOTexture(path: absoluteFileName, type: type)))
                 case "float":
-                        return Texture.floatTexture(FloatTexture.openImageIoTexture(OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        return Texture.floatTexture(
+                                FloatTexture.openImageIoTexture(
+                                        OpenImageIOTexture(path: absoluteFileName, type: type)))
                 default:
                         unimplemented()
                 }
