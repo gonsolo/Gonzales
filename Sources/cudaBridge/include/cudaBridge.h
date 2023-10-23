@@ -11,7 +11,7 @@ extern "C" {
 	void optixSetup();
 	void optixIntersect(
 		vec3f from,
-		float dx, float dy, float dz,
+		vec3f dir,
 		float& tHit,
 		float& px, float& py, float& pz,
 		float& nx, float& ny, float& nz,

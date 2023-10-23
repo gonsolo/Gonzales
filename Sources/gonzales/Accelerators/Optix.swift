@@ -61,9 +61,10 @@ class Optix {
                 var intersected: Int32 = 0
                 var primID32: Int32 = -1
                 let rayOrigin = vec3f(ray.origin.x, ray.origin.y, ray.origin.z);
+                let rayDirection = vec3f(ray.direction.x, ray.direction.y, ray.direction.z);
                 optixIntersect(
                         rayOrigin,
-                        ray.direction.x, ray.direction.y, ray.direction.z,
+                        rayDirection,
                         &tHit,
                         &px, &py, &pz,
                         &nx, &ny, &nz,
