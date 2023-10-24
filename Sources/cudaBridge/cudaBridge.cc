@@ -52,8 +52,8 @@ void optixSetup() {
         }
 }
 
-void optixIntersect(vec3f from, vec3f dir, float &tHit, vec3f &p, vec3f &n, int &didIntersect,
-                    int &didPrimID, float &didTMax) {
+void optixIntersect(vec3f from, vec3f dir, float &tHit, vec3f &p, vec3f &n, int &didIntersect, int &didPrimID,
+                    float &didTMax) {
         try {
                 OptixCamera camera = {from, dir, tHit};
                 optixRenderer->setCamera(camera);
@@ -64,7 +64,7 @@ void optixIntersect(vec3f from, vec3f dir, float &tHit, vec3f &p, vec3f &n, int 
                 n = normals[0];
                 didIntersect = intersected[0];
                 didPrimID = primID[0];
-		didTMax = tMax[0];
+                didTMax = tMax[0];
         } catch (std::runtime_error &e) {
                 std::cout << "FATAL ERROR: " << e.what() << std::endl;
                 exit(1);

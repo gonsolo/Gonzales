@@ -334,12 +334,12 @@ void OptixRenderer::resize(const vec2i &newSize) {
         tMaxBuffer.resize(sizeof(float));
 
         launchParams.frame.size = newSize;
-        launchParams.frame.colorBuffer = (uint32_t*)colorBuffer.d_pointer();
-        launchParams.frame.outVertexBuffer = (vec3f*)outVertexBuffer.d_pointer();
-        launchParams.frame.outNormalBuffer = (vec3f*)outNormalBuffer.d_pointer();
-        launchParams.frame.intersected = (int*)intersectedBuffer.d_pointer();
-        launchParams.frame.primID = (int*)primIDBuffer.d_pointer();
-        launchParams.frame.tMax = (float*)tMaxBuffer.d_pointer();
+        launchParams.frame.colorBuffer = (uint32_t *)colorBuffer.d_pointer();
+        launchParams.frame.outVertexBuffer = (vec3f *)outVertexBuffer.d_pointer();
+        launchParams.frame.outNormalBuffer = (vec3f *)outNormalBuffer.d_pointer();
+        launchParams.frame.intersected = (int *)intersectedBuffer.d_pointer();
+        launchParams.frame.primID = (int *)primIDBuffer.d_pointer();
+        launchParams.frame.tMax = (float *)tMaxBuffer.d_pointer();
 
         setCamera(lastSetCamera);
 }
