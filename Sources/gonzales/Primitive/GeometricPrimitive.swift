@@ -6,12 +6,12 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 interaction: inout SurfaceInteraction
         ) throws {
                 if alpha == 0 { return }
-                // argument material is unused
                 try shape.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
                 if interaction.valid {
+                        interaction.material = material
                         interaction.mediumInterface = mediumInterface
                 }
         }

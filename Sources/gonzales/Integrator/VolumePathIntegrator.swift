@@ -268,7 +268,6 @@ final class VolumePathIntegrator {
                                 bounce: bounce,
                                 estimate: &estimate,
                                 interaction: &interaction)
-
                         if !interaction.valid {
                                 break
                         }
@@ -301,7 +300,6 @@ final class VolumePathIntegrator {
                                                                 inDirection: surfaceInteraction.wo)
                                         }
                                 }
-
                                 if surfaceInteraction.material == noMaterial {
                                         break
                                 }

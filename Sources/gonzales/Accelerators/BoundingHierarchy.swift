@@ -44,8 +44,6 @@ struct BoundingHierarchy: Boundable, Intersectable {
                         }
                 }
                 BoundingHierarchy.boundingHierarchyNodesVisited += nodesVisited
-
-                //print(ray, interaction.valid, interaction.position)
         }
 
         func objectBound() -> Bounds3f {
