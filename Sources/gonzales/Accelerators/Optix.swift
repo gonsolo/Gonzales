@@ -56,6 +56,7 @@ class Optix {
                 var n = vec3f()
                 var intersected: Int32 = 0
                 var primID32: Int32 = -1
+                var tMax: Float = 0
                 let rayOrigin = vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
                 let rayDirection = vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
                 optixIntersect(
@@ -65,18 +66,21 @@ class Optix {
                         &p,
                         &n,
                         &intersected,
-                        &primID32)
+                        &primID32,
+                        &tMax)
                 let intersectionPoint = Point(x: p.x, y: p.y, z: p.z)
                 let intersectionNormal = Normal(x: n.x, y: n.y, z: n.z)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
                 let primID = Int(primID32)
                 if intersectionIntersected {
+                        tHit = tMax
                         interaction.valid = true
                         interaction.position = intersectionPoint
                         interaction.normal = intersectionNormal
                         interaction.shadingNormal = intersectionNormal
                         interaction.wo = -ray.direction
-                        // dpdu
+                        let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: intersectionNormal))
+                        interaction.dpdu = dpdu
                         // uv
                         // faceIndex
                         interaction.material = materials[primID] ?? -1

@@ -31,6 +31,7 @@ struct PerRayData {
         vec3f intersectionNormal;
         int intersected = 0;
         int primID = -1;
+	float tMax = 0.f;
 };
 
 extern "C" __global__ void __closesthit__radiance() {
@@ -57,11 +58,13 @@ extern "C" __global__ void __closesthit__radiance() {
         const vec3f &B = sbtData.vertex[index.y];
         const vec3f &C = sbtData.vertex[index.z];
         vec3f P = (1.f - u - v) * A + u * B + v * C;
+
         PerRayData &prd = *(PerRayData *)getPRD<PerRayData>();
         prd.intersectionPoint = P;
         prd.intersectionNormal = N;
         prd.intersected = 1;
         prd.primID = primID;
+	prd.tMax = optixGetRayTmax();
 }
 
 extern "C" __global__ void __anyhit__radiance() {}
@@ -118,4 +121,5 @@ extern "C" __global__ void __raygen__renderFrame() {
         optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;
         optixLaunchParams.frame.intersected[0] = perRayData.intersected;
         optixLaunchParams.frame.primID[0] = perRayData.primID;
+	optixLaunchParams.frame.tMax[0] = perRayData.tMax;
 }

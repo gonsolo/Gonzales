@@ -22,6 +22,7 @@ struct LaunchParams {
                 vec3f *outNormalBuffer;
                 int *intersected;
                 int *primID;
+		float *tMax;
         } frame;
 
         struct {

@@ -20,7 +20,7 @@ class OptixRenderer {
         void resize(const vec2i &newSize);
 
         void downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[], int h_intersected[],
-                            int h_primID[]);
+                            int h_primID[], float h_tMax[]);
 
         void setCamera(const OptixCamera &camera);
 
@@ -75,6 +75,7 @@ class OptixRenderer {
         CUDABuffer outNormalBuffer;
         CUDABuffer intersectedBuffer;
         CUDABuffer primIDBuffer;
+        CUDABuffer tMaxBuffer;
 
         OptixCamera lastSetCamera;
 

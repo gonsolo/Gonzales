@@ -331,22 +331,25 @@ void OptixRenderer::resize(const vec2i &newSize) {
         outNormalBuffer.resize(newSize.x * newSize.y * sizeof(vec3f));
         intersectedBuffer.resize(sizeof(int));
         primIDBuffer.resize(sizeof(int));
+        tMaxBuffer.resize(sizeof(float));
 
         launchParams.frame.size = newSize;
-        launchParams.frame.colorBuffer = (uint32_t *)colorBuffer.d_pointer();
-        launchParams.frame.outVertexBuffer = (vec3f *)outVertexBuffer.d_pointer();
-        launchParams.frame.outNormalBuffer = (vec3f *)outNormalBuffer.d_pointer();
-        launchParams.frame.intersected = (int *)intersectedBuffer.d_pointer();
-        launchParams.frame.primID = (int *)primIDBuffer.d_pointer();
+        launchParams.frame.colorBuffer = (uint32_t*)colorBuffer.d_pointer();
+        launchParams.frame.outVertexBuffer = (vec3f*)outVertexBuffer.d_pointer();
+        launchParams.frame.outNormalBuffer = (vec3f*)outNormalBuffer.d_pointer();
+        launchParams.frame.intersected = (int*)intersectedBuffer.d_pointer();
+        launchParams.frame.primID = (int*)primIDBuffer.d_pointer();
+        launchParams.frame.tMax = (float*)tMaxBuffer.d_pointer();
 
         setCamera(lastSetCamera);
 }
 
 void OptixRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[],
-                                   int h_intersected[], int h_primID[]) {
+                                   int h_intersected[], int h_primID[], float h_tMax[]) {
         colorBuffer.download(h_pixels, launchParams.frame.size.x * launchParams.frame.size.y);
         outVertexBuffer.download(h_vertices, launchParams.frame.size.x * launchParams.frame.size.y);
         outNormalBuffer.download(h_normals, launchParams.frame.size.x * launchParams.frame.size.y);
         intersectedBuffer.download(h_intersected, 1);
         primIDBuffer.download(h_primID, 1);
+        tMaxBuffer.download(h_tMax, 1);
 }

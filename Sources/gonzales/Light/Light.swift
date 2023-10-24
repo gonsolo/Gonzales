@@ -25,7 +25,6 @@ enum Light {
                 }
         }
 
-        //@_noAllocation
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
         {
