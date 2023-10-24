@@ -81,8 +81,8 @@ class Optix {
                         interaction.wo = -ray.direction
                         let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: intersectionNormal))
                         interaction.dpdu = dpdu
-                        // uv
-                        // faceIndex
+                        // TODO: uv
+                        // TODO: faceIndex
                         interaction.material = materials[primID] ?? -1
                         interaction.areaLight = areaLights[primID] ?? nil
                 }
