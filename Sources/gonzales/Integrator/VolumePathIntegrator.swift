@@ -241,6 +241,26 @@ final class VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
+        func getRadiancesAndAlbedos(
+                from rays: [Ray],
+                tHits: inout [FloatX],
+                with sampler: Sampler,
+                lightSampler: LightSampler
+        ) throws
+                -> [(estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)]
+        {
+                var estimatesAlbedosNormals = [(RgbSpectrum, RgbSpectrum, Normal)]()
+                for i in 0..<rays.count {
+                        let estimateAlbedoNormal = try getRadianceAndAlbedo(
+                                from: rays[i],
+                                tHit: &tHits[i],
+                                with: sampler,
+                                lightSampler: lightSampler)
+                        estimatesAlbedosNormals.append(estimateAlbedoNormal)
+                }
+                return estimatesAlbedosNormals
+        }
+
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
