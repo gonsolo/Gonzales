@@ -261,6 +261,145 @@ final class VolumePathIntegrator {
                 return estimatesAlbedosNormals
         }
 
+        func oneBounce(
+                interaction: inout SurfaceInteraction,
+                tHit: inout Float,
+                ray: inout Ray,
+                bounce: Int,
+                estimate: inout RgbSpectrum,
+                sampler: Sampler,
+                pathThroughputWeight: inout RgbSpectrum,
+                lightSampler: LightSampler,
+                albedo: inout RgbSpectrum,
+                firstNormal: inout Normal
+        ) throws -> Bool {
+                interaction.valid = false
+                try intersectOrInfiniteLights(
+                        ray: ray,
+                        tHit: &tHit,
+                        bounce: bounce,
+                        estimate: &estimate,
+                        interaction: &interaction)
+                if !interaction.valid {
+                        return false
+                }
+                let (mediumL, mediumInteraction) =
+                        ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
+                pathThroughputWeight *= mediumL
+                if pathThroughputWeight.isBlack {
+                        return false
+                }
+                guard bounce < maxDepth else {
+                        return false
+                }
+                if let mediumInteraction {
+                        var mediumRadiance = black
+                        (mediumRadiance, ray) = try sampleMedium(
+                                pathThroughputWeight: pathThroughputWeight,
+                                mediumInteraction: mediumInteraction,
+                                sampler: sampler,
+                                lightSampler: lightSampler,
+                                ray: ray)
+                        estimate += mediumRadiance
+                } else {
+                        var surfaceInteraction = interaction
+                        if bounce == 0 {
+                                if let areaLight = surfaceInteraction.areaLight {
+                                        estimate +=
+                                                pathThroughputWeight
+                                                * areaLight.emittedRadiance(
+                                                        from: surfaceInteraction,
+                                                        inDirection: surfaceInteraction.wo)
+                                }
+                        }
+                        if surfaceInteraction.material == noMaterial {
+                                return false
+                        }
+                        if materials[surfaceInteraction.material].isInterface {
+                                var spawnedRay = surfaceInteraction.spawnRay(
+                                        inDirection: ray.direction)
+                                if let interface = surfaceInteraction.mediumInterface {
+                                        spawnedRay.medium = state.namedMedia[interface.interior]
+                                }
+                                ray = spawnedRay
+                                try bounces(
+                                        ray: &ray,
+                                        interaction: &interaction,
+                                        tHit: &tHit,
+                                        bounce: bounce + 1,
+                                        estimate: &estimate,
+                                        sampler: sampler,
+                                        pathThroughputWeight: &pathThroughputWeight,
+                                        lightSampler: lightSampler,
+                                        albedo: &albedo,
+                                        firstNormal: &firstNormal)
+                        }
+                        surfaceInteraction.setBsdf()
+                        if bounce == 0 {
+                                albedo = surfaceInteraction.bsdf.albedo()
+                                firstNormal = surfaceInteraction.normal
+                        }
+                        let lightEstimate =
+                                try pathThroughputWeight
+                                * sampleOneLight(
+                                        at: surfaceInteraction,
+                                        with: sampler,
+                                        lightSampler: lightSampler)
+                        estimate += lightEstimate
+                        let (bsdfSample, _) = surfaceInteraction.bsdf.sampleWorld(
+                                wo: surfaceInteraction.wo, u: sampler.get3D())
+                        guard
+                                bsdfSample.probabilityDensity != 0
+                                        && !bsdfSample.probabilityDensity.isNaN
+                        else {
+                                return false
+                        }
+                        pathThroughputWeight *= bsdfSample.throughputWeight(
+                                normal: surfaceInteraction.normal)
+                        let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
+                        ray = spawnedRay
+                }
+                tHit = FloatX.infinity
+                if stopWithRussianRoulette(
+                        bounce: bounce,
+                        pathThroughputWeight: &pathThroughputWeight)
+                {
+                        return false
+                }
+                return true
+        }
+
+        func bounces(
+                ray: inout Ray,
+                interaction: inout SurfaceInteraction,
+                tHit: inout Float,
+                bounce: Int,
+                estimate: inout RgbSpectrum,
+                sampler: Sampler,
+                pathThroughputWeight: inout RgbSpectrum,
+                lightSampler: LightSampler,
+                albedo: inout RgbSpectrum,
+                firstNormal: inout Normal
+        ) throws {
+                for bounce in bounce...maxDepth {
+                        let result = try oneBounce(
+                                interaction: &interaction,
+                                tHit: &tHit,
+                                ray: &ray,
+                                bounce: bounce,
+                                estimate: &estimate,
+                                sampler: sampler,
+                                pathThroughputWeight: &pathThroughputWeight,
+                                lightSampler: lightSampler,
+                                albedo: &albedo,
+                                firstNormal: &firstNormal
+                        )
+                        if !result {
+                                break
+                        }
+                }
+        }
+
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
@@ -269,102 +408,30 @@ final class VolumePathIntegrator {
         ) throws
                 -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
         {
-                var estimate = black
 
                 // Path throughput weight
                 // The product of all GlobalBsdfs and cosines divided by the pdf
                 // Π f |cosθ| / pdf
                 var pathThroughputWeight = white
 
+                var estimate = black
                 var ray = ray
                 var albedo = black
                 var firstNormal = zeroNormal
                 var interaction = SurfaceInteraction()
-                for bounce in 0...maxDepth {
-                        interaction.valid = false
-                        try intersectOrInfiniteLights(
-                                ray: ray,
-                                tHit: &tHit,
-                                bounce: bounce,
-                                estimate: &estimate,
-                                interaction: &interaction)
-                        if !interaction.valid {
-                                break
-                        }
-                        let (mediumL, mediumInteraction) =
-                                ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
-                        pathThroughputWeight *= mediumL
-                        if pathThroughputWeight.isBlack {
-                                break
-                        }
-                        guard bounce < maxDepth else {
-                                break
-                        }
-                        if let mediumInteraction {
-                                var mediumRadiance = black
-                                (mediumRadiance, ray) = try sampleMedium(
-                                        pathThroughputWeight: pathThroughputWeight,
-                                        mediumInteraction: mediumInteraction,
-                                        sampler: sampler,
-                                        lightSampler: lightSampler,
-                                        ray: ray)
-                                estimate += mediumRadiance
-                        } else {
-                                var surfaceInteraction = interaction
-                                if bounce == 0 {
-                                        if let areaLight = surfaceInteraction.areaLight {
-                                                estimate +=
-                                                        pathThroughputWeight
-                                                        * areaLight.emittedRadiance(
-                                                                from: surfaceInteraction,
-                                                                inDirection: surfaceInteraction.wo)
-                                        }
-                                }
-                                if surfaceInteraction.material == noMaterial {
-                                        break
-                                }
-                                if materials[surfaceInteraction.material].isInterface {
-                                        var spawnedRay = surfaceInteraction.spawnRay(
-                                                inDirection: ray.direction)
-                                        if let interface = surfaceInteraction.mediumInterface {
-                                                spawnedRay.medium = state.namedMedia[interface.interior]
-                                        }
-                                        ray = spawnedRay
-                                        continue
-                                }
-                                surfaceInteraction.setBsdf()
-                                if bounce == 0 {
-                                        albedo = surfaceInteraction.bsdf.albedo()
-                                        firstNormal = surfaceInteraction.normal
-                                }
-                                let lightEstimate =
-                                        try pathThroughputWeight
-                                        * sampleOneLight(
-                                                at: surfaceInteraction,
-                                                with: sampler,
-                                                lightSampler: lightSampler)
-                                estimate += lightEstimate
-                                let (bsdfSample, _) = surfaceInteraction.bsdf.sampleWorld(
-                                        wo: surfaceInteraction.wo, u: sampler.get3D())
-                                guard
-                                        bsdfSample.probabilityDensity != 0
-                                                && !bsdfSample.probabilityDensity.isNaN
-                                else {
-                                        return (estimate, albedo, firstNormal)
-                                }
-                                pathThroughputWeight *= bsdfSample.throughputWeight(
-                                        normal: surfaceInteraction.normal)
-                                let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
-                                ray = spawnedRay
-                        }
-                        tHit = FloatX.infinity
-                        if stopWithRussianRoulette(
-                                bounce: bounce,
-                                pathThroughputWeight: &pathThroughputWeight)
-                        {
-                                break
-                        }
-                }
+
+                try bounces(
+                        ray: &ray,
+                        interaction: &interaction,
+                        tHit: &tHit,
+                        bounce: 0,
+                        estimate: &estimate,
+                        sampler: sampler,
+                        pathThroughputWeight: &pathThroughputWeight,
+                        lightSampler: lightSampler,
+                        albedo: &albedo,
+                        firstNormal: &firstNormal)
+
                 intelHack(&albedo)
                 return (estimate: estimate, albedo: albedo, normal: firstNormal)
         }
