@@ -54,11 +54,45 @@ class Optix {
                 skips: [Bool]
         ) throws {
                 for i in 0..<rays.count {
-                        if !skips[i] {
-                                try intersect(
-                                        ray: rays[i],
-                                        tHit: &tHits[i],
-                                        interaction: &interactions[i])
+                        if skips[i] {
+                                continue
+                        }
+                        var p = vec3f()
+                        var n = vec3f()
+                        var intersected: Int32 = 0
+                        var primID32: Int32 = -1
+                        var tMax: Float = 0
+                        let rayOrigin = vec3f(rays[i].origin.x, rays[i].origin.y, rays[i].origin.z)
+                        let rayDirection = vec3f(
+                                rays[i].direction.x,
+                                rays[i].direction.y,
+                                rays[i].direction.z)
+                        optixIntersect(
+                                rayOrigin,
+                                rayDirection,
+                                &tHits[i],
+                                &p,
+                                &n,
+                                &intersected,
+                                &primID32,
+                                &tMax)
+                        let intersectionPoint = Point(x: p.x, y: p.y, z: p.z)
+                        let intersectionNormal = Normal(x: n.x, y: n.y, z: n.z)
+                        let intersectionIntersected: Bool = intersected == 1 ? true : false
+                        let primID = Int(primID32)
+                        if intersectionIntersected {
+                                tHits[i] = tMax
+                                interactions[i].valid = true
+                                interactions[i].position = intersectionPoint
+                                interactions[i].normal = intersectionNormal
+                                interactions[i].shadingNormal = intersectionNormal
+                                interactions[i].wo = -rays[i].direction
+                                let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: intersectionNormal))
+                                interactions[i].dpdu = dpdu
+                                // TODO: uv
+                                // TODO: faceIndex
+                                interactions[i].material = materials[primID] ?? -1
+                                interactions[i].areaLight = areaLights[primID] ?? nil
                         }
                 }
         }
@@ -66,8 +100,12 @@ class Optix {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
+                interaction: inout SurfaceInteraction,
+                skip: Bool = false
         ) throws {
+                if skip {
+                        return
+                }
                 var p = vec3f()
                 var n = vec3f()
                 var intersected: Int32 = 0
