@@ -18,7 +18,6 @@ struct Scene {
                 sceneDiameter = diameter()
         }
 
-        //@_noAllocation
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,

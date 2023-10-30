@@ -241,26 +241,6 @@ final class VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
-        func getRadiancesAndAlbedos(
-                from rays: [Ray],
-                tHits: inout [FloatX],
-                with sampler: Sampler,
-                lightSampler: LightSampler
-        ) throws
-                -> [(estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)]
-        {
-                var estimatesAlbedosNormals = [(RgbSpectrum, RgbSpectrum, Normal)]()
-                for i in 0..<rays.count {
-                        let estimateAlbedoNormal = try getRadianceAndAlbedo(
-                                from: rays[i],
-                                tHit: &tHits[i],
-                                with: sampler,
-                                lightSampler: lightSampler)
-                        estimatesAlbedosNormals.append(estimateAlbedoNormal)
-                }
-                return estimatesAlbedosNormals
-        }
-
         func oneBounce(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
@@ -400,40 +380,52 @@ final class VolumePathIntegrator {
                 }
         }
 
-        func getRadianceAndAlbedo(
-                from ray: Ray,
-                tHit: inout FloatX,
+        func getRadiancesAndAlbedos(
+                from rays: [Ray],
+                tHits: inout [FloatX],
                 with sampler: Sampler,
                 lightSampler: LightSampler
         ) throws
-                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
+                -> [(estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)]
         {
+                var estimatesAlbedosNormals = [(RgbSpectrum, RgbSpectrum, Normal)]()
+                for i in 0..<rays.count {
 
-                // Path throughput weight
-                // The product of all GlobalBsdfs and cosines divided by the pdf
-                // Π f |cosθ| / pdf
-                var pathThroughputWeight = white
+                        // Path throughput weight
+                        // The product of all GlobalBsdfs and cosines divided by the pdf
+                        // Π f |cosθ| / pdf
+                        var pathThroughputWeight = white
 
-                var estimate = black
-                var ray = ray
-                var albedo = black
-                var firstNormal = zeroNormal
-                var interaction = SurfaceInteraction()
+                        var estimate = black
+                        var ray = rays[i]
+                        var albedo = black
+                        var firstNormal = zeroNormal
+                        var interaction = SurfaceInteraction()
 
-                try bounces(
-                        ray: &ray,
-                        interaction: &interaction,
-                        tHit: &tHit,
-                        bounce: 0,
-                        estimate: &estimate,
-                        sampler: sampler,
-                        pathThroughputWeight: &pathThroughputWeight,
-                        lightSampler: lightSampler,
-                        albedo: &albedo,
-                        firstNormal: &firstNormal)
+                        try bounces(
+                                ray: &ray,
+                                interaction: &interaction,
+                                tHit: &tHits[i],
+                                bounce: 0,
+                                estimate: &estimate,
+                                sampler: sampler,
+                                pathThroughputWeight: &pathThroughputWeight,
+                                lightSampler: lightSampler,
+                                albedo: &albedo,
+                                firstNormal: &firstNormal)
 
-                intelHack(&albedo)
-                return (estimate: estimate, albedo: albedo, normal: firstNormal)
+                        intelHack(&albedo)
+                        let estimateAlbedoNormal = (estimate: estimate, albedo: albedo, normal: firstNormal)
+
+                        //let estimateAlbedoNormal = try getRadianceAndAlbedo(
+                        //        from: rays[i],
+                        //        tHit: &tHits[i],
+                        //        with: sampler,
+                        //        lightSampler: lightSampler)
+
+                        estimatesAlbedosNormals.append(estimateAlbedoNormal)
+                }
+                return estimatesAlbedosNormals
         }
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
