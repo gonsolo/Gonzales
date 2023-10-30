@@ -254,11 +254,10 @@ final class VolumePathIntegrator {
                 firstNormals: inout [Normal],
                 skips: [Bool]
         ) throws -> [Bool] {
-                var results = [Bool]()
+                var results = Array(repeating: false, count: rays.count)
                 for i in 0..<rays.count {
-                        var result = false
                         if skips[i] {
-                                result = false
+                                results[i] = false
                         } else {
                                 interactions[i].valid = false
                                 try intersectOrInfiniteLights(
@@ -268,9 +267,9 @@ final class VolumePathIntegrator {
                                         estimate: &estimates[i],
                                         interaction: &interactions[i])
                                 if !interactions[i].valid {
-                                        result = false
+                                        results[i] = false
                                 } else {
-                                        result = try oneBounce(
+                                        results[i] = try oneBounce(
                                                 interaction: &interactions[i],
                                                 tHit: &tHits[i],
                                                 ray: &rays[i],
@@ -285,7 +284,6 @@ final class VolumePathIntegrator {
                                         )
                                 }
                         }
-                        results.append(result)
                 }
                 return results
         }
