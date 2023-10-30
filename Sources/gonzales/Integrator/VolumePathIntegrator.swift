@@ -242,6 +242,39 @@ final class VolumePathIntegrator {
         }
 
         func oneBounce(
+                interactions: inout [SurfaceInteraction],
+                tHits: inout [Float],
+                rays: inout [Ray],
+                bounce: Int,
+                estimates: inout [RgbSpectrum],
+                sampler: Sampler,
+                pathThroughputWeights: inout [RgbSpectrum],
+                lightSampler: LightSampler,
+                albedos: inout [RgbSpectrum],
+                firstNormals: inout [Normal],
+                skips: [Bool]
+        ) throws -> [Bool] {
+                var results = [Bool]()
+                for i in 0..<rays.count {
+                        let result = try oneBounce(
+                                interaction: &interactions[i],
+                                tHit: &tHits[i],
+                                ray: &rays[i],
+                                bounce: bounce,
+                                estimate: &estimates[i],
+                                sampler: sampler,
+                                pathThroughputWeight: &pathThroughputWeights[i],
+                                lightSampler: lightSampler,
+                                albedo: &albedos[i],
+                                firstNormal: &firstNormals[i],
+                                skip: skips[i]
+                        )
+                        results.append(result)
+                }
+                return results
+        }
+
+        func oneBounce(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
@@ -366,22 +399,22 @@ final class VolumePathIntegrator {
                 firstNormals: inout [Normal]
         ) throws {
                 var skip = Array(repeating: false, count: rays.count)
-                for i in 0..<rays.count {
-                        for bounce in bounce...maxDepth {
-                                let result = try oneBounce(
-                                        interaction: &interactions[i],
-                                        tHit: &tHits[i],
-                                        ray: &rays[i],
-                                        bounce: bounce,
-                                        estimate: &estimates[i],
-                                        sampler: sampler,
-                                        pathThroughputWeight: &pathThroughputWeights[i],
-                                        lightSampler: lightSampler,
-                                        albedo: &albedos[i],
-                                        firstNormal: &firstNormals[i],
-                                        skip: skip[i]
-                                )
-                                if !result {
+                for bounce in bounce...maxDepth {
+                        let results = try oneBounce(
+                                interactions: &interactions,
+                                tHits: &tHits,
+                                rays: &rays,
+                                bounce: bounce,
+                                estimates: &estimates,
+                                sampler: sampler,
+                                pathThroughputWeights: &pathThroughputWeights,
+                                lightSampler: lightSampler,
+                                albedos: &albedos,
+                                firstNormals: &firstNormals,
+                                skips: skip
+                        )
+                        for i in 0..<rays.count {
+                                if !results[i] {
                                         skip[i] = true
                                 }
                         }
