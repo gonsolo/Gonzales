@@ -260,32 +260,33 @@ final class VolumePathIntegrator {
         ) throws -> [Bool] {
                 var results = Array(repeating: false, count: rays.count)
                 for i in 0..<rays.count {
-                        if !skips[i] {
-                                interactions[i].valid = false
-                                try intersectOrInfiniteLights(
-                                        ray: rays[i],
+                        if skips[i] {
+                                continue
+                        }
+                        interactions[i].valid = false
+                        try intersectOrInfiniteLights(
+                                ray: rays[i],
+                                tHit: &tHits[i],
+                                bounce: bounce,
+                                estimate: &estimates[i],
+                                interaction: &interactions[i],
+                                skip: skips[i])
+                        if !interactions[i].valid {
+                                results[i] = false
+                        } else {
+                                results[i] = try oneBounce(
+                                        interaction: &interactions[i],
                                         tHit: &tHits[i],
+                                        ray: &rays[i],
                                         bounce: bounce,
                                         estimate: &estimates[i],
-                                        interaction: &interactions[i],
-                                        skip: skips[i])
-                                if !interactions[i].valid {
-                                        results[i] = false
-                                } else {
-                                        results[i] = try oneBounce(
-                                                interaction: &interactions[i],
-                                                tHit: &tHits[i],
-                                                ray: &rays[i],
-                                                bounce: bounce,
-                                                estimate: &estimates[i],
-                                                sampler: sampler,
-                                                pathThroughputWeight: &pathThroughputWeights[i],
-                                                lightSampler: lightSampler,
-                                                albedo: &albedos[i],
-                                                firstNormal: &firstNormals[i],
-                                                skip: skips[i]
-                                        )
-                                }
+                                        sampler: sampler,
+                                        pathThroughputWeight: &pathThroughputWeights[i],
+                                        lightSampler: lightSampler,
+                                        albedo: &albedos[i],
+                                        firstNormal: &firstNormals[i],
+                                        skip: skips[i]
+                                )
                         }
                 }
                 return results
