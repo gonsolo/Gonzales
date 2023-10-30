@@ -1,5 +1,3 @@
-var intersectionTests = 0
-
 typealias AcceleratorIndex = Int
 
 struct Scene {
@@ -24,13 +22,11 @@ struct Scene {
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
         ) throws {
-                for i in 0..<rays.count {
-                        try intersect(
-                                ray: rays[i],
-                                tHit: &tHits[i],
-                                interaction: &interactions[i],
-                                skip: skips[i])
-                }
+                try accelerators[acceleratorIndex].intersect(
+                        rays: rays,
+                        tHits: &tHits,
+                        interactions: &interactions,
+                        skips: skips)
         }
 
         func intersect(
@@ -42,7 +38,6 @@ struct Scene {
                 if skip {
                         return
                 }
-                intersectionTests += 1
                 try accelerators[acceleratorIndex].intersect(
                         ray: ray,
                         tHit: &tHit,
@@ -55,10 +50,6 @@ struct Scene {
 
         func diameter() -> FloatX {
                 return length(bound().diagonal())
-        }
-
-        static func statistics() {
-                print("  Ray (regular + shadow) intersection tests:\t\t\t\t\(intersectionTests)")
         }
 
         var acceleratorIndex: AcceleratorIndex

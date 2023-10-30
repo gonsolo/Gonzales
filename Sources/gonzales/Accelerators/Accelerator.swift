@@ -7,6 +7,23 @@ enum Accelerator: Boundable, Intersectable {
         case optix(Optix)
 
         func intersect(
+                rays: [Ray],
+                tHits: inout [FloatX],
+                interactions: inout [SurfaceInteraction],
+                skips: [Bool]
+        ) throws {
+                for i in 0..<rays.count {
+                        if skips[i] {
+                                continue
+                        }
+                        try intersect(
+                                ray: rays[i],
+                                tHit: &tHits[i],
+                                interaction: &interactions[i])
+                }
+        }
+
+        func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction

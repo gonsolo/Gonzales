@@ -5,9 +5,7 @@ struct Statistics {
                 BoundingHierarchyBuilder.statistics()
                 BoundingHierarchy.statistics()
                 PerspectiveCamera.statistics()
-                Scene.statistics()
                 Triangle.statistics()
-                //Curve.statistics()
                 Bounds3.statistics()
         }
 }
