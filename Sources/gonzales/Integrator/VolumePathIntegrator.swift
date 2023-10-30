@@ -39,13 +39,11 @@ final class VolumePathIntegrator {
                                 interactions[i].valid = false
                         }
                 }
-                for i in 0..<rays.count {
-                        try scene.intersect(
-                                ray: rays[i],
-                                tHit: &tHits[i],
-                                interaction: &interactions[i],
-                                skip: skips[i])
-                }
+                try scene.intersect(
+                        rays: rays,
+                        tHits: &tHits,
+                        interactions: &interactions,
+                        skips: skips)
                 for i in 0..<rays.count {
                         if interactions[i].valid {
                                 continue
