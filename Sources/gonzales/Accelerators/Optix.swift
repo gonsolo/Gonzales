@@ -2,6 +2,16 @@ import Foundation
 import cuda
 import cudaBridge
 
+extension vec3f {
+        init(point: Point) {
+                self.init(point.x, point.y, point.z)
+        }
+
+        init(vector: Vector) {
+                self.init(vector.x, vector.y, vector.z)
+        }
+}
+
 class Optix {
 
         init(primitives: [Boundable & Intersectable]) throws {
@@ -53,35 +63,37 @@ class Optix {
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
         ) throws {
+                var ps = Array(repeating: vec3f(), count: rays.count)
+                var ns = Array(repeating: vec3f(), count: rays.count)
+                var intersecteds = Array(repeating: Int32(0), count: rays.count)
+                var primID32s = Array(repeating: Int32(-1), count: rays.count)
+                var tMaxs = Array(repeating: Float(0), count: rays.count)
+                let rayOrigins = rays.map { vec3f(point: $0.origin) }
+                let rayDirections = rays.map { vec3f(vector: $0.direction) }
+
                 for i in 0..<rays.count {
                         if skips[i] {
                                 continue
                         }
-                        var p = vec3f()
-                        var n = vec3f()
-                        var intersected: Int32 = 0
-                        var primID32: Int32 = -1
-                        var tMax: Float = 0
-                        let rayOrigin = vec3f(rays[i].origin.x, rays[i].origin.y, rays[i].origin.z)
-                        let rayDirection = vec3f(
-                                rays[i].direction.x,
-                                rays[i].direction.y,
-                                rays[i].direction.z)
+                        //let rayDirection = vec3f(
+                        //        rays[i].direction.x,
+                        //        rays[i].direction.y,
+                        //        rays[i].direction.z)
                         optixIntersect(
-                                rayOrigin,
-                                rayDirection,
+                                rayOrigins[i],
+                                rayDirections[i],
                                 &tHits[i],
-                                &p,
-                                &n,
-                                &intersected,
-                                &primID32,
-                                &tMax)
-                        let intersectionPoint = Point(x: p.x, y: p.y, z: p.z)
-                        let intersectionNormal = Normal(x: n.x, y: n.y, z: n.z)
-                        let intersectionIntersected: Bool = intersected == 1 ? true : false
-                        let primID = Int(primID32)
+                                &ps[i],
+                                &ns[i],
+                                &intersecteds[i],
+                                &primID32s[i],
+                                &tMaxs[i])
+                        let intersectionPoint = Point(x: ps[i].x, y: ps[i].y, z: ps[i].z)
+                        let intersectionNormal = Normal(x: ns[i].x, y: ns[i].y, z: ns[i].z)
+                        let intersectionIntersected: Bool = intersecteds[i] == 1 ? true : false
+                        let primID = Int(primID32s[i])
                         if intersectionIntersected {
-                                tHits[i] = tMax
+                                tHits[i] = tMaxs[i]
                                 interactions[i].valid = true
                                 interactions[i].position = intersectionPoint
                                 interactions[i].normal = intersectionNormal
