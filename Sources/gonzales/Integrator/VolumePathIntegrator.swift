@@ -31,8 +31,12 @@ final class VolumePathIntegrator {
                 tHit: inout FloatX,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                interaction: inout SurfaceInteraction
+                interaction: inout SurfaceInteraction,
+                skip: Bool
         ) throws {
+                if skip {
+                        return
+                }
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
@@ -256,16 +260,15 @@ final class VolumePathIntegrator {
         ) throws -> [Bool] {
                 var results = Array(repeating: false, count: rays.count)
                 for i in 0..<rays.count {
-                        if skips[i] {
-                                results[i] = false
-                        } else {
+                        if !skips[i] {
                                 interactions[i].valid = false
                                 try intersectOrInfiniteLights(
                                         ray: rays[i],
                                         tHit: &tHits[i],
                                         bounce: bounce,
                                         estimate: &estimates[i],
-                                        interaction: &interactions[i])
+                                        interaction: &interactions[i],
+                                        skip: skips[i])
                                 if !interactions[i].valid {
                                         results[i] = false
                                 } else {
