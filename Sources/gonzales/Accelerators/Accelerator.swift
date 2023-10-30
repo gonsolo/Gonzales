@@ -32,14 +32,11 @@ enum Accelerator: Boundable, Intersectable {
                                 }
                         }
                 case .optix(let optix):
-                        for i in 0..<rays.count {
-                                if !skips[i] {
-                                        try optix.intersect(
-                                                ray: rays[i],
-                                                tHit: &tHits[i],
-                                                interaction: &interactions[i])
-                                }
-                        }
+                        try optix.intersect(
+                                rays: rays,
+                                tHits: &tHits,
+                                interactions: &interactions,
+                                skips: skips)
                 }
         }
 
