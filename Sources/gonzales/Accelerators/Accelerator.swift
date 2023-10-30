@@ -12,14 +12,34 @@ enum Accelerator: Boundable, Intersectable {
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
         ) throws {
-                for i in 0..<rays.count {
-                        if skips[i] {
-                                continue
+                switch self {
+                case .boundingHierarchy(let boundingHierarchy):
+                        for i in 0..<rays.count {
+                                if !skips[i] {
+                                        try boundingHierarchy.intersect(
+                                                ray: rays[i],
+                                                tHit: &tHits[i],
+                                                interaction: &interactions[i])
+                                }
                         }
-                        try intersect(
-                                ray: rays[i],
-                                tHit: &tHits[i],
-                                interaction: &interactions[i])
+                case .embree(let embree):
+                        for i in 0..<rays.count {
+                                if !skips[i] {
+                                        try embree.intersect(
+                                                ray: rays[i],
+                                                tHit: &tHits[i],
+                                                interaction: &interactions[i])
+                                }
+                        }
+                case .optix(let optix):
+                        for i in 0..<rays.count {
+                                if !skips[i] {
+                                        try optix.intersect(
+                                                ray: rays[i],
+                                                tHit: &tHits[i],
+                                                interaction: &interactions[i])
+                                }
+                        }
                 }
         }
 
