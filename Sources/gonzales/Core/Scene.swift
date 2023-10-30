@@ -21,8 +21,12 @@ struct Scene {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
+                interaction: inout SurfaceInteraction,
+                skip: Bool = false
         ) throws {
+                if skip {
+                        return
+                }
                 intersectionTests += 1
                 try accelerators[acceleratorIndex].intersect(
                         ray: ray,

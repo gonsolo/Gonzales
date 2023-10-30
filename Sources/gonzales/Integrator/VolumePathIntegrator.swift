@@ -27,29 +27,36 @@ final class VolumePathIntegrator {
         }
 
         private func intersectOrInfiniteLights(
-                ray: Ray,
-                tHit: inout FloatX,
+                rays: [Ray],
+                tHits: inout [FloatX],
                 bounce: Int,
-                estimate: inout RgbSpectrum,
-                interaction: inout SurfaceInteraction,
-                skip: Bool
+                estimates: inout [RgbSpectrum],
+                interactions: inout [SurfaceInteraction],
+                skips: [Bool]
         ) throws {
-                if skip {
-                        return
+                for i in 0..<rays.count {
+                        if !skips[i] {
+                                interactions[i].valid = false
+                        }
                 }
-                interaction.valid = false
-                try scene.intersect(
-                        ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
-                if interaction.valid {
-                        return
+                for i in 0..<rays.count {
+                        try scene.intersect(
+                                ray: rays[i],
+                                tHit: &tHits[i],
+                                interaction: &interactions[i],
+                                skip: skips[i])
                 }
-                let radiance = scene.infiniteLights.reduce(
-                        black,
-                        { accumulated, light in accumulated + light.radianceFromInfinity(for: ray) }
-                )
-                if bounce == 0 { estimate += radiance }
+                for i in 0..<rays.count {
+                        if interactions[i].valid {
+                                continue
+                        }
+                        let radiance = scene.infiniteLights.reduce(
+                                black,
+                                { accumulated, light in accumulated + light.radianceFromInfinity(for: rays[i])
+                                }
+                        )
+                        if bounce == 0 { estimates[i] += radiance }
+                }
         }
 
         private func sampleLightSource(
@@ -260,14 +267,14 @@ final class VolumePathIntegrator {
                 skips: [Bool]
         ) throws -> [Bool] {
                 var results = Array(repeating: false, count: rays.count)
+                try intersectOrInfiniteLights(
+                        rays: rays,
+                        tHits: &tHits,
+                        bounce: bounce,
+                        estimates: &estimates,
+                        interactions: &interactions,
+                        skips: skips)
                 for i in 0..<rays.count {
-                        try intersectOrInfiniteLights(
-                                ray: rays[i],
-                                tHit: &tHits[i],
-                                bounce: bounce,
-                                estimate: &estimates[i],
-                                interaction: &interactions[i],
-                                skip: skips[i])
                         if skips[i] {
                                 continue
                         }
