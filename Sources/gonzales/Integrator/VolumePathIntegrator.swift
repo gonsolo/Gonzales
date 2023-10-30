@@ -256,19 +256,35 @@ final class VolumePathIntegrator {
         ) throws -> [Bool] {
                 var results = [Bool]()
                 for i in 0..<rays.count {
-                        let result = try oneBounce(
-                                interaction: &interactions[i],
-                                tHit: &tHits[i],
-                                ray: &rays[i],
-                                bounce: bounce,
-                                estimate: &estimates[i],
-                                sampler: sampler,
-                                pathThroughputWeight: &pathThroughputWeights[i],
-                                lightSampler: lightSampler,
-                                albedo: &albedos[i],
-                                firstNormal: &firstNormals[i],
-                                skip: skips[i]
-                        )
+                        var result = false
+                        if skips[i] {
+                                result = false
+                        } else {
+                                interactions[i].valid = false
+                                try intersectOrInfiniteLights(
+                                        ray: rays[i],
+                                        tHit: &tHits[i],
+                                        bounce: bounce,
+                                        estimate: &estimates[i],
+                                        interaction: &interactions[i])
+                                if !interactions[i].valid {
+                                        result = false
+                                } else {
+                                        result = try oneBounce(
+                                                interaction: &interactions[i],
+                                                tHit: &tHits[i],
+                                                ray: &rays[i],
+                                                bounce: bounce,
+                                                estimate: &estimates[i],
+                                                sampler: sampler,
+                                                pathThroughputWeight: &pathThroughputWeights[i],
+                                                lightSampler: lightSampler,
+                                                albedo: &albedos[i],
+                                                firstNormal: &firstNormals[i],
+                                                skip: skips[i]
+                                        )
+                                }
+                        }
                         results.append(result)
                 }
                 return results
@@ -287,19 +303,6 @@ final class VolumePathIntegrator {
                 firstNormal: inout Normal,
                 skip: Bool
         ) throws -> Bool {
-                if skip {
-                        return false
-                }
-                interaction.valid = false
-                try intersectOrInfiniteLights(
-                        ray: ray,
-                        tHit: &tHit,
-                        bounce: bounce,
-                        estimate: &estimate,
-                        interaction: &interaction)
-                if !interaction.valid {
-                        return false
-                }
                 let (mediumL, mediumInteraction) =
                         ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
                 pathThroughputWeight *= mediumL
