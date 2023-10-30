@@ -70,15 +70,15 @@ class Optix {
                 var tMaxs = Array(repeating: Float(0), count: rays.count)
                 let rayOrigins = rays.map { vec3f(point: $0.origin) }
                 let rayDirections = rays.map { vec3f(vector: $0.direction) }
+                var intersectionPoints = Array(repeating: Point(), count: rays.count)
+                var intersectionNormals = Array(repeating: Normal(), count: rays.count)
+                var intersectionIntersecteds = Array(repeating: false, count: rays.count)
+                var primIDs = Array(repeating: 0, count: rays.count)
 
                 for i in 0..<rays.count {
                         if skips[i] {
                                 continue
                         }
-                        //let rayDirection = vec3f(
-                        //        rays[i].direction.x,
-                        //        rays[i].direction.y,
-                        //        rays[i].direction.z)
                         optixIntersect(
                                 rayOrigins[i],
                                 rayDirections[i],
@@ -88,23 +88,26 @@ class Optix {
                                 &intersecteds[i],
                                 &primID32s[i],
                                 &tMaxs[i])
-                        let intersectionPoint = Point(x: ps[i].x, y: ps[i].y, z: ps[i].z)
-                        let intersectionNormal = Normal(x: ns[i].x, y: ns[i].y, z: ns[i].z)
-                        let intersectionIntersected: Bool = intersecteds[i] == 1 ? true : false
-                        let primID = Int(primID32s[i])
-                        if intersectionIntersected {
+
+                        intersectionPoints[i] = Point(x: ps[i].x, y: ps[i].y, z: ps[i].z)
+                        intersectionNormals[i] = Normal(x: ns[i].x, y: ns[i].y, z: ns[i].z)
+                        intersectionIntersecteds[i] = intersecteds[i] == 1 ? true : false
+                        primIDs[i] = Int(primID32s[i])
+
+                        if intersectionIntersecteds[i] {
                                 tHits[i] = tMaxs[i]
                                 interactions[i].valid = true
-                                interactions[i].position = intersectionPoint
-                                interactions[i].normal = intersectionNormal
-                                interactions[i].shadingNormal = intersectionNormal
+                                interactions[i].position = intersectionPoints[i]
+                                interactions[i].normal = intersectionNormals[i]
+                                interactions[i].shadingNormal = intersectionNormals[i]
                                 interactions[i].wo = -rays[i].direction
-                                let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: intersectionNormal))
+                                let (dpdu, _) = makeCoordinateSystem(
+                                        from: Vector(normal: intersectionNormals[i]))
                                 interactions[i].dpdu = dpdu
                                 // TODO: uv
                                 // TODO: faceIndex
-                                interactions[i].material = materials[primID] ?? -1
-                                interactions[i].areaLight = areaLights[primID] ?? nil
+                                interactions[i].material = materials[primIDs[i]] ?? -1
+                                interactions[i].areaLight = areaLights[primIDs[i]] ?? nil
                         }
                 }
         }
