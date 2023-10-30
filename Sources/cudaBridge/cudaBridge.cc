@@ -52,8 +52,20 @@ void optixSetup() {
         }
 }
 
-void optixIntersect(vec3f from, vec3f dir, float &tHit, vec3f &p, vec3f &n, int &didIntersect, int &didPrimID,
-                    float &didTMax) {
+void optixIntersect(
+	vec3f from,
+	vec3f dir,
+	float &tHit,
+	vec3f &p,
+	vec3f &n,
+	int &didIntersect,
+	int &didPrimID,
+        float &didTMax,
+	bool skip
+) {
+	if (skip) {
+		return;
+	}
         try {
                 OptixCamera camera = {from, dir, tHit};
                 optixRenderer->setCamera(camera);

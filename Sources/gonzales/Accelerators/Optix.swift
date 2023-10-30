@@ -76,9 +76,6 @@ class Optix {
                 var primIDs = Array(repeating: 0, count: rays.count)
 
                 for i in 0..<rays.count {
-                        if skips[i] {
-                                continue
-                        }
                         optixIntersect(
                                 rayOrigins[i],
                                 rayDirections[i],
@@ -87,8 +84,13 @@ class Optix {
                                 &ns[i],
                                 &intersecteds[i],
                                 &primID32s[i],
-                                &tMaxs[i])
-
+                                &tMaxs[i],
+                                skips[i])
+                }
+                for i in 0..<rays.count {
+                        if skips[i] {
+                                continue
+                        }
                         intersectionPoints[i] = Point(x: ps[i].x, y: ps[i].y, z: ps[i].z)
                         intersectionNormals[i] = Normal(x: ns[i].x, y: ns[i].y, z: ns[i].z)
                         intersectionIntersecteds[i] = intersecteds[i] == 1 ? true : false
@@ -136,7 +138,8 @@ class Optix {
                         &n,
                         &intersected,
                         &primID32,
-                        &tMax)
+                        &tMax,
+                        false)
                 let intersectionPoint = Point(x: p.x, y: p.y, z: p.z)
                 let intersectionNormal = Normal(x: n.x, y: n.y, z: n.z)
                 let intersectionIntersected: Bool = intersected == 1 ? true : false
