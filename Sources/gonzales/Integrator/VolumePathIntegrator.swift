@@ -350,6 +350,39 @@ final class VolumePathIntegrator {
         }
 
         func bounces(
+                rays: inout [Ray],
+                interactions: inout [SurfaceInteraction],
+                tHits: inout [Float],
+                bounce: Int,
+                estimates: inout [RgbSpectrum],
+                sampler: Sampler,
+                pathThroughputWeights: inout [RgbSpectrum],
+                lightSampler: LightSampler,
+                albedos: inout [RgbSpectrum],
+                firstNormals: inout [Normal]
+        ) throws {
+                for i in 0..<rays.count {
+                        for bounce in bounce...maxDepth {
+                                let result = try oneBounce(
+                                        interaction: &interactions[i],
+                                        tHit: &tHits[i],
+                                        ray: &rays[i],
+                                        bounce: bounce,
+                                        estimate: &estimates[i],
+                                        sampler: sampler,
+                                        pathThroughputWeight: &pathThroughputWeights[i],
+                                        lightSampler: lightSampler,
+                                        albedo: &albedos[i],
+                                        firstNormal: &firstNormals[i]
+                                )
+                                if !result {
+                                        break
+                                }
+                        }
+                }
+        }
+
+        func bounces(
                 ray: inout Ray,
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
@@ -388,43 +421,48 @@ final class VolumePathIntegrator {
         ) throws
                 -> [(estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)]
         {
+
+                //for i in 0..<rays.count {
+
+                // Path throughput weight
+                // The product of all GlobalBsdfs and cosines divided by the pdf
+                // Π f |cosθ| / pdf
+                //var pathThroughputWeight = white
+                var pathThroughputWeights = Array(repeating: white, count: rays.count)
+
+                //var estimate = black
+                var estimates = Array(repeating: black, count: rays.count)
+                //var ray = rays[i]
+                var varRays = rays
+                //var albedo = black
+                var albedos = Array(repeating: black, count: rays.count)
+                //var firstNormal = zeroNormal
+                var firstNormals = Array(repeating: zeroNormal, count: rays.count)
+                //var interaction = SurfaceInteraction()
+                var interactions = Array(repeating: SurfaceInteraction(), count: rays.count)
+                try bounces(
+                        rays: &varRays,
+                        interactions: &interactions,
+                        tHits: &tHits,
+                        bounce: 0,
+                        estimates: &estimates,
+                        sampler: sampler,
+                        pathThroughputWeights: &pathThroughputWeights,
+                        lightSampler: lightSampler,
+                        albedos: &albedos,
+                        firstNormals: &firstNormals)
+
+                //intelHack(&albedo)
                 var estimatesAlbedosNormals = [(RgbSpectrum, RgbSpectrum, Normal)]()
                 for i in 0..<rays.count {
-
-                        // Path throughput weight
-                        // The product of all GlobalBsdfs and cosines divided by the pdf
-                        // Π f |cosθ| / pdf
-                        var pathThroughputWeight = white
-
-                        var estimate = black
-                        var ray = rays[i]
-                        var albedo = black
-                        var firstNormal = zeroNormal
-                        var interaction = SurfaceInteraction()
-
-                        try bounces(
-                                ray: &ray,
-                                interaction: &interaction,
-                                tHit: &tHits[i],
-                                bounce: 0,
-                                estimate: &estimate,
-                                sampler: sampler,
-                                pathThroughputWeight: &pathThroughputWeight,
-                                lightSampler: lightSampler,
-                                albedo: &albedo,
-                                firstNormal: &firstNormal)
-
-                        intelHack(&albedo)
-                        let estimateAlbedoNormal = (estimate: estimate, albedo: albedo, normal: firstNormal)
-
-                        //let estimateAlbedoNormal = try getRadianceAndAlbedo(
-                        //        from: rays[i],
-                        //        tHit: &tHits[i],
-                        //        with: sampler,
-                        //        lightSampler: lightSampler)
-
+                        let estimateAlbedoNormal = (
+                                estimate: estimates[i],
+                                albedo: albedos[i],
+                                normal: firstNormals[i]
+                        )
                         estimatesAlbedosNormals.append(estimateAlbedoNormal)
                 }
+                //}
                 return estimatesAlbedosNormals
         }
 
