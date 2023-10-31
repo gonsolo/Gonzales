@@ -63,30 +63,54 @@ class Optix {
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
         ) throws {
-                var ps = Array(repeating: vec3f(), count: rays.count)
-                var ns = Array(repeating: vec3f(), count: rays.count)
-                var intersecteds = Array(repeating: Int32(0), count: rays.count)
-                var primID32s = Array(repeating: Int32(-1), count: rays.count)
-                var tMaxs = Array(repeating: Float(0), count: rays.count)
+                var ps = VectorVec3f()
+                ps.resize(rays.count)
+                var ns = VectorVec3f()
+                ns.resize(rays.count)
+                var intersecteds = VectorInt32()
+                intersecteds.resize(rays.count)
+                var primID32s = VectorInt32()
+                primID32s.resize(rays.count)
+                var tMaxs = VectorFloat()
+                tMaxs.resize(rays.count)
+                var skipsVector = VectorBool()
+                for skip in skips {
+                        skipsVector.push_back(skip)
+                }
                 let rayOrigins = rays.map { vec3f(point: $0.origin) }
+                var rayOriginsVector = VectorVec3f()
+                for origin in rayOrigins {
+                        rayOriginsVector.push_back(origin)
+                }
                 let rayDirections = rays.map { vec3f(vector: $0.direction) }
+                var rayDirectionsVector = VectorVec3f()
+                for direction in rayDirections {
+                        rayDirectionsVector.push_back(direction)
+                }
+                var tHitsVector = VectorFloat()
+                for tHit in tHits {
+                        tHitsVector.push_back(tHit)
+                }
                 var intersectionPoints = Array(repeating: Point(), count: rays.count)
                 var intersectionNormals = Array(repeating: Normal(), count: rays.count)
                 var intersectionIntersecteds = Array(repeating: false, count: rays.count)
                 var primIDs = Array(repeating: 0, count: rays.count)
 
-                for i in 0..<rays.count {
-                        optixIntersect(
-                                rayOrigins[i],
-                                rayDirections[i],
-                                &tHits[i],
-                                &ps[i],
-                                &ns[i],
-                                &intersecteds[i],
-                                &primID32s[i],
-                                &tMaxs[i],
-                                skips[i])
+                optixIntersectVec(
+                        rayOriginsVector,
+                        rayDirectionsVector,
+                        &tHitsVector,
+                        &ps,
+                        &ns,
+                        &intersecteds,
+                        &primID32s,
+                        &tMaxs,
+                        skipsVector)
+
+                for i in 0..<tHitsVector.count {
+                        tHits[i] = tHitsVector[i]
                 }
+
                 for i in 0..<rays.count {
                         if skips[i] {
                                 continue

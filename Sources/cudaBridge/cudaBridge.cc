@@ -1,6 +1,7 @@
 #include "../../External/Optix/7.7.0/include/optix_function_table_definition.h"
 
 #include "OptixRenderer.h"
+#include "include/cudaBridge.h"
 #include <fstream>
 #include <iostream>
 
@@ -50,6 +51,31 @@ void optixSetup() {
                 std::cout << "FATAL ERROR: " << e.what() << std::endl;
                 exit(1);
         }
+}
+
+void optixIntersectVec(
+	const VectorVec3f& from,
+	const VectorVec3f& dir,
+	VectorFloat &tHit,
+	VectorVec3f &p,
+	VectorVec3f &n,
+	VectorInt32 &didIntersect,
+	VectorInt32 &didPrimID,
+        VectorFloat &didTMax,
+	VectorBool skip
+) {
+	for (int i = 0; i < from.size(); i++) {
+		optixIntersect(
+				from[i],
+				dir[i],
+				tHit[i],
+				p[i],
+				n[i],
+				didIntersect[i],
+				didPrimID[i],
+				didTMax[i],
+				skip[i]);
+	}
 }
 
 void optixIntersect(
