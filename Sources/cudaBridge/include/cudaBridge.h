@@ -8,10 +8,11 @@
 extern "C" {
 #endif
 
-using VectorVec3f = std::vector<vec3f>;
+using VectorBool = std::vector<bool>;
 using VectorFloat = std::vector<float>;
 using VectorInt32 = std::vector<int32_t>;
-using VectorBool = std::vector<bool>;
+using VectorUInt32 = std::vector<uint32_t>;
+using VectorVec3f = std::vector<vec3f>;
 
 void contextLogCallback(unsigned int level, const char *tag, const char *message, void *);
 void optixAddTriangle(vec3f a, vec3f b, vec3f c);

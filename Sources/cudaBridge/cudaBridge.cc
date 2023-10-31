@@ -28,12 +28,12 @@ void optixAddTriangle(vec3f a, vec3f b, vec3f c) {
 }
 
 OptixRenderer *optixRenderer;
-std::vector<uint32_t> pixels;
-std::vector<vec3f> vertices;
-std::vector<vec3f> normals;
-std::vector<int> intersected;
-std::vector<int> primID;
-std::vector<float> tMax;
+VectorUInt32 pixels;
+VectorVec3f vertices;
+VectorVec3f  normals;
+VectorInt32 intersected;
+VectorInt32  primID;
+VectorFloat tMax;
 
 void optixSetup() {
         try {
