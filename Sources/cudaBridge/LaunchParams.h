@@ -26,9 +26,9 @@ struct LaunchParams {
         } frame;
 
         struct {
-                vec3f position;
-                vec3f rayDirection;
-                float tHit;
+                vec3f *position;
+                vec3f *rayDirection;
+                float *tHit;
         } camera;
 
         OptixTraversableHandle traversable;

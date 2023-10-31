@@ -3,12 +3,12 @@
 #include "CUDABuffer.h"
 #include "LaunchParams.h"
 #include "Model.h"
-#include "vec.h"
+#include "include/vec.h"
 
 struct OptixCamera {
-        vec3f from;
-        vec3f rayDirection;
-        float tHit;
+        VectorVec3f from;
+        VectorVec3f rayDirection;
+        VectorFloat tHit;
 };
 
 class OptixRenderer {
@@ -76,6 +76,10 @@ class OptixRenderer {
         CUDABuffer intersectedBuffer;
         CUDABuffer primIDBuffer;
         CUDABuffer tMaxBuffer;
+
+	CUDABuffer cameraPositionBuffer;
+	CUDABuffer cameraDirectionBuffer;
+	CUDABuffer cameraTHitBuffer;
 
         OptixCamera lastSetCamera;
 

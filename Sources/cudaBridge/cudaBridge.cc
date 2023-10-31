@@ -65,6 +65,24 @@ void optixIntersectVec(
         VectorFloat &didTMax,
 	VectorBool skip
 ) {
+	// ignore skip for now
+        try {
+                OptixCamera camera = {from, dir, tHit};
+//                optixRenderer->setCamera(camera);
+//                optixRenderer->render();
+//                optixRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(),
+//                                              intersected.data(), primID.data(), tMax.data());
+//                p = vertices[0];
+//                n = normals[0];
+//                didIntersect = intersected[0];
+//                didPrimID = primID[0];
+//                didTMax = tMax[0];
+        } catch (std::runtime_error &e) {
+                std::cout << "FATAL ERROR: " << e.what() << std::endl;
+                exit(1);
+        }
+
+	//
 	for (int i = 0; i < from.size(); i++) {
 		optixIntersect(
 				from[i],
@@ -94,7 +112,10 @@ void optixIntersect(
 		return;
 	}
         try {
-                OptixCamera camera = {from, dir, tHit};
+		VectorVec3f fromVec = { from };
+		VectorVec3f dirVec = { dir };
+		VectorFloat tHitVec = { tHit };
+                OptixCamera camera = {fromVec, dirVec, tHitVec};
                 optixRenderer->setCamera(camera);
                 optixRenderer->render();
                 optixRenderer->downloadPixels(pixels.data(), vertices.data(), normals.data(),

@@ -2,7 +2,7 @@
 #include <optix_device.h>
 
 #include "LaunchParams.h"
-#include "vec.h"
+#include "include/vec.h"
 
 extern "C" __constant__ LaunchParams optixLaunchParams;
 
@@ -78,7 +78,7 @@ extern "C" __global__ void __miss__radiance() {
 extern "C" __global__ void __raygen__renderFrame() {
         const int ix = optixGetLaunchIndex().x;
         const int iy = optixGetLaunchIndex().y;
-
+        const uint32_t fbIndex = ix + iy * optixLaunchParams.frame.size.x;
         const auto &camera = optixLaunchParams.camera;
 
         PerRayData perRayData = {vec3f(0.f), vec3f(0.f), false, -1};
@@ -87,16 +87,16 @@ extern "C" __global__ void __raygen__renderFrame() {
         packPointer(&perRayData, u0, u1);
 
         float3 rayDir;
-        rayDir.x = camera.rayDirection.x;
-        rayDir.y = camera.rayDirection.y;
-        rayDir.z = camera.rayDirection.z;
+        rayDir.x = camera.rayDirection[fbIndex].x;
+        rayDir.y = camera.rayDirection[fbIndex].y;
+        rayDir.z = camera.rayDirection[fbIndex].z;
 
-        float tmax = camera.tHit;
+        float tmax = camera.tHit[fbIndex];
 
         float3 position;
-        position.x = camera.position.x;
-        position.y = camera.position.y;
-        position.z = camera.position.z;
+        position.x = camera.position[fbIndex].x;
+        position.y = camera.position[fbIndex].y;
+        position.z = camera.position[fbIndex].z;
 
         optixTrace(optixLaunchParams.traversable, position, rayDir,
                    0.f, // tmin
@@ -115,7 +115,6 @@ extern "C" __global__ void __raygen__renderFrame() {
 
         const uint32_t rgba = 0xff000000 | (r << 0) | (g << 8) | (b << 16);
 
-        const uint32_t fbIndex = ix + iy * optixLaunchParams.frame.size.x;
         optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
         optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.intersectionPoint;
         optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <ostream>
+#include <vector>
 
 #if defined(__CUDACC__)
 #define __gdt_device __device__
@@ -108,3 +110,11 @@ using vec3f = vec3<float>;
 using vec3i = vec3<int>;
 using vec2f = vec2<float>;
 using vec2i = vec2<int>;
+
+using VectorBool = std::vector<bool>;
+using VectorFloat = std::vector<float>;
+using VectorInt32 = std::vector<int32_t>;
+using VectorUInt32 = std::vector<uint32_t>;
+using VectorVec3f = std::vector<vec3f>;
+
+

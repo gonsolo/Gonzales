@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vec.h"
+#include "include/vec.h"
 #include <vector>
 
 struct TriangleMesh {

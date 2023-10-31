@@ -134,10 +134,7 @@ void OptixRenderer::initOptix() {
         cudaGetDeviceCount(&numDevices);
         if (numDevices == 0)
                 throw std::runtime_error("no CUDA capable devices found!");
-        // std::cout << "Found " << numDevices << " CUDA devices" << std::endl;
-
         OPTIX_CHECK(optixInit());
-        // std::cout << "Successfully initialized optix!" << std::endl;
 }
 
 static void context_log_cb(unsigned int level, const char *tag, const char *message, void *) {
@@ -148,14 +145,10 @@ void OptixRenderer::createContext() {
         const int deviceID = 0;
         CUDA_CHECK(SetDevice(deviceID));
         CUDA_CHECK(StreamCreate(&stream));
-
         cudaGetDeviceProperties(&deviceProps, deviceID);
-        // std::cout << "Running on device: " << deviceProps.name << std::endl;
-
         CUresult cuRes = cuCtxGetCurrent(&cudaContext);
         if (cuRes != CUDA_SUCCESS)
                 fprintf(stderr, "Error querying current context: error code %d\n", cuRes);
-
         OPTIX_CHECK(optixDeviceContextCreate(cudaContext, 0, &optixContext));
         OPTIX_CHECK(optixDeviceContextSetLogCallback(optixContext, context_log_cb, nullptr, 4));
 }
@@ -316,22 +309,33 @@ void OptixRenderer::render() {
 }
 
 void OptixRenderer::setCamera(const OptixCamera &camera) {
+	auto size = camera.from.size();
+	if (size == 0)
+		return;
         lastSetCamera = camera;
-        launchParams.camera.position = camera.from;
-        launchParams.camera.rayDirection = camera.rayDirection;
-        launchParams.camera.tHit = camera.tHit;
+	cameraPositionBuffer.upload(camera.from.data(), size);
+	cameraDirectionBuffer.upload(camera.rayDirection.data(), size);
+	cameraTHitBuffer.upload(camera.tHit.data(), size);
+	launchParams.camera.position = (vec3f*)cameraPositionBuffer.d_pointer();
+	launchParams.camera.rayDirection = (vec3f*)cameraDirectionBuffer.d_pointer();
+	launchParams.camera.tHit = (float*)cameraTHitBuffer.d_pointer();
 }
 
 void OptixRenderer::resize(const vec2i &newSize) {
         if (newSize.x == 0 | newSize.y == 0)
                 return;
 
-        colorBuffer.resize(newSize.x * newSize.y * sizeof(uint32_t));
-        outVertexBuffer.resize(newSize.x * newSize.y * sizeof(vec3f));
-        outNormalBuffer.resize(newSize.x * newSize.y * sizeof(vec3f));
-        intersectedBuffer.resize(sizeof(int));
-        primIDBuffer.resize(sizeof(int));
-        tMaxBuffer.resize(sizeof(float));
+	auto size = newSize.x * newSize.y;
+        colorBuffer.resize(size * sizeof(uint32_t));
+        outVertexBuffer.resize(size * sizeof(vec3f));
+        outNormalBuffer.resize(size * sizeof(vec3f));
+        intersectedBuffer.resize(size * sizeof(int));
+        primIDBuffer.resize(size * sizeof(int));
+        tMaxBuffer.resize(size *sizeof(float));
+
+	cameraPositionBuffer.resize(size * sizeof(vec3f));
+	cameraDirectionBuffer.resize(size * sizeof(vec3f));
+	cameraTHitBuffer.resize(size * sizeof(float));
 
         launchParams.frame.size = newSize;
         launchParams.frame.colorBuffer = (uint32_t *)colorBuffer.d_pointer();
@@ -341,7 +345,7 @@ void OptixRenderer::resize(const vec2i &newSize) {
         launchParams.frame.primID = (int *)primIDBuffer.d_pointer();
         launchParams.frame.tMax = (float *)tMaxBuffer.d_pointer();
 
-        setCamera(lastSetCamera);
+	setCamera(lastSetCamera);
 }
 
 void OptixRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[],
