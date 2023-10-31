@@ -346,10 +346,11 @@ void OptixRenderer::resize(const vec2i &newSize) {
 
 void OptixRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[],
                                    int h_intersected[], int h_primID[], float h_tMax[]) {
-        colorBuffer.download(h_pixels, launchParams.frame.size.x * launchParams.frame.size.y);
-        outVertexBuffer.download(h_vertices, launchParams.frame.size.x * launchParams.frame.size.y);
-        outNormalBuffer.download(h_normals, launchParams.frame.size.x * launchParams.frame.size.y);
-        intersectedBuffer.download(h_intersected, 1);
-        primIDBuffer.download(h_primID, 1);
-        tMaxBuffer.download(h_tMax, 1);
+	auto size = launchParams.frame.size.x * launchParams.frame.size.y;
+        colorBuffer.download(h_pixels, size);
+        outVertexBuffer.download(h_vertices, size);
+        outNormalBuffer.download(h_normals, size);
+        intersectedBuffer.download(h_intersected, size);
+        primIDBuffer.download(h_primID, size);
+        tMaxBuffer.download(h_tMax, size);
 }

@@ -30,26 +30,27 @@ void optixAddTriangle(vec3f a, vec3f b, vec3f c) {
 OptixRenderer *optixRenderer;
 VectorUInt32 pixels;
 VectorVec3f vertices;
-VectorVec3f  normals;
+VectorVec3f normals;
 VectorInt32 intersected;
-VectorInt32  primID;
+VectorInt32 primID;
 VectorFloat tMax;
 
 void optixSetup() {
         try {
-                model.meshes.push_back(&triangleMesh);
-                optixRenderer = new OptixRenderer(&model);
-                vec2i newSize{1, 1};
-                optixRenderer->resize(newSize);
-                pixels.resize(newSize.x * newSize.y);
-                vertices.resize(newSize.x * newSize.y);
-                normals.resize(newSize.x * newSize.y);
-                intersected.resize(1);
-                primID.resize(1);
-                tMax.resize(1);
+		model.meshes.push_back(&triangleMesh);
+		optixRenderer = new OptixRenderer(&model);
+		vec2i newSize{1, 1};
+		optixRenderer->resize(newSize);
+		auto sizeVec = newSize.x * newSize.y;
+		pixels.resize(sizeVec);
+		vertices.resize(sizeVec);
+		normals.resize(sizeVec);
+		intersected.resize(sizeVec);
+		primID.resize(sizeVec);
+		tMax.resize(sizeVec);
         } catch (std::runtime_error &e) {
-                std::cout << "FATAL ERROR: " << e.what() << std::endl;
-                exit(1);
+		std::cout << "FATAL ERROR: " << e.what() << std::endl;
+		exit(1);
         }
 }
 
