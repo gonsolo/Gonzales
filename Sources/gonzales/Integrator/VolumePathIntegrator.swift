@@ -297,6 +297,23 @@ final class VolumePathIntegrator {
                 return results
         }
 
+        func mediumEstimate(
+                ray: inout Ray,
+                pathThroughputWeight: RgbSpectrum,
+                mediumInteraction: MediumInteraction,
+                sampler: Sampler,
+                lightSampler: LightSampler
+        ) throws -> RgbSpectrum {
+                var mediumRadiance = black
+                (mediumRadiance, ray) = try sampleMedium(
+                        pathThroughputWeight: pathThroughputWeight,
+                        mediumInteraction: mediumInteraction,
+                        sampler: sampler,
+                        lightSampler: lightSampler,
+                        ray: ray)
+                return mediumRadiance
+        }
+
         func oneBounce(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
@@ -320,14 +337,12 @@ final class VolumePathIntegrator {
                         return false
                 }
                 if let mediumInteraction {
-                        var mediumRadiance = black
-                        (mediumRadiance, ray) = try sampleMedium(
+                        estimate += try mediumEstimate(
+                                ray: &ray,
                                 pathThroughputWeight: pathThroughputWeight,
                                 mediumInteraction: mediumInteraction,
                                 sampler: sampler,
-                                lightSampler: lightSampler,
-                                ray: ray)
-                        estimate += mediumRadiance
+                                lightSampler: lightSampler)
                 } else {
                         var surfaceInteraction = interaction
                         if bounce == 0 {
