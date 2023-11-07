@@ -309,32 +309,32 @@ void OptixRenderer::render() {
 }
 
 void OptixRenderer::setCamera(const OptixCamera &camera) {
-	auto size = camera.from.size();
-	if (size == 0)
-		return;
-	cameraPositionBuffer.upload(camera.from.data(), size);
-	cameraDirectionBuffer.upload(camera.rayDirection.data(), size);
-	cameraTHitBuffer.upload(camera.tHit.data(), size);
-	launchParams.camera.position = (vec3f*)cameraPositionBuffer.d_pointer();
-	launchParams.camera.rayDirection = (vec3f*)cameraDirectionBuffer.d_pointer();
-	launchParams.camera.tHit = (float*)cameraTHitBuffer.d_pointer();
+        auto size = camera.from.size();
+        if (size == 0)
+                return;
+        cameraPositionBuffer.upload(camera.from.data(), size);
+        cameraDirectionBuffer.upload(camera.rayDirection.data(), size);
+        cameraTHitBuffer.upload(camera.tHit.data(), size);
+        launchParams.camera.position = (vec3f *)cameraPositionBuffer.d_pointer();
+        launchParams.camera.rayDirection = (vec3f *)cameraDirectionBuffer.d_pointer();
+        launchParams.camera.tHit = (float *)cameraTHitBuffer.d_pointer();
 }
 
 void OptixRenderer::resize(const vec2i &newSize) {
         if (newSize.x == 0 | newSize.y == 0)
                 return;
 
-	auto size = newSize.x * newSize.y;
+        auto size = newSize.x * newSize.y;
         colorBuffer.resize(size * sizeof(uint32_t));
         outVertexBuffer.resize(size * sizeof(vec3f));
         outNormalBuffer.resize(size * sizeof(vec3f));
         intersectedBuffer.resize(size * sizeof(int));
         primIDBuffer.resize(size * sizeof(int));
-        tMaxBuffer.resize(size *sizeof(float));
+        tMaxBuffer.resize(size * sizeof(float));
 
-	cameraPositionBuffer.resize(size * sizeof(vec3f));
-	cameraDirectionBuffer.resize(size * sizeof(vec3f));
-	cameraTHitBuffer.resize(size * sizeof(float));
+        cameraPositionBuffer.resize(size * sizeof(vec3f));
+        cameraDirectionBuffer.resize(size * sizeof(vec3f));
+        cameraTHitBuffer.resize(size * sizeof(float));
 
         launchParams.frame.size = newSize;
         launchParams.frame.colorBuffer = (uint32_t *)colorBuffer.d_pointer();
@@ -347,7 +347,7 @@ void OptixRenderer::resize(const vec2i &newSize) {
 
 void OptixRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[],
                                    int h_intersected[], int h_primID[], float h_tMax[]) {
-	auto size = launchParams.frame.size.x * launchParams.frame.size.y;
+        auto size = launchParams.frame.size.x * launchParams.frame.size.y;
         colorBuffer.download(h_pixels, size);
         outVertexBuffer.download(h_vertices, size);
         outNormalBuffer.download(h_normals, size);

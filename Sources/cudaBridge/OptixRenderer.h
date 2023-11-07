@@ -77,9 +77,9 @@ class OptixRenderer {
         CUDABuffer primIDBuffer;
         CUDABuffer tMaxBuffer;
 
-	CUDABuffer cameraPositionBuffer;
-	CUDABuffer cameraDirectionBuffer;
-	CUDABuffer cameraTHitBuffer;
+        CUDABuffer cameraPositionBuffer;
+        CUDABuffer cameraDirectionBuffer;
+        CUDABuffer cameraTHitBuffer;
 
         const Model *model;
 

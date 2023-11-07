@@ -116,5 +116,3 @@ using VectorFloat = std::vector<float>;
 using VectorInt32 = std::vector<int32_t>;
 using VectorUInt32 = std::vector<uint32_t>;
 using VectorVec3f = std::vector<vec3f>;
-
-

@@ -32,7 +32,7 @@ struct CUDABuffer {
 
         template <typename T> void upload(const T *t, size_t count) {
                 assert(d_ptr != nullptr);
-		//printf("sizeInBytes %zu count %zu sizeof T %lu\n", sizeInBytes, count, sizeof(T));
+                // printf("sizeInBytes %zu count %zu sizeof T %lu\n", sizeInBytes, count, sizeof(T));
                 assert(sizeInBytes == count * sizeof(T));
                 CUDA_CHECK(Memcpy(d_ptr, (void *)t, count * sizeof(T), cudaMemcpyHostToDevice));
         }
