@@ -115,10 +115,10 @@ extern "C" __global__ void __raygen__renderFrame() {
 
         const uint32_t rgba = 0xff000000 | (r << 0) | (g << 8) | (b << 16);
 
-        optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
-        optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.intersectionPoint;
-        optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;
-        optixLaunchParams.frame.intersected[0] = perRayData.intersected;
-        optixLaunchParams.frame.primID[0] = perRayData.primID;
-	optixLaunchParams.frame.tMax[0] = perRayData.tMax;
+	optixLaunchParams.frame.colorBuffer[fbIndex] = rgba;
+	optixLaunchParams.frame.outVertexBuffer[fbIndex] = perRayData.intersectionPoint;
+	optixLaunchParams.frame.outNormalBuffer[fbIndex] = perRayData.intersectionNormal;
+	optixLaunchParams.frame.intersected[fbIndex] = perRayData.intersected;
+	optixLaunchParams.frame.primID[fbIndex] = perRayData.primID;
+	optixLaunchParams.frame.tMax[fbIndex] = perRayData.tMax;
 }

@@ -81,8 +81,6 @@ class OptixRenderer {
 	CUDABuffer cameraDirectionBuffer;
 	CUDABuffer cameraTHitBuffer;
 
-        OptixCamera lastSetCamera;
-
         const Model *model;
 
         std::vector<CUDABuffer> vertexBuffer;

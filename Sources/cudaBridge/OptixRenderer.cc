@@ -312,7 +312,6 @@ void OptixRenderer::setCamera(const OptixCamera &camera) {
 	auto size = camera.from.size();
 	if (size == 0)
 		return;
-        lastSetCamera = camera;
 	cameraPositionBuffer.upload(camera.from.data(), size);
 	cameraDirectionBuffer.upload(camera.rayDirection.data(), size);
 	cameraTHitBuffer.upload(camera.tHit.data(), size);
@@ -344,8 +343,6 @@ void OptixRenderer::resize(const vec2i &newSize) {
         launchParams.frame.intersected = (int *)intersectedBuffer.d_pointer();
         launchParams.frame.primID = (int *)primIDBuffer.d_pointer();
         launchParams.frame.tMax = (float *)tMaxBuffer.d_pointer();
-
-	setCamera(lastSetCamera);
 }
 
 void OptixRenderer::downloadPixels(uint32_t h_pixels[], vec3f h_vertices[], vec3f h_normals[],
