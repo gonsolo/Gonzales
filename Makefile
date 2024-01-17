@@ -106,10 +106,8 @@ else
 	LLDB 			= /usr/libexec/swift/bin/lldb
 	ifeq ($(HOSTNAME), Limone)
 		SWIFT		= ~/bin/swift
-	else ifeq ($(HOSTNAME), Pampelmuse)
-		SWIFT		= swift
 	else
-		SWIFT		= ./swift-5.9-RELEASE-ubuntu22.04/usr/bin/swift
+		SWIFT		= swift
 endif
 	#SWIFT_VERBOSE		= -v
 	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
