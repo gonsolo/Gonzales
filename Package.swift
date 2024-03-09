@@ -14,7 +14,7 @@ let package = Package(
                         name: "gonzales",
                         dependencies: [
                                 "SWCompression",
-                                "embree3",
+                                "embree4",
                                 "openImageIOBridge",
                                 "cuda",
                                 "cudaBridge",
@@ -35,7 +35,7 @@ let package = Package(
                         dependencies: ["cuda"],
                         swiftSettings: [.interoperabilityMode(.Cxx)]
                 ),
-                .systemLibrary(name: "embree3"),
+                .systemLibrary(name: "embree4"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "cuda", pkgConfig: "cuda-12.3"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),

@@ -1,5 +1,5 @@
 import Foundation
-import embree3
+import embree4
 
 // swift-format-ignore: AlwaysUseLowerCamelCase
 @_silgen_name("_swift_stdlib_immortalize")
@@ -139,14 +139,11 @@ final class EmbreeAccelerator: EmbreeBase {
                         v: 0,
                         primID: 0,
                         geomID: rtcInvalidGeometryId,
-                        instID: rtcInvalidGeometryId)
+                        instID: rtcInvalidGeometryId,
+                        instPrimID: 0)
 
-                //_unsafePerformance {
                 var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
-                var context = RTCIntersectContext()
-                rtcInitIntersectContext(&context)
-                rtcIntersect1(rtcScene, &context, &rayhit)
-                //}
+                rtcIntersect1(rtcScene, &rayhit, nil)
 
                 guard rayhit.hit.geomID != rtcInvalidGeometryId else {
                         return empty(#line)
