@@ -160,8 +160,12 @@ DEVICE_PROGRAMS_PTX = .build/devicePrograms.ptx
 
 optix: $(EMBEDDED_C)
 
+#/usr/lib/gcc/x86_64-pc-linux-gnu/13.3.0/include/c++/x86_64-pc-linux-gnu/bits
+
 $(DEVICE_PROGRAMS_PTX): $(DEVICE_PROGRAMS_SOURCE) Sources/cudaBridge/LaunchParams.h
-	@$(NVCC) -allow-unsupported-compiler --ptx -ISources/cudaBridge/include -IExternal/Optix/7.7.0/include/ -rdc=true -o $@ $< > /dev/null
+	$(NVCC) -I/usr/lib/gcc/x86_64-pc-linux-gnu/13.3.0/include/c++/x86_64-pc-linux-gnu \
+		-I/usr/lib/gcc/x86_64-pc-linux-gnu/13.3.0/include/c++ \
+		-allow-unsupported-compiler --ptx -ISources/cudaBridge/include -IExternal/Optix/7.7.0/include/ -rdc=true -o $@ $< > /dev/null
 
 $(EMBEDDED_C): $(DEVICE_PROGRAMS_PTX)
 	@bin2c -c --padd 0 --type char --name embedded_ptx_code $(DEVICE_PROGRAMS_PTX) > $(EMBEDDED_C)

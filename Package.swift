@@ -37,7 +37,7 @@ let package = Package(
                 ),
                 .systemLibrary(name: "embree4"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
-                .systemLibrary(name: "cuda", pkgConfig: "cuda-12.3"),
+                .systemLibrary(name: "cuda", pkgConfig: "cuda"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
         cxxLanguageStandard: .cxx20
