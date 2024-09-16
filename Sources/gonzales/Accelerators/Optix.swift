@@ -1,3 +1,4 @@
+/*
 import Foundation
 import cuda
 import cudaBridge
@@ -197,3 +198,4 @@ class Optix {
         var materials = [Int: MaterialIndex]()
         var areaLights = [Int: AreaLight]()
 }
+*/

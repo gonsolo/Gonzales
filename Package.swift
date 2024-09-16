@@ -16,8 +16,8 @@ let package = Package(
                                 "SWCompression",
                                 "embree4",
                                 "openImageIOBridge",
-                                "cuda",
-                                "cudaBridge",
+                                //"cuda",
+                                //"cudaBridge",
                                 "ptexBridge",
                         ]
                 ),
@@ -30,14 +30,14 @@ let package = Package(
                         name: "ptexBridge",
                         dependencies: ["ptex"]
                 ),
-                .target(
-                        name: "cudaBridge",
-                        dependencies: ["cuda"],
-                        swiftSettings: [.interoperabilityMode(.Cxx)]
-                ),
+                //.target(
+                //        name: "cudaBridge",
+                //        dependencies: ["cuda"],
+                //        swiftSettings: [.interoperabilityMode(.Cxx)]
+                //),
                 .systemLibrary(name: "embree4"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
-                .systemLibrary(name: "cuda", pkgConfig: "cuda"),
+                //.systemLibrary(name: "cuda", pkgConfig: "cuda"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
         cxxLanguageStandard: .cxx20

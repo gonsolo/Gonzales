@@ -307,8 +307,8 @@ final class EmbreeBuilder: EmbreeBase {
                                         embreeAccelerator = embree
                                 case .boundingHierarchy:
                                         embreeError("Embree accelerator expected!")
-                                case .optix:
-                                        embreeError("Embree accelerator expected!")
+                                //case .optix:
+                                //        embreeError("Embree accelerator expected!")
                                 }
                                 let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
                                 rtcSetGeometryInstancedScene(instance, embreeAccelerator.rtcScene)

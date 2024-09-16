@@ -4,7 +4,7 @@ enum Accelerator: Boundable, Intersectable {
 
         case boundingHierarchy(BoundingHierarchy)
         case embree(EmbreeAccelerator)
-        case optix(Optix)
+        //case optix(Optix)
 
         func intersect(
                 rays: [Ray],
@@ -31,12 +31,12 @@ enum Accelerator: Boundable, Intersectable {
                                                 interaction: &interactions[i])
                                 }
                         }
-                case .optix(let optix):
-                        try optix.intersect(
-                                rays: rays,
-                                tHits: &tHits,
-                                interactions: &interactions,
-                                skips: skips)
+                //case .optix(let optix):
+                //        try optix.intersect(
+                //                rays: rays,
+                //                tHits: &tHits,
+                //                interactions: &interactions,
+                //                skips: skips)
                 }
         }
 
@@ -56,11 +56,11 @@ enum Accelerator: Boundable, Intersectable {
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
-                case .optix(let optix):
-                        try optix.intersect(
-                                ray: ray,
-                                tHit: &tHit,
-                                interaction: &interaction)
+                //case .optix(let optix):
+                //        try optix.intersect(
+                //                ray: ray,
+                //                tHit: &tHit,
+                //                interaction: &interaction)
                 }
         }
 
@@ -70,8 +70,8 @@ enum Accelerator: Boundable, Intersectable {
                         return boundingHierarchy.objectBound()
                 case .embree(let embree):
                         return embree.objectBound()
-                case .optix(let optix):
-                        return optix.objectBound()
+                //case .optix(let optix):
+                //        return optix.objectBound()
                 }
         }
 
@@ -81,8 +81,8 @@ enum Accelerator: Boundable, Intersectable {
                         return boundingHierarchy.worldBound()
                 case .embree(let embree):
                         return embree.worldBound()
-                case .optix(let optix):
-                        return optix.worldBound()
+                //case .optix(let optix):
+                //        return optix.worldBound()
                 }
         }
 
