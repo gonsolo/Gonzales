@@ -14,8 +14,7 @@ PTEXMEM = --ptexmem 1 # GB
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
 SCENE_NAME = cornell-box
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-SCENE = $(BITTERLI)/$(SCENE_NAME)/scene-v4.pbrt
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 IMAGE_PBRT = $(IMAGE)
 
