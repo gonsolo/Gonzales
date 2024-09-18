@@ -171,10 +171,10 @@ $(EMBEDDED_C): $(DEVICE_PROGRAMS_PTX)
 	@bin2c -c --padd 0 --type char --name embedded_ptx_code $(DEVICE_PROGRAMS_PTX) > $(EMBEDDED_C)
 
 r: release
-release: optix
+release: #optix
 	@$(BUILD_RELEASE)
 d: debug
-debug: optix
+debug: #optix
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug
