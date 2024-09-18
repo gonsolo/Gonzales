@@ -5,15 +5,15 @@ import PackageDescription
 let package = Package(
         name: "gonzales",
         dependencies: [
-                .package(
-                        url: "https://github.com/tsolomko/SWCompression.git",
-                        from: "4.8.0")
+                //.package(
+                //        url: "https://github.com/tsolomko/SWCompression.git",
+                //        from: "4.8.6")
         ],
         targets: [
                 .executableTarget(
                         name: "gonzales",
                         dependencies: [
-                                "SWCompression",
+                                //"SWCompression",
                                 "embree4",
                                 "openImageIOBridge",
                                 //"cuda",
