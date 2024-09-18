@@ -1,5 +1,4 @@
 import Foundation
-import SWCompression
 
 protocol DefaultInitializable {
         init()
@@ -377,7 +376,7 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) th
         let uncompressedData = file.readDataToEndOfFile()
         var data: Data
         if absoluteFileName.hasSuffix(".gz") {
-                data = try GzipArchive.unarchive(archive: uncompressedData)
+                data = try Compression.get(data: uncompressedData)
         } else {
                 data = uncompressedData
         }

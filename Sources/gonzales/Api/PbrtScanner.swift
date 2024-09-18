@@ -1,7 +1,5 @@
 import Foundation  // InputStream, pow, EOF, exit
 
-import SWCompression
-
 final class PbrtScanner {
 
         enum PbrtScannerError: Error {
@@ -18,7 +16,7 @@ final class PbrtScanner {
                                 throw PbrtScannerError.noFile
                         }
                         let data = try Data(contentsOf: url)
-                        let decompressedData = try GzipArchive.unarchive(archive: data)
+                        let decompressedData = try Compression.get(data: data)
                         let inputStream = InputStream(data: decompressedData)
                         self.stream = inputStream
                 } else {

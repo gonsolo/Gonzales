@@ -124,7 +124,8 @@ endif
 	#CXX_INTEROP 		= -Xswiftc -enable-experimental-cxx-interop
 	CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
 	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
-	DEBUG_OPTIONS   	= $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)
+	#SWIFT_VERSION 		= -Xswiftc -swift-version -Xswiftc 6
+	DEBUG_OPTIONS   	= $(SWIFT_VERSION) $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)
 	RELEASE_OPTIONS 	= $(DEBUG_OPTIONS) $(SWIFT_OPTIMIZE)
 	BUILD			= $(SWIFT) build
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
