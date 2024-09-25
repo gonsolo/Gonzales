@@ -8,11 +8,12 @@
 protocol Sampleable {
         func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX)
         func sample(ref: Interaction, u: TwoRandomVariables) -> (Interaction, FloatX)
+        @MainActor
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
                 from interaction: Interaction
         )
-                throws -> FloatX
+                async throws -> FloatX
         func area() -> FloatX
 }
 
@@ -33,12 +34,12 @@ extension Sampleable where Self: Intersectable {
                 samplingDirection direction: Vector,
                 from: Interaction
         )
-                throws -> FloatX
+                async throws -> FloatX
         {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
                 var interaction = SurfaceInteraction()
-                try intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+                try await intersect(ray: ray, tHit: &tHit, interaction: &interaction)
                 if !interaction.valid {
                         return 0
                 }

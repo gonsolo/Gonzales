@@ -5,6 +5,7 @@ enum DiffuseError: Error {
 
 struct Diffuse {
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black
@@ -24,6 +25,7 @@ struct Diffuse {
         let reflectance: Texture
 }
 
+@MainActor
 func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {

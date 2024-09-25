@@ -1,10 +1,11 @@
 struct BoundingHierarchy: Boundable, Intersectable {
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 var toVisit = 0
                 var current = 0
                 //var nodesToVisit = FixedArray16<Int>()
@@ -19,7 +20,7 @@ struct BoundingHierarchy: Boundable, Intersectable {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
                                                 let primitive = primitives[node.offset + i]
-                                                try primitive.intersect(
+                                                try await primitive.intersect(
                                                         ray: ray,
                                                         tHit: &tHit,
                                                         interaction: &interaction)

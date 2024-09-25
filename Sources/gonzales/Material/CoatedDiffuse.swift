@@ -12,6 +12,7 @@ struct CoatedDiffuse {
                 self.remapRoughness = remapRoughness
         }
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
@@ -31,6 +32,7 @@ struct CoatedDiffuse {
         var remapRoughness: Bool
 }
 
+@MainActor
 func createCoatedDiffuse(parameters: ParameterDictionary) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")

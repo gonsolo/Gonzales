@@ -2,6 +2,8 @@ import Foundation
 import ptexBridge
 
 struct PtexCache {
+
+        @MainActor
         init() {
                 initPtexCache(ptexMemory)
         }
@@ -14,6 +16,7 @@ struct Ptex {
                 initPtexTexture(path)
         }
 
+        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluatePtex(

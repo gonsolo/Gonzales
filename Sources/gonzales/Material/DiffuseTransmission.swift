@@ -1,5 +1,6 @@
 struct DiffuseTransmission {
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let reflectance = reflectance.evaluateRgbSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)
@@ -17,6 +18,7 @@ struct DiffuseTransmission {
         var scale: FloatTexture
 }
 
+@MainActor
 func createDiffuseTransmission(parameters: ParameterDictionary) throws -> DiffuseTransmission {
         let reflectance = try parameters.findRgbSpectrumTexture(
                 name: "reflectance",

@@ -11,6 +11,7 @@ struct Hair {
                 return eumelaninAbsorption + pheomelaninAbsorption
         }
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
                 let absorption = absorptionFrom(eumelaninConcentration: eumelanin)
@@ -29,6 +30,7 @@ struct Hair {
         var eumelanin: FloatTexture
 }
 
+@MainActor
 func createHair(parameters: ParameterDictionary) throws -> Hair {
         let eumelanin = try parameters.findFloatXTexture(name: "eumelanin", else: 1.3)
         return Hair(eumelanin: eumelanin)

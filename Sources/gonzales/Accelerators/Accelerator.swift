@@ -1,3 +1,4 @@
+@MainActor
 var accelerators = [Accelerator]()
 
 enum Accelerator: Boundable, Intersectable {
@@ -6,17 +7,18 @@ enum Accelerator: Boundable, Intersectable {
         case embree(EmbreeAccelerator)
         //case optix(Optix)
 
+        @MainActor
         func intersect(
                 rays: [Ray],
                 tHits: inout [FloatX],
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
-        ) throws {
+        ) async throws {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):
                         for i in 0..<rays.count {
                                 if !skips[i] {
-                                        try boundingHierarchy.intersect(
+                                        try await boundingHierarchy.intersect(
                                                 ray: rays[i],
                                                 tHit: &tHits[i],
                                                 interaction: &interactions[i])
@@ -25,7 +27,7 @@ enum Accelerator: Boundable, Intersectable {
                 case .embree(let embree):
                         for i in 0..<rays.count {
                                 if !skips[i] {
-                                        try embree.intersect(
+                                        try await embree.intersect(
                                                 ray: rays[i],
                                                 tHit: &tHits[i],
                                                 interaction: &interactions[i])
@@ -40,19 +42,20 @@ enum Accelerator: Boundable, Intersectable {
                 }
         }
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):
-                        try boundingHierarchy.intersect(
+                        try await boundingHierarchy.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
                 case .embree(let embree):
-                        try embree.intersect(
+                        try await embree.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)

@@ -7,6 +7,7 @@ enum LightSampler {
         case power(PowerLightSampler)
         case uniform(UniformLightSampler)
 
+        @MainActor
         func chooseLight() -> (Light, FloatX) {
                 switch self {
                 case .power(let powerLightSampler):

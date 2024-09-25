@@ -2,6 +2,7 @@ import Foundation  // sin, cos
 
 // Is initialized in Scene.init.
 // TODO: Move somewhere reasonable.
+@MainActor
 var sceneDiameter: FloatX = 100.0
 
 final class InfiniteLight {
@@ -16,6 +17,7 @@ final class InfiniteLight {
                 self.texture = texture
         }
 
+        @MainActor
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
@@ -42,6 +44,7 @@ final class InfiniteLight {
                 return (radiance: color, direction, pdf, visibility)
         }
 
+        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
         {
@@ -101,6 +104,7 @@ final class InfiniteLight {
                 return Point2F(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
         }
 
+        @MainActor
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 let uv = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uv: uv)
@@ -111,6 +115,7 @@ final class InfiniteLight {
                 return radiance
         }
 
+        @MainActor
         func power() -> FloatX {
                 let worldRadius = sceneDiameter / 2
                 return FloatX.pi * square(worldRadius) * brightness.average()

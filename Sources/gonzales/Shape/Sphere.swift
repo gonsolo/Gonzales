@@ -112,11 +112,12 @@ final class Sphere: Shape {
                 return (ta[0], ta[1])
         }
 
+        @MainActor
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 let empty = { (line: Int) in
                         return
                 }

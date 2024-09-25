@@ -42,6 +42,7 @@ func usage() {
         print("Usage: gonzales scene.pbrt")
 }
 
+@MainActor
 func parseArguments() throws -> String {
         let arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
         if arguments.isEmpty {
@@ -84,7 +85,8 @@ func parseArguments() throws -> String {
         return sceneName
 }
 
-func main() {
+@MainActor
+func main() async {
         do {
                 let sceneName = try parseArguments()
                 guard let sceneNameURL = URL(string: sceneName) else {
@@ -102,10 +104,10 @@ func main() {
                 let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
                 sceneDirectory = url.path
                 api.start()
-                try api.include(file: sceneNameLast, render: true)
+                try await api.include(file: sceneNameLast, render: true)
         } catch let error {
                 handle(error)
         }
 }
 
-main()
+await main()

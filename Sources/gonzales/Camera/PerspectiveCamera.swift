@@ -1,3 +1,4 @@
+@MainActor
 var numberCameraRays = 0
 
 final class PerspectiveCamera: Camera, Transformable {
@@ -35,6 +36,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 return Ray(origin: origin, direction: direction, cameraSample: cameraSample)
         }
 
+        @MainActor
         func generateRay(cameraSample: CameraSample) -> Ray {
                 let rasterPoint = Point(x: cameraSample.film.0, y: cameraSample.film.1, z: 0)
                 let cameraPoint = cameraTransform.rasterToCamera * rasterPoint
@@ -48,6 +50,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 return objectToWorld * ray
         }
 
+        @MainActor
         static func statistics() {
                 print("  Camera rays traced:\t\t\t\t\t\t\t\(numberCameraRays)")
         }

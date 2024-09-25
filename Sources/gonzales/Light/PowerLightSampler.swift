@@ -19,6 +19,7 @@ public func lowerBound<T: Comparable>(_ a: [T], key: T) -> (Int, T) {
 
 final class PowerLightSampler {
 
+        @MainActor
         init(sampler: Sampler, lights: [Light]) {
                 self.sampler = sampler
                 self.lights = lights
@@ -32,6 +33,7 @@ final class PowerLightSampler {
                 }
         }
 
+        @MainActor
         func chooseLight() -> (Light, FloatX) {
                 assert(lights.count > 0)
                 let u = sampler.get1D()

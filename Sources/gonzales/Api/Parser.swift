@@ -48,7 +48,8 @@ final class Parser {
                 self.render = render
         }
 
-        func parse() throws {
+        @MainActor
+        func parse() async throws {
                 while !scanner.isAtEnd {
                         parseComments()
                         if scanner.isAtEnd {
@@ -60,7 +61,7 @@ final class Parser {
                                 if scanner.isAtEnd {
                                         // PBRT v4 does not use WorldEnd
                                         if render && !worldEndSeen {
-                                                try api.worldEnd()
+                                                try await api.worldEnd()
                                         }
                                         return
                                 }
@@ -68,7 +69,7 @@ final class Parser {
                                 message += " at \(scanner.scanLocation)"
                                 try bail(message: message)
                         }
-                        try handleRenderStatement(buffer)
+                        try await handleRenderStatement(buffer)
                 }
         }
 
@@ -521,14 +522,16 @@ final class Parser {
                 api.identity()
         }
 
-        private func parseImport() throws {
+        @MainActor
+        private func parseImport() async throws {
                 let name = try parseString()
-                try api.importFile(file: name)
+                try await api.importFile(file: name)
         }
 
-        private func parseInclude() throws {
+        @MainActor
+        private func parseInclude() async throws {
                 let name = try parseString()
-                try api.include(file: name, render: false)
+                try await api.include(file: name, render: false)
         }
 
         private func parseCamera() throws {
@@ -559,60 +562,71 @@ final class Parser {
                 api.worldBegin()
         }
 
-        private func parseWorldEnd() throws {
+        @MainActor
+        private func parseWorldEnd() async throws {
                 worldEndSeen = true
-                try api.worldEnd()
+                try await api.worldEnd()
         }
 
+        @MainActor
         private func parseMakeNamedMaterial() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.makeNamedMaterial(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseMakeNamedMedium() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.makeNamedMedium(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseMaterial() throws {
                 let type = try parseString()
                 let parameters = try parseParameters()
                 try api.material(type: type, parameters: parameters)
         }
 
+        @MainActor
         private func parseMediumInterface() throws {
                 let interior = try parseString()
                 let exterior = try parseString()
                 api.mediumInterface(interior: interior, exterior: exterior)
         }
 
+        @MainActor
         private func parseNamedMaterial() throws {
                 let name = try parseString()
                 try api.namedMaterial(name: name)
         }
 
+        @MainActor
         private func parseObjectBegin() throws {
                 let name = try parseString()
                 try api.objectBegin(name: name)
         }
 
+        @MainActor
         private func parseObjectEnd() throws {
                 try api.objectEnd()
         }
 
+        @MainActor
         private func parseObjectInstance() throws {
                 let name = try parseString()
                 try api.objectInstance(name: name)
         }
 
+        @MainActor
         private func parseShape() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.shape(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseTexture() throws {
                 let textureName = try parseString()
                 let textureType = try parseString()
@@ -626,10 +640,12 @@ final class Parser {
                 )
         }
 
+        @MainActor
         private func parseAttributeBegin() throws {
                 try api.attributeBegin()
         }
 
+        @MainActor
         private func parseAttributeEnd() throws {
                 try api.attributeEnd()
         }
@@ -640,6 +656,7 @@ final class Parser {
                 try api.accelerator(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseAreaLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
@@ -662,7 +679,8 @@ final class Parser {
                 } while commentFound
         }
 
-        private func handleRenderStatement(_ input: String) throws {
+        @MainActor
+        private func handleRenderStatement(_ input: String) async throws {
                 guard let statement = RenderStatement(rawValue: input) else {
                         var message = "Unknown RenderStatement: |\(input)|"
                         message += " in file \(fileName)"
@@ -680,8 +698,8 @@ final class Parser {
                 case .concatTransform: try parseConcatTransform()
                 case .film: try parseFilm()
                 case .identity: parseIdentity()
-                case .include: try parseInclude()
-                case .importFile: try parseImport()
+                case .include: try await parseInclude()
+                case .importFile: try await parseImport()
                 case .integrator: try parseIntegrator()
                 case .lightSource: try parseLightSource()
                 case .lookAt: try parseLookAt()
@@ -705,7 +723,7 @@ final class Parser {
                 case .transformEnd: try parseTransformEnd()
                 case .translate: try parseTranslate()
                 case .worldBegin: try parseWorldBegin()
-                case .worldEnd: try parseWorldEnd()
+                case .worldEnd: try await parseWorldEnd()
                 }
         }
 

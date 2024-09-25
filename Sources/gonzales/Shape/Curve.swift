@@ -282,11 +282,12 @@ final class Curve: Shape {
                 return overlaps
         }
 
+        @MainActor
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 let ray = worldToObject * worldRay
                 let points = blossomBezier(points: common.points, u: u)
                 let dx = cross(ray.direction, points.3 - points.0)

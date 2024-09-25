@@ -5,6 +5,7 @@ struct UninstancedMaterial {
 
 struct State {
 
+        @MainActor
         init() {
                 namedMaterials = [String: UninstancedMaterial]()
                 currentNamedMaterial = "None"
@@ -19,6 +20,7 @@ struct State {
                 ptexCache = PtexCache()
         }
 
+        @MainActor
         func createMaterial(parameters: ParameterDictionary) throws -> Material {
                 var material: UninstancedMaterial!
                 if currentMaterial != nil {

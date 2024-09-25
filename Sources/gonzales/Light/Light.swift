@@ -7,6 +7,7 @@ enum Light {
         case distant(DistantLight)
         case point(PointLight)
 
+        @MainActor
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
@@ -25,12 +26,13 @@ enum Light {
                 }
         }
 
+        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
-                throws -> FloatX
+                async throws -> FloatX
         {
                 switch self {
                 case .area(let areaLight):
-                        return try areaLight.probabilityDensityFor(
+                        return try await areaLight.probabilityDensityFor(
                                 samplingDirection: direction,
                                 from: reference)
                 case .infinite(let infiniteLight):
@@ -48,6 +50,7 @@ enum Light {
                 }
         }
 
+        @MainActor
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 switch self {
                 case .area(let areaLight):
@@ -61,6 +64,7 @@ enum Light {
                 }
         }
 
+        @MainActor
         func power() -> FloatX {
                 switch self {
                 case .area(let areaLight):

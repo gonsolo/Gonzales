@@ -11,11 +11,12 @@ final class EmbreeCurve: Shape {
                 numberOfCurves += 1
         }
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 unimplemented()
         }
 
@@ -41,6 +42,7 @@ final class EmbreeCurve: Shape {
                 unimplemented()
         }
 
+        @MainActor
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
                 from interaction: Interaction

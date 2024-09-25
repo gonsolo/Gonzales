@@ -1,12 +1,13 @@
 struct GeometricPrimitive: Boundable, Intersectable {
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 if alpha == 0 { return }
-                try shape.intersect(
+                try await shape.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
@@ -24,6 +25,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return shape.objectBound()
         }
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 return materials[material].getBsdf(interaction: interaction)
         }
@@ -36,4 +38,6 @@ struct GeometricPrimitive: Boundable, Intersectable {
 
 typealias MaterialIndex = Int
 let noMaterial = -1
+
+@MainActor
 var materials: [Material] = []

@@ -208,6 +208,7 @@ class Options {
                 objects.removeAll()
         }
 
+        @MainActor
         func makeRenderer() throws -> Renderer {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
@@ -245,6 +246,7 @@ class Options {
                 )
         }
 
+        @MainActor
         func makeScene(acceleratorIndex: AcceleratorIndex) -> Scene {
                 return Scene(acceleratorIndex: acceleratorIndex, lights: lights)
         }

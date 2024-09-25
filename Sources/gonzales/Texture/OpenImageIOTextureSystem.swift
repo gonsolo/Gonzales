@@ -36,5 +36,6 @@ final class OpenImageIOTextureSystem {
                 return result
         }
 
+        @MainActor
         static let shared = OpenImageIOTextureSystem()
 }

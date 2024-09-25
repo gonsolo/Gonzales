@@ -42,9 +42,9 @@ final class TileRenderer: Renderer {
                 return tiles
         }
 
-        private func renderTile(tile: Tile) throws -> [Sample] {
+        private func renderTile(tile: Tile) async throws -> [Sample] {
                 let tileSampler = self.sampler.clone()
-                let samples = try tile.render(
+                let samples = try await tile.render(
                         reporter: reporter,
                         sampler: tileSampler,
                         camera: self.camera,
@@ -54,33 +54,33 @@ final class TileRenderer: Renderer {
                 return samples
         }
 
-        private func renderAndMergeTile(tile: Tile) throws {
-                let samples = try renderTile(tile: tile)
+        private func renderAndMergeTile(tile: Tile) async throws {
+                let samples = try await renderTile(tile: tile)
                 camera.film.add(samples: samples)
         }
 
-        private func renderSync(tile: Tile) throws {
-                try queue.sync {
-                        try renderAndMergeTile(tile: tile)
-                }
+        private func renderSync(tile: Tile) async throws {
+                //try queue.sync {
+                        try await renderAndMergeTile(tile: tile)
+                //}
         }
 
-        private func renderAsync(tile: Tile) {
-                queue.async(group: group) {
+        private func renderAsync(tile: Tile) async {
+                //queue.async(group: group) {
                         do {
-                                try self.renderAndMergeTile(tile: tile)
+                                try await self.renderAndMergeTile(tile: tile)
                         } catch let error {
                                 handle(error)
                                 fatalError("in async")
                         }
-                }
+                //}
         }
 
-        private func doRenderTile(tile: Tile) throws {
+        private func doRenderTile(tile: Tile) async throws {
                 if renderSynchronously {
-                        try renderSync(tile: tile)
+                        try await renderSync(tile: tile)
                 } else {
-                        renderAsync(tile: tile)
+                        await renderAsync(tile: tile)
                 }
         }
 
@@ -96,23 +96,23 @@ final class TileRenderer: Renderer {
                 return bounds
         }
 
-        private func renderTiles(tiles: [Tile]) throws {
+        private func renderTiles(tiles: [Tile]) async throws {
                 for tile in tiles {
-                        try doRenderTile(tile: tile)
+                        try await doRenderTile(tile: tile)
                 }
         }
 
-        private func renderImage(bounds: Bounds2i) throws {
+        private func renderImage(bounds: Bounds2i) async throws {
                 let tiles = generateTiles(from: bounds)
-                try renderTiles(tiles: tiles)
+                try await renderTiles(tiles: tiles)
         }
 
-        func render() throws {
+        func render() async throws {
                 let timer = Timer("Rendering...")
                 let bounds = generateBounds()
                 reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
                 reporter.reset()
-                try renderImage(bounds: bounds)
+                try await renderImage(bounds: bounds)
                 group.wait()
                 try camera.film.writeImages()
                 print("\n")

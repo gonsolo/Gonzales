@@ -25,10 +25,11 @@ struct AreaLight: Boundable, Intersectable {
                 return (radiance, direction, pdf, visibility)
         }
 
+        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
-                throws -> FloatX
+                async throws -> FloatX
         {
-                return try shape.probabilityDensityFor(
+                return try await shape.probabilityDensityFor(
                         samplingDirection: direction, from: reference)
         }
 
@@ -46,19 +47,21 @@ struct AreaLight: Boundable, Intersectable {
                 return shape.objectBound()
         }
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 if alpha == 0 { return }
-                try shape.intersect(
+                try await shape.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
                 interaction.areaLight = self
         }
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let diffuse = Diffuse(
                         reflectance: Texture.rgbSpectrumTexture(

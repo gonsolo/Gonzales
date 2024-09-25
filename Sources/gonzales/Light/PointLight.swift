@@ -19,6 +19,7 @@ struct PointLight {
                 return (radiance, direction, pdf, visibility)
         }
 
+        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
         {

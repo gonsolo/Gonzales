@@ -58,12 +58,13 @@ class Optix {
                 }
         }
 
+        @MainActor
         func intersect(
                 rays: [Ray],
                 tHits: inout [FloatX],
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
-        ) throws {
+        ) async throws {
                 var ps = VectorVec3f()
                 ps.resize(rays.count)
                 var ns = VectorVec3f()
@@ -139,12 +140,13 @@ class Optix {
                 }
         }
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction,
                 skip: Bool = false
-        ) throws {
+        ) async throws {
                 if skip {
                         return
                 }

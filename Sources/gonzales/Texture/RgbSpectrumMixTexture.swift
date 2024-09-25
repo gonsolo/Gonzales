@@ -1,5 +1,6 @@
 struct RgbSpectrumMixTexture {
 
+        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let value0 = textures.0.evaluateRgbSpectrum(at: interaction)
                 let value1 = textures.1.evaluateRgbSpectrum(at: interaction)

@@ -1,3 +1,3 @@
 protocol Renderer {
-        func render() throws
+        func render() async throws
 }

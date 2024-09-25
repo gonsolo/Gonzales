@@ -1,20 +1,21 @@
 import Foundation
 
-final class TransformedPrimitive: Boundable & Intersectable {
+final class TransformedPrimitive: @preconcurrency Boundable & Intersectable {
 
         init(acceleratorIndex: AcceleratorIndex, transform: Transform) {
                 self.acceleratorIndex = acceleratorIndex
                 self.transform = transform
         }
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 let localRay = transform.inverse * ray
                 // TODO: transform tHit?
-                try accelerators[acceleratorIndex].intersect(
+                try await accelerators[acceleratorIndex].intersect(
                         ray: localRay,
                         tHit: &tHit,
                         interaction: &interaction)
@@ -24,6 +25,7 @@ final class TransformedPrimitive: Boundable & Intersectable {
                 interaction = transform * interaction
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 let bound = transform * accelerators[acceleratorIndex].worldBound()
                 return bound

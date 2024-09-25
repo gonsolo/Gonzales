@@ -8,6 +8,7 @@ struct ConstantTexture<T: TextureEvaluation> {
 }
 
 extension ConstantTexture where T == RgbSpectrum {
+        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 return evaluate(at: interaction) as! RgbSpectrum
         }

@@ -4,7 +4,7 @@ protocol Intersectable {
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                interaction: inout SurfaceInteraction) throws
+                interaction: inout SurfaceInteraction) async throws
 }
 
 enum IntersectablePrimitive {
@@ -13,29 +13,30 @@ enum IntersectablePrimitive {
         case transformedPrimitive(TransformedPrimitive)
         case areaLight(AreaLight)
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 switch self {
                 case .areaLight(let areaLight):
-                        try areaLight.intersect(
+                        try await areaLight.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
                 case .geometricPrimitive(let geometricPrimitive):
-                        try geometricPrimitive.intersect(
+                        try await geometricPrimitive.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
                 case .triangle(let triangle):
-                        try triangle.intersect(
+                        try await triangle.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
                 case .transformedPrimitive(let transformedPrimitive):
-                        try transformedPrimitive.intersect(
+                        try await transformedPrimitive.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)

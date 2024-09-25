@@ -12,7 +12,10 @@ var singleRay = false
 var singleRayCoordinate = Point2I()
 var renderSynchronously = false
 var justParse = false
+
+@MainActor
 var ptexMemory = 4  // GB
+
 var sceneDirectory = String()
 
 func radians(deg: FloatX) -> FloatX {

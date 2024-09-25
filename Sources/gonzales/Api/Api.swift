@@ -1,11 +1,13 @@
 import Foundation
 
+@MainActor
 func addAccelerator(accelerator: Accelerator) -> AcceleratorIndex {
         let index: AcceleratorIndex = accelerators.count
         accelerators.append(accelerator)
         return index
 }
 
+@MainActor
 func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
@@ -82,11 +84,13 @@ extension TimeInterval {
 
 struct Api {
 
+        @MainActor
         func attributeBegin() throws {
                 try transformBegin()
                 states.append(state)
         }
 
+        @MainActor
         func attributeEnd() throws {
                 try transformEnd()
                 guard let last = states.popLast() else {
@@ -135,11 +139,13 @@ struct Api {
                 currentTransform = Transform()
         }
 
-        mutating func importFile(file sceneName: String) throws {
-                try include(file: sceneName, render: false)
+        @MainActor
+        mutating func importFile(file sceneName: String) async throws {
+                try await include(file: sceneName, render: false)
         }
 
-        mutating func include(file sceneName: String, render: Bool) throws {
+        @MainActor
+        mutating func include(file sceneName: String, render: Bool) async throws {
                 print(sceneName)
                 do {
                         let fileManager = FileManager.default
@@ -151,7 +157,7 @@ struct Api {
                         }
                         if #available(OSX 10.15, *) {
                                 let parser = try Parser(fileName: absoluteSceneName, render: render)
-                                try parser.parse()
+                                try await parser.parse()
                         } else {
                                 // Fallback on earlier versions
                         }
@@ -160,6 +166,7 @@ struct Api {
                 }
         }
 
+        @MainActor
         func areaLight(name: String, parameters: ParameterDictionary) throws {
                 guard name == "diffuse" || name == "area" else {
                         throw ApiError.areaLight
@@ -199,11 +206,13 @@ struct Api {
                 currentTransform *= transform
         }
 
+        @MainActor
         func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
                 let type = try parameters.findString(called: "type") ?? "defaultMaterial"
                 state.namedMaterials[name] = UninstancedMaterial(type: type, parameters: parameters)
         }
 
+        @MainActor
         func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
                 guard let type = try parameters.findString(called: "type") else {
                         throw ApiError.namedMedium
@@ -230,28 +239,34 @@ struct Api {
                 }
         }
 
+        @MainActor
         func material(type: String, parameters: ParameterDictionary) throws {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }
 
+        @MainActor
         func mediumInterface(interior: String, exterior: String) {
                 state.currentMediumInterface = MediumInterface(interior: interior, exterior: exterior)
         }
 
+        @MainActor
         func namedMaterial(name: String) throws {
                 state.currentNamedMaterial = name
         }
 
+        @MainActor
         func objectBegin(name: String) throws {
                 try attributeBegin()
                 state.objectName = name
         }
 
+        @MainActor
         func objectEnd() throws {
                 try attributeEnd()
                 state.objectName = nil
         }
 
+        @MainActor
         func objectInstance(name: String) throws {
                 guard var primitives = options.objects[name] else {
                         return
@@ -280,6 +295,7 @@ struct Api {
                 options.filterParameters = parameters
         }
 
+        @MainActor
         func shape(name: String, parameters: ParameterDictionary) throws {
                 var areaLights = [Light]()
                 var prims = [Boundable & Intersectable]()
@@ -391,6 +407,7 @@ struct Api {
                 currentTransform *= Transform(matrix: matrix)
         }
 
+        @MainActor
         func texture(
                 name: String,
                 type: String,
@@ -527,11 +544,12 @@ struct Api {
                 }
         }
 
-        func worldEnd() throws {
+        @MainActor
+        func worldEnd() async throws {
                 print("Reading: \(readTimer.elapsed)")
                 if justParse { return }
                 let renderer = try options.makeRenderer()
-                try renderer.render()
+                try await renderer.render()
                 if verbose { statistics.report() }
                 cleanUp()
         }
@@ -569,6 +587,7 @@ struct Api {
                 }
         }
 
+        @MainActor
         private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
                 warnOnce("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
@@ -577,6 +596,7 @@ struct Api {
                 return Material.diffuse(diffuse)
         }
 
+        @MainActor
         func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
 
                 var material: Material
@@ -691,7 +711,10 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
 
 var api = Api()
 var options = Options()
+
+@MainActor
 var state = State()
+
 var states = [State]()
 var currentTransform = Transform()
 var transforms = [Transform]()

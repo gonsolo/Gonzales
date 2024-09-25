@@ -39,6 +39,7 @@ extension ParameterDictionary {
                 return try findString(called: name) ?? ""
         }
 
+        @MainActor
         func findRgbSpectrumTexture(
                 name: String,
                 else spectrum: RgbSpectrum = RgbSpectrum(intensity: 1)
@@ -71,6 +72,7 @@ extension ParameterDictionary {
                 }
         }
 
+        @MainActor
         func findFloatXTexture(name: String, else value: FloatX = 1.0) throws -> FloatTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {

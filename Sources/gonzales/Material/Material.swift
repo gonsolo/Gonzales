@@ -12,6 +12,7 @@ enum Material {
         case interface(Interface)
         case measured(Measured)
 
+        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 switch self {
                 case .areaLight(let areaLight):

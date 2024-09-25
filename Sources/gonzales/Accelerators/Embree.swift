@@ -80,11 +80,12 @@ final class EmbreeAccelerator: EmbreeBase {
                 return bounds
         }
 
+        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 try intersect(
                         originX: ray.origin.x,
                         originY: ray.origin.y,
@@ -96,7 +97,7 @@ final class EmbreeAccelerator: EmbreeBase {
                         interaction: &interaction)
         }
 
-        //@_noAllocation
+        @MainActor
         func intersect(
                 originX: FloatX,
                 originY: FloatX,
@@ -231,6 +232,7 @@ final class EmbreeAccelerator: EmbreeBase {
 
 final class EmbreeBuilder: EmbreeBase {
 
+        @MainActor
         init(primitives: [Boundable & Intersectable]) {
                 rtcScene = rtcNewScene(embree.rtcDevice)
                 check(rtcScene)
@@ -262,6 +264,7 @@ final class EmbreeBuilder: EmbreeBase {
                 bounds = union(first: bounds, second: primitive.worldBound())
         }
 
+        @MainActor
         private func addPrimitives(primitives: [Boundable & Intersectable]) {
                 for primitive in primitives {
                         switch primitive {

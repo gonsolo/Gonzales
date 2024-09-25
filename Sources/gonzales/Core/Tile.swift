@@ -11,7 +11,7 @@ final class Tile {
                 camera: Camera,
                 scene: Scene,
                 lightSampler: LightSampler
-        ) throws -> [Sample] {
+        ) async throws -> [Sample] {
                 var samples = [Sample]()
                 var cameraSamples = [CameraSample]()
                 var rays = [Ray]()
@@ -25,7 +25,7 @@ final class Tile {
                                 tHits.append(Float.infinity)
                         }
                 }
-                let radianceAlbedoNormals = try integrator.getRadiancesAndAlbedos(
+                let radianceAlbedoNormals = try await integrator.getRadiancesAndAlbedos(
                         from: rays,
                         tHits: &tHits,
                         with: sampler,

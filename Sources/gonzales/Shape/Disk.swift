@@ -14,11 +14,12 @@ final class Disk: Shape {
                 return Bounds3f()
         }
 
+        @MainActor
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 // TODO
         }
 

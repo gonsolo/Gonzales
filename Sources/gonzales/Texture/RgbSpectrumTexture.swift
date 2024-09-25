@@ -6,6 +6,7 @@ indirect enum RgbSpectrumTexture {
         case rgbSpectrumMixTexture(RgbSpectrumMixTexture)
         case scaledTexture(ScaledTexture)
 
+        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 switch self {
                 case .checkerboard(let checkerboard):
@@ -23,6 +24,7 @@ indirect enum RgbSpectrumTexture {
                 }
         }
 
+        @MainActor
         func evaluate(at interaction: Interaction) -> TextureEvaluation {
                 return evaluateRgbSpectrum(at: interaction)
         }

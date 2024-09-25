@@ -176,11 +176,12 @@ struct Triangle: Shape {
                 return uvHit
         }
 
+        @MainActor
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
                 let empty = { (line: Int) in
                         //print("No triangle intersection at line ", line)
                         //Thread.callStackSymbols.forEach { print($0) }

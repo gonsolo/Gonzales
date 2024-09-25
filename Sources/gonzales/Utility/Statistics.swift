@@ -1,5 +1,6 @@
 struct Statistics {
 
+        @MainActor
         func report() {
                 print("Statistics:")
                 BoundingHierarchyBuilder.statistics()

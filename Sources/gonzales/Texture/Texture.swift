@@ -2,6 +2,7 @@ enum Texture {
         case floatTexture(FloatTexture)
         case rgbSpectrumTexture(RgbSpectrumTexture)
 
+        @MainActor
         func evaluate(at interaction: Interaction) -> TextureEvaluation {
                 switch self {
                 case .floatTexture(let floatTexture):

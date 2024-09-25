@@ -17,6 +17,7 @@ struct SurfaceInteraction: Interaction {
                 return bsdf.probabilityDensityWorld(wo: wo, wi: wi)
         }
 
+        @MainActor
         mutating func setBsdf() {
                 bsdf = materials[material].getBsdf(interaction: self)
         }
