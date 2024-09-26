@@ -346,7 +346,7 @@ final class Curve: Shape {
                 fatalError("Not implemented")
         }
 
-        func sample(u: TwoFloats) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoFloats) async -> (interaction: Interaction, pdf: FloatX) {
                 fatalError("Not implemented")
         }
 

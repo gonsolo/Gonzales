@@ -8,7 +8,7 @@ enum Light {
         case point(PointLight)
 
         @MainActor
-        func sample(for reference: Interaction, u: TwoRandomVariables) -> (
+        func sample(for reference: Interaction, u: TwoRandomVariables) async -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -16,7 +16,7 @@ enum Light {
         ) {
                 switch self {
                 case .area(let areaLight):
-                        return areaLight.sample(for: reference, u: u)
+                        return await areaLight.sample(for: reference, u: u)
                 case .infinite(let infiniteLight):
                         return infiniteLight.sample(for: reference, u: u)
                 case .distant(let distantLight):
@@ -65,10 +65,10 @@ enum Light {
         }
 
         @MainActor
-        func power() -> FloatX {
+        func power() async -> FloatX {
                 switch self {
                 case .area(let areaLight):
-                        return areaLight.power()
+                        return await areaLight.power()
                 case .infinite(let infiniteLight):
                         return infiniteLight.power()
                 case .distant(let distantLight):

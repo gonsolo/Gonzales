@@ -225,7 +225,7 @@ class Options {
                 let scene = makeScene(acceleratorIndex: acceleratorIndex)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
-                let powerLightSampler = PowerLightSampler(sampler: sampler, lights: lights)
+                let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = LightSampler.power(powerLightSampler)
 
                 // The Optix renderer is not thread-safe for now; use just one tile as big as the image.

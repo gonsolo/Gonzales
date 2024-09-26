@@ -21,10 +21,10 @@ final class VolumePathIntegrator {
         private func chooseLight(
                 sampler: Sampler,
                 lightSampler: LightSampler
-        ) throws
+        ) async throws
                 -> (Light, FloatX)
         {
-                return lightSampler.chooseLight()
+                return await lightSampler.chooseLight()
         }
 
         @MainActor
@@ -65,7 +65,7 @@ final class VolumePathIntegrator {
                 interaction: Interaction,
                 sampler: Sampler
         ) async throws -> BsdfSample {
-                let (radiance, wi, lightDensity, visibility) = light.sample(
+                let (radiance, wi, lightDensity, visibility) = await light.sample(
                         for: interaction, u: sampler.get2D())
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
@@ -216,7 +216,7 @@ final class VolumePathIntegrator {
                 with sampler: Sampler,
                 lightSampler: LightSampler
         ) async throws -> RgbSpectrum {
-                let (light, lightPdf) = try chooseLight(
+                let (light, lightPdf) = try await chooseLight(
                         sampler: sampler,
                         lightSampler: lightSampler)
                 let estimate = try await estimateDirect(

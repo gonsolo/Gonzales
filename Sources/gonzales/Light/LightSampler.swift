@@ -1,17 +1,13 @@
-//protocol LightSampler {
-//        func chooseLight() -> (Light, FloatX)
-//}
-
 enum LightSampler {
 
         case power(PowerLightSampler)
         case uniform(UniformLightSampler)
 
         @MainActor
-        func chooseLight() -> (Light, FloatX) {
+        func chooseLight() async -> (Light, FloatX) {
                 switch self {
                 case .power(let powerLightSampler):
-                        return powerLightSampler.chooseLight()
+                        return await powerLightSampler.chooseLight()
                 case .uniform(let uniformLightSampler):
                         return uniformLightSampler.chooseLight()
                 }

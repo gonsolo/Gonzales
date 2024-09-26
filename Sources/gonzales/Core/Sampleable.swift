@@ -6,20 +6,25 @@
 /// the analytical solution.
 
 protocol Sampleable {
-        func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX)
-        func sample(ref: Interaction, u: TwoRandomVariables) -> (Interaction, FloatX)
+
+        func sample(u: TwoRandomVariables) async -> (interaction: Interaction, pdf: FloatX)
+
+        func sample(ref: Interaction, u: TwoRandomVariables) async -> (Interaction, FloatX)
+
         @MainActor
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
                 from interaction: Interaction
         )
                 async throws -> FloatX
-        func area() -> FloatX
+
+        func area() async -> FloatX
 }
 
 extension Sampleable {
-        func sample(ref: Interaction, u: TwoRandomVariables) -> (Interaction, FloatX) {
-                var (intr, pdf) = sample(u: u)
+
+        func sample(ref: Interaction, u: TwoRandomVariables) async -> (Interaction, FloatX) {
+                var (intr, pdf) = await sample(u: u)
                 let wi: Vector = normalized(intr.position - ref.position)
                 let squaredDistance = distanceSquared(ref.position, intr.position)
                 let angle = absDot(Vector(normal: intr.normal), -wi)
@@ -45,7 +50,7 @@ extension Sampleable where Self: Intersectable {
                 }
                 let squaredDistance = distanceSquared(from.position, interaction.position)
                 let angle = absDot(interaction.normal, -direction)
-                let angleTimesArea = angle * area()
+                let angleTimesArea = await angle * area()
                 let density = squaredDistance / angleTimesArea
                 if density.isInfinite {
                         return 0

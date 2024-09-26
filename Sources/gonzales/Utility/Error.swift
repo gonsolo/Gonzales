@@ -43,6 +43,7 @@ func warning(_ message: String) {
         }
 }
 
+@MainActor
 var warningsSeen = Set<Int>()
 
 @MainActor

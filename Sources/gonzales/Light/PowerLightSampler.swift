@@ -17,30 +17,44 @@ public func lowerBound<T: Comparable>(_ a: [T], key: T) -> (Int, T) {
         return (lowerBound, a[lowerBound])
 }
 
+// No async reduce in Swift as for now
+extension Sequence {
+        func asyncReduce<Result>(
+                _ initialResult: Result,
+                _ nextPartialResult: ((Result, Element) async throws -> Result)
+        ) async rethrows -> Result {
+                var result = initialResult
+                for element in self {
+                        result = try await nextPartialResult(result, element)
+                }
+                return result
+        }
+}
+
 final class PowerLightSampler {
 
         @MainActor
-        init(sampler: Sampler, lights: [Light]) {
+        init(sampler: Sampler, lights: [Light]) async {
                 self.sampler = sampler
                 self.lights = lights
-                totalPower = lights.reduce(0, { total, light in total + light.power() })
+                totalPower = await lights.asyncReduce(0, { total, light in await total + light.power() })
                 for (i, light) in lights.enumerated() {
                         if i == 0 {
-                                cumulativePowers.append(light.power())
+                                await cumulativePowers.append(light.power())
                         } else {
-                                cumulativePowers.append(cumulativePowers.last! + light.power())
+                                await cumulativePowers.append(cumulativePowers.last! + light.power())
                         }
                 }
         }
 
         @MainActor
-        func chooseLight() -> (Light, FloatX) {
+        func chooseLight() async -> (Light, FloatX) {
                 assert(lights.count > 0)
                 let u = sampler.get1D()
                 let powerIndex = u * totalPower
                 let (i, _) = lowerBound(cumulativePowers, key: powerIndex)
                 let light = lights[i]
-                let probabilityDensity = light.power() / totalPower
+                let probabilityDensity = await light.power() / totalPower
                 return (light, probabilityDensity)
         }
 

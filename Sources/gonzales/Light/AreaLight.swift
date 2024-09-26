@@ -14,10 +14,10 @@ struct AreaLight: Boundable, Intersectable {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(for ref: Interaction, u: TwoRandomVariables) -> (
+        func sample(for ref: Interaction, u: TwoRandomVariables) async -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
-                let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
+                let (shapeInteraction, pdf) = await shape.sample(ref: ref, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - ref.position)
                 assert(!direction.isNaN)
                 let visibility = Visibility(from: ref, to: shapeInteraction)
@@ -35,8 +35,8 @@ struct AreaLight: Boundable, Intersectable {
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
-        func power() -> FloatX {
-                return brightness.average() * shape.area() * FloatX.pi
+        func power() async -> FloatX {
+                return await brightness.average() * shape.area() * FloatX.pi
         }
 
         func worldBound() async -> Bounds3f {
