@@ -1,7 +1,7 @@
 @MainActor
 var numberCameraRays = 0
 
-final class PerspectiveCamera: Camera, Transformable {
+final class PerspectiveCamera: @preconcurrency Camera, Transformable {
 
         init(
                 cameraToWorld: Transform,
