@@ -214,11 +214,11 @@ class Options {
         }
 
         @MainActor
-        func makeRenderer() throws -> Renderer {
+        func makeRenderer() async throws -> Renderer {
                 let camera = try makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try makeAccelerator(primitives: primitives)
+                let accelerator = try await makeAccelerator(primitives: primitives)
                 let acceleratorIndex = addAccelerator(accelerator: accelerator)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")

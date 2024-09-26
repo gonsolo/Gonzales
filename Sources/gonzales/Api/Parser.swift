@@ -641,9 +641,9 @@ final class Parser {
         }
 
         @MainActor
-        private func parseObjectInstance() throws {
+        private func parseObjectInstance() async throws {
                 let name = try parseString()
-                try api.objectInstance(name: name)
+                try await api.objectInstance(name: name)
         }
 
         @MainActor
@@ -738,7 +738,7 @@ final class Parser {
                 case .namedMaterial: try parseNamedMaterial()
                 case .objectBegin: try parseObjectBegin()
                 case .objectEnd: try parseObjectEnd()
-                case .objectInstance: try parseObjectInstance()
+                case .objectInstance: try await parseObjectInstance()
                 case .pixelFilter: try parsePixelFilter()
                 case .reverseOrientation: parseReverseOrientation()
                 case .rotate: try parseRotate()

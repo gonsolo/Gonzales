@@ -1,8 +1,16 @@
+@MainActor
 var triangleIntersections = 0
+
+@MainActor
 var triangleHits = 0
 
+@MainActor
 var numberOfTriangles = 0
+
+@MainActor
 var triangleMemory = 0
+
+@MainActor
 var worldBoundCalled = 0
 
 struct TriangleMesh {
@@ -116,6 +124,7 @@ struct Triangle: Shape {
                 return String(number) + " bytes"
         }
 
+        @MainActor
         static func statistics() {
                 print("  Number of triangles:\t\t\t\t\t\t\t\(numberOfTriangles)")
                 print("  Triangle memory:\t\t\t\t\t\t\t\(formatHuman(triangleMemory))")

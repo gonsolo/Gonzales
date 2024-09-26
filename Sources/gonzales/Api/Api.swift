@@ -8,15 +8,15 @@ func addAccelerator(accelerator: Accelerator) -> AcceleratorIndex {
 }
 
 @MainActor
-func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelerator {
+func makeAccelerator(primitives: [Boundable & Intersectable]) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
-                let builder = BoundingHierarchyBuilder(primitives: primitives)
+                let builder = await BoundingHierarchyBuilder(primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
                 let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
                 return accelerator
         case "embree":
-                let builder = EmbreeBuilder(primitives: primitives)
+                let builder = await EmbreeBuilder(primitives: primitives)
                 let embree = builder.getAccelerator()
                 let accelerator = Accelerator.embree(embree)
                 return accelerator
@@ -278,7 +278,7 @@ struct Api {
         }
 
         @MainActor
-        func objectInstance(name: String) throws {
+        func objectInstance(name: String) async throws {
                 guard var primitives = options.objects[name] else {
                         return
                 }
@@ -286,7 +286,7 @@ struct Api {
                         return
                 }
                 var instance: Boundable & Intersectable
-                let accelerator = try makeAccelerator(primitives: primitives)
+                let accelerator = try await makeAccelerator(primitives: primitives)
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
                 let index = addAccelerator(accelerator: accelerator)
@@ -571,7 +571,7 @@ struct Api {
         func worldEnd() async throws {
                 print("Reading: \(readTimer.elapsed)")
                 if justParse { return }
-                let renderer = try options.makeRenderer()
+                let renderer = try await options.makeRenderer()
                 try await renderer.render()
                 if verbose { statistics.report() }
                 cleanUp()

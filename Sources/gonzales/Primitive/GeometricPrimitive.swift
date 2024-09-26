@@ -17,12 +17,12 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 }
         }
 
-        func worldBound() -> Bounds3f {
-                return shape.worldBound()
+        func worldBound() async -> Bounds3f {
+                return await shape.worldBound()
         }
 
-        func objectBound() -> Bounds3f {
-                return shape.objectBound()
+        func objectBound() async -> Bounds3f {
+                return await shape.objectBound()
         }
 
         @MainActor

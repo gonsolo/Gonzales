@@ -238,10 +238,10 @@ final class EmbreeAccelerator: EmbreeBase {
 final class EmbreeBuilder: EmbreeBase {
 
         @MainActor
-        init(primitives: [Boundable & Intersectable]) {
+        init(primitives: [Boundable & Intersectable]) async {
                 rtcScene = rtcNewScene(embree.rtcDevice)
                 check(rtcScene)
-                addPrimitives(primitives: primitives)
+                await addPrimitives(primitives: primitives)
         }
 
         @MainActor
@@ -267,17 +267,17 @@ final class EmbreeBuilder: EmbreeBase {
         }
 
         @MainActor
-        private func setBound(primitive: GeometricPrimitive) {
-                bounds = union(first: bounds, second: primitive.worldBound())
+        private func setBound(primitive: GeometricPrimitive) async {
+                bounds = union(first: bounds, second: await primitive.worldBound())
         }
 
         @MainActor
-        private func addPrimitives(primitives: [Boundable & Intersectable]) {
+        private func addPrimitives(primitives: [Boundable & Intersectable]) async {
                 for primitive in primitives {
                         switch primitive {
                         case let geometricPrimitive as GeometricPrimitive:
                                 setIDs(id: geomID, primitive: geometricPrimitive)
-                                setBound(primitive: geometricPrimitive)
+                                await setBound(primitive: geometricPrimitive)
                                 switch geometricPrimitive.shape {
                                 case let curve as EmbreeCurve:
                                         geometry(curve: curve, geomID: geomID)
