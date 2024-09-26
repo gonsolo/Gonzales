@@ -29,6 +29,7 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) throws -> Accelera
         }
 }
 
+@MainActor
 func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
         let dir: Vector = normalized(at - eye)
         var up = normalized(up)

@@ -61,21 +61,22 @@ final class TileRenderer: Renderer {
 
         private func renderSync(tile: Tile) async throws {
                 //try queue.sync {
-                        try await renderAndMergeTile(tile: tile)
+                try await renderAndMergeTile(tile: tile)
                 //}
         }
 
         private func renderAsync(tile: Tile) async {
                 //queue.async(group: group) {
-                        do {
-                                try await self.renderAndMergeTile(tile: tile)
-                        } catch let error {
-                                handle(error)
-                                fatalError("in async")
-                        }
+                do {
+                        try await self.renderAndMergeTile(tile: tile)
+                } catch let error {
+                        handle(error)
+                        fatalError("in async")
+                }
                 //}
         }
 
+        @MainActor
         private func doRenderTile(tile: Tile) async throws {
                 if renderSynchronously {
                         try await renderSync(tile: tile)
@@ -84,6 +85,7 @@ final class TileRenderer: Renderer {
                 }
         }
 
+        @MainActor
         private func generateBounds() -> Bounds2i {
                 let sampleBounds = camera.film.getSampleBounds()
                 var bounds: Bounds2i
@@ -107,6 +109,7 @@ final class TileRenderer: Renderer {
                 try await renderTiles(tiles: tiles)
         }
 
+        @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
                 let bounds = generateBounds()

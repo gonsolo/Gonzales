@@ -6,11 +6,22 @@ let machineEpsilon = FloatX.ulpOfOne
 let shadowEpsilon: FloatX = 0.00001
 let oneMinusEpsilon: FloatX = 0.99999999999999989
 
+@MainActor
 var quick = false
+
+@MainActor
 var verbose = false
+
+@MainActor
 var singleRay = false
+
+@MainActor
 var singleRayCoordinate = Point2I()
+
+@MainActor
 var renderSynchronously = false
+
+@MainActor
 var justParse = false
 
 @MainActor

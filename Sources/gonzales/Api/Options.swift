@@ -78,6 +78,7 @@ class Options {
 
         init() {}
 
+        @MainActor
         func makeFilm(filter: Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
@@ -131,6 +132,7 @@ class Options {
                 return filter
         }
 
+        @MainActor
         func makeCamera() throws -> Camera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
@@ -194,6 +196,7 @@ class Options {
                 return VolumePathIntegrator(scene: scene, maxDepth: maxDepth)
         }
 
+        @MainActor
         func makeSampler(film: Film) throws -> Sampler {
                 if samplerName != "random" {
                         warning("Unknown sampler, using random sampler.")

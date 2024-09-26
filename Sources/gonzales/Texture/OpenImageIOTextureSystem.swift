@@ -10,6 +10,7 @@ final class OpenImageIOTextureSystem {
                 destroyTextureSystem()
         }
 
+        @MainActor
         private func evaluate(
                 filename: String,
                 s: Float,
@@ -22,6 +23,7 @@ final class OpenImageIOTextureSystem {
                 }
         }
 
+        @MainActor
         func evaluate(filename: String, s: Float, t: Float) -> FloatX {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 1)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)
@@ -29,6 +31,7 @@ final class OpenImageIOTextureSystem {
                 return result
         }
 
+        @MainActor
         func evaluate(filename: String, s: Float, t: Float) -> RgbSpectrum {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)

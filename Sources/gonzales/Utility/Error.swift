@@ -36,6 +36,7 @@ func notOverridden(function: String = #function, file: String = #file, line: Int
         fatalError()
 }
 
+@MainActor
 func warning(_ message: String) {
         if verbose {
                 print("Warning: \(message)")
@@ -44,6 +45,7 @@ func warning(_ message: String) {
 
 var warningsSeen = Set<Int>()
 
+@MainActor
 func warnOnce(_ message: String) {
         var hasher = Hasher()
         hasher.combine(message)

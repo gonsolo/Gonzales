@@ -210,6 +210,7 @@ final class Parser {
                 return f
         }
 
+        @MainActor
         private func parseNamedSpectrum() throws -> (any Spectrum)? {
                 guard let string = try parseStringOpt() else {
                         return nil
@@ -223,6 +224,7 @@ final class Parser {
                 }
         }
 
+        @MainActor
         private func parseRgbSpectrum() throws -> (any Spectrum)? {
                 if let namedSpectrum = try parseNamedSpectrum() {
                         return namedSpectrum
@@ -233,6 +235,7 @@ final class Parser {
                 return RgbSpectrum(rgb: threeFloats)
         }
 
+        @MainActor
         private func parseRGBSpectra() throws -> [any Spectrum] {
                 var spectra = [any Spectrum]()
                 while let spectrum = try parseRgbSpectrum() {
@@ -294,6 +297,7 @@ final class Parser {
                 return normals
         }
 
+        @MainActor
         private func parseValue(type: String) throws -> Parameter {
                 switch type {
                 case "blackbody":
@@ -351,11 +355,13 @@ final class Parser {
                 }
         }
 
+        @MainActor
         private func blackBodyDummy(value: FloatX) -> [RgbSpectrum] {
                 warning("Blackbody emission is not implemented!")
                 return [gray]
         }
 
+        @MainActor
         private func parseValues(type: String) throws -> Parameter {
                 switch type {
                 case "blackbody":
@@ -389,6 +395,7 @@ final class Parser {
                 }
         }
 
+        @MainActor
         private func parseParameter() throws -> (String, Parameter)? {
                 parseComments()
                 if scanner.scanString("\"") == nil { return nil }
@@ -409,6 +416,7 @@ final class Parser {
                 return (name, parameter)
         }
 
+        @MainActor
         private func parseParameters() throws -> ParameterDictionary {
                 var parameters = ParameterDictionary()
                 var nameAndParameter = try parseParameter()
@@ -513,6 +521,7 @@ final class Parser {
                 api.pixelFilter(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseReverseOrientation() {
                 warning("Ignoring reverseOrientation!")
         }

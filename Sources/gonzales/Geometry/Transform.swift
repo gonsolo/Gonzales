@@ -7,6 +7,7 @@ struct Transform {
                 self.inverseMatrix = inverseMatrix
         }
 
+        @MainActor
         public init(matrix: Matrix) {
                 self.init(matrix: matrix, inverseMatrix: matrix.inverse)
         }
@@ -61,10 +62,12 @@ extension Transform {
                 return point / wp
         }
 
+        @MainActor
         public static func *= (left: inout Transform, right: Transform) {
                 left = left * right
         }
 
+        @MainActor
         public static func * (left: Transform, right: Transform) -> Transform {
                 return Transform(matrix: left.matrix * right.matrix)
         }
@@ -77,6 +80,7 @@ extension Transform: CustomStringConvertible {
 }
 
 extension Transform {
+        @MainActor
         static public func makePerspective(fov: FloatX, near: FloatX, far: FloatX) throws
                 -> Transform
         {
@@ -89,6 +93,7 @@ extension Transform {
                 return try makeScale(x: invTanAng, y: invTanAng, z: 1) * Transform(matrix: persp)
         }
 
+        @MainActor
         static func makeScale(x: FloatX, y: FloatX, z: FloatX) throws -> Transform {
                 let m = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
@@ -98,6 +103,7 @@ extension Transform {
                 return Transform(matrix: m)
         }
 
+        @MainActor
         static func makeTranslation(from delta: Vector) throws -> Transform {
                 let m = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: delta.x,

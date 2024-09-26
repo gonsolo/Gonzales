@@ -303,6 +303,7 @@ struct PlyMesh {
                 }
         }
 
+        @MainActor
         mutating func readFaces(from data: Data) throws {
                 for _ in 0..<plyHeader.faceCount {
                         var numberIndices: UInt32 = 0
@@ -335,6 +336,7 @@ struct PlyMesh {
                 }
         }
 
+        @MainActor
         init(from data: Data) throws {
                 try readPlyHeader(from: data)
                 try readVertices(from: data)

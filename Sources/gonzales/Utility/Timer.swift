@@ -2,6 +2,7 @@ import Foundation
 
 final class Timer {
 
+        @MainActor
         init(_ name: String, newline: Bool = true) {
                 self.name = name
                 if verbose {

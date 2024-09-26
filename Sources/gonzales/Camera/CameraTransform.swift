@@ -1,5 +1,6 @@
 struct CameraTransform {
 
+        @MainActor
         public init(
                 cameraToScreen: Transform,
                 screenWindow: Bounds2f,
