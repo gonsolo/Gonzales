@@ -127,8 +127,9 @@ endif
 
 	# Concurrency in Swift 6
 	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc DisableOutwardActorInference
-	SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc GlobalConcurrency
+	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc GlobalConcurrency
 	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc InferSendableFromCaptures
+	SWIFT_CONCURRENCY 	= -Xswiftc -strict-concurrency=targeted # complete
 	#SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
 
 	DEBUG_OPTIONS   	= $(SWIFT_CONCURRENCY) $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)
