@@ -16,6 +16,7 @@ var justParse = false
 @MainActor
 var ptexMemory = 4  // GB
 
+@MainActor
 var sceneDirectory = String()
 
 func radians(deg: FloatX) -> FloatX {

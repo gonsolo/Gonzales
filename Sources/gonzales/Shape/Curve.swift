@@ -423,6 +423,7 @@ func createBVHCurveShape(
         return curves
 }
 
+@MainActor
 func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")

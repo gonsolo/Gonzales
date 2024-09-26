@@ -11,6 +11,7 @@ enum BoundingHierarchyBuilderError: Error {
 
 final class BoundingHierarchyBuilder {
 
+        @MainActor
         internal init(primitives: [Boundable]) {
                 self.cachedPrimitives = primitives.enumerated().map { index, primitive in
                         let bound = primitive.worldBound()
@@ -20,6 +21,7 @@ final class BoundingHierarchyBuilder {
                 buildHierarchy()
         }
 
+        @MainActor
         internal func getBoundingHierarchy() throws -> BoundingHierarchy {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
@@ -42,6 +44,7 @@ final class BoundingHierarchyBuilder {
                 return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
 
+        @MainActor
         internal static func statistics() {
                 print("  BVH:")
                 print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
@@ -77,6 +80,7 @@ final class BoundingHierarchyBuilder {
                 }
         }
 
+        @MainActor
         private func buildHierarchy() {
                 if cachedPrimitives.isEmpty { return }
                 let _ = build(range: 0..<cachedPrimitives.count)
@@ -90,6 +94,7 @@ final class BoundingHierarchyBuilder {
                 }
         }
 
+        @MainActor
         private func addLeafNode(
                 offset: Int,
                 bounds: Bounds3f,
@@ -150,6 +155,7 @@ final class BoundingHierarchyBuilder {
                 var bounds = Bounds3f()
         }
 
+        @MainActor
         private func splitSurfaceAreaHeuristic(
                 bounds: Bounds3f,
                 centroidBounds: Bounds3f,
@@ -237,6 +243,7 @@ final class BoundingHierarchyBuilder {
                 return (start, mid, end, Bounds3f())
         }
 
+        @MainActor
         private func build(range: Range<Int>) -> Bounds3f {
                 let counter = totalNodes
                 totalNodes += 1
@@ -308,6 +315,7 @@ final class BoundingHierarchyBuilder {
                 return combinedBounds
         }
 
+        @MainActor
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
                 nodes[counter] = BoundingHierarchyNode(bounds: combinedBounds, offset: beforeRight, axis: dim)
@@ -316,11 +324,22 @@ final class BoundingHierarchyBuilder {
 
         private let primitivesPerNode = 4
 
+        @MainActor
         private static var interiorNodes = 0
+
+        @MainActor
         private static var leafNodes = 0
+
+        @MainActor
         private static var totalPrimitives = 0
+
+        @MainActor
         private static var callsToPartition = 0
+
+        @MainActor
         private static var bhNodes = 0
+
+        @MainActor
         private static var bhPrimitives = 0
 
         private var totalNodes = 0

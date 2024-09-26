@@ -130,6 +130,7 @@ final class InfiniteLight {
         let texture: Texture
 }
 
+@MainActor
 func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary) throws
         -> InfiniteLight
 {

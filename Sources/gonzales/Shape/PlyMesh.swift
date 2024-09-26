@@ -361,6 +361,7 @@ struct PlyMesh {
         var dataIndex = 0
 }
 
+@MainActor
 func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
         -> [Shape]
 {

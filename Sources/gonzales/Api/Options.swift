@@ -176,6 +176,7 @@ class Options {
                 )
         }
 
+        @MainActor
         func makeIntegrator(scene: Scene, sampler: Sampler) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break

@@ -59,6 +59,7 @@ struct BoundingHierarchy: Boundable, Intersectable {
                 }
         }
 
+        @MainActor
         static func statistics() {
                 print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
@@ -66,5 +67,6 @@ struct BoundingHierarchy: Boundable, Intersectable {
         let primitives: [IntersectablePrimitive]
         var nodes = [BoundingHierarchyNode]()
 
+        @MainActor
         static var boundingHierarchyNodesVisited = 0
 }

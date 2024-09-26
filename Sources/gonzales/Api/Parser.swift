@@ -422,18 +422,21 @@ final class Parser {
                 return parameters
         }
 
+        @MainActor
         private func parseIntegrator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.integrator(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try api.lightSource(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseLookAt() throws {
                 parseComments()
                 guard let eye = try parsePoint() else {
@@ -448,6 +451,7 @@ final class Parser {
                 try api.lookAt(eye: eye, at: at, up: up)
         }
 
+        @MainActor
         private func parseRotate() throws {
                 guard let angle = try parseFloatX() else { try bail() }
                 guard let f = try parseThreeFloatXs() else { try bail() }
@@ -466,36 +470,43 @@ final class Parser {
                 return values
         }
 
+        @MainActor
         private func parseTransform() throws {
                 let values = try scanTransform()
                 try api.transform(values: values)
         }
 
+        @MainActor
         private func parseTransformBegin() throws {
                 try api.transformBegin()
         }
 
+        @MainActor
         private func parseTransformEnd() throws {
                 try api.transformEnd()
         }
 
+        @MainActor
         private func parseTranslate() throws {
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 let translation = Vector(xyz: f)
                 try api.translate(by: translation)
         }
 
+        @MainActor
         private func parseSampler() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 api.sampler(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseScale() throws {
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 try api.scale(x: f.0, y: f.1, z: f.2)
         }
 
+        @MainActor
         private func parsePixelFilter() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
@@ -506,6 +517,7 @@ final class Parser {
                 warning("Ignoring reverseOrientation!")
         }
 
+        @MainActor
         private func parseFilm() throws {
                 let filmType = try parseString()
                 switch filmType {
@@ -518,6 +530,7 @@ final class Parser {
                 try api.film(name: filmType, parameters: parameters)
         }
 
+        @MainActor
         private func parseIdentity() {
                 api.identity()
         }
@@ -534,6 +547,7 @@ final class Parser {
                 try await api.include(file: name, render: false)
         }
 
+        @MainActor
         private func parseCamera() throws {
                 let name = try parseString()
                 guard name == "perspective" else {
@@ -543,21 +557,25 @@ final class Parser {
                 try api.camera(name: name, parameters: parameters)
         }
 
+        @MainActor
         private func parseCoordinateSystem() throws {
                 let name = try parseString()
                 api.coordinateSystem(name: name)
         }
 
+        @MainActor
         private func parseCoordSysTransform() throws {
                 let name = try parseString()
                 try api.coordSysTransform(name: name)
         }
 
+        @MainActor
         private func parseConcatTransform() throws {
                 let values = try scanTransform()
                 try api.concatTransform(values: values)
         }
 
+        @MainActor
         private func parseWorldBegin() throws {
                 api.worldBegin()
         }
@@ -650,6 +668,7 @@ final class Parser {
                 try api.attributeEnd()
         }
 
+        @MainActor
         private func parseAccelerator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()

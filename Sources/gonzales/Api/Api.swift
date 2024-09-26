@@ -99,6 +99,7 @@ struct Api {
                 state = last
         }
 
+        @MainActor
         func camera(name: String, parameters: ParameterDictionary) throws {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
@@ -106,10 +107,12 @@ struct Api {
                 namedCoordinateSystems["camera"] = options.cameraToWorld
         }
 
+        @MainActor
         func coordinateSystem(name: String) {
                 namedCoordinateSystems[name] = currentTransform
         }
 
+        @MainActor
         func coordSysTransform(name: String) throws {
                 guard let transform = namedCoordinateSystems[name] else {
                         throw ApiError.coordSysTransform
@@ -117,6 +120,7 @@ struct Api {
                 currentTransform = transform
         }
 
+        @MainActor
         func concatTransform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
@@ -126,6 +130,7 @@ struct Api {
                 currentTransform *= Transform(matrix: matrix)
         }
 
+        @MainActor
         func film(name: String, parameters: ParameterDictionary) throws {
                 let fileName = try parameters.findString(called: "filename") ?? "gonzales.exr"
                 guard fileName.hasSuffix("exr") else {
@@ -135,17 +140,18 @@ struct Api {
                 options.filmParameters = parameters
         }
 
+        @MainActor
         func identity() {
                 currentTransform = Transform()
         }
 
         @MainActor
-        mutating func importFile(file sceneName: String) async throws {
+        func importFile(file sceneName: String) async throws {
                 try await include(file: sceneName, render: false)
         }
 
         @MainActor
-        mutating func include(file sceneName: String, render: Bool) async throws {
+        func include(file sceneName: String, render: Bool) async throws {
                 print(sceneName)
                 do {
                         let fileManager = FileManager.default
@@ -175,6 +181,7 @@ struct Api {
                 state.areaLightParameters = parameters
         }
 
+        @MainActor
         func accelerator(name: String, parameters: ParameterDictionary) throws {
                 switch name {
                 case "bvh":
@@ -188,11 +195,13 @@ struct Api {
                 }
         }
 
+        @MainActor
         func integrator(name: String, parameters: ParameterDictionary) throws {
                 options.integratorName = name
                 options.integratorParameters = parameters
         }
 
+        @MainActor
         func lightSource(name: String, parameters: ParameterDictionary) throws {
                 let light = try makeLight(
                         name: name,
@@ -201,6 +210,7 @@ struct Api {
                 options.lights.append(light)
         }
 
+        @MainActor
         func lookAt(eye: Point, at: Point, up: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, at: at, up: up)
                 currentTransform *= transform
@@ -285,11 +295,13 @@ struct Api {
                 options.primitives.append(instance)
         }
 
+        @MainActor
         func sampler(name: String, parameters: ParameterDictionary) {
                 options.samplerName = name
                 options.samplerParameters = parameters
         }
 
+        @MainActor
         func pixelFilter(name: String, parameters: ParameterDictionary) {
                 options.filterName = name
                 options.filterParameters = parameters
@@ -350,6 +362,7 @@ struct Api {
                 }
         }
 
+        @MainActor
         func transform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
@@ -359,10 +372,12 @@ struct Api {
                 currentTransform = Transform(matrix: matrix)
         }
 
+        @MainActor
         func transformBegin() throws {
                 transforms.append(currentTransform)
         }
 
+        @MainActor
         func transformEnd() throws {
                 guard let last = transforms.popLast() else {
                         throw ApiError.transformsEmpty
@@ -370,6 +385,7 @@ struct Api {
                 currentTransform = last
         }
 
+        @MainActor
         func scale(x: FloatX, y: FloatX, z: FloatX) throws {
                 let matrix = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
@@ -380,11 +396,13 @@ struct Api {
         }
 
         // Not really part of PBRT API
+        @MainActor
         func start() {
                 readTimer = Timer("Reading...", newline: false)
                 fflush(stdout)
         }
 
+        @MainActor
         func rotate(by angle: FloatX, around axis: Vector) throws {
                 let a = normalized(axis)
                 let theta = radians(deg: angle)
@@ -494,6 +512,7 @@ struct Api {
                 state.textures[name] = texture
         }
 
+        @MainActor
         func translate(by: Vector) throws {
                 let matrix = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: by.x,
@@ -504,6 +523,7 @@ struct Api {
                 currentTransform *= translation
         }
 
+        @MainActor
         public func worldBegin() {
                 currentTransform = Transform()
         }
@@ -518,6 +538,7 @@ struct Api {
                         " },")
         }
 
+        @MainActor
         func dumpPrimitives() {
                 print("\nNumber of primitives: ", options.primitives.count)
                 for primitive in options.primitives {
@@ -554,10 +575,12 @@ struct Api {
                 cleanUp()
         }
 
+        @MainActor
         private func cleanUp() {
                 options = Options()
         }
 
+        @MainActor
         private func makeLight(
                 name: String,
                 parameters: ParameterDictionary,
@@ -635,6 +658,7 @@ struct Api {
                 return material
         }
 
+        @MainActor
         private func makeShapes(
                 name: String,
                 objectToWorld: Transform,
@@ -679,6 +703,7 @@ struct Api {
         }
 }
 
+@MainActor
 func getTextureFrom(name: String, type: String) throws -> Texture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
@@ -709,15 +734,29 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
         }
 }
 
+@MainActor
 var api = Api()
+
+@MainActor
 var options = Options()
 
 @MainActor
 var state = State()
 
+@MainActor
 var states = [State]()
+
+@MainActor
 var currentTransform = Transform()
+
+@MainActor
 var transforms = [Transform]()
+
+@MainActor
 var readTimer = Timer("")
+
+@MainActor
 var acceleratorName = "embree"
+
+@MainActor
 var namedCoordinateSystems = [String: Transform]()

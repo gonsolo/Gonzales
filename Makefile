@@ -126,8 +126,8 @@ endif
 	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
 
 	# Concurrency in Swift 6
-	SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc DisableOutwardActorInference
-	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc GlobalConcurrency
+	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc DisableOutwardActorInference
+	SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc GlobalConcurrency
 	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc InferSendableFromCaptures
 	#SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
 

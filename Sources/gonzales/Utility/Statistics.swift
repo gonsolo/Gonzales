@@ -11,4 +11,5 @@ struct Statistics {
         }
 }
 
+@MainActor
 var statistics = Statistics()
