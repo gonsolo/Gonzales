@@ -50,6 +50,7 @@ final class Embree: EmbreeBase {
 
 final class EmbreeAccelerator: EmbreeBase {
 
+        @MainActor
         init(
                 bounds: Bounds3f,
                 rtcScene: OpaquePointer?,

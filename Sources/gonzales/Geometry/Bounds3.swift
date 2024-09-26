@@ -128,9 +128,10 @@ func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
 
 extension Bounds3 where T == FloatX {
 
+        @MainActor
         static var intersections = 0
 
-        @inline(__always)
+        @MainActor
         func intersects(ray: Ray, tHit: FloatX) -> Bool {
                 Self.intersections += 1
                 var t0: FloatX = 0.0

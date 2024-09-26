@@ -1,5 +1,6 @@
 import Foundation  // sqrt, log2
 
+@MainActor
 var numberOfCurves = 0
 
 enum CurveError: Error {
@@ -57,6 +58,7 @@ extension Vector2 {
 
 final class Curve: Shape {
 
+        @MainActor
         init(objectToWorld: Transform, common: CurveCommon, u: TwoFloats) {
                 self.common = common
                 self.u = u
@@ -352,6 +354,7 @@ final class Curve: Shape {
                 return "Curve"
         }
 
+        @MainActor
         static func statistics() {
                 print("  Number of curves:\t\t\t\t\t\t\t\(numberOfCurves)")
         }
@@ -367,6 +370,7 @@ struct CurveCommon {
         let width: TwoFloats
 }
 
+@MainActor
 func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [Shape] {
         let common = CurveCommon(points: points, width: width)
         // The default splitdepth in pbrt is 3 which would make this 8 segments (1 << splitDepth).
@@ -383,6 +387,7 @@ func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats)
         return segments
 }
 
+@MainActor
 func createBVHCurveShape(
         controlPoints: [Point],
         widths: (Float, Float),

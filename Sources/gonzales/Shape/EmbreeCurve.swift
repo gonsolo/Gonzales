@@ -1,5 +1,6 @@
 final class EmbreeCurve: Shape {
 
+        @MainActor
         init(
                 objectToWorld: Transform,
                 controlPoints: [Point],
@@ -61,6 +62,7 @@ final class EmbreeCurve: Shape {
         let widths: (Float, Float)
 }
 
+@MainActor
 func createEmbreeCurveShape(
         controlPoints: [Point],
         widths: (Float, Float),

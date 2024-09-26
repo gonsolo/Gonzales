@@ -1,7 +1,7 @@
 @MainActor
 var accelerators = [Accelerator]()
 
-enum Accelerator: Boundable, Intersectable {
+enum Accelerator: @preconcurrency Boundable, Intersectable {
 
         case boundingHierarchy(BoundingHierarchy)
         case embree(EmbreeAccelerator)
