@@ -51,6 +51,7 @@ struct TriangleMeshes {
         var meshes: [TriangleMesh] = []
 }
 
+@MainActor
 var triangleMeshes = TriangleMeshes()
 
 class Options {

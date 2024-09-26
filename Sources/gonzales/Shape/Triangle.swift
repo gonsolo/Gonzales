@@ -88,6 +88,7 @@ extension Array {
 
 struct Triangle: Shape {
 
+        @MainActor
         init(
                 meshIndex: Int,
                 number: Int
@@ -125,41 +126,43 @@ struct Triangle: Shape {
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
-        @inline(__always)
+        @MainActor
         var vertexIndex0: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
         }
 
-        @inline(__always)
+        @MainActor
         var vertexIndex1: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
         }
 
-        @inline(__always)
+        @MainActor
         var vertexIndex2: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
         }
 
-        @inline(__always)
+        @MainActor
         var point0: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex0)
         }
 
-        @inline(__always)
+        @MainActor
         var point1: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex1)
         }
 
-        @inline(__always)
+        @MainActor
         var point2: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex2)
         }
 
+        @MainActor
         func objectBound() -> Bounds3f {
                 let (p0, p1, p2) = getLocalPoints()
                 return union(bound: Bounds3f(first: p0, second: p1), point: p2)
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 worldBoundCalled += 1
                 return objectToWorld * objectBound()
@@ -335,14 +338,17 @@ struct Triangle: Shape {
                 interaction.faceIndex = faceIndex
         }
 
+        @MainActor
         private func getLocalPoint(index: Int) -> Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)
         }
 
+        @MainActor
         private func getWorldPoint(index: Int) -> Point {
                 return objectToWorld * getLocalPoint(index: index)
         }
 
+        @MainActor
         public func getLocalPoints() -> (Point, Point, Point) {
                 let p0 = getLocalPoint(index: vertexIndex0)
                 let p1 = getLocalPoint(index: vertexIndex1)
@@ -350,6 +356,7 @@ struct Triangle: Shape {
                 return (p0, p1, p2)
         }
 
+        @MainActor
         public func getWorldPoints() -> (Point, Point, Point) {
                 let p0 = getWorldPoint(index: vertexIndex0)
                 let p1 = getWorldPoint(index: vertexIndex1)
@@ -362,11 +369,13 @@ struct Triangle: Shape {
                 return Point2F(x: 1 - su0, y: u.1 * su0)
         }
 
+        @MainActor
         func area() -> FloatX {
                 let (p0, p1, p2) = getLocalPoints()
                 return 0.5 * length(cross(Vector(vector: (p1 - p0)), p2 - p0))
         }
 
+        @MainActor
         func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
                 let b = uniformSampleTriangle(u: u)
                 let (p0, p1, p2) = getLocalPoints()
@@ -382,6 +391,7 @@ struct Triangle: Shape {
                 return (worldInteraction, pdf)
         }
 
+        @MainActor
         var description: String {
                 var d = "Triangle [ "
                 let (p0, p1, p2) = getLocalPoints()
@@ -390,6 +400,7 @@ struct Triangle: Shape {
                 return d
         }
 
+        @MainActor
         var objectToWorld: Transform {
                 return triangleMeshes.getObjectToWorldFor(meshIndex: meshIndex)
         }
@@ -398,6 +409,7 @@ struct Triangle: Shape {
         let idx: Int
 }
 
+@MainActor
 func createTriangleMeshShape(
         objectToWorld: Transform,
         parameters: ParameterDictionary
@@ -424,6 +436,7 @@ func createTriangleMeshShape(
                 faceIndices: faceIndices)
 }
 
+@MainActor
 func createTriangleMesh(
         objectToWorld: Transform,
         indices: [Int],

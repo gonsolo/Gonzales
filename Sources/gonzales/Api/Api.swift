@@ -528,6 +528,7 @@ struct Api {
                 currentTransform = Transform()
         }
 
+        @MainActor
         func dumpPoints(_ type: String, _ triangle: Triangle) {
                 let points = triangle.getLocalPoints()
                 print(

@@ -363,6 +363,7 @@ final class EmbreeBuilder: EmbreeBase {
                 embreeCurve(points: points, widths: curve.widths)
         }
 
+        @MainActor
         private func geometry(triangle: Triangle, geomID: UInt32) {
                 let points = triangle.getWorldPoints()
                 let a = points.0
