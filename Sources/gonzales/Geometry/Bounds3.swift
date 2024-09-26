@@ -55,8 +55,10 @@ public typealias Bounds3f = Bounds3<FloatX>
 
 extension Bounds3 where T == FloatX {
 
+        @MainActor
         static var counter = 0
 
+        @MainActor
         init() {
                 Self.counter += 1
                 pMin = Point3(x: FloatX.infinity, y: FloatX.infinity, z: FloatX.infinity)
@@ -149,6 +151,7 @@ extension Bounds3 where T == FloatX {
                 return true
         }
 
+        @MainActor
         static func statistics() {
                 print("  Bounds3:")
                 print("    Generated:\t\t\t\t\t\t\t\t\(counter)")

@@ -1,6 +1,7 @@
 struct BoundingHierarchyNode {
 
-        init(bounds: Bounds3f = Bounds3f(), count: Int = 0, offset: Int = 0, axis: Int = 0) {
+        @MainActor
+        init(bounds: Bounds3f, count: Int = 0, offset: Int = 0, axis: Int = 0) {
                 self.bounds = bounds
                 self.count = count
                 self.offset = offset

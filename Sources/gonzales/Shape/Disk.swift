@@ -5,10 +5,12 @@ final class Disk: Shape {
                 self.radius = radius
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 return objectToWorld * objectBound()
         }
 
+        @MainActor
         func objectBound() -> Bounds3f {
                 // TODO
                 return Bounds3f()

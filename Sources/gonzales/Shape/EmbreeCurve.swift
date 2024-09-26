@@ -20,10 +20,12 @@ final class EmbreeCurve: Shape {
                 unimplemented()
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 return objectToWorld * objectBound()
         }
 
+        @MainActor
         func objectBound() -> Bounds3f {
                 var bounds = Bounds3f()
                 for point in controlPoints {

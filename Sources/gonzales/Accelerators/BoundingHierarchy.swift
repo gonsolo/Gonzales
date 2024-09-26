@@ -47,10 +47,12 @@ struct BoundingHierarchy: Boundable, Intersectable {
                 BoundingHierarchy.boundingHierarchyNodesVisited += nodesVisited
         }
 
+        @MainActor
         func objectBound() -> Bounds3f {
                 return worldBound()
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 if nodes.isEmpty {
                         return Bounds3f()

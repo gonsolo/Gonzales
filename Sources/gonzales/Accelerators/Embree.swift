@@ -72,10 +72,12 @@ final class EmbreeAccelerator: EmbreeBase {
                 rtcReleaseScene(rtcScene)
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 return bounds
         }
 
+        @MainActor
         func objectBound() -> Bounds3f {
                 return bounds
         }
@@ -221,7 +223,9 @@ final class EmbreeAccelerator: EmbreeBase {
                 tHit = tout
         }
 
+        @MainActor
         private var bounds = Bounds3f()
+
         var rtcScene: OpaquePointer?
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()
@@ -239,6 +243,7 @@ final class EmbreeBuilder: EmbreeBase {
                 addPrimitives(primitives: primitives)
         }
 
+        @MainActor
         func getAccelerator() -> EmbreeAccelerator {
                 let embreeAccelerator = EmbreeAccelerator(
                         bounds: bounds,
@@ -260,6 +265,7 @@ final class EmbreeBuilder: EmbreeBase {
                 }
         }
 
+        @MainActor
         private func setBound(primitive: GeometricPrimitive) {
                 bounds = union(first: bounds, second: primitive.worldBound())
         }
@@ -537,6 +543,7 @@ final class EmbreeBuilder: EmbreeBase {
         private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
         private var instanceMap = [UInt32: AcceleratorIndex]()
 
+        @MainActor
         private var bounds = Bounds3f()
 
         private let floatSize = MemoryLayout<Float>.size

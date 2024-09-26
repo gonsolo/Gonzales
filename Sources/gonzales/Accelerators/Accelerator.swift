@@ -67,6 +67,7 @@ enum Accelerator: Boundable, Intersectable {
                 }
         }
 
+        @MainActor
         func objectBound() -> Bounds3f {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):
@@ -78,6 +79,7 @@ enum Accelerator: Boundable, Intersectable {
                 }
         }
 
+        @MainActor
         func worldBound() -> Bounds3f {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):

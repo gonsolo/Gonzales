@@ -87,10 +87,12 @@ final class BoundingHierarchyBuilder {
                 //printNodes()
         }
 
+        @MainActor
         private func growNodes(counter: Int) {
                 let missing = counter - nodes.count + 1
                 if missing > 0 {
-                        nodes += Array(repeating: BoundingHierarchyNode(), count: missing)
+                        let bounds = Bounds3()
+                        nodes += Array(repeating: BoundingHierarchyNode(bounds: bounds), count: missing)
                 }
         }
 
@@ -150,6 +152,7 @@ final class BoundingHierarchyBuilder {
                 return (start, mid, end)
         }
 
+        @MainActor
         struct BVHSplitBucket {
                 var count = 0
                 var bounds = Bounds3f()
