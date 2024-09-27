@@ -1,4 +1,4 @@
-public struct Vector3<T: FloatingPoint>: Three {
+public struct Vector3<T: FloatingPoint & Sendable>: Sendable, Three {
 
         public init(x: T, y: T, z: T) {
                 self.x = x

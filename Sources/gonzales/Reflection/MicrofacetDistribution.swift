@@ -1,7 +1,7 @@
 ///        A type that describes the reflected light from a surface based on the
 ///        theory that the surface consists of many differently oriented perfect
 ///        specular microfacets.
-protocol MicrofacetDistribution {
+protocol MicrofacetDistribution: Sendable {
 
         // D in PBRT
         func differentialArea(withNormal: Vector) -> FloatX

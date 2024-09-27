@@ -1,4 +1,4 @@
-public struct Normal3<T: FloatingPoint>: Three {
+public struct Normal3<T: FloatingPoint & Sendable>: Sendable, Three {
 
         init() {
                 self.x = 0

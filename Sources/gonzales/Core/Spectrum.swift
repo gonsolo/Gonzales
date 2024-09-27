@@ -142,7 +142,7 @@ var namedSpectra: [String: any Spectrum] = [
         "metal-Cu-k": copperExtinctionCoefficients,
 ]
 
-public struct BaseRgbSpectrum<T: FloatingPoint>: Initializable, Three {
+public struct BaseRgbSpectrum<T: FloatingPoint & Sendable>: Initializable, Sendable, Three {
 
         init() {
                 self.init(r: 0, g: 0, b: 0)

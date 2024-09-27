@@ -1,4 +1,4 @@
-struct Ray {
+struct Ray: Sendable {
 
         init() {
                 self.init(

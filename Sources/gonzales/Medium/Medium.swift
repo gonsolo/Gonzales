@@ -1,4 +1,4 @@
-protocol Medium {
+protocol Medium: Sendable {
 
         // Sample the medium along the ray. If the proposed sample is behind the
         // max length just return transmittance and nil, otherwise the medium is

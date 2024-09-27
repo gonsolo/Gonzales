@@ -1,4 +1,4 @@
-final class MediumInterface {
+final class MediumInterface: Sendable {
 
         init(interior: String, exterior: String) {
                 self.interior = interior

@@ -8,7 +8,7 @@ protocol GetIntXY {
         var y: Int { get }
 }
 
-public struct Point2<T> {
+public struct Point2<T: Sendable>: Sendable {
 
         public init(x: T, y: T) {
                 self.x = x

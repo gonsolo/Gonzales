@@ -1,6 +1,6 @@
 import Foundation
 
-struct AreaLight: Boundable, Intersectable {
+struct AreaLight: Boundable, Intersectable, Sendable {
 
         init(brightness: RgbSpectrum, shape: Shape, alpha: FloatX) {
                 self.brightness = brightness

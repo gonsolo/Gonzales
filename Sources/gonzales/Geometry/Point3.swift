@@ -1,4 +1,4 @@
-public struct Point3<T> {
+public struct Point3<T: Sendable>: Sendable {
 
         init(x: T, y: T, z: T) {
                 self.xyz = (x, y, z)
