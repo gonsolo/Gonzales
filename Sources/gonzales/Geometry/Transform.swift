@@ -1,6 +1,6 @@
 import Foundation  // tan
 
-struct Transform {
+struct Transform: Sendable {
 
         public init(matrix: Matrix, inverseMatrix: Matrix) {
                 self.matrix = matrix

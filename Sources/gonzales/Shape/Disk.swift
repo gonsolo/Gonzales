@@ -42,8 +42,8 @@ final class Disk: Shape {
                 print("TODO")
         }
 
-        var objectToWorld: Transform
-        var radius: FloatX
+        let objectToWorld: Transform
+        let radius: FloatX
 }
 
 func createDiskShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {

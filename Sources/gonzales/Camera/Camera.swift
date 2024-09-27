@@ -3,8 +3,11 @@
 /// It generates viewing rays per pixel into the scene
 /// and records the computed radiance on the film.
 
-protocol Camera {
-        func generateRay(cameraSample: CameraSample) -> Ray
-        static func statistics()
+protocol Camera: Sendable {
+
+        func generateRay(cameraSample: CameraSample) async -> Ray
+
+        static func statistics() async
+
         var film: Film { get }
 }

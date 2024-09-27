@@ -167,8 +167,8 @@ final class Sphere: Shape {
                 tHit = shapeHit
         }
 
-        var objectToWorld: Transform
-        var radius: FloatX
+        let objectToWorld: Transform
+        let radius: FloatX
 }
 
 func createSphere(objectToWorld: Transform, parameters: ParameterDictionary) throws -> Sphere {

@@ -1,4 +1,4 @@
-final class Film {
+final class Film: Sendable {
 
         enum FilmError: Error {
                 case unknownFileType(name: String)
@@ -139,8 +139,8 @@ final class Film {
                 }
         }
 
-        private var name: String
-        private var fileName: String
+        private let name: String
+        private let fileName: String
         var filter: Filter
         var image: Image
         var albedoImage: Image

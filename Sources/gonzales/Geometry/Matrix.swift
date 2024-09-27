@@ -1,4 +1,4 @@
-public struct Matrix {
+public struct Matrix: Sendable {
 
         public init(
                 t00: FloatX, t01: FloatX, t02: FloatX, t03: FloatX,

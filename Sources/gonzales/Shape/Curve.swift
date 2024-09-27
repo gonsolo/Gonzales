@@ -359,9 +359,9 @@ final class Curve: Shape {
                 print("  Number of curves:\t\t\t\t\t\t\t\(numberOfCurves)")
         }
 
-        var common: CurveCommon
-        var u: TwoFloats
-        var objectToWorld: Transform
+        let common: CurveCommon
+        let u: TwoFloats
+        let objectToWorld: Transform
 }
 
 struct CurveCommon {

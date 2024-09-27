@@ -20,7 +20,7 @@ final class Tile {
                         for _ in 0..<sampler.samplesPerPixel {
                                 let cameraSample = sampler.getCameraSample(pixel: pixel)
                                 cameraSamples.append(cameraSample)
-                                let ray = camera.generateRay(cameraSample: cameraSample)
+                                let ray = await camera.generateRay(cameraSample: cameraSample)
                                 rays.append(ray)
                                 tHits.append(Float.infinity)
                         }

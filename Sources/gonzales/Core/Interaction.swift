@@ -1,4 +1,4 @@
-protocol Interaction {
+protocol Interaction: Sendable {
 
         func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX)
         func spawnRay(inDirection direction: Vector) -> Ray

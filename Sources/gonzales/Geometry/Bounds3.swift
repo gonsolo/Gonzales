@@ -1,4 +1,4 @@
-public struct Bounds3<T: Comparable> {
+public struct Bounds3<T: Comparable & Sendable>: Sendable {
 
         init(first: Point3<T>, second: Point3<T>) {
                 self.pMin = Point3(
