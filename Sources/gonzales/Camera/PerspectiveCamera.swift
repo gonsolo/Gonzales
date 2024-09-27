@@ -11,17 +11,18 @@ final class PerspectiveCamera: Camera, Transformable {
                 focalDistance: FloatX,
                 lensRadius: FloatX,
                 film: Film
-        ) throws {
+        ) async throws {
                 self.objectToWorld = cameraToWorld
                 self.fieldOfView = fov
                 self.focalDistance = focalDistance
                 self.lensRadius = lensRadius
                 self.film = film
                 let perspective = try Transform.makePerspective(fov: fov, near: 0.01, far: 1000.0)
+                let resolution = await film.getResolution()
                 cameraTransform = try CameraTransform(
                         cameraToScreen: perspective,
                         screenWindow: screenWindow,
-                        resolution: film.image.fullResolution
+                        resolution: resolution
                 )
         }
 

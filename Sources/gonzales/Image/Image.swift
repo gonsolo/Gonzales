@@ -35,6 +35,10 @@ struct Image {
                 }
         }
 
+        func getResolution() -> Point2I {
+                return fullResolution
+        }
+
         var fullResolution: Point2I
         var pixels: [Pixel]
 }

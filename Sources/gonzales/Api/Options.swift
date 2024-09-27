@@ -133,11 +133,11 @@ class Options {
         }
 
         @MainActor
-        func makeCamera() throws -> Camera {
+        func makeCamera() async throws -> Camera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter)
-                let resolution = film.image.fullResolution
+                let resolution = await film.getResolution()
                 let frame = FloatX(resolution.x) / FloatX(resolution.y)
                 var screen = Bounds2f()
 
@@ -169,7 +169,7 @@ class Options {
                         called: "focaldistance",
                         else: 1e6)
                 let lensRadius = try cameraParameters.findOneFloatX(called: "lensradius", else: 0)
-                return try PerspectiveCamera(
+                return try await PerspectiveCamera(
                         cameraToWorld: cameraToWorld,
                         screenWindow: screen,
                         fov: fov,
@@ -215,7 +215,7 @@ class Options {
 
         @MainActor
         func makeRenderer() async throws -> Renderer {
-                let camera = try makeCamera()
+                let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try await makeAccelerator(primitives: primitives)

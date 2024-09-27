@@ -14,6 +14,10 @@ public typealias Bounds2f = Bounds2<FloatX>
 
 extension Bounds2 where T: BinaryInteger {
 
+        init() {
+                self.init(pMin: Point2(x: 0, y: 0), pMax: Point2(x: 1, y: 1))
+        }
+
         func area() -> T {
                 return (pMax.x - pMin.x) * (pMax.y - pMin.y)
         }

@@ -56,7 +56,7 @@ final class TileRenderer: Renderer {
 
         private func renderAndMergeTile(tile: Tile) async throws {
                 let samples = try await renderTile(tile: tile)
-                camera.film.add(samples: samples)
+                await camera.film.add(samples: samples)
         }
 
         private func renderSync(tile: Tile) async throws {
@@ -86,8 +86,8 @@ final class TileRenderer: Renderer {
         }
 
         @MainActor
-        private func generateBounds() -> Bounds2i {
-                let sampleBounds = camera.film.getSampleBounds()
+        private func generateBounds() async -> Bounds2i {
+                let sampleBounds = await camera.getSampleBounds()
                 var bounds: Bounds2i
                 if singleRay {
                         let point = sampleBounds.pMin + singleRayCoordinate
@@ -112,12 +112,12 @@ final class TileRenderer: Renderer {
         @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
-                let bounds = generateBounds()
+                let bounds = await generateBounds()
                 reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
                 reporter.reset()
                 try await renderImage(bounds: bounds)
                 group.wait()
-                try camera.film.writeImages()
+                try await camera.film.writeImages()
                 print("\n")
                 print(timer.elapsed)
                 fflush(stdout)

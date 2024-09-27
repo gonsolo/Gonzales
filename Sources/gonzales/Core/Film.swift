@@ -1,4 +1,4 @@
-final class Film: Sendable {
+actor Film: Sendable {
 
         enum FilmError: Error {
                 case unknownFileType(name: String)
@@ -139,9 +139,13 @@ final class Film: Sendable {
                 }
         }
 
+        func getResolution() -> Point2I {
+                return image.getResolution()
+        }
+
         private let name: String
         private let fileName: String
-        var filter: Filter
+        let filter: Filter
         var image: Image
         var albedoImage: Image
         var normalImage: Image
