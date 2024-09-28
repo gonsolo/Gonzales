@@ -1,6 +1,6 @@
 import Foundation
 
-final class TransformedPrimitive: @preconcurrency Boundable & Intersectable {
+final class TransformedPrimitive: @preconcurrency Boundable, Intersectable, Sendable {
 
         init(acceleratorIndex: AcceleratorIndex, transform: Transform) {
                 self.acceleratorIndex = acceleratorIndex

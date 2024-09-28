@@ -7,7 +7,7 @@ protocol Intersectable {
                 interaction: inout SurfaceInteraction) async throws
 }
 
-enum IntersectablePrimitive {
+enum IntersectablePrimitive: Sendable {
         case geometricPrimitive(GeometricPrimitive)
         case triangle(Triangle)
         case transformedPrimitive(TransformedPrimitive)

@@ -1,4 +1,4 @@
-struct BoundingHierarchy: @preconcurrency Boundable, Intersectable {
+struct BoundingHierarchy: @preconcurrency Boundable, Intersectable, Sendable {
 
         @MainActor
         func intersect(

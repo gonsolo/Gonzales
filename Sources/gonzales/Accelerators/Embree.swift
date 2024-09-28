@@ -48,9 +48,8 @@ final class Embree: EmbreeBase {
         var rtcDevice: OpaquePointer?
 }
 
-final class EmbreeAccelerator: EmbreeBase {
+actor EmbreeAccelerator: EmbreeBase {
 
-        @MainActor
         init(
                 bounds: Bounds3f,
                 rtcScene: OpaquePointer?,
@@ -89,7 +88,7 @@ final class EmbreeAccelerator: EmbreeBase {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) async throws {
-                try intersect(
+                try await intersect(
                         originX: ray.origin.x,
                         originY: ray.origin.y,
                         originZ: ray.origin.z,
@@ -100,7 +99,6 @@ final class EmbreeAccelerator: EmbreeBase {
                         interaction: &interaction)
         }
 
-        @MainActor
         func intersect(
                 originX: FloatX,
                 originY: FloatX,
@@ -110,7 +108,7 @@ final class EmbreeAccelerator: EmbreeBase {
                 directionZ: FloatX,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) throws {
+        ) async throws {
 
                 let empty = { (line: Int) in
                         //print("No triangle intersection at line ", line)
@@ -170,7 +168,7 @@ final class EmbreeAccelerator: EmbreeBase {
                         }
                 }
 
-                if let areaLight = scene.areaLights[geomID] {
+                if let areaLight = await scene.areaLights[geomID] {
                         if areaLight.alpha == 0 {
                                 return empty(#line)
                         }
@@ -180,7 +178,7 @@ final class EmbreeAccelerator: EmbreeBase {
                 let bary2 = rayhit.hit.v
                 let bary0 = 1 - bary1 - bary2
                 var uvs = (Vector2F(), Vector2F(), Vector2F())
-                let uvsOpt = scene.triangleUVs[geomID]
+                let uvsOpt = await scene.triangleUVs[geomID]
                 if uvsOpt == nil {
                         //let message = "TriangleUVs is nil: \(geomID)"
                         //embreeError(message)
@@ -212,13 +210,13 @@ final class EmbreeAccelerator: EmbreeBase {
                 interaction.dpdu = dpdu
 
                 interaction.faceIndex = 0  // TODO
-                if let areaLight = scene.areaLights[geomID] {
+                if let areaLight = await scene.areaLights[geomID] {
                         interaction.areaLight = areaLight
                 }
-                if let material = scene.materials[geomID] {
+                if let material = await scene.materials[geomID] {
                         interaction.material = material
                 }
-                if let mediumInterface = scene.mediumInterfaces[geomID] {
+                if let mediumInterface = await scene.mediumInterfaces[geomID] {
                         interaction.mediumInterface = mediumInterface
                 }
                 tHit = tout
@@ -227,7 +225,7 @@ final class EmbreeAccelerator: EmbreeBase {
         @MainActor
         private var bounds = Bounds3f()
 
-        var rtcScene: OpaquePointer?
+        let rtcScene: OpaquePointer?
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()
         private var areaLights = [UInt32: AreaLight]()
@@ -536,7 +534,7 @@ final class EmbreeBuilder: EmbreeBase {
                 rtcReleaseGeometry(geometry)
         }
 
-        private var rtcScene: OpaquePointer?
+        private let rtcScene: OpaquePointer?
 
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()
