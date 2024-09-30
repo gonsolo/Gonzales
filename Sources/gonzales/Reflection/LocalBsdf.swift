@@ -4,9 +4,9 @@
 protocol LocalBsdf {
 
         func albedo() -> RgbSpectrum
-        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum
+        func evaluateLocal(wo: Vector, wi: Vector) async -> RgbSpectrum
         func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample
 
         var isReflective: Bool { get }
         var isTransmissive: Bool { get }
@@ -17,17 +17,17 @@ extension LocalBsdf {
         func sampleLocal(
                 wo: Vector,
                 u: ThreeRandomVariables,
-                evaluate: (Vector, Vector) -> RgbSpectrum
-        ) -> BsdfSample {
+                evaluate: (Vector, Vector) async -> RgbSpectrum
+        ) async -> BsdfSample {
                 var wi = cosineSampleHemisphere(u: TwoRandomVariables(u.0, u.1))
                 if wo.z < 0 { wi.z = -wi.z }
                 let density = probabilityDensityLocal(wo: wo, wi: wi)
-                let radiance = evaluate(wo, wi)
+                let radiance = await evaluate(wo, wi)
                 return BsdfSample(radiance, wi, density)
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
-                return sampleLocal(wo: wo, u: u, evaluate: self.evaluateLocal)
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
+                return await sampleLocal(wo: wo, u: u, evaluate: self.evaluateLocal)
         }
 
         func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {

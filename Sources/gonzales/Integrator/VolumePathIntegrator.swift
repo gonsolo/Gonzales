@@ -73,7 +73,7 @@ final class VolumePathIntegrator: Sendable {
                 guard try await visibility.unoccluded(scene: scene) else {
                         return invalidBsdfSample
                 }
-                let scatter = interaction.evaluateDistributionFunction(wi: wi)
+                let scatter = await interaction.evaluateDistributionFunction(wi: wi)
                 let estimate = scatter * radiance
                 return BsdfSample(estimate, wi, lightDensity)
         }
@@ -86,7 +86,7 @@ final class VolumePathIntegrator: Sendable {
         ) async throws -> BsdfSample {
 
                 let zero = BsdfSample()
-                var bsdfSample = interaction.sampleDistributionFunction(sampler: sampler)
+                var bsdfSample = await interaction.sampleDistributionFunction(sampler: sampler)
                 guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                         return zero
                 }
@@ -252,7 +252,7 @@ final class VolumePathIntegrator: Sendable {
                                 at: mediumInteraction,
                                 with: sampler,
                                 lightSampler: lightSampler)
-                let (_, wi) = mediumInteraction.phase.samplePhase(
+                let (_, wi) = await mediumInteraction.phase.samplePhase(
                         wo: -ray.direction,
                         sampler: sampler)
                 let spawnedRay = mediumInteraction.spawnRay(inDirection: wi)
@@ -380,7 +380,7 @@ final class VolumePathIntegrator: Sendable {
                                 with: sampler,
                                 lightSampler: lightSampler)
                 estimate += lightEstimate
-                let (bsdfSample, _) = surfaceInteraction.bsdf.sampleWorld(
+                let (bsdfSample, _) = await surfaceInteraction.bsdf.sampleWorld(
                         wo: surfaceInteraction.wo, u: sampler.get3D())
                 guard
                         bsdfSample.probabilityDensity != 0
@@ -410,7 +410,7 @@ final class VolumePathIntegrator: Sendable {
                 skip: Bool
         ) async throws -> Bool {
                 let (transmittance, mediumInteraction) =
-                        ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
+                        await ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
                 pathThroughputWeight *= transmittance
                 if pathThroughputWeight.isBlack {
                         return false

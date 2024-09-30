@@ -1,14 +1,14 @@
 struct SurfaceInteraction: Interaction, Sendable {
 
-        func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum {
-                let reflected = bsdf.evaluateWorld(wo: wo, wi: wi)
+        func evaluateDistributionFunction(wi: Vector) async -> RgbSpectrum {
+                let reflected = await bsdf.evaluateWorld(wo: wo, wi: wi)
                 let dot = absDot(wi, Vector(normal: shadingNormal))
                 let scatter = reflected * dot
                 return scatter
         }
 
-        func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
-                var (bsdfSample, _) = bsdf.sampleWorld(wo: wo, u: sampler.get3D())
+        func sampleDistributionFunction(sampler: Sampler) async -> BsdfSample {
+                var (bsdfSample, _) = await bsdf.sampleWorld(wo: wo, u: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, shadingNormal)
                 return bsdfSample
         }

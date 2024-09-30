@@ -201,10 +201,7 @@ class Options {
                 if samplerName != "random" {
                         warning("Unknown sampler, using random sampler.")
                 }
-                let sampler = try createRandomSampler(parameters: samplerParameters)
-                if quick {
-                        sampler.samplesPerPixel = 1
-                }
+                let sampler = try createRandomSampler(parameters: samplerParameters, quick: quick)
                 return sampler
         }
 

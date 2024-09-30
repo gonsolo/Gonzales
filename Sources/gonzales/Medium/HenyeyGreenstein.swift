@@ -11,8 +11,8 @@ final class HenyeyGreenstein: PhaseFunction {
                 return inv4Pi * (1 - g * g) / (denom * (denom).squareRoot())
         }
 
-        func samplePhase(wo: Vector, sampler: Sampler) -> (value: FloatX, wi: Vector) {
-                let u = sampler.get2D()
+        func samplePhase(wo: Vector, sampler: Sampler) async -> (value: FloatX, wi: Vector) {
+                let u = await sampler.get2D()
                 var cosTheta: FloatX
                 if abs(g) < 1e-3 {
                         cosTheta = 1 - 2 * u.0

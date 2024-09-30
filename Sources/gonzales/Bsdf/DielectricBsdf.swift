@@ -165,7 +165,7 @@ struct DielectricBsdf: GlobalBsdf {
                 }
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return sampleSpecular(wo: wo, u: u)
                 } else {

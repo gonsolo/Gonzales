@@ -37,6 +37,8 @@ final class PowerLightSampler: Sendable {
         init(sampler: Sampler, lights: [Light]) async {
                 self.sampler = sampler
                 self.lights = lights
+
+                var cumulativePowers = [FloatX]()
                 totalPower = await lights.asyncReduce(0, { total, light in await total + light.power() })
                 for (i, light) in lights.enumerated() {
                         if i == 0 {
@@ -45,12 +47,14 @@ final class PowerLightSampler: Sendable {
                                 await cumulativePowers.append(cumulativePowers.last! + light.power())
                         }
                 }
+
+                self.cumulativePowers = cumulativePowers
         }
 
         @MainActor
         func chooseLight() async -> (Light, FloatX) {
                 assert(lights.count > 0)
-                let u = sampler.get1D()
+                let u = await sampler.get1D()
                 let powerIndex = u * totalPower
                 let (i, _) = lowerBound(cumulativePowers, key: powerIndex)
                 let light = lights[i]
@@ -60,6 +64,6 @@ final class PowerLightSampler: Sendable {
 
         let sampler: Sampler
         let lights: [Light]
-        var cumulativePowers: [FloatX] = []
+        let cumulativePowers: [FloatX]
         let totalPower: FloatX
 }

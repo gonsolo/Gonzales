@@ -311,7 +311,7 @@ struct HairBsdf: GlobalBsdf {
                 return clamp(value: x, low: a, high: b)
         }
 
-        func sampleLocal(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RgbSpectrum) -> (
+        func sampleLocal(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
                 RgbSpectrum, Vector, FloatX
         ) {
                 let sinThetaO = wo.x

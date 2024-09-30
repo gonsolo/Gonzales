@@ -1,4 +1,4 @@
-final class RandomSampler: Sampler {
+actor RandomSampler: Sampler {
 
         init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples
@@ -8,27 +8,30 @@ final class RandomSampler: Sampler {
                 samplesPerPixel = instance.samplesPerPixel
         }
 
-        func get1D() -> RandomVariable {
+        func get1D() async -> RandomVariable {
                 return FloatX.random(in: 0..<1, using: &xoshiro)
         }
 
-        func get2D() -> TwoRandomVariables {
-                return (get1D(), get1D())
+        func get2D() async -> TwoRandomVariables {
+                return await (get1D(), get1D())
         }
 
-        func get3D() -> ThreeRandomVariables {
-                return (get1D(), get1D(), get1D())
+        func get3D() async -> ThreeRandomVariables {
+                return await (get1D(), get1D(), get1D())
         }
 
-        func clone() -> Sampler {
+        func clone() async -> Sampler {
                 return RandomSampler(numberOfSamples: samplesPerPixel)
         }
 
-        var samplesPerPixel: Int
+        let samplesPerPixel: Int
         var xoshiro = Xoshiro()
 }
 
-func createRandomSampler(parameters: ParameterDictionary) throws -> RandomSampler {
-        let samples = try parameters.findOneInt(called: "pixelsamples", else: 1)
+func createRandomSampler(parameters: ParameterDictionary, quick: Bool) throws -> RandomSampler {
+        var samples = try parameters.findOneInt(called: "pixelsamples", else: 1)
+        if quick {
+                samples = 1
+        }
         return RandomSampler(numberOfSamples: samples)
 }

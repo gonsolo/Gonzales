@@ -52,7 +52,7 @@ final class TileRenderer: Renderer {
         }
 
         private func renderTile(tile: Tile) async throws -> [Sample] {
-                let tileSampler = self.sampler.clone()
+                let tileSampler = await self.sampler.clone()
                 let samples = try await tile.render(
                         reporter: reporter,
                         sampler: tileSampler,

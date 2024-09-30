@@ -9,7 +9,7 @@ enum LightSampler: Sendable {
                 case .power(let powerLightSampler):
                         return await powerLightSampler.chooseLight()
                 case .uniform(let uniformLightSampler):
-                        return uniformLightSampler.chooseLight()
+                        return await uniformLightSampler.chooseLight()
                 }
         }
 

@@ -1,4 +1,4 @@
-final class Tile {
+final class Tile: Sendable {
 
         init(integrator: VolumePathIntegrator, bounds: Bounds2i) {
                 self.integrator = integrator
@@ -18,7 +18,7 @@ final class Tile {
                 var tHits = [Float]()
                 for pixel in bounds {
                         for _ in 0..<sampler.samplesPerPixel {
-                                let cameraSample = sampler.getCameraSample(pixel: pixel)
+                                let cameraSample = await sampler.getCameraSample(pixel: pixel)
                                 cameraSamples.append(cameraSample)
                                 let ray = await camera.generateRay(cameraSample: cameraSample)
                                 rays.append(ray)
@@ -47,6 +47,6 @@ final class Tile {
                 return samples
         }
 
-        unowned var integrator: VolumePathIntegrator
-        var bounds: Bounds2i
+        let integrator: VolumePathIntegrator
+        let bounds: Bounds2i
 }

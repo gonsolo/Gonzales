@@ -13,7 +13,7 @@ struct MicrofacetReflection: GlobalBsdf {
                 return reflectance * area * visible * f / (4 * cosThetaI * cosThetaO)
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
                 guard !wo.z.isZero else {
                         return BsdfSample()
                 }

@@ -6,8 +6,8 @@ struct MediumInteraction: Interaction {
                 return scatter
         }
 
-        func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
-                let (value, wi) = phase.samplePhase(wo: wo, sampler: sampler)
+        func sampleDistributionFunction(sampler: Sampler) async -> BsdfSample {
+                let (value, wi) = await phase.samplePhase(wo: wo, sampler: sampler)
                 return BsdfSample(RgbSpectrum(intensity: value), wi, value)
         }
 
