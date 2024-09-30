@@ -129,7 +129,7 @@ endif
 	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc DisableOutwardActorInference
 	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc GlobalConcurrency
 	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc InferSendableFromCaptures
-	SWIFT_CONCURRENCY 	= -Xswiftc -strict-concurrency=targeted # complete
+	SWIFT_CONCURRENCY 	= -Xswiftc -strict-concurrency=complete # targeted # complete
 	#SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
 
 	#SWIFT_SUPPRESS 		= -Xswiftc -suppress-warnings

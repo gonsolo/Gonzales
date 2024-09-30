@@ -122,7 +122,7 @@ final class Sphere: Shape {
                         return
                 }
 
-                let ray = worldToObject * worldRay
+                let ray = await worldToObject * worldRay
                 let ox = ray.origin.x
                 let oy = ray.origin.y
                 let oz = ray.origin.z

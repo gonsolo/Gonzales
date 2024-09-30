@@ -167,7 +167,7 @@ actor EmbreeAccelerator: EmbreeBase {
                         guard let acceleratorIndex = instanceMap[rayhit.hit.instID] else {
                                 embreeError("No scene in instanceMap, instID: \(rayhit.hit.instID)")
                         }
-                        let accelerator = accelerators[acceleratorIndex]
+                        let accelerator = await accelerators[acceleratorIndex]
                         switch accelerator {
                         case .embree(let embree):
                                 scene = embree

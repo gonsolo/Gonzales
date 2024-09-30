@@ -1,3 +1,3 @@
-protocol TextureEvaluation {}
+protocol TextureEvaluation: Sendable {}
 extension RgbSpectrum: TextureEvaluation {}
 extension FloatX: TextureEvaluation {}

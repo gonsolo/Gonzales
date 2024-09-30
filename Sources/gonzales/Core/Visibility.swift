@@ -3,9 +3,7 @@
 struct Visibility {
 
         @MainActor
-        func unoccluded(scene: Scene)
-                async throws
-        -> Bool {
+        func unoccluded(scene: Scene) async throws -> Bool {
                 var (ray, tHit) = from.spawnRay(to: to.position)
                 var interaction = SurfaceInteraction()
                 try await scene.intersect(

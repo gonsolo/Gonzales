@@ -7,4 +7,3 @@ struct Compression {
                 //return try GzipArchive.unarchive(archive: data)
         }
 }
-

@@ -200,7 +200,7 @@ struct Triangle: Shape {
                         return
                 }
 
-                let ray = worldToObject * worldRay
+                let ray = await worldToObject * worldRay
 
                 triangleIntersections += 1
 

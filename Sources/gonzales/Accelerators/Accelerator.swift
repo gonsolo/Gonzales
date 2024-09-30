@@ -1,3 +1,4 @@
+@MainActor
 var accelerators = [Accelerator]()
 
 enum Accelerator: @preconcurrency Boundable, Intersectable, Sendable {

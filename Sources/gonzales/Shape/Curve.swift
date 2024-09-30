@@ -290,7 +290,7 @@ final class Curve: Shape {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) async throws {
-                let ray = worldToObject * worldRay
+                let ray = await worldToObject * worldRay
                 let points = blossomBezier(points: common.points, u: u)
                 let dx = cross(ray.direction, points.3 - points.0)
                 if lengthSquared(dx) == 0 {
