@@ -574,5 +574,5 @@ final class VolumePathIntegrator: Sendable {
         }
 
         let scene: Scene
-        var maxDepth: Int
+        let maxDepth: Int
 }

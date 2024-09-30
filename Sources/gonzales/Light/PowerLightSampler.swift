@@ -31,7 +31,7 @@ extension Sequence {
         }
 }
 
-final class PowerLightSampler {
+final class PowerLightSampler: Sendable {
 
         @MainActor
         init(sampler: Sampler, lights: [Light]) async {

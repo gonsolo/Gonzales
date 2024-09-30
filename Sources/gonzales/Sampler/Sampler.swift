@@ -3,7 +3,8 @@ typealias TwoRandomVariables = (RandomVariable, RandomVariable)
 typealias ThreeRandomVariables = (RandomVariable, RandomVariable, RandomVariable)
 
 ///        A type that provides samples points.
-protocol Sampler {
+protocol Sampler: Sendable {
+
         func get1D() -> RandomVariable
         func get2D() -> TwoRandomVariables
         func get3D() -> ThreeRandomVariables

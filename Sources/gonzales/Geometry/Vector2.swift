@@ -1,4 +1,4 @@
-public struct Vector2<T>: Sendable {
+public struct Vector2<T: Sendable>: Sendable {
 
         public init(x: T, y: T) {
                 self.x = x

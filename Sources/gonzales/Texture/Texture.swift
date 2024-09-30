@@ -1,4 +1,4 @@
-enum Texture {
+enum Texture: Sendable {
         case floatTexture(FloatTexture)
         case rgbSpectrumTexture(RgbSpectrumTexture)
 

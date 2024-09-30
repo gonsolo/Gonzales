@@ -1,4 +1,4 @@
-public struct Bounds2<T> {
+public struct Bounds2<T: Sendable>: Sendable {
 
         public init(pMin: Point2<T>, pMax: Point2<T>) {
                 self.pMin = pMin
