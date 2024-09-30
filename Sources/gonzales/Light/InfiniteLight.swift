@@ -5,7 +5,7 @@ import Foundation  // sin, cos
 @MainActor
 var sceneDiameter: FloatX = 100.0
 
-final class InfiniteLight {
+final class InfiniteLight: Sendable {
 
         init(
                 lightToWorld: Transform,

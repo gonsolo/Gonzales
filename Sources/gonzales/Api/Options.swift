@@ -240,7 +240,7 @@ class Options {
                 //        tileSize.0 = resolution.x
                 //        tileSize.1 = resolution.y
                 }
-                return TileRenderer(
+                return await TileRenderer(
                         accelerator: accelerator,
                         camera: camera,
                         integrator: integrator,

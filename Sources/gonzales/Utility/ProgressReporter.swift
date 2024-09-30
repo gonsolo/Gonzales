@@ -1,6 +1,6 @@
 import Foundation  // fflush, stdout
 
-final class ProgressReporter {
+actor ProgressReporter {
 
         init() { total = 0 }
 

@@ -2,7 +2,7 @@
 // "James Kajiya: The Rendering Equation"
 // DOI: 10.1145/15922.15902
 
-final class VolumePathIntegrator {
+final class VolumePathIntegrator: Sendable {
 
         init(scene: Scene, maxDepth: Int) {
                 self.scene = scene

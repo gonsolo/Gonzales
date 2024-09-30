@@ -1,4 +1,4 @@
-enum LightSampler {
+enum LightSampler: Sendable {
 
         case power(PowerLightSampler)
         case uniform(UniformLightSampler)

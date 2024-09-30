@@ -1,6 +1,6 @@
 typealias AcceleratorIndex = Int
 
-struct Scene {
+struct Scene: Sendable {
 
         @MainActor
         init(acceleratorIndex: AcceleratorIndex, lights: [Light]) {

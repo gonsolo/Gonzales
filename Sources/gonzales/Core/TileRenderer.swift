@@ -10,7 +10,7 @@ final class TileRenderer: Renderer {
                 scene: Scene,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int)
-        ) {
+        ) async {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
@@ -18,6 +18,15 @@ final class TileRenderer: Renderer {
                 self.accelerator = accelerator
                 self.lightSampler = lightSampler
                 self.tileSize = tileSize
+
+                let sampleBounds = await camera.getSampleBounds()
+                if await singleRay {
+                        let point = await sampleBounds.pMin + singleRayCoordinate
+                        bounds = Bounds2i(pMin: point, pMax: point + Point2I(x: 1, y: 1))
+                } else {
+                        bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
+                }
+                reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
         }
 
         private func generateTiles(from bounds: Bounds2i) -> [Tile] {
@@ -85,19 +94,6 @@ final class TileRenderer: Renderer {
                 }
         }
 
-        @MainActor
-        private func generateBounds() async -> Bounds2i {
-                let sampleBounds = await camera.getSampleBounds()
-                var bounds: Bounds2i
-                if singleRay {
-                        let point = sampleBounds.pMin + singleRayCoordinate
-                        bounds = Bounds2i(pMin: point, pMax: point + Point2I(x: 1, y: 1))
-                } else {
-                        bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
-                }
-                return bounds
-        }
-
         private func renderTiles(tiles: [Tile]) async throws {
                 for tile in tiles {
                         try await doRenderTile(tile: tile)
@@ -112,9 +108,7 @@ final class TileRenderer: Renderer {
         @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
-                let bounds = await generateBounds()
-                reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
-                reporter.reset()
+                await reporter.reset()
                 try await renderImage(bounds: bounds)
                 group.wait()
                 try await camera.film.writeImages()
@@ -129,9 +123,10 @@ final class TileRenderer: Renderer {
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
         let queue = DispatchQueue.global()
-        var reporter = ProgressReporter()
+        let reporter: ProgressReporter
         let sampler: Sampler
         let scene: Scene
+        let bounds: Bounds2i
 
         let tileSize: (Int, Int)
 }

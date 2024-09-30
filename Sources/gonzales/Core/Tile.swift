@@ -43,7 +43,7 @@ final class Tile {
                                 location: Point2F(x: cameraSample.film.0, y: cameraSample.film.1))
                         samples.append(sample)
                 }
-                reporter.update()
+                await reporter.update()
                 return samples
         }
 

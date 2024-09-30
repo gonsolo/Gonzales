@@ -1,6 +1,6 @@
 ///        A light source
 
-enum Light {
+enum Light: Sendable {
 
         case area(AreaLight)
         case infinite(InfiniteLight)
