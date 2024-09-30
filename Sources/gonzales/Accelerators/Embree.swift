@@ -1,5 +1,5 @@
 import Foundation
-import embree4
+@preconcurrency import embree4
 
 // swift-format-ignore: AlwaysUseLowerCamelCase
 @_silgen_name("_swift_stdlib_immortalize")
@@ -17,6 +17,14 @@ protocol EmbreeBase {
 
         func check(_ pointer: Any?)
         func embreeError(_ message: String) -> Never
+}
+
+actor EmbreeScene {
+        init(scene: OpaquePointer?) {
+                rtcScene = scene
+        }
+
+        let rtcScene: OpaquePointer?
 }
 
 extension EmbreeBase {
@@ -52,7 +60,7 @@ actor EmbreeAccelerator: EmbreeBase {
 
         init(
                 bounds: Bounds3f,
-                rtcScene: OpaquePointer?,
+                scene: EmbreeScene,
                 materials: [UInt32: MaterialIndex],
                 mediumInterfaces: [UInt32: MediumInterface?],
                 areaLights: [UInt32: AreaLight],
@@ -60,7 +68,7 @@ actor EmbreeAccelerator: EmbreeBase {
                 instanceMap: [UInt32: AcceleratorIndex]
         ) {
                 self.bounds = bounds
-                self.rtcScene = rtcScene
+                self.scene = scene
                 self.materials = materials
                 self.mediumInterfaces = mediumInterfaces
                 self.areaLights = areaLights
@@ -69,7 +77,7 @@ actor EmbreeAccelerator: EmbreeBase {
         }
 
         deinit {
-                rtcReleaseScene(rtcScene)
+                rtcReleaseScene(scene.rtcScene)
         }
 
         @MainActor
@@ -145,7 +153,7 @@ actor EmbreeAccelerator: EmbreeBase {
                         instPrimID: 0)
 
                 var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
-                rtcIntersect1(rtcScene, &rayhit, nil)
+                rtcIntersect1(scene.rtcScene, &rayhit, nil)
 
                 guard rayhit.hit.geomID != rtcInvalidGeometryId else {
                         return empty(#line)
@@ -225,7 +233,8 @@ actor EmbreeAccelerator: EmbreeBase {
         @MainActor
         private var bounds = Bounds3f()
 
-        let rtcScene: OpaquePointer?
+        //let rtcScene: OpaquePointer?
+        let scene: EmbreeScene
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()
         private var areaLights = [UInt32: AreaLight]()
@@ -233,12 +242,14 @@ actor EmbreeAccelerator: EmbreeBase {
         private var instanceMap = [UInt32: AcceleratorIndex]()
 }
 
-final class EmbreeBuilder: EmbreeBase {
+final class EmbreeBuilder: EmbreeBase, Sendable {
 
         @MainActor
         init(primitives: [Boundable & Intersectable]) async {
-                rtcScene = rtcNewScene(embree.rtcDevice)
-                check(rtcScene)
+                let rtcScene = rtcNewScene(embree.rtcDevice)
+                scene = EmbreeScene(scene: rtcScene)
+                //check(rtcScene)
+                check(scene)
                 await addPrimitives(primitives: primitives)
         }
 
@@ -246,7 +257,7 @@ final class EmbreeBuilder: EmbreeBase {
         func getAccelerator() -> EmbreeAccelerator {
                 let embreeAccelerator = EmbreeAccelerator(
                         bounds: bounds,
-                        rtcScene: rtcScene,
+                        scene: scene,
                         materials: materials,
                         mediumInterfaces: mediumInterfaces,
                         areaLights: areaLights,
@@ -319,10 +330,10 @@ final class EmbreeBuilder: EmbreeBase {
                                 //        embreeError("Embree accelerator expected!")
                                 }
                                 let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
-                                rtcSetGeometryInstancedScene(instance, embreeAccelerator.rtcScene)
+                                rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
                                 rtcSetGeometryTimeStepCount(instance, 1)
 
-                                rtcAttachGeometryByID(rtcScene, instance, geomID)
+                                rtcAttachGeometryByID(scene.rtcScene, instance, geomID)
 
                                 instanceMap[geomID] = acceleratorIndex
 
@@ -353,7 +364,7 @@ final class EmbreeBuilder: EmbreeBase {
                         }
                         geomID += 1
                 }
-                rtcCommitScene(rtcScene)
+                rtcCommitScene(scene.rtcScene)
         }
 
         func sizeInBytes<Key, Value>(of dictionary: [Key: Value]) -> Int {
@@ -447,7 +458,7 @@ final class EmbreeBuilder: EmbreeBase {
                         vertices.storeBytes(of: curveRadius, toByteOffset: wIndex, as: Float.self)
                 }
                 rtcCommitGeometry(geometry)
-                rtcAttachGeometryByID(rtcScene, geometry, geomID)
+                rtcAttachGeometryByID(scene.rtcScene, geometry, geomID)
                 rtcReleaseGeometry(geometry)
         }
 
@@ -473,7 +484,7 @@ final class EmbreeBuilder: EmbreeBase {
                 vertices.storeBytes(of: center.z, toByteOffset: 2 * floatSize, as: Float.self)
                 vertices.storeBytes(of: radius, toByteOffset: 3 * floatSize, as: Float.self)
                 rtcCommitGeometry(geometry)
-                rtcAttachGeometryByID(rtcScene, geometry, geomID)
+                rtcAttachGeometryByID(scene.rtcScene, geometry, geomID)
                 rtcReleaseGeometry(geometry)
         }
 
@@ -530,11 +541,12 @@ final class EmbreeBuilder: EmbreeBase {
                 indices.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
                 rtcCommitGeometry(geometry)
-                rtcAttachGeometryByID(rtcScene, geometry, geomID)
+                rtcAttachGeometryByID(scene.rtcScene, geometry, geomID)
                 rtcReleaseGeometry(geometry)
         }
 
-        private let rtcScene: OpaquePointer?
+        private let scene: EmbreeScene
+        //private let rtcScene: OpaquePointer?
 
         private var materials = [UInt32: MaterialIndex]()
         private var mediumInterfaces = [UInt32: MediumInterface?]()

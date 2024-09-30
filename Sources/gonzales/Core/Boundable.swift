@@ -3,7 +3,7 @@
 /// Typically this is used to restrict intersection calculations to a
 /// subset of all primitives.
 
-protocol Boundable {
+protocol Boundable: Sendable {
         func objectBound() async -> Bounds3f
         func worldBound() async -> Bounds3f
 }
