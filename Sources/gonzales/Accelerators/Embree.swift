@@ -19,7 +19,7 @@ protocol EmbreeBase {
         func embreeError(_ message: String) -> Never
 }
 
-actor EmbreeScene {
+@preconcurrency struct EmbreeScene {
         init(scene: OpaquePointer?) {
                 rtcScene = scene
         }
@@ -42,7 +42,7 @@ extension EmbreeBase {
 
 }
 
-final class Embree: EmbreeBase {
+@preconcurrency final class Embree: EmbreeBase {
 
         init() {
                 rtcDevice = rtcNewDevice(nil)
@@ -242,7 +242,7 @@ actor EmbreeAccelerator: EmbreeBase {
         private var instanceMap = [UInt32: AcceleratorIndex]()
 }
 
-final class EmbreeBuilder: EmbreeBase, Sendable {
+@preconcurrency final class EmbreeBuilder: EmbreeBase {
 
         @MainActor
         init(primitives: [Boundable & Intersectable]) async {
@@ -330,7 +330,7 @@ final class EmbreeBuilder: EmbreeBase, Sendable {
                                 //        embreeError("Embree accelerator expected!")
                                 }
                                 let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
-                                rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
+                                await rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
                                 rtcSetGeometryTimeStepCount(instance, 1)
 
                                 rtcAttachGeometryByID(scene.rtcScene, instance, geomID)
