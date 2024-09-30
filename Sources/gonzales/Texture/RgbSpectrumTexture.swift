@@ -1,4 +1,5 @@
-indirect enum RgbSpectrumTexture {
+indirect enum RgbSpectrumTexture: Sendable {
+
         case checkerboard(Checkerboard)
         case constantTexture(ConstantTexture<RgbSpectrum>)
         case openImageIoTexture(OpenImageIOTexture)

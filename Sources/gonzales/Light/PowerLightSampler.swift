@@ -21,7 +21,7 @@ public func lowerBound<T: Comparable>(_ a: [T], key: T) -> (Int, T) {
 extension Sequence {
         func asyncReduce<Result>(
                 _ initialResult: Result,
-                _ nextPartialResult: ((Result, Element) async throws -> Result)
+                _ nextPartialResult: (@Sendable (Result, Element) async throws -> Result)
         ) async rethrows -> Result {
                 var result = initialResult
                 for element in self {
