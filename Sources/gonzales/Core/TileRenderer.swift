@@ -69,12 +69,7 @@ final class TileRenderer: Renderer {
         }
 
         private func doRenderTile(tile: Tile) async throws -> Int {
-                do {
-                        try await self.renderAndMergeTile(tile: tile)
-                } catch let error {
-                        handle(error)
-                        fatalError("in async")
-                }
+                try await self.renderAndMergeTile(tile: tile)
                 return 0
         }
 
