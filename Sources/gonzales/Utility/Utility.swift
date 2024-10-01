@@ -19,9 +19,6 @@ var singleRay = false
 var singleRayCoordinate = Point2I()
 
 @MainActor
-var renderSynchronously = false
-
-@MainActor
 var justParse = false
 
 @MainActor

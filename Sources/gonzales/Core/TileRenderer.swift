@@ -68,29 +68,12 @@ final class TileRenderer: Renderer {
                 await camera.film.add(samples: samples)
         }
 
-        private func renderSync(tile: Tile) async throws {
-                //try queue.sync {
-                try await renderAndMergeTile(tile: tile)
-                //}
-        }
-
-        private func renderAsync(tile: Tile) async {
-                //queue.async(group: group) {
+        private func doRenderTile(tile: Tile) async throws -> Int {
                 do {
                         try await self.renderAndMergeTile(tile: tile)
                 } catch let error {
                         handle(error)
                         fatalError("in async")
-                }
-                //}
-        }
-
-        @MainActor
-        private func doRenderTile(tile: Tile) async throws -> Int {
-                if renderSynchronously {
-                        try await renderSync(tile: tile)
-                } else {
-                        await renderAsync(tile: tile)
                 }
                 return 0
         }

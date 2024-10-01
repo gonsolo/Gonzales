@@ -64,8 +64,6 @@ func parseArguments() throws -> String {
                         guard let y = Int(sy) else { throw MainError.format }
                         singleRay = true
                         singleRayCoordinate = Point2I(x: x, y: y)
-                case "--sync":
-                        renderSynchronously = true
                 case "--parse":
                         justParse = true
                 case "--ptexmem":
