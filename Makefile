@@ -121,21 +121,15 @@ endif
 	# Should not be needed since there is only one module
 	# CROSS 			= -Xswiftc -cross-module-optimization
 
-	#CXX_INTEROP 		= -Xswiftc -enable-experimental-cxx-interop
 	CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
 	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
 
-	# Concurrency in Swift 6
-	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc DisableOutwardActorInference
-	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc GlobalConcurrency
-	#SWIFT_CONCURRENCY 	= -Xswiftc -enable-upcoming-feature -Xswiftc InferSendableFromCaptures
-	SWIFT_CONCURRENCY 	= -Xswiftc -strict-concurrency=complete # targeted # complete
-	#SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
+	SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
 
 	#SWIFT_SUPPRESS 		= -Xswiftc -suppress-warnings
 
-	DEBUG_OPTIONS   	= $(SWIFT_CONCURRENCY) $(SWIFT_SUPPRESS) $(SWIFT_VERBOSE) $(SWIFT_EXPORT_DYNAMIC) \
-				  $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)
+	DEBUG_OPTIONS   	= $(UPCOMING_FEATURE) $(SWIFT_CONCURRENCY) $(SWIFT_SUPPRESS) $(SWIFT_VERBOSE) \
+				  $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL)
 	RELEASE_OPTIONS 	= $(DEBUG_OPTIONS) $(SWIFT_OPTIMIZE)
 	BUILD			= $(SWIFT) build
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)

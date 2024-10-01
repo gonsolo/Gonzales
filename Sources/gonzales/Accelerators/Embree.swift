@@ -11,6 +11,7 @@ func immortalize(_ o: AnyObject) {
         }
 }
 
+@MainActor
 let embree = Embree()
 
 protocol EmbreeBase {
@@ -19,7 +20,7 @@ protocol EmbreeBase {
         func embreeError(_ message: String) -> Never
 }
 
-@preconcurrency struct EmbreeScene {
+struct EmbreeScene: @unchecked Sendable {
         init(scene: OpaquePointer?) {
                 rtcScene = scene
         }
@@ -330,7 +331,7 @@ actor EmbreeAccelerator: EmbreeBase {
                                 //        embreeError("Embree accelerator expected!")
                                 }
                                 let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
-                                await rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
+                                rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
                                 rtcSetGeometryTimeStepCount(instance, 1)
 
                                 rtcAttachGeometryByID(scene.rtcScene, instance, geomID)
@@ -374,6 +375,7 @@ actor EmbreeAccelerator: EmbreeBase {
                 return bytes
         }
 
+        @MainActor
         private func geometry(curve: EmbreeCurve, geomID: UInt32) {
                 let points = curve.controlPoints
                 embreeCurve(points: points, widths: curve.widths)
@@ -398,12 +400,14 @@ actor EmbreeAccelerator: EmbreeBase {
                 }
         }
 
+        @MainActor
         private func geometry(sphere: Sphere, geomID: UInt32) {
                 let center = sphere.objectToWorld * Point()
                 let radius = sphere.radius
                 embreeSphere(center: center, radius: radius)
         }
 
+        @MainActor
         private func embreeCurve(points: [Point], widths: (Float, Float)) {
 
                 // TODO: Just width.0 used
@@ -462,6 +466,7 @@ actor EmbreeAccelerator: EmbreeBase {
                 rtcReleaseGeometry(geometry)
         }
 
+        @MainActor
         private func embreeSphere(center: Point, radius: FloatX) {
                 guard let geometry = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_SPHERE_POINT) else {
                         embreeError()
@@ -488,6 +493,7 @@ actor EmbreeAccelerator: EmbreeBase {
                 rtcReleaseGeometry(geometry)
         }
 
+        @MainActor
         private func embreeTriangle(
                 ax: FloatX, ay: FloatX, az: FloatX,
                 bx: FloatX, by: FloatX, bz: FloatX,
