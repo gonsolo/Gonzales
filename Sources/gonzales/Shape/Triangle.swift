@@ -188,7 +188,6 @@ struct Triangle: Shape {
                 return uvHit
         }
 
-        @MainActor
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
@@ -202,11 +201,11 @@ struct Triangle: Shape {
 
                 let ray = await worldToObject * worldRay
 
-                triangleIntersections += 1
+                //triangleIntersections += 1
 
-                var p0t: Point = point0 - ray.origin
-                var p1t: Point = point1 - ray.origin
-                var p2t: Point = point2 - ray.origin
+                var p0t: Point = await point0 - ray.origin
+                var p1t: Point = await point1 - ray.origin
+                var p2t: Point = await point2 - ray.origin
 
                 let kz = maxDimension(abs(ray.direction))
                 let kx = (kz + 1) % 3
@@ -255,16 +254,16 @@ struct Triangle: Shape {
                 let b2: FloatX = e2 * invDet
                 let t: FloatX = tScaled * invDet
 
-                let hit0: Point = b0 * point0
-                let hit1: Point = b1 * point1
-                let hit2: Point = b2 * point2
+                let hit0: Point = await b0 * point0
+                let hit1: Point = await b1 * point1
+                let hit2: Point = await b2 * point2
                 let pHit: Point = hit0 + hit1 + hit2
 
-                let dp02 = Vector(point: point0 - point2)
-                let dp12 = Vector(point: point1 - point2)
+                let dp02 = await Vector(point: point0 - point2)
+                let dp12 = await Vector(point: point1 - point2)
                 let normal = normalized(Normal(cross(dp02, dp12)))
 
-                let uv = triangleMeshes.getUVFor(
+                let uv = await triangleMeshes.getUVFor(
                         meshIndex: meshIndex,
                         indices: (vertexIndex0, vertexIndex1, vertexIndex2))
                 let uvHit = computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
@@ -287,7 +286,7 @@ struct Triangle: Shape {
                 }
 
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
-                        let ng: Vector = cross(point2 - point0, point1 - point0)
+                        let ng: Vector = await cross(point2 - point0, point1 - point0)
                         if lengthSquared(ng) == 0 {
                                 return empty(#line)
                         }
@@ -295,16 +294,16 @@ struct Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if !triangleMeshes.hasNormals(meshIndex: meshIndex) {
+                if await !triangleMeshes.hasNormals(meshIndex: meshIndex) {
                         shadingNormal = normal
                 } else {
-                        let n0 = triangleMeshes.getNormal(
+                        let n0 = await triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex0)
                         let sn0 = b0 * n0
-                        let n1 = triangleMeshes.getNormal(
+                        let n1 = await triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex1)
                         let sn1 = b1 * n1
-                        let n2 = triangleMeshes.getNormal(
+                        let n2 = await triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex2)
                         let sn2 = b2 * n2
                         shadingNormal = sn0 + sn1 + sn2
@@ -328,20 +327,20 @@ struct Triangle: Shape {
                 dpdu = ss
 
                 var faceIndex: Int = 0
-                if triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
-                        faceIndex = triangleMeshes.getFaceIndex(
+                if await triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
+                        faceIndex = await triangleMeshes.getFaceIndex(
                                 meshIndex: meshIndex,
                                 index: idx / 3)
                 }
 
                 tHit = t
-                triangleHits += 1
+                //triangleHits += 1
 
                 interaction.valid = true
-                interaction.position = objectToWorld * pHit
-                interaction.normal = normalized(objectToWorld * normal)
-                interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
-                interaction.wo = normalized(objectToWorld * -ray.direction)
+                interaction.position = await objectToWorld * pHit
+                interaction.normal = await normalized(objectToWorld * normal)
+                interaction.shadingNormal = await normalized(objectToWorld * shadingNormal)
+                interaction.wo = await normalized(objectToWorld * -ray.direction)
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex
