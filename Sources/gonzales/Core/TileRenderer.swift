@@ -86,23 +86,24 @@ final class TileRenderer: Renderer {
         }
 
         @MainActor
-        private func doRenderTile(tile: Tile) async throws {
+        private func doRenderTile(tile: Tile) async throws -> Int {
                 if renderSynchronously {
                         try await renderSync(tile: tile)
                 } else {
                         await renderAsync(tile: tile)
                 }
-        }
-
-        private func renderTiles(tiles: [Tile]) async throws {
-                for tile in tiles {
-                        try await doRenderTile(tile: tile)
-                }
+                return 0
         }
 
         private func renderImage(bounds: Bounds2i) async throws {
                 let tiles = generateTiles(from: bounds)
-                try await renderTiles(tiles: tiles)
+                await withThrowingTaskGroup(of: Int.self) { group in
+                        for tile in tiles {
+                                group.addTask {
+                                        return try await self.doRenderTile(tile: tile)
+                                }
+                        }
+                }
         }
 
         @MainActor
@@ -110,7 +111,7 @@ final class TileRenderer: Renderer {
                 let timer = Timer("Rendering...")
                 await reporter.reset()
                 try await renderImage(bounds: bounds)
-                group.wait()
+                //group.wait()
                 try await camera.film.writeImages()
                 print("\n")
                 print(timer.elapsed)
@@ -118,15 +119,12 @@ final class TileRenderer: Renderer {
         }
 
         let camera: Camera
-        let group = DispatchGroup()
         let accelerator: Accelerator
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
-        let queue = DispatchQueue.global()
         let reporter: ProgressReporter
         let sampler: Sampler
         let scene: Scene
         let bounds: Bounds2i
-
         let tileSize: (Int, Int)
 }
