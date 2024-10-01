@@ -68,17 +68,16 @@ final class TileRenderer: Renderer {
                 await camera.film.add(samples: samples)
         }
 
-        private func doRenderTile(tile: Tile) async throws -> Int {
+        private func doRenderTile(tile: Tile) async throws {
                 try await self.renderAndMergeTile(tile: tile)
-                return 0
         }
 
         private func renderImage(bounds: Bounds2i) async throws {
                 let tiles = generateTiles(from: bounds)
-                await withThrowingTaskGroup(of: Int.self) { group in
+                await withThrowingTaskGroup(of: Void.self) { group in
                         for tile in tiles {
                                 group.addTask {
-                                        return try await self.doRenderTile(tile: tile)
+                                        try await self.doRenderTile(tile: tile)
                                 }
                         }
                 }
