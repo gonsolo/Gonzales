@@ -229,7 +229,7 @@ test_pbrt:
 xcode:
 	$(SWIFT) package generate-xcodeproj --xcconfig-overrides Config.xcconfig
 
-FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| egrep -v \.build | wc -l)
+FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| grep -Ev \.build | wc -l)
 LINES=$(shell wc -l $$(find Sources -name \*.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
@@ -261,7 +261,7 @@ memcheck: release
 	massif-visualizer $(MASSIF_OUT)
 
 # Record memory while rendering with:
-# while true; do ps aux|grep gonzales|egrep -v grep|awk '{print $5}' >> gonzales_memory; sleep 5; done
+# while true; do ps aux|grep gonzales|grep -Ev grep|awk '{print $5}' >> gonzales_memory; sleep 5; done
 
 flame:
 	perf script|  ../../src/FlameGraph/stackcollapse-perf.pl | swift-demangle | ../../src/FlameGraph/flamegraph.pl --width 10000 --height 48 > flame.svg
