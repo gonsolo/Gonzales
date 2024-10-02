@@ -1,8 +1,8 @@
 import Foundation
 
-struct AsciiWriter: ImageWriter {
+actor AsciiWriter {
 
-        func write(fileName: String, crop: Bounds2i, image: Image) throws {
+        func write(fileName: String, crop: Bounds2i, image: Image) async throws {
 
                 let resolution = crop.pMax - crop.pMin
                 var text = String(resolution.x) + " " + String(resolution.y) + "\n"
@@ -21,7 +21,7 @@ struct AsciiWriter: ImageWriter {
                 for y in crop.pMin.y..<crop.pMax.y {
                         for x in crop.pMin.x..<crop.pMax.x {
                                 let location = Point2I(x: x, y: y)
-                                let pixel = image.getPixel(atLocation: location)
+                                let pixel = await image.getPixel(atLocation: location)
                                 let px = x - crop.pMin.x
                                 let py = y - crop.pMin.y
                                 let index = py * resolution.x * 4 + px * 4

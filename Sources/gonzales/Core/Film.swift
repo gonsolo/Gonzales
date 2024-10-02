@@ -19,7 +19,6 @@ actor Film: Sendable {
                 self.crop = Bounds2i(
                         pMin: upperPoint2i(resolution * crop.pMin),
                         pMax: upperPoint2i(resolution * crop.pMax))
-                self.locker = Locker()
         }
 
         func getSampleBounds() -> Bounds2i {
@@ -27,46 +26,45 @@ actor Film: Sendable {
         }
 
         private func chooseWriter(name: String) throws -> ImageWriter {
+
                 if name.hasSuffix(".exr") {
-                        return OpenImageIOWriter()
+                        return ImageWriter.openImageIO(OpenImageIOWriter())
                 } else if name.hasSuffix(".ascii") {
-                        return AsciiWriter()
+                        return ImageWriter.ascii(AsciiWriter())
                 } else {
                         throw FilmError.unknownFileType(name: name)
                 }
         }
 
-        func writeImages() throws {
-                try writeImage(name: fileName, image: &image)
-                try writeImage(name: "albedo.exr", image: &albedoImage)
-                try writeImage(name: "normal.exr", image: &normalImage)
+        func writeImages() async throws {
+                try await writeImage(name: fileName, image: image)
+                try await writeImage(name: "albedo.exr", image: albedoImage)
+                try await writeImage(name: "normal.exr", image: normalImage)
         }
 
-        func writeImage(name: String, image: inout Image) throws {
-                try image.normalize()
+        func writeImage(name: String, image: Image) async throws {
+                try await image.normalize()
                 let imageWriter = try chooseWriter(name: name)
-                try imageWriter.write(fileName: name, crop: crop, image: image)
+                try await imageWriter.write(fileName: name, crop: crop, image: image)
         }
 
-        func add(samples: [Sample]) {
-                locker.locked {
-                        for sample in samples {
-                                add(
-                                        value: sample.light,
-                                        weight: sample.weight,
-                                        location: sample.location,
-                                        image: &image)
-                                add(
-                                        value: sample.albedo,
-                                        weight: sample.weight,
-                                        location: sample.location,
-                                        image: &albedoImage)
-                                add(
-                                        value: RgbSpectrum(from: sample.normal),
-                                        weight: sample.weight,
-                                        location: sample.location,
-                                        image: &normalImage)
-                        }
+        func add(samples: [Sample]) async {
+                for sample in samples {
+                        await add(
+                                value: sample.light,
+                                weight: sample.weight,
+                                location: sample.location,
+                                image: image)
+                        await add(
+                                value: sample.albedo,
+                                weight: sample.weight,
+                                location: sample.location,
+                                image: albedoImage)
+                        await add(
+                                value: RgbSpectrum(from: sample.normal),
+                                weight: sample.weight,
+                                location: sample.location,
+                                image: normalImage)
                 }
         }
 
@@ -104,11 +102,11 @@ actor Film: Sendable {
         func filterAndWrite(
                 sample: Point2F,
                 pixel: Point2I,
-                image: inout Image,
+                image: Image,
                 value: RgbSpectrum,
                 weight: FloatX
-        ) {
-                if isWithin(location: pixel, resolution: image.fullResolution) {
+        ) async {
+                if isWithin(location: pixel, resolution: await image.getResolution()) {
                         let pixelCenter = Point2F(
                                 x: FloatX(pixel.x) + 0.5,
                                 y: FloatX(pixel.y) + 0.5)
@@ -116,7 +114,7 @@ actor Film: Sendable {
                         if isWithin(location: relativeLocation, support: filter.support) {
                                 let color = filter.evaluate(atLocation: relativeLocation) * value
                                 let weight = filter.evaluate(atLocation: relativeLocation) * weight
-                                image.addPixel(
+                                await image.addPixel(
                                         withColor: color,
                                         withWeight: weight,
                                         atLocation: pixel)
@@ -124,23 +122,23 @@ actor Film: Sendable {
                 }
         }
 
-        private func add(value: RgbSpectrum, weight: FloatX, location: Point2F, image: inout Image) {
+        private func add(value: RgbSpectrum, weight: FloatX, location: Point2F, image: Image) async {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
                                 let pixelLocation = Point2I(x: x, y: y)
-                                filterAndWrite(
+                                await filterAndWrite(
                                         sample: location,
                                         pixel: pixelLocation,
-                                        image: &image,
+                                        image: image,
                                         value: value,
                                         weight: weight)
                         }
                 }
         }
 
-        func getResolution() -> Point2I {
-                return image.getResolution()
+        func getResolution() async -> Point2I {
+                return await image.getResolution()
         }
 
         private let name: String
@@ -150,5 +148,4 @@ actor Film: Sendable {
         var albedoImage: Image
         var normalImage: Image
         var crop: Bounds2i
-        let locker: Locker
 }

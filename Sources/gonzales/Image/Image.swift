@@ -4,7 +4,7 @@ enum ImageError: Error {
         case lock
 }
 
-struct Image {
+actor Image {
 
         init(resolution: Point2I) {
                 fullResolution = resolution
@@ -20,11 +20,11 @@ struct Image {
 
         }
 
-        mutating func normalize() throws {
+        func normalize() throws {
                 pixels = try pixels.map { return try $0.normalized() }
         }
 
-        mutating func addPixel(
+        func addPixel(
                 withColor color: RgbSpectrum,
                 withWeight weight: FloatX,
                 atLocation location: Point2I
