@@ -22,8 +22,6 @@ func handle(_ error: Error) {
                 print("MainError: \(error)")
         case is RenderError:
                 print("RenderError: \(error)")
-        case is ImageError:
-                print("ImageError \(error)")
         case is ParameterError:
                 switch error {
                 case ParameterError.missing(let parameter, let function):

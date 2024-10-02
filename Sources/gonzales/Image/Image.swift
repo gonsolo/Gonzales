@@ -1,9 +1,3 @@
-import Foundation  // DispatchSemaphore
-
-enum ImageError: Error {
-        case lock
-}
-
 actor Image {
 
         init(resolution: Point2I) {
