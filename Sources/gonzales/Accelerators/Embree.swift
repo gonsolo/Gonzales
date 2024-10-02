@@ -196,7 +196,7 @@ actor EmbreeAccelerator: EmbreeBase {
                         uvs = uvsOpt!
                 }
 
-                let uv = Point2F(
+                let uv = Point2f(
                         x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
                         y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
                 )

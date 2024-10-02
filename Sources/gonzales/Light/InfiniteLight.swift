@@ -70,13 +70,13 @@ final class InfiniteLight: Sendable {
                 return acos(clamp(value: v.z, low: -1, high: 1))
         }
 
-        private func directionToUV(direction: Vector) -> Point2F {
+        private func directionToUV(direction: Vector) -> Point2f {
                 let directionLight = normalized(worldToLight * direction)
                 let uv = equalAreaSphereToSquare(direction: directionLight)
                 return uv
         }
 
-        private func equalAreaSphereToSquare(direction: Vector) -> Point2F {
+        private func equalAreaSphereToSquare(direction: Vector) -> Point2f {
                 let x = abs(direction.x)
                 let y = abs(direction.y)
                 let z = abs(direction.z)
@@ -101,7 +101,7 @@ final class InfiniteLight: Sendable {
                 }
                 u = copysign(u, direction.x)
                 v = copysign(v, direction.y)
-                return Point2F(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
+                return Point2f(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
         }
 
         @MainActor

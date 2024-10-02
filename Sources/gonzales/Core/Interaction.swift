@@ -12,7 +12,7 @@ protocol Interaction: Sendable {
         var normal: Normal { get }
         var position: Point { get }
         var shadingNormal: Normal { get }
-        var uv: Point2F { get }
+        var uv: Point2f { get }
         var wo: Vector { get }
 }
 

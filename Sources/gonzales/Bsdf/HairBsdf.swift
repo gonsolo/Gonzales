@@ -299,7 +299,7 @@ struct HairBsdf: GlobalBsdf {
                 return (FloatX(bits.0) / FloatX(1 << 16), FloatX(bits.1) / FloatX(1 << 16))
         }
 
-        private func demux(_ u: Point2F) -> (FloatX, FloatX, FloatX, FloatX) {
+        private func demux(_ u: Point2f) -> (FloatX, FloatX, FloatX, FloatX) {
                 let a = demux(u[0])
                 let b = demux(u[1])
                 return (a.0, a.1, b.0, b.1)
@@ -311,7 +311,7 @@ struct HairBsdf: GlobalBsdf {
                 return clamp(value: x, low: a, high: b)
         }
 
-        func sampleLocal(wo: Vector, u: Point2F, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
+        func sampleLocal(wo: Vector, u: Point2f, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
                 RgbSpectrum, Vector, FloatX
         ) {
                 let sinThetaO = wo.x

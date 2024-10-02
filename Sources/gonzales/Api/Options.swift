@@ -86,14 +86,14 @@ class Options {
                         x /= 4
                         y /= 4
                 }
-                let resolution = Point2I(x: x, y: y)
+                let resolution = Point2i(x: x, y: y)
                 let fileName = try filmParameters.findString(called: "filename") ?? "gonzales.exr"
                 let crop = try filmParameters.findFloatXs(called: "cropwindow")
                 var cropWindow = Bounds2f()
                 if !crop.isEmpty {
                         guard crop.count == 4 else { throw OptionError.crop }
-                        cropWindow.pMin = Point2F(x: crop[0], y: crop[2])
-                        cropWindow.pMax = Point2F(x: crop[1], y: crop[3])
+                        cropWindow.pMin = Point2f(x: crop[0], y: crop[2])
+                        cropWindow.pMax = Point2f(x: crop[1], y: crop[3])
                 }
                 return Film(
                         name: fileName,

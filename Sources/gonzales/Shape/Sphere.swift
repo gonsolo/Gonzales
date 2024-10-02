@@ -154,7 +154,7 @@ final class Sphere: Shape {
                 let phiMax = 2 * FloatX.pi
                 let dpdu = Vector(x: -phiMax * pHit.y, y: phiMax * pHit.x, z: 0)
 
-                let uv = Point2F()
+                let uv = Point2f()
                 let localInteraction = SurfaceInteraction(
                         valid: true,
                         position: pHit,

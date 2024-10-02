@@ -20,7 +20,7 @@ struct MediumInteraction: Interaction {
         var normal = Normal()
         var position = Point()
         var shadingNormal = Normal()
-        var uv = Point2F()
+        var uv = Point2f()
         var wo = Vector()
 
         var phase: PhaseFunction = HenyeyGreenstein()

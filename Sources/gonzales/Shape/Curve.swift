@@ -197,7 +197,7 @@ final class Curve: Shape {
 
                         if !testTangent(1, 0) { return nothing }
                         if !testTangent(2, 3) { return nothing }
-                        let segmentDirection: Vector2 = Point2F(points[3]) - Point2F(points[0])
+                        let segmentDirection: Vector2 = Point2f(points[3]) - Point2f(points[0])
                         let denominator = lengthSquared(segmentDirection)
                         if denominator == 0 { return nothing }
                         let w = dot(-Vector2F(points[0]), segmentDirection) / denominator
@@ -227,7 +227,7 @@ final class Curve: Shape {
                                 normalized(Vector(x: -dpduPlane.y, y: dpduPlane.x, z: 0)) * hitWidth
                         let dpdv = rayToObject * dpdvPlane
                         let normal = Normal(normalized(cross(dpdu, dpdv)))
-                        let uvHit = Point2F(x: nu, y: v)
+                        let uvHit = Point2f(x: nu, y: v)
                         let pHit = ray.getPointFor(parameter: tHit)
                         let localInteraction = SurfaceInteraction(
                                 position: pHit,

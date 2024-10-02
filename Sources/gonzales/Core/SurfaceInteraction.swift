@@ -28,7 +28,7 @@ struct SurfaceInteraction: Interaction, Sendable {
         var shadingNormal = Normal()
         var wo = Vector()
         var dpdu = Vector()
-        var uv = Point2F()
+        var uv = Point2f()
         var faceIndex = 0
         var areaLight: AreaLight? = nil
         var material: MaterialIndex = -1

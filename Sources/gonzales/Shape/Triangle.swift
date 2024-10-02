@@ -179,12 +179,12 @@ struct Triangle: Shape {
 
         @inline(__always)
         func computeUVHit(b0: FloatX, b1: FloatX, b2: FloatX, uv: (Vector2F, Vector2F, Vector2F))
-                -> Point2F
+                -> Point2f
         {
-                let uvHit0: Point2F = b0 * Point2F(from: uv.0)
-                let uvHit1: Point2F = b1 * Point2F(from: uv.1)
-                let uvHit2: Point2F = b2 * Point2F(from: uv.2)
-                let uvHit: Point2F = uvHit0 + uvHit1 + uvHit2
+                let uvHit0: Point2f = b0 * Point2f(from: uv.0)
+                let uvHit1: Point2f = b1 * Point2f(from: uv.1)
+                let uvHit2: Point2f = b2 * Point2f(from: uv.2)
+                let uvHit: Point2f = uvHit0 + uvHit1 + uvHit2
                 return uvHit
         }
 
@@ -372,9 +372,9 @@ struct Triangle: Shape {
                 return (p0, p1, p2)
         }
 
-        private func uniformSampleTriangle(u: TwoRandomVariables) -> Point2F {
+        private func uniformSampleTriangle(u: TwoRandomVariables) -> Point2f {
                 let su0 = u.0.squareRoot()
-                return Point2F(x: 1 - su0, y: u.1 * su0)
+                return Point2f(x: 1 - su0, y: u.1 * su0)
         }
 
         @MainActor

@@ -3,5 +3,5 @@ struct Sample {
         var albedo: RgbSpectrum
         var normal: Normal
         var weight: FloatX
-        var location: Point2F
+        var location: Point2f
 }

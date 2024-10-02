@@ -42,10 +42,10 @@ extension Bounds2: CustomStringConvertible {
 
 extension Bounds2i: Sequence {
 
-        public typealias Element = Point2I
+        public typealias Element = Point2i
 
         public struct Iterator: IteratorProtocol {
-                public typealias Element = Point2I
+                public typealias Element = Point2i
 
                 init(_ bounds: Bounds2i) {
                         self.bounds = bounds
@@ -54,12 +54,12 @@ extension Bounds2i: Sequence {
                         self.dy = bounds.pMax.y - bounds.pMin.y
                 }
 
-                public mutating func next() -> Point2I? {
+                public mutating func next() -> Point2i? {
                         guard times < dx * dy else {
                                 return nil
                         }
                         times = times + 1
-                        return Point2I(
+                        return Point2i(
                                 x: bounds.pMin.x + times % dx,
                                 y: bounds.pMin.y + times / dx)
                 }

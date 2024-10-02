@@ -251,11 +251,11 @@ final class Parser {
                 return Point(xyz: threeFloats)
         }
 
-        private func parsePoint2() throws -> Point2F? {
+        private func parsePoint2() throws -> Point2f? {
                 guard let twoFloats = try parseTwoFloatXs() else {
                         return nil
                 }
-                return Point2F(xy: twoFloats)
+                return Point2f(xy: twoFloats)
         }
 
         private func parsePoints() throws -> [Point] {

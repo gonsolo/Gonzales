@@ -20,7 +20,7 @@ actor AsciiWriter {
 
                 for y in crop.pMin.y..<crop.pMax.y {
                         for x in crop.pMin.x..<crop.pMax.x {
-                                let location = Point2I(x: x, y: y)
+                                let location = Point2i(x: x, y: y)
                                 let pixel = await image.getPixel(atLocation: location)
                                 let px = x - crop.pMin.x
                                 let py = y - crop.pMin.y

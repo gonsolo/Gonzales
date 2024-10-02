@@ -14,7 +14,7 @@ struct GaussianFilter: Filter {
                         * exp(-square(x - mu) / (2 * sigma * sigma))
         }
 
-        func evaluate(atLocation point: Point2F) -> FloatX {
+        func evaluate(atLocation point: Point2f) -> FloatX {
                 let x = max(0, gaussian(x: point.x, sigma: sigma))
                 let y = max(0, gaussian(x: point.y, sigma: sigma))
                 return x * y

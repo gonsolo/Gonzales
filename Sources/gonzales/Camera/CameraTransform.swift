@@ -4,7 +4,7 @@ struct CameraTransform {
         public init(
                 cameraToScreen: Transform,
                 screenWindow: Bounds2f,
-                resolution: Point2I
+                resolution: Point2i
         )
                 throws
         {

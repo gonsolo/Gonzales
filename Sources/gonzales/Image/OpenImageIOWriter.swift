@@ -15,7 +15,7 @@ actor OpenImageIOWriter {
                 buffer = [Float](repeating: 0, count: resolution.x * resolution.y * 4)
                 for y in crop.pMin.y..<crop.pMax.y {
                         for x in crop.pMin.x..<crop.pMax.x {
-                                let location = Point2I(x: x, y: y)
+                                let location = Point2i(x: x, y: y)
                                 let pixel = await image.getPixel(atLocation: location)
                                 let px = x - crop.pMin.x
                                 let py = y - crop.pMin.y
@@ -28,7 +28,7 @@ actor OpenImageIOWriter {
 
         func write(fileName: String, image: Image) async throws {
                 let crop = await Bounds2i(
-                        pMin: Point2I(x: 0, y: 0),
+                        pMin: Point2i(x: 0, y: 0),
                         pMax: image.getResolution())
                 try await write(fileName: fileName, crop: crop, image: image)
         }

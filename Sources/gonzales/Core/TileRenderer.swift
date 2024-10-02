@@ -22,7 +22,7 @@ final class TileRenderer: Renderer {
                 let sampleBounds = await camera.getSampleBounds()
                 if await singleRay {
                         let point = await sampleBounds.pMin + singleRayCoordinate
-                        bounds = Bounds2i(pMin: point, pMax: point + Point2I(x: 1, y: 1))
+                        bounds = Bounds2i(pMin: point, pMax: point + Point2i(x: 1, y: 1))
                 } else {
                         bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
                 }
@@ -35,8 +35,8 @@ final class TileRenderer: Renderer {
                 while y < bounds.pMax.y {
                         var x = bounds.pMin.x
                         while x < bounds.pMax.x {
-                                let pMin = Point2I(x: x, y: y)
-                                let pMax = Point2I(
+                                let pMin = Point2i(x: x, y: y)
+                                let pMax = Point2i(
                                         x: min(x + tileSize.0, bounds.pMax.x),
                                         y: min(y + tileSize.1, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)

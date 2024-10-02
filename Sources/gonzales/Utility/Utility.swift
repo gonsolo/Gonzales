@@ -16,7 +16,7 @@ var verbose = false
 var singleRay = false
 
 @MainActor
-var singleRayCoordinate = Point2I()
+var singleRayCoordinate = Point2i()
 
 @MainActor
 var justParse = false

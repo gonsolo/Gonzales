@@ -4,10 +4,10 @@ actor Film: Sendable {
                 case unknownFileType(name: String)
         }
 
-        init(name: String, resolution: Point2I, fileName: String, filter: Filter, crop: Bounds2f) {
+        init(name: String, resolution: Point2i, fileName: String, filter: Filter, crop: Bounds2f) {
 
-                func upperPoint2i(_ p: Point2F) -> Point2I {
-                        return Point2I(x: Int(p.x.rounded(.up)), y: Int(p.y.rounded(.up)))
+                func upperPoint2i(_ p: Point2f) -> Point2i {
+                        return Point2i(x: Int(p.x.rounded(.up)), y: Int(p.y.rounded(.up)))
                 }
 
                 self.name = name
@@ -78,11 +78,11 @@ actor Film: Sendable {
                 return (min, max)
         }
 
-        private func generateBound(location: Point2F, radius: Vector2F) -> Bounds2i {
+        private func generateBound(location: Point2f, radius: Vector2F) -> Bounds2i {
                 let (xmin, xmax) = getRasterBounds(from: location.x, delta: radius.x)
                 let (ymin, ymax) = getRasterBounds(from: location.y, delta: radius.y)
-                let pMin = Point2I(x: xmin, y: ymin)
-                let pMax = Point2I(x: xmax, y: ymax)
+                let pMin = Point2i(x: xmin, y: ymin)
+                let pMax = Point2i(x: xmax, y: ymax)
                 return Bounds2i(pMin: pMin, pMax: pMax)
         }
 
@@ -100,17 +100,17 @@ actor Film: Sendable {
         }
 
         func filterAndWrite(
-                sample: Point2F,
-                pixel: Point2I,
+                sample: Point2f,
+                pixel: Point2i,
                 image: Image,
                 value: RgbSpectrum,
                 weight: FloatX
         ) async {
                 if isWithin(location: pixel, resolution: await image.getResolution()) {
-                        let pixelCenter = Point2F(
+                        let pixelCenter = Point2f(
                                 x: FloatX(pixel.x) + 0.5,
                                 y: FloatX(pixel.y) + 0.5)
-                        let relativeLocation = Point2F(from: sample - pixelCenter)
+                        let relativeLocation = Point2f(from: sample - pixelCenter)
                         if isWithin(location: relativeLocation, support: filter.support) {
                                 let color = filter.evaluate(atLocation: relativeLocation) * value
                                 let weight = filter.evaluate(atLocation: relativeLocation) * weight
@@ -122,11 +122,11 @@ actor Film: Sendable {
                 }
         }
 
-        private func add(value: RgbSpectrum, weight: FloatX, location: Point2F, image: Image) async {
+        private func add(value: RgbSpectrum, weight: FloatX, location: Point2f, image: Image) async {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
-                                let pixelLocation = Point2I(x: x, y: y)
+                                let pixelLocation = Point2i(x: x, y: y)
                                 await filterAndWrite(
                                         sample: location,
                                         pixel: pixelLocation,
@@ -137,7 +137,7 @@ actor Film: Sendable {
                 }
         }
 
-        func getResolution() async -> Point2I {
+        func getResolution() async -> Point2i {
                 return await image.getResolution()
         }
 

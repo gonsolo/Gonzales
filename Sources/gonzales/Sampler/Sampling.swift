@@ -1,10 +1,10 @@
 import Foundation
 
-func concentricSampleDisk(u: TwoRandomVariables) -> Point2F {
-        let u = Point2F(x: u.0, y: u.1)
+func concentricSampleDisk(u: TwoRandomVariables) -> Point2f {
+        let u = Point2f(x: u.0, y: u.1)
         let uOffset = 2.0 * u - Vector2F(x: 1, y: 1)
         if uOffset.x == 0 && uOffset.y == 0 {
-                return Point2F()
+                return Point2f()
         }
         var theta: FloatX = 0.0
         var r: FloatX = 0.0
@@ -15,7 +15,7 @@ func concentricSampleDisk(u: TwoRandomVariables) -> Point2F {
                 r = uOffset.y
                 theta = (FloatX.pi / 2.0) - (FloatX.pi / 4.0) * (uOffset.x / uOffset.y)
         }
-        return r * Point2F(x: cos(theta), y: sin(theta))
+        return r * Point2f(x: cos(theta), y: sin(theta))
 }
 
 func cosineSampleHemisphere(u: TwoRandomVariables) -> Vector {

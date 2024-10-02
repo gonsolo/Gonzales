@@ -60,14 +60,14 @@ extension Point2 where T: BinaryInteger {
         }
 }
 
-public typealias Point2I = Point2<Int>
-extension Point2I: GetIntXY {}
-public typealias Point2F = Point2<FloatX>
-extension Point2F: GetFloatXY {}
+public typealias Point2i = Point2<Int>
+extension Point2i: GetIntXY {}
+public typealias Point2f = Point2<FloatX>
+extension Point2f: GetFloatXY {}
 
 extension Point2 where T: BinaryInteger {
 
-        init(from: Point2I) {
+        init(from: Point2i) {
                 self.init(
                         x: T(from.x),
                         y: T(from.y))
@@ -79,7 +79,7 @@ extension Point2 where T: BinaryInteger {
                         y: T(from.y))
         }
 
-        init(from: Point2F) {
+        init(from: Point2f) {
                 self.init(
                         x: T(from.x),
                         y: T(from.y))
@@ -93,19 +93,19 @@ extension Point2 where T: BinaryInteger {
 }
 
 extension Point2 where T: FloatingPoint {
-        init(from: Point2I) {
+        init(from: Point2i) {
                 self.init(
                         x: T(from.x),
                         y: T(from.y))
         }
 }
 
-func * (i: Point2I, f: Point2F) -> Point2F {
-        return Point2F(from: i) * f
+func * (i: Point2i, f: Point2f) -> Point2f {
+        return Point2f(from: i) * f
 }
 
-func * (a: Point2F, b: Point2F) -> Point2F {
-        return Point2F(x: a.x * b.x, y: a.y * b.y)
+func * (a: Point2f, b: Point2f) -> Point2f {
+        return Point2f(x: a.x * b.x, y: a.y * b.y)
 }
 
 extension Point2 where T: FloatingPoint {

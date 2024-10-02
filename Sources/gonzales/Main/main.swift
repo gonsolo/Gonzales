@@ -61,7 +61,7 @@ func parseArguments() throws -> String {
                         guard let x = Int(sx) else { throw MainError.format }
                         guard let y = Int(sy) else { throw MainError.format }
                         singleRay = true
-                        singleRayCoordinate = Point2I(x: x, y: y)
+                        singleRayCoordinate = Point2i(x: x, y: y)
                 case "--parse":
                         justParse = true
                 case "--ptexmem":
