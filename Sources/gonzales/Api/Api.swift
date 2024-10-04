@@ -15,11 +15,11 @@ func makeAccelerator(primitives: [Boundable & Intersectable]) async throws -> Ac
                 let boundingHierarchy = try builder.getBoundingHierarchy()
                 let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
                 return accelerator
-        case "embree":
-                let builder = await EmbreeBuilder(primitives: primitives)
-                let embree = builder.getAccelerator()
-                let accelerator = Accelerator.embree(embree)
-                return accelerator
+        //case "embree":
+        //        let builder = await EmbreeBuilder(primitives: primitives)
+        //        let embree = builder.getAccelerator()
+        //        let accelerator = Accelerator.embree(embree)
+        //        return accelerator
         //case "optix":
         //        let optix = try Optix(primitives: primitives)
         //        let accelerator = Accelerator.optix(optix)
@@ -291,7 +291,8 @@ struct Api {
                 options.objects[name] = [accelerator]
                 let index = addAccelerator(accelerator: accelerator)
                 instance = TransformedPrimitive(
-                        acceleratorIndex: index,
+                        //acceleratorIndex: index,
+                        accelerator: accelerators[index],
                         transform: currentTransform)
                 options.primitives.append(instance)
         }

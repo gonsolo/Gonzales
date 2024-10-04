@@ -174,8 +174,8 @@ class Options {
                 switch accelerator {
                 case .boundingHierarchy:
                         break
-                case .embree:
-                        break
+                //case .embree:
+                //        break
                 //case .optix:
                 //        let resolution = camera.film.image.fullResolution
                 //        tileSize.0 = resolution.x

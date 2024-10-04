@@ -112,17 +112,16 @@ final class Sphere: Shape {
                 return (ta[0], ta[1])
         }
 
-        @MainActor
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
+        ) throws {
                 let empty = { (line: Int) in
                         return
                 }
 
-                let ray = await worldToObject * worldRay
+                let ray = worldToObject * worldRay
                 let ox = ray.origin.x
                 let oy = ray.origin.y
                 let oz = ray.origin.z

@@ -12,12 +12,11 @@ final class EmbreeCurve: Shape {
                 numberOfCurves += 1
         }
 
-        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
+        ) throws {
                 unimplemented()
         }
 

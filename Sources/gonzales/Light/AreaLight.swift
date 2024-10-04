@@ -47,14 +47,13 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return await shape.objectBound()
         }
 
-        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
+        ) throws {
                 if alpha == 0 { return }
-                try await shape.intersect(
+                try shape.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)

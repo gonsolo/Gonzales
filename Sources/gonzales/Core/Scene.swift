@@ -41,7 +41,7 @@ struct Scene: Sendable {
                 if skip {
                         return
                 }
-                try await accelerators[acceleratorIndex].intersect(
+                try accelerators[acceleratorIndex].intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)

@@ -57,7 +57,7 @@ extension EmbreeBase {
         var rtcDevice: OpaquePointer?
 }
 
-actor EmbreeAccelerator: EmbreeBase {
+final class EmbreeAccelerator: EmbreeBase {
 
         init(
                 bounds: Bounds3f,
@@ -91,13 +91,12 @@ actor EmbreeAccelerator: EmbreeBase {
                 return bounds
         }
 
-        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
-                try await intersect(
+        ) throws {
+                try intersect(
                         originX: ray.origin.x,
                         originY: ray.origin.y,
                         originZ: ray.origin.z,
@@ -117,118 +116,117 @@ actor EmbreeAccelerator: EmbreeBase {
                 directionZ: FloatX,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
+        ) throws {
+                //let empty = { (line: Int) in
+                //        //print("No triangle intersection at line ", line)
+                //        return
+                //}
 
-                let empty = { (line: Int) in
-                        //print("No triangle intersection at line ", line)
-                        return
-                }
+                //var tout: FloatX = 0
+                //var geomID: UInt32 = 0
 
-                var tout: FloatX = 0
-                var geomID: UInt32 = 0
+                //let rtcInvalidGeometryId = UInt32.max
 
-                let rtcInvalidGeometryId = UInt32.max
+                //let rtcRay = RTCRay(
+                //        org_x: originX,
+                //        org_y: originY,
+                //        org_z: originZ,
+                //        tnear: 0,
+                //        dir_x: directionX,
+                //        dir_y: directionY,
+                //        dir_z: directionZ,
+                //        time: 0,
+                //        tfar: tHit,
+                //        mask: 0,
+                //        id: 0,
+                //        flags: 0)
+                //let rtcHit = RTCHit(
+                //        Ng_x: 0,
+                //        Ng_y: 0,
+                //        Ng_z: 0,
+                //        u: 0,
+                //        v: 0,
+                //        primID: 0,
+                //        geomID: rtcInvalidGeometryId,
+                //        instID: rtcInvalidGeometryId,
+                //        instPrimID: 0)
 
-                let rtcRay = RTCRay(
-                        org_x: originX,
-                        org_y: originY,
-                        org_z: originZ,
-                        tnear: 0,
-                        dir_x: directionX,
-                        dir_y: directionY,
-                        dir_z: directionZ,
-                        time: 0,
-                        tfar: tHit,
-                        mask: 0,
-                        id: 0,
-                        flags: 0)
-                let rtcHit = RTCHit(
-                        Ng_x: 0,
-                        Ng_y: 0,
-                        Ng_z: 0,
-                        u: 0,
-                        v: 0,
-                        primID: 0,
-                        geomID: rtcInvalidGeometryId,
-                        instID: rtcInvalidGeometryId,
-                        instPrimID: 0)
+                //var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
+                //rtcIntersect1(scene.rtcScene, &rayhit, nil)
 
-                var rayhit = RTCRayHit(ray: rtcRay, hit: rtcHit)
-                rtcIntersect1(scene.rtcScene, &rayhit, nil)
+                //guard rayhit.hit.geomID != rtcInvalidGeometryId else {
+                //        return empty(#line)
+                //}
 
-                guard rayhit.hit.geomID != rtcInvalidGeometryId else {
-                        return empty(#line)
-                }
+                //tout = rayhit.ray.tfar
+                //geomID = rayhit.hit.geomID
 
-                tout = rayhit.ray.tfar
-                geomID = rayhit.hit.geomID
+                //var scene = self
+                //if rayhit.hit.instID != rtcInvalidGeometryId {
+                //        guard let acceleratorIndex = instanceMap[rayhit.hit.instID] else {
+                //                embreeError("No scene in instanceMap, instID: \(rayhit.hit.instID)")
+                //        }
+                //        let accelerator = await accelerators[acceleratorIndex]
+                //        switch accelerator {
+                //        case .embree(let embree):
+                //                scene = embree
+                //        default:
+                //                fatalError("Embree expected!")
+                //        }
+                //}
 
-                var scene = self
-                if rayhit.hit.instID != rtcInvalidGeometryId {
-                        guard let acceleratorIndex = instanceMap[rayhit.hit.instID] else {
-                                embreeError("No scene in instanceMap, instID: \(rayhit.hit.instID)")
-                        }
-                        let accelerator = await accelerators[acceleratorIndex]
-                        switch accelerator {
-                        case .embree(let embree):
-                                scene = embree
-                        default:
-                                fatalError("Embree expected!")
-                        }
-                }
+                //if let areaLight = await scene.areaLights[geomID] {
+                //        if areaLight.alpha == 0 {
+                //                return empty(#line)
+                //        }
+                //}
 
-                if let areaLight = await scene.areaLights[geomID] {
-                        if areaLight.alpha == 0 {
-                                return empty(#line)
-                        }
-                }
+                //let bary1 = rayhit.hit.u
+                //let bary2 = rayhit.hit.v
+                //let bary0 = 1 - bary1 - bary2
+                //var uvs = (Vector2F(), Vector2F(), Vector2F())
+                //let uvsOpt = await scene.triangleUVs[geomID]
+                //if uvsOpt == nil {
+                //        //let message = "TriangleUVs is nil: \(geomID)"
+                //        //embreeError(message)
+                //        //message += " in scene \(String(describing: rtcScene))"
+                //} else {
+                //        uvs = uvsOpt!
+                //}
 
-                let bary1 = rayhit.hit.u
-                let bary2 = rayhit.hit.v
-                let bary0 = 1 - bary1 - bary2
-                var uvs = (Vector2F(), Vector2F(), Vector2F())
-                let uvsOpt = await scene.triangleUVs[geomID]
-                if uvsOpt == nil {
-                        //let message = "TriangleUVs is nil: \(geomID)"
-                        //embreeError(message)
-                        //message += " in scene \(String(describing: rtcScene))"
-                } else {
-                        uvs = uvsOpt!
-                }
+                //let uv = Point2f(
+                //        x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
+                //        y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
+                //)
+                //interaction.valid = true
+                //interaction.position.x = originX + tout * directionX
+                //interaction.position.y = originY + tout * directionY
+                //interaction.position.z = originZ + tout * directionZ
+                //interaction.normal = normalized(
+                //        Normal(
+                //                x: rayhit.hit.Ng_x,
+                //                y: rayhit.hit.Ng_y,
+                //                z: rayhit.hit.Ng_z))
+                //interaction.shadingNormal = interaction.normal
+                //interaction.wo.x = -directionX
+                //interaction.wo.y = -directionY
+                //interaction.wo.z = -directionZ
+                //interaction.uv = uv
 
-                let uv = Point2f(
-                        x: bary0 * uvs.0.x + bary1 * uvs.1.x + bary2 * uvs.2.x,
-                        y: bary0 * uvs.0.y + bary1 * uvs.1.y + bary2 * uvs.2.y
-                )
-                interaction.valid = true
-                interaction.position.x = originX + tout * directionX
-                interaction.position.y = originY + tout * directionY
-                interaction.position.z = originZ + tout * directionZ
-                interaction.normal = normalized(
-                        Normal(
-                                x: rayhit.hit.Ng_x,
-                                y: rayhit.hit.Ng_y,
-                                z: rayhit.hit.Ng_z))
-                interaction.shadingNormal = interaction.normal
-                interaction.wo.x = -directionX
-                interaction.wo.y = -directionY
-                interaction.wo.z = -directionZ
-                interaction.uv = uv
+                //let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
+                //interaction.dpdu = dpdu
 
-                let (dpdu, _) = makeCoordinateSystem(from: Vector(normal: interaction.normal))
-                interaction.dpdu = dpdu
-
-                interaction.faceIndex = 0  // TODO
-                if let areaLight = await scene.areaLights[geomID] {
-                        interaction.areaLight = areaLight
-                }
-                if let material = await scene.materials[geomID] {
-                        interaction.material = material
-                }
-                if let mediumInterface = await scene.mediumInterfaces[geomID] {
-                        interaction.mediumInterface = mediumInterface
-                }
-                tHit = tout
+                //interaction.faceIndex = 0  // TODO
+                //if let areaLight = await scene.areaLights[geomID] {
+                //        interaction.areaLight = areaLight
+                //}
+                //if let material = await scene.materials[geomID] {
+                //        interaction.material = material
+                //}
+                //if let mediumInterface = await scene.mediumInterfaces[geomID] {
+                //        interaction.mediumInterface = mediumInterface
+                //}
+                //tHit = tout
         }
 
         @MainActor
@@ -283,89 +281,90 @@ actor EmbreeAccelerator: EmbreeBase {
 
         @MainActor
         private func addPrimitives(primitives: [Boundable & Intersectable]) async {
-                for primitive in primitives {
-                        switch primitive {
-                        case let geometricPrimitive as GeometricPrimitive:
-                                setIDs(id: geomID, primitive: geometricPrimitive)
-                                await setBound(primitive: geometricPrimitive)
-                                switch geometricPrimitive.shape {
-                                case let curve as EmbreeCurve:
-                                        geometry(curve: curve, geomID: geomID)
-                                case let triangle as Triangle:
-                                        geometry(triangle: triangle, geomID: geomID)
-                                case let sphere as Sphere:
-                                        geometry(sphere: sphere, geomID: geomID)
-                                case let disk as Disk:
-                                        _ = disk
-                                        warnOnce("Ignoring disk!")
-                                default:
-                                        var message = "Unknown shape in geometric primitive: "
-                                        message += "\(geometricPrimitive.shape)"
-                                        embreeError(message)
-                                }
-                        case let areaLight as AreaLight:
-                                switch areaLight.shape {
-                                case let triangle as Triangle:
-                                        geometry(triangle: triangle, geomID: geomID)
-                                        bounds = union(first: bounds, second: triangle.worldBound())
-                                        areaLights[geomID] = areaLight
-                                case let disk as Disk:
-                                        _ = disk
-                                        warnOnce("Ignoring disk in area light!")
-                                case let sphere as Sphere:
-                                        _ = sphere
-                                        warnOnce("Ignoring sphere in area light!")
-                                default:
-                                        embreeError("Unknown shape in AreaLight.")
-                                }
-                        case let transformedPrimitive as TransformedPrimitive:
-                                let acceleratorIndex = transformedPrimitive.acceleratorIndex
-                                let accelerator = accelerators[acceleratorIndex]
-                                var embreeAccelerator: EmbreeAccelerator
-                                switch accelerator {
-                                case .embree(let embree):
-                                        embreeAccelerator = embree
-                                case .boundingHierarchy:
-                                        embreeError("Embree accelerator expected!")
-                                //case .optix:
-                                //        embreeError("Embree accelerator expected!")
-                                }
-                                let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
-                                rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
-                                rtcSetGeometryTimeStepCount(instance, 1)
+                //for primitive in primitives {
+                //        switch primitive {
+                //        case let geometricPrimitive as GeometricPrimitive:
+                //                setIDs(id: geomID, primitive: geometricPrimitive)
+                //                await setBound(primitive: geometricPrimitive)
+                //                switch geometricPrimitive.shape {
+                //                case let curve as EmbreeCurve:
+                //                        geometry(curve: curve, geomID: geomID)
+                //                case let triangle as Triangle:
+                //                        geometry(triangle: triangle, geomID: geomID)
+                //                case let sphere as Sphere:
+                //                        geometry(sphere: sphere, geomID: geomID)
+                //                case let disk as Disk:
+                //                        _ = disk
+                //                        warnOnce("Ignoring disk!")
+                //                default:
+                //                        var message = "Unknown shape in geometric primitive: "
+                //                        message += "\(geometricPrimitive.shape)"
+                //                        embreeError(message)
+                //                }
+                //        case let areaLight as AreaLight:
+                //                switch areaLight.shape {
+                //                case let triangle as Triangle:
+                //                        geometry(triangle: triangle, geomID: geomID)
+                //                        bounds = union(first: bounds, second: triangle.worldBound())
+                //                        areaLights[geomID] = areaLight
+                //                case let disk as Disk:
+                //                        _ = disk
+                //                        warnOnce("Ignoring disk in area light!")
+                //                case let sphere as Sphere:
+                //                        _ = sphere
+                //                        warnOnce("Ignoring sphere in area light!")
+                //                default:
+                //                        embreeError("Unknown shape in AreaLight.")
+                //                }
+                //        case let transformedPrimitive as TransformedPrimitive:
+                //                //let acceleratorIndex = transformedPrimitive.acceleratorIndex
+                //                //let accelerator = accelerators[acceleratorIndex]
+                //                let accelerator = transformedPrimitive.accelerator
+                //                var embreeAccelerator: EmbreeAccelerator
+                //                switch accelerator {
+                //                //case .embree(let embree):
+                //                //        embreeAccelerator = embree
+                //                case .boundingHierarchy:
+                //                        embreeError("Embree accelerator expected!")
+                //                //case .optix:
+                //                //        embreeError("Embree accelerator expected!")
+                //                }
+                //                let instance = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_INSTANCE)
+                //                rtcSetGeometryInstancedScene(instance, embreeAccelerator.scene.rtcScene)
+                //                rtcSetGeometryTimeStepCount(instance, 1)
 
-                                rtcAttachGeometryByID(scene.rtcScene, instance, geomID)
+                //                rtcAttachGeometryByID(scene.rtcScene, instance, geomID)
 
-                                instanceMap[geomID] = acceleratorIndex
+                //                instanceMap[geomID] = acceleratorIndex
 
-                                rtcReleaseGeometry(instance)
+                //                rtcReleaseGeometry(instance)
 
-                                let transformMatrix = transformedPrimitive.transform.getMatrix()
-                                let transposed = transformMatrix.transpose()
-                                let xfm = transposed.backing.m2
+                //                let transformMatrix = transformedPrimitive.transform.getMatrix()
+                //                let transposed = transformMatrix.transpose()
+                //                let xfm = transposed.backing.m2
 
-                                let timeStep: UInt32 = 0
-                                rtcSetGeometryTransform(
-                                        instance,
-                                        timeStep,
-                                        RTC_FORMAT_FLOAT4X4_COLUMN_MAJOR,
-                                        xfm)
+                //                let timeStep: UInt32 = 0
+                //                rtcSetGeometryTransform(
+                //                        instance,
+                //                        timeStep,
+                //                        RTC_FORMAT_FLOAT4X4_COLUMN_MAJOR,
+                //                        xfm)
 
-                                rtcCommitGeometry(instance)
-                        //case let accelerator as Accelerator:
-                        //        print("Accelerator")
-                        //        switch accelerator {
-                        //        case .embree:
-                        //                print("Embree")
-                        //        case .boundingHierarchy:
-                        //                print("Bounding hierarchy")
-                        //        }
-                        default:
-                                embreeError("Unknown primitive \(primitive).")
-                        }
-                        geomID += 1
-                }
-                rtcCommitScene(scene.rtcScene)
+                //                rtcCommitGeometry(instance)
+                //        //case let accelerator as Accelerator:
+                //        //        print("Accelerator")
+                //        //        switch accelerator {
+                //        //        case .embree:
+                //        //                print("Embree")
+                //        //        case .boundingHierarchy:
+                //        //                print("Bounding hierarchy")
+                //        //        }
+                //        default:
+                //                embreeError("Unknown primitive \(primitive).")
+                //        }
+                //        geomID += 1
+                //}
+                //rtcCommitScene(scene.rtcScene)
         }
 
         func sizeInBytes<Key, Value>(of dictionary: [Key: Value]) -> Int {

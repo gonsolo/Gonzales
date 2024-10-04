@@ -128,12 +128,11 @@ func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
 
 extension Bounds3 where T == FloatX {
 
-        @MainActor
-        static var intersections = 0
+        //@MainActor
+        //static var intersections = 0
 
-        @MainActor
         func intersects(ray: Ray, tHit: FloatX) -> Bool {
-                Self.intersections += 1
+                //Self.intersections += 1
                 var t0: FloatX = 0.0
                 var t1 = tHit
                 for i in 0..<3 {
@@ -156,7 +155,7 @@ extension Bounds3 where T == FloatX {
         static func statistics() {
                 print("  Bounds3:")
                 print("    Generated:\t\t\t\t\t\t\t\t\(counter)")
-                print("    Intersections:\t\t\t\t\t\t\t\(intersections)")
+                //print("    Intersections:\t\t\t\t\t\t\t\(intersections)")
         }
 }
 

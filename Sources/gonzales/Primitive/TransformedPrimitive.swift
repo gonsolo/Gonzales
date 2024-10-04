@@ -2,20 +2,23 @@ import Foundation
 
 final class TransformedPrimitive: Boundable, Intersectable, Sendable {
 
-        init(acceleratorIndex: AcceleratorIndex, transform: Transform) {
-                self.acceleratorIndex = acceleratorIndex
+        init(
+                //acceleratorIndex: AcceleratorIndex,
+                accelerator: Accelerator,
+                transform: Transform) {
+                //self.acceleratorIndex = acceleratorIndex
+                self.accelerator = accelerator
                 self.transform = transform
         }
 
-        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
+        ) throws {
                 let localRay = transform.inverse * ray
                 // TODO: transform tHit?
-                try await accelerators[acceleratorIndex].intersect(
+                try accelerator.intersect(
                         ray: localRay,
                         tHit: &tHit,
                         interaction: &interaction)
@@ -27,7 +30,7 @@ final class TransformedPrimitive: Boundable, Intersectable, Sendable {
 
         @MainActor
         func worldBound() -> Bounds3f {
-                let bound = transform * accelerators[acceleratorIndex].worldBound()
+                let bound = transform * accelerator.worldBound()
                 return bound
         }
 
@@ -35,6 +38,7 @@ final class TransformedPrimitive: Boundable, Intersectable, Sendable {
                 unimplemented()
         }
 
-        let acceleratorIndex: AcceleratorIndex
+        //let acceleratorIndex: AcceleratorIndex
+        let accelerator: Accelerator
         let transform: Transform
 }
