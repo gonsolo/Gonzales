@@ -163,10 +163,6 @@ struct TriangleMeshes {
 @MainActor
 var triangleMeshBuilder = TriangleMeshBuilder()
 
-//var triangleMeshes = TriangleMeshes(meshes: triangleMeshBuilder.getMeshes())
-//@MainActor
-//var triangleMeshes = TriangleMeshes()
-
 struct Triangle: Shape {
 
         @MainActor
@@ -536,12 +532,14 @@ func createTriangleMesh(
                 faceIndices: faceIndices)
 
         let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
-
-        // TODO: This is a hack!
         let triangleMeshes = triangleMeshBuilder.getMeshes()
 
         for i in 0..<numberTriangles {
-                triangles.append(try Triangle(meshIndex: meshIndex, number: i, triangleMeshes: triangleMeshes))
+                triangles.append(
+                        try Triangle(
+                                meshIndex: meshIndex,
+                                number: i,
+                                triangleMeshes: triangleMeshes))
         }
         return triangles
 }
