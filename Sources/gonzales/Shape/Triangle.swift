@@ -94,15 +94,91 @@ extension Array {
         }
 }
 
+struct TriangleMeshBuilder {
+
+        mutating func appendMesh(mesh: TriangleMesh) -> Int {
+                var meshIndex = 0
+                meshIndex = meshes.count
+                meshes.append(mesh)
+                return meshIndex
+        }
+
+        var meshes: [TriangleMesh] = []
+
+        func getMeshes() -> TriangleMeshes {
+                return TriangleMeshes(meshes: meshes)
+        }
+}
+
+struct TriangleMeshes {
+
+        func getMesh(index: Int) -> TriangleMesh {
+                return meshes[index]
+        }
+
+        func getUVFor(meshIndex: Int, indices: (Int, Int, Int)) -> (Vector2F, Vector2F, Vector2F) {
+                return meshes[meshIndex].getUVs(indices: indices)
+        }
+
+        func getPointCountFor(meshIndex: Int) -> Int {
+                return meshes[meshIndex].pointCount
+        }
+
+        func getVertexIndexFor(meshIndex: Int, at vertexIndex: Int) -> Int {
+                return meshes[meshIndex].getVertexIndex(at: vertexIndex)
+        }
+
+        func getPointFor(meshIndex: Int, at vertexIndex: Int) -> Point {
+                return meshes[meshIndex].getPoint(at: vertexIndex)
+        }
+
+        func getNormal(meshIndex: Int, vertexIndex: Int) -> Normal {
+                return meshes[meshIndex].normals[vertexIndex]
+        }
+
+        func hasNormals(meshIndex: Int) -> Bool {
+                return !meshes[meshIndex].normals.isEmpty
+        }
+
+        func hasFaceIndices(meshIndex: Int) -> Bool {
+                return !meshes[meshIndex].faceIndices.isEmpty
+        }
+
+        func getFaceIndex(meshIndex: Int, index: Int) -> Int {
+                return meshes[meshIndex].faceIndices[index]
+        }
+
+        func getObjectToWorldFor(meshIndex: Int) -> Transform {
+                return meshes[meshIndex].objectToWorld
+        }
+
+        func freeze() -> [TriangleMesh] {
+                let immutableMeshes = meshes
+                return immutableMeshes
+        }
+
+        let meshes: [TriangleMesh]
+}
+
+@MainActor
+var triangleMeshBuilder = TriangleMeshBuilder()
+
+//var triangleMeshes = TriangleMeshes(meshes: triangleMeshBuilder.getMeshes())
+//@MainActor
+//var triangleMeshes = TriangleMeshes()
+
 struct Triangle: Shape {
 
         @MainActor
         init(
                 meshIndex: Int,
-                number: Int
+                number: Int,
+                triangleMeshes: TriangleMeshes
         ) throws {
                 self.meshIndex = meshIndex
                 self.idx = 3 * number
+                self.triangleMeshes = triangleMeshes
+
                 numberOfTriangles += 1
                 triangleMemory += MemoryLayout<Self>.stride
                 let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
@@ -135,32 +211,26 @@ struct Triangle: Shape {
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
-        @MainActor
         var vertexIndex0: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
         }
 
-        @MainActor
         var vertexIndex1: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
         }
 
-        @MainActor
         var vertexIndex2: Int {
                 return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
         }
 
-        @MainActor
         var point0: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex0)
         }
 
-        @MainActor
         var point1: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex1)
         }
 
-        @MainActor
         var point2: Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex2)
         }
@@ -192,20 +262,20 @@ struct Triangle: Shape {
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
-        ) async throws {
+        ) throws {
                 let empty = { (line: Int) in
                         //print("No triangle intersection at line ", line)
                         //Thread.callStackSymbols.forEach { print($0) }
                         return
                 }
 
-                let ray = await worldToObject * worldRay
+                let ray = worldToObject * worldRay
 
                 //triangleIntersections += 1
 
-                var p0t: Point = await point0 - ray.origin
-                var p1t: Point = await point1 - ray.origin
-                var p2t: Point = await point2 - ray.origin
+                var p0t: Point = point0 - ray.origin
+                var p1t: Point = point1 - ray.origin
+                var p2t: Point = point2 - ray.origin
 
                 let kz = maxDimension(abs(ray.direction))
                 let kx = (kz + 1) % 3
@@ -254,16 +324,16 @@ struct Triangle: Shape {
                 let b2: FloatX = e2 * invDet
                 let t: FloatX = tScaled * invDet
 
-                let hit0: Point = await b0 * point0
-                let hit1: Point = await b1 * point1
-                let hit2: Point = await b2 * point2
+                let hit0: Point = b0 * point0
+                let hit1: Point = b1 * point1
+                let hit2: Point = b2 * point2
                 let pHit: Point = hit0 + hit1 + hit2
 
-                let dp02 = await Vector(point: point0 - point2)
-                let dp12 = await Vector(point: point1 - point2)
+                let dp02 = Vector(point: point0 - point2)
+                let dp12 = Vector(point: point1 - point2)
                 let normal = normalized(Normal(cross(dp02, dp12)))
 
-                let uv = await triangleMeshes.getUVFor(
+                let uv = triangleMeshes.getUVFor(
                         meshIndex: meshIndex,
                         indices: (vertexIndex0, vertexIndex1, vertexIndex2))
                 let uvHit = computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
@@ -286,7 +356,7 @@ struct Triangle: Shape {
                 }
 
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
-                        let ng: Vector = await cross(point2 - point0, point1 - point0)
+                        let ng: Vector = cross(point2 - point0, point1 - point0)
                         if lengthSquared(ng) == 0 {
                                 return empty(#line)
                         }
@@ -294,16 +364,16 @@ struct Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if await !triangleMeshes.hasNormals(meshIndex: meshIndex) {
+                if !triangleMeshes.hasNormals(meshIndex: meshIndex) {
                         shadingNormal = normal
                 } else {
-                        let n0 = await triangleMeshes.getNormal(
+                        let n0 = triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex0)
                         let sn0 = b0 * n0
-                        let n1 = await triangleMeshes.getNormal(
+                        let n1 = triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex1)
                         let sn1 = b1 * n1
-                        let n2 = await triangleMeshes.getNormal(
+                        let n2 = triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex2)
                         let sn2 = b2 * n2
                         shadingNormal = sn0 + sn1 + sn2
@@ -327,8 +397,8 @@ struct Triangle: Shape {
                 dpdu = ss
 
                 var faceIndex: Int = 0
-                if await triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
-                        faceIndex = await triangleMeshes.getFaceIndex(
+                if triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
+                        faceIndex = triangleMeshes.getFaceIndex(
                                 meshIndex: meshIndex,
                                 index: idx / 3)
                 }
@@ -337,21 +407,19 @@ struct Triangle: Shape {
                 //triangleHits += 1
 
                 interaction.valid = true
-                interaction.position = await objectToWorld * pHit
-                interaction.normal = await normalized(objectToWorld * normal)
-                interaction.shadingNormal = await normalized(objectToWorld * shadingNormal)
-                interaction.wo = await normalized(objectToWorld * -ray.direction)
+                interaction.position = objectToWorld * pHit
+                interaction.normal = normalized(objectToWorld * normal)
+                interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
+                interaction.wo = normalized(objectToWorld * -ray.direction)
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex
         }
 
-        @MainActor
         private func getLocalPoint(index: Int) -> Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)
         }
 
-        @MainActor
         private func getWorldPoint(index: Int) -> Point {
                 return objectToWorld * getLocalPoint(index: index)
         }
@@ -364,7 +432,6 @@ struct Triangle: Shape {
                 return (p0, p1, p2)
         }
 
-        @MainActor
         public func getWorldPoints() -> (Point, Point, Point) {
                 let p0 = getWorldPoint(index: vertexIndex0)
                 let p1 = getWorldPoint(index: vertexIndex1)
@@ -408,13 +475,13 @@ struct Triangle: Shape {
                 return d
         }
 
-        @MainActor
         var objectToWorld: Transform {
                 return triangleMeshes.getObjectToWorldFor(meshIndex: meshIndex)
         }
 
         let meshIndex: Int
         let idx: Int
+        let triangleMeshes: TriangleMeshes
 }
 
 @MainActor
@@ -468,9 +535,13 @@ func createTriangleMesh(
                 uvs: triangleUvs,
                 faceIndices: faceIndices)
 
-        let meshIndex = triangleMeshes.appendMesh(mesh: mesh)
+        let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
+
+        // TODO: This is a hack!
+        let triangleMeshes = triangleMeshBuilder.getMeshes()
+
         for i in 0..<numberTriangles {
-                triangles.append(try Triangle(meshIndex: meshIndex, number: i))
+                triangles.append(try Triangle(meshIndex: meshIndex, number: i, triangleMeshes: triangleMeshes))
         }
         return triangles
 }

@@ -57,4 +57,5 @@ struct State {
         var textures: [String: Texture]
 
         let ptexCache: PtexCache
+
 }

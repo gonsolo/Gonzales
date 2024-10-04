@@ -381,14 +381,13 @@ actor EmbreeAccelerator: EmbreeBase {
                 embreeCurve(points: points, widths: curve.widths)
         }
 
-        @MainActor
         private func geometry(triangle: Triangle, geomID: UInt32) {
                 let points = triangle.getWorldPoints()
                 let a = points.0
                 let b = points.1
                 let c = points.2
 
-                let uv = triangleMeshes.getUVFor(
+                let uv = triangle.triangleMeshes.getUVFor(
                         meshIndex: triangle.meshIndex,
                         indices: (triangle.vertexIndex0, triangle.vertexIndex1, triangle.vertexIndex2))
                 embreeTriangle(
@@ -493,62 +492,61 @@ actor EmbreeAccelerator: EmbreeBase {
                 rtcReleaseGeometry(geometry)
         }
 
-        @MainActor
         private func embreeTriangle(
                 ax: FloatX, ay: FloatX, az: FloatX,
                 bx: FloatX, by: FloatX, bz: FloatX,
                 cx: FloatX, cy: FloatX, cz: FloatX
         ) {
-                guard let geometry = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
-                        embreeError()
-                }
-                let indexSlot: UInt32 = 0
-                let numberVertices = 3
-                guard
-                        let vertices = rtcSetNewGeometryBuffer(
-                                geometry,
-                                RTC_BUFFER_TYPE_VERTEX,
-                                indexSlot,
-                                RTC_FORMAT_FLOAT3,
-                                vec3fSize,
-                                numberVertices)
-                else {
-                        embreeError()
-                }
+                //guard let geometry = rtcNewGeometry(embree.rtcDevice, RTC_GEOMETRY_TYPE_TRIANGLE) else {
+                //        embreeError()
+                //}
+                //let indexSlot: UInt32 = 0
+                //let numberVertices = 3
+                //guard
+                //        let vertices = rtcSetNewGeometryBuffer(
+                //                geometry,
+                //                RTC_BUFFER_TYPE_VERTEX,
+                //                indexSlot,
+                //                RTC_FORMAT_FLOAT3,
+                //                vec3fSize,
+                //                numberVertices)
+                //else {
+                //        embreeError()
+                //}
 
-                vertices.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
-                vertices.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
-                vertices.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
-                vertices.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
-                vertices.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
-                vertices.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
-                vertices.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
-                vertices.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
-                vertices.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: ax, toByteOffset: 0 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: ay, toByteOffset: 1 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: az, toByteOffset: 2 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: bx, toByteOffset: 3 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: by, toByteOffset: 4 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: bz, toByteOffset: 5 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: cx, toByteOffset: 6 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: cy, toByteOffset: 7 * floatSize, as: Float.self)
+                //vertices.storeBytes(of: cz, toByteOffset: 8 * floatSize, as: Float.self)
 
-                let unsignedSize = MemoryLayout<UInt32>.size
-                let indicesSize = 3 * unsignedSize
-                let slot: UInt32 = 0
-                let numberIndices = 1
-                guard
-                        let indices = rtcSetNewGeometryBuffer(
-                                geometry,
-                                RTC_BUFFER_TYPE_INDEX,
-                                slot,
-                                RTC_FORMAT_UINT3,
-                                indicesSize,
-                                numberIndices
-                        )
-                else {
-                        embreeError()
-                }
-                indices.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
-                indices.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
-                indices.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
+                //let unsignedSize = MemoryLayout<UInt32>.size
+                //let indicesSize = 3 * unsignedSize
+                //let slot: UInt32 = 0
+                //let numberIndices = 1
+                //guard
+                //        let indices = rtcSetNewGeometryBuffer(
+                //                geometry,
+                //                RTC_BUFFER_TYPE_INDEX,
+                //                slot,
+                //                RTC_FORMAT_UINT3,
+                //                indicesSize,
+                //                numberIndices
+                //        )
+                //else {
+                //        embreeError()
+                //}
+                //indices.storeBytes(of: 0, toByteOffset: 0 * unsignedSize, as: UInt32.self)
+                //indices.storeBytes(of: 1, toByteOffset: 1 * unsignedSize, as: UInt32.self)
+                //indices.storeBytes(of: 2, toByteOffset: 2 * unsignedSize, as: UInt32.self)
 
-                rtcCommitGeometry(geometry)
-                rtcAttachGeometryByID(scene.rtcScene, geometry, geomID)
-                rtcReleaseGeometry(geometry)
+                //rtcCommitGeometry(geometry)
+                //rtcAttachGeometryByID(scene.rtcScene, geometry, geomID)
+                //rtcReleaseGeometry(geometry)
         }
 
         private let scene: EmbreeScene

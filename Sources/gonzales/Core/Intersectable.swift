@@ -31,7 +31,7 @@ enum IntersectablePrimitive: Sendable {
                                 tHit: &tHit,
                                 interaction: &interaction)
                 case .triangle(let triangle):
-                        try await triangle.intersect(
+                        try triangle.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
