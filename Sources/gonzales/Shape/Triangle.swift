@@ -420,7 +420,6 @@ struct Triangle: Shape {
                 return objectToWorld * getLocalPoint(index: index)
         }
 
-        @MainActor
         public func getLocalPoints() -> (Point, Point, Point) {
                 let p0 = getLocalPoint(index: vertexIndex0)
                 let p1 = getLocalPoint(index: vertexIndex1)
@@ -440,13 +439,11 @@ struct Triangle: Shape {
                 return Point2f(x: 1 - su0, y: u.1 * su0)
         }
 
-        @MainActor
         func area() -> FloatX {
                 let (p0, p1, p2) = getLocalPoints()
                 return 0.5 * length(cross(Vector(vector: (p1 - p0)), p2 - p0))
         }
 
-        @MainActor
         func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
                 let b = uniformSampleTriangle(u: u)
                 let (p0, p1, p2) = getLocalPoints()
