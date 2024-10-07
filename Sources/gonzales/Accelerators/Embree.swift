@@ -57,6 +57,8 @@ extension EmbreeBase {
         var rtcDevice: OpaquePointer?
 }
 
+typealias AcceleratorIndex = Int
+
 final class EmbreeAccelerator: EmbreeBase {
 
         init(

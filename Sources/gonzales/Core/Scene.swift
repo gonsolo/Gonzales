@@ -1,10 +1,8 @@
-typealias AcceleratorIndex = Int
-
 struct Scene: Sendable {
 
         @MainActor
-        init(acceleratorIndex: AcceleratorIndex, lights: [Light]) {
-                self.acceleratorIndex = acceleratorIndex
+        init(accelerator: Accelerator, lights: [Light]) {
+                self.accelerator = accelerator
                 self.lights = lights
                 infiniteLights = lights.compactMap {
                         switch $0 {
@@ -17,14 +15,13 @@ struct Scene: Sendable {
                 sceneDiameter = diameter()
         }
 
-        @MainActor
         func intersect(
                 rays: [Ray],
                 tHits: inout [FloatX],
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
-        ) async throws {
-                try await accelerators[acceleratorIndex].intersect(
+        ) throws {
+                try accelerator.intersect(
                         rays: rays,
                         tHits: &tHits,
                         interactions: &interactions,
@@ -41,7 +38,7 @@ struct Scene: Sendable {
                 if skip {
                         return
                 }
-                try accelerators[acceleratorIndex].intersect(
+                try accelerator.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
@@ -49,7 +46,7 @@ struct Scene: Sendable {
 
         @MainActor
         func bound() -> Bounds3f {
-                return accelerators[acceleratorIndex].worldBound()
+                return accelerator.worldBound()
         }
 
         @MainActor
@@ -57,7 +54,7 @@ struct Scene: Sendable {
                 return length(bound().diagonal())
         }
 
-        var acceleratorIndex: AcceleratorIndex
+        var accelerator: Accelerator
         var lights: [Light]
         var infiniteLights: [InfiniteLight]
 }

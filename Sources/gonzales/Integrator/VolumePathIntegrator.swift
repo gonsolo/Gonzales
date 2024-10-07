@@ -41,7 +41,7 @@ final class VolumePathIntegrator: Sendable {
                                 interactions[i].valid = false
                         }
                 }
-                try await scene.intersect(
+                try scene.intersect(
                         rays: rays,
                         tHits: &tHits,
                         interactions: &interactions,

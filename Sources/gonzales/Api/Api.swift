@@ -1,13 +1,6 @@
 @preconcurrency import Foundation
 
 @MainActor
-func addAccelerator(accelerator: Accelerator) -> AcceleratorIndex {
-        let index: AcceleratorIndex = accelerators.count
-        accelerators.append(accelerator)
-        return index
-}
-
-@MainActor
 func makeAccelerator(primitives: [Boundable & Intersectable]) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
@@ -289,10 +282,8 @@ struct Api {
                 let accelerator = try await makeAccelerator(primitives: primitives)
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
-                let index = addAccelerator(accelerator: accelerator)
                 instance = TransformedPrimitive(
-                        //acceleratorIndex: index,
-                        accelerator: accelerators[index],
+                        accelerator: accelerator,
                         transform: currentTransform)
                 options.primitives.append(instance)
         }

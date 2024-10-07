@@ -1,19 +1,15 @@
-@MainActor
-var accelerators = [Accelerator]()
-
 enum Accelerator: Boundable, Intersectable, Sendable {
 
         case boundingHierarchy(BoundingHierarchy)
         //case embree(EmbreeAccelerator)
         //case optix(Optix)
 
-        @MainActor
         func intersect(
                 rays: [Ray],
                 tHits: inout [FloatX],
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
-        ) async throws {
+        ) throws {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):
                         for i in 0..<rays.count {
