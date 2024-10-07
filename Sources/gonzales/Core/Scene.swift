@@ -28,13 +28,12 @@ struct Scene: Sendable {
                         skips: skips)
         }
 
-        @MainActor
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction,
                 skip: Bool = false
-        ) async throws {
+        ) throws {
                 if skip {
                         return
                 }

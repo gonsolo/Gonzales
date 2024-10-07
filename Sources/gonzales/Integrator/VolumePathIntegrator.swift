@@ -93,7 +93,7 @@ final class VolumePathIntegrator: Sendable {
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
-                try await scene.intersect(
+                try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)
