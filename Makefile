@@ -14,6 +14,7 @@ PTEXMEM = --ptexmem 1 # GB
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
 SCENE_NAME = cornell-box
+#SCENE_NAME = bathroom
 SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 IMAGE =  $(SCENE_NAME).exr
 IMAGE_PBRT = $(IMAGE)
@@ -103,7 +104,8 @@ ifeq ($(OS), Darwin)
 else
 	VIEWER 			= gimp
 	PBRT 			= ~/bin/pbrt
-	LLDB 			= /usr/libexec/swift/bin/lldb
+	#LLDB 			= /usr/libexec/swift/bin/lldb
+	LLDB 			= lldb
 	ifeq ($(HOSTNAME), Limone)
 		SWIFT		= ~/bin/swift
 	else

@@ -759,7 +759,7 @@ var transforms = [Transform]()
 var readTimer = Timer("")
 
 @MainActor
-var acceleratorName = "embree"
+var acceleratorName = "bvh"
 
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
