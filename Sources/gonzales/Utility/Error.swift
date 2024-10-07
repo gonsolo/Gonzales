@@ -43,20 +43,6 @@ func warning(_ message: String) {
         }
 }
 
-@MainActor
-var warningsSeen = Set<Int>()
-
-@MainActor
-func warnOnce(_ message: String) {
-        var hasher = Hasher()
-        hasher.combine(message)
-        let hash = hasher.finalize()
-        if !warningsSeen.contains(hash) {
-                warningsSeen.insert(hash)
-                warning(message)
-        }
-}
-
 func abort(_ message: String) -> Never {
         print("Error: \(message)")
         exit(-1)

@@ -16,7 +16,6 @@ struct Ptex {
                 initPtexTexture(path)
         }
 
-        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluatePtex(
@@ -27,5 +26,5 @@ struct Ptex {
                 return gammaSrgbToLinear(light: spectrum)
         }
 
-        var path: String
+        let path: String
 }

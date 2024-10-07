@@ -606,7 +606,7 @@ struct Api {
 
         @MainActor
         private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
-                warnOnce("Unknown material \"\(material)\". Creating default.")
+                print("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
                 parameters["reflectance"] = [gray]
                 let diffuse = try createDiffuse(parameters: parameters)

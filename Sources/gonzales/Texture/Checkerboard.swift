@@ -2,7 +2,6 @@ import Foundation
 
 struct Checkerboard {
 
-        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 guard let textureEven = textures.0.evaluate(at: interaction) as? RgbSpectrum else {
                         return black

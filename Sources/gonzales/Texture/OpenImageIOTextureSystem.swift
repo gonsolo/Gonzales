@@ -1,6 +1,6 @@
 import openImageIOBridge
 
-final class OpenImageIOTextureSystem {
+final class OpenImageIOTextureSystem: Sendable {
 
         private init() {
                 createTextureSystem()
@@ -10,7 +10,6 @@ final class OpenImageIOTextureSystem {
                 destroyTextureSystem()
         }
 
-        @MainActor
         private func evaluate(
                 filename: String,
                 s: Float,
@@ -19,11 +18,10 @@ final class OpenImageIOTextureSystem {
         ) {
                 let successful = texture(filename, s, t, pointer)
                 if !successful {
-                        warnOnce("Could not evaluate texture!")
+                        print("Could not evaluate texture!")
                 }
         }
 
-        @MainActor
         func evaluate(filename: String, s: Float, t: Float) -> FloatX {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 1)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)
@@ -31,7 +29,6 @@ final class OpenImageIOTextureSystem {
                 return result
         }
 
-        @MainActor
         func evaluate(filename: String, s: Float, t: Float) -> RgbSpectrum {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)
@@ -39,6 +36,5 @@ final class OpenImageIOTextureSystem {
                 return result
         }
 
-        @MainActor
         static let shared = OpenImageIOTextureSystem()
 }

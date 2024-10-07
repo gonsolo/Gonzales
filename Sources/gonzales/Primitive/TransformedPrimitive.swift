@@ -5,7 +5,8 @@ final class TransformedPrimitive: Boundable, Intersectable, Sendable {
         init(
                 //acceleratorIndex: AcceleratorIndex,
                 accelerator: Accelerator,
-                transform: Transform) {
+                transform: Transform)
+        {
                 //self.acceleratorIndex = acceleratorIndex
                 self.accelerator = accelerator
                 self.transform = transform

@@ -31,13 +31,11 @@ struct OpenImageIOTexture {
                 return (s, t)
         }
 
-        @MainActor
         func evaluateFloat(at interaction: Interaction) -> FloatX {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
 
-        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)

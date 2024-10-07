@@ -27,7 +27,6 @@ final class VolumePathIntegrator: Sendable {
                 return await lightSampler.chooseLight()
         }
 
-        @MainActor
         private func intersectOrInfiniteLights(
                 rays: [Ray],
                 tHits: inout [FloatX],
@@ -35,7 +34,7 @@ final class VolumePathIntegrator: Sendable {
                 estimates: inout [RgbSpectrum],
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
-        ) async throws {
+        ) throws {
                 for i in 0..<rays.count {
                         if !skips[i] {
                                 interactions[i].valid = false
@@ -274,7 +273,7 @@ final class VolumePathIntegrator: Sendable {
                 skips: [Bool]
         ) async throws -> [Bool] {
                 var results = Array(repeating: false, count: rays.count)
-                try await intersectOrInfiniteLights(
+                try intersectOrInfiniteLights(
                         rays: rays,
                         tHits: &tHits,
                         bounce: bounce,

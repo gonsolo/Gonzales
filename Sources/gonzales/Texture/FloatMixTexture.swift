@@ -1,6 +1,5 @@
 struct FloatMixTexture {
 
-        @MainActor
         func evaluateFloat(at interaction: Interaction) -> Float {
                 let value0 = textures.0.evaluateFloat(at: interaction)
                 let value1 = textures.1.evaluateFloat(at: interaction)

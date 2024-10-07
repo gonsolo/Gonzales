@@ -2,7 +2,6 @@ import Foundation
 
 struct ScaledTexture {
 
-        @MainActor
         func evaluateRgbSpectrum(at interaction: Interaction) -> RgbSpectrum {
                 guard let scale = scale.evaluate(at: interaction) as? FloatX else {
                         return black

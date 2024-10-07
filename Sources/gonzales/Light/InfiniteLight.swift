@@ -104,12 +104,11 @@ final class InfiniteLight: Sendable {
                 return Point2f(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
         }
 
-        @MainActor
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 let uv = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uv: uv)
                 guard let radiance = texture.evaluate(at: interaction) as? RgbSpectrum else {
-                        warning("Unsupported texture type!")
+                        print("Unsupported texture type!")
                         return black
                 }
                 return radiance
