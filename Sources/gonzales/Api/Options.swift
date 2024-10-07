@@ -162,7 +162,7 @@ class Options {
                 let accelerator = try await makeAccelerator(primitives: primitives)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let scene = makeScene(accelerator: accelerator)
+                let scene = Scene(accelerator: accelerator, lights: lights)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights)
@@ -189,10 +189,5 @@ class Options {
                         lightSampler: lightSampler,
                         tileSize: tileSize
                 )
-        }
-
-        @MainActor
-        func makeScene(accelerator: Accelerator) -> Scene {
-                return Scene(accelerator: accelerator, lights: lights)
         }
 }
