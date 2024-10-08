@@ -11,7 +11,6 @@ struct Dielectric {
                 self.remapRoughness = remapRoughness
         }
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness

@@ -11,7 +11,6 @@ struct Hair {
                 return eumelaninAbsorption + pheomelaninAbsorption
         }
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
                 let absorption = absorptionFrom(eumelaninConcentration: eumelanin)

@@ -44,7 +44,6 @@ final class EmbreeCurve: Shape {
                 unimplemented()
         }
 
-        @MainActor
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
                 from interaction: Interaction

@@ -10,7 +10,8 @@ final class Tile: Sendable {
                 sampler: Sampler,
                 camera: Camera,
                 scene: Scene,
-                lightSampler: LightSampler
+                lightSampler: LightSampler,
+                state: ImmutableState
         ) async throws -> [Sample] {
                 var samples = [Sample]()
                 var cameraSamples = [CameraSample]()
@@ -29,7 +30,8 @@ final class Tile: Sendable {
                         from: rays,
                         tHits: &tHits,
                         with: sampler,
-                        lightSampler: lightSampler)
+                        lightSampler: lightSampler,
+                        state: state)
                 let rayWeight: FloatX = 1.0
                 for (radianceAlbedoNormal, cameraSample) in zip(radianceAlbedoNormals, cameraSamples) {
                         let radiance = radianceAlbedoNormal.0

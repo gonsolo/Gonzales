@@ -32,11 +32,11 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 exitZ: FloatX,
                 wis: BsdfSample,
                 wi: Vector
-        ) async -> RgbSpectrum? {
+        ) -> RgbSpectrum? {
                 var estimate = black
                 if depth > 3 && pathThroughputWeight.maxValue < 0.25 {
                         let q = max(0, 1 - pathThroughputWeight.maxValue)
-                        if await sampler.get1D() < q {
+                        if sampler.get1D() < q {
                                 return nil
                         }
                         pathThroughputWeight /= 1 - q
@@ -54,7 +54,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 //        unimplemented()
                 //}
                 if z == exitZ {
-                        let bsdfSample = await topBxdf.sampleLocal(wo: -w, u: sampler.get3D())
+                        let bsdfSample = topBxdf.sampleLocal(wo: -w, u: sampler.get3D())
                         if !bsdfSample.isValid {
                                 return nil
                         }
@@ -77,9 +77,9 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                                 * transmittance(dz: thickness, w: wis.incoming)
                                 * wis.estimate
                                 / wis.probabilityDensity
-                        let eval = await bottomBxdf.evaluateLocal(wo: -w, wi: -wis.incoming)
+                        let eval = bottomBxdf.evaluateLocal(wo: -w, wi: -wis.incoming)
                         estimate += floatWeight * eval
-                        let bs = await bottomBxdf.sampleLocal(wo: -w, u: sampler.get3D())
+                        let bs = bottomBxdf.sampleLocal(wo: -w, u: sampler.get3D())
                         if !bs.isValid {
                                 return nil
                         }
@@ -112,13 +112,13 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 wi: Vector,
                 exitZ: FloatX,
                 estimate: inout RgbSpectrum
-        ) async {
-                let wos = await topBxdf.sampleLocal(wo: wo, u: sampler.get3D())
+        ) {
+                let wos = topBxdf.sampleLocal(wo: wo, u: sampler.get3D())
                 if !wos.isValid {
                         return
                 }
-                let u2 = await (sampler.get1D(), sampler.get1D(), sampler.get1D())
-                let wis = await topBxdf.sampleLocal(wo: wi, u: u2)
+                let u2 = (sampler.get1D(), sampler.get1D(), sampler.get1D())
+                let wis = topBxdf.sampleLocal(wo: wi, u: u2)
                 if !wis.isValid {
                         return
                 }
@@ -127,7 +127,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 var w = wos.incoming
                 for depth in 0..<maxDepth {
                         guard
-                                let nextEstimate = await evaluateNextEvent(
+                                let nextEstimate = evaluateNextEvent(
                                         depth: depth,
                                         pathThroughputWeight: &pathThroughputWeight,
                                         sampler: sampler,
@@ -145,7 +145,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
 
         }
 
-        func evaluateLocal(wo: Vector, wi: Vector) async -> RgbSpectrum {
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
                 assert(wo.z > 0)
                 assert(sameHemisphere(wi, wo))
 
@@ -161,7 +161,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 var estimate = FloatX(numberOfSamples) * topBxdf.evaluateLocal(wo: wo, wi: wi)
                 let sampler = RandomSampler()
                 for _ in 0..<numberOfSamples {
-                        await evaluateOneSample(
+                        evaluateOneSample(
                                 sampler: sampler,
                                 wo: wo,
                                 wi: wi,
@@ -173,7 +173,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         }
 
         func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
-                let bs = await topBxdf.sampleLocal(wo: wo, u: u)
+                let bs = topBxdf.sampleLocal(wo: wo, u: u)
                 if !bs.isValid {
                         return invalidBsdfSample
                 }
@@ -202,7 +202,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                         estimate *= transmittance(dz: thickness, w: w)
                         let interface: LocalBsdf = (z == 0) ? bottomBxdf : topBxdf
                         // TODO: u.0 is used above too, have to generate a new one
-                        let bs = await interface.sampleLocal(wo: -w, u: u)
+                        let bs = interface.sampleLocal(wo: -w, u: u)
                         if !bs.isValid {
                                 return invalidBsdfSample
                         }
@@ -222,15 +222,15 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 let rInterface = bottomBxdf
                 let tInterface = topBxdf
                 let sampler = RandomSampler()
-                let wos = await tInterface.sampleLocal(wo: wo, u: sampler.get3D())
-                let wis = await tInterface.sampleLocal(wo: wi, u: sampler.get3D())
+                let wos = tInterface.sampleLocal(wo: wo, u: sampler.get3D())
+                let wis = tInterface.sampleLocal(wo: wi, u: sampler.get3D())
                 if wos.isValid && wis.isValid {
                         if tInterface.isSpecular {
                                 pdfSum += rInterface.probabilityDensityLocal(
                                         wo: -wos.incoming,
                                         wi: -wis.incoming)
                         } else {
-                                let rs = await rInterface.sampleLocal(wo: -wos.incoming, u: sampler.get3D())
+                                let rs = rInterface.sampleLocal(wo: -wos.incoming, u: sampler.get3D())
                                 if rs.isValid {
                                         let rPdf = rInterface.probabilityDensityLocal(
                                                 wo: -wos.incoming, wi: -wis.incoming)
@@ -252,11 +252,11 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 let tiInterface = bottomBxdf
                 let sampler = RandomSampler()
                 var pdfSum: FloatX = 0
-                let wos = await toInterface.sampleLocal(wo: wo, u: sampler.get3D())
+                let wos = toInterface.sampleLocal(wo: wo, u: sampler.get3D())
                 guard wos.isValid else {
                         return pdfSum
                 }
-                let wis = await tiInterface.sampleLocal(wo: wi, u: sampler.get3D())
+                let wis = tiInterface.sampleLocal(wo: wi, u: sampler.get3D())
                 guard wis.isValid else {
                         return pdfSum
                 }

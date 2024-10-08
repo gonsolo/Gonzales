@@ -12,7 +12,6 @@ struct Scene: Sendable {
                                 return nil
                         }
                 }
-                sceneDiameter = diameter()
         }
 
         func intersect(

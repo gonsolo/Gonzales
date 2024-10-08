@@ -1,6 +1,5 @@
 struct Interface {
 
-        @MainActor
         func getBsdf() -> GlobalBsdf {
                 // Unimplemented by design
                 unimplemented()

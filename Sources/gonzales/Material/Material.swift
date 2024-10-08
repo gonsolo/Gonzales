@@ -1,6 +1,6 @@
 ///        A material provides the look of a surface.
 
-enum Material {
+indirect enum Material {
         case areaLight(AreaLight)
         case coatedDiffuse(CoatedDiffuse)
         case conductor(Conductor)
@@ -12,7 +12,6 @@ enum Material {
         case interface(Interface)
         case measured(Measured)
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 switch self {
                 case .areaLight(let areaLight):

@@ -3,13 +3,12 @@ enum LightSampler: Sendable {
         case power(PowerLightSampler)
         case uniform(UniformLightSampler)
 
-        @MainActor
-        func chooseLight() async -> (Light, FloatX) {
+        func chooseLight() -> (Light, FloatX) {
                 switch self {
                 case .power(let powerLightSampler):
-                        return await powerLightSampler.chooseLight()
+                        return powerLightSampler.chooseLight()
                 case .uniform(let uniformLightSampler):
-                        return await uniformLightSampler.chooseLight()
+                        return uniformLightSampler.chooseLight()
                 }
         }
 

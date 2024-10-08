@@ -5,9 +5,9 @@ typealias ThreeRandomVariables = (RandomVariable, RandomVariable, RandomVariable
 ///        A type that provides samples points.
 protocol Sampler: Sendable {
 
-        func get1D() async -> RandomVariable
-        func get2D() async -> TwoRandomVariables
-        func get3D() async -> ThreeRandomVariables
+        func get1D() -> RandomVariable
+        func get2D() -> TwoRandomVariables
+        func get3D() -> ThreeRandomVariables
         func clone() async -> Sampler
         func getCameraSample(pixel: Point2i) async -> CameraSample
 
@@ -17,7 +17,7 @@ protocol Sampler: Sendable {
 extension Sampler {
 
         func getCameraSample(pixel: Point2i) async -> CameraSample {
-                return await CameraSample(
+                return CameraSample(
                         film: (
                                 FloatX(pixel.x) + get1D(),
                                 FloatX(pixel.y) + get1D()

@@ -1,6 +1,6 @@
 // Adapted from https://github.com/mattgallagher/CwlUtils/blob/master/Sources/CwlUtils/CwlRandom.swift
 
-public struct Xoshiro: RandomNumberGenerator {
+struct Xoshiro: RandomNumberGenerator {
 
         typealias StateType = (UInt64, UInt64, UInt64, UInt64)
 

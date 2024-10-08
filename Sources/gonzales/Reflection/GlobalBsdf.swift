@@ -1,24 +1,24 @@
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
 protocol GlobalBsdf: BsdfFrameProtocol, LocalBsdf, Sendable {
-        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) async -> RgbSpectrum
+        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum
         func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
-                async -> (bsdfSample: BsdfSample, isTransmissive: Bool)
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
 extension GlobalBsdf {
 
-        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) async -> RgbSpectrum {
+        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
                 var totalLightScattered = black
                 let woLocal = worldToLocal(world: woWorld)
                 let wiLocal = worldToLocal(world: wiWorld)
                 let reflect = isReflecting(wi: wiWorld, wo: woWorld)
                 if reflect && isReflective {
-                        totalLightScattered += await evaluateLocal(wo: woLocal, wi: wiLocal)
+                        totalLightScattered += evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
                 if !reflect && isTransmissive {
-                        totalLightScattered += await evaluateLocal(wo: woLocal, wi: wiLocal)
+                        totalLightScattered += evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
                 return totalLightScattered
         }
@@ -31,10 +31,10 @@ extension GlobalBsdf {
         }
 
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
-                async -> (bsdfSample: BsdfSample, isTransmissive: Bool)
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 let woLocal = worldToLocal(world: woWorld)
-                let bsdfSample = await sampleLocal(wo: woLocal, u: u)
+                let bsdfSample = sampleLocal(wo: woLocal, u: u)
                 let wiWorld = localToWorld(local: bsdfSample.incoming)
                 return (
                         BsdfSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),

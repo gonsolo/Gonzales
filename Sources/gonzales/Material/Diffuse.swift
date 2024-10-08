@@ -5,7 +5,6 @@ enum DiffuseError: Error {
 
 struct Diffuse {
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black

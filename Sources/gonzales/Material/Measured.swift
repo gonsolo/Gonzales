@@ -4,7 +4,6 @@ enum MeasuredError: Error {
 
 struct Measured {
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 // TODO: Implement this some day
                 let bsdfFrame = BsdfFrame(interaction: interaction)

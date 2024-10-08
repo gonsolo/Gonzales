@@ -16,7 +16,6 @@ struct DistantLight {
                 return (brightness, direction, pdf: 1, visibility)
         }
 
-        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
         {

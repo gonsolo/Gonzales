@@ -3,6 +3,10 @@ struct UninstancedMaterial {
         let parameters: ParameterDictionary
 }
 
+struct ImmutableState {
+        let namedMedia: [String: Medium]
+}
+
 struct State {
 
         @MainActor
@@ -42,6 +46,10 @@ struct State {
                 return try api.makeMaterial(type: material.type, parameters: merged)
         }
 
+        func getImmutable() -> ImmutableState {
+                return ImmutableState(namedMedia: self.namedMedia)
+        }
+
         var areaLight = ""
         var areaLightParameters = ParameterDictionary()
 
@@ -57,5 +65,4 @@ struct State {
         var textures: [String: Texture]
 
         let ptexCache: PtexCache
-
 }

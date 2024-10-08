@@ -14,10 +14,10 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(for ref: Interaction, u: TwoRandomVariables) async -> (
+        func sample(for ref: Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
-                let (shapeInteraction, pdf) = await shape.sample(ref: ref, u: u)
+                let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - ref.position)
                 assert(!direction.isNaN)
                 let visibility = Visibility(from: ref, to: shapeInteraction)
@@ -25,18 +25,17 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return (radiance, direction, pdf, visibility)
         }
 
-        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
-                async throws -> FloatX
+                throws -> FloatX
         {
-                return try await shape.probabilityDensityFor(
+                return try shape.probabilityDensityFor(
                         samplingDirection: direction, from: reference)
         }
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
-        func power() async -> FloatX {
-                return await brightness.average() * shape.area() * FloatX.pi
+        func power() -> FloatX {
+                return brightness.average() * shape.area() * FloatX.pi
         }
 
         func worldBound() async -> Bounds3f {
@@ -60,7 +59,6 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 interaction.areaLight = self
         }
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let diffuse = Diffuse(
                         reflectance: Texture.rgbSpectrumTexture(

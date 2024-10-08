@@ -1,6 +1,5 @@
 struct DiffuseTransmission {
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let reflectance = reflectance.evaluateRgbSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)

@@ -12,7 +12,7 @@ struct DummyBsdf: GlobalBsdf {
 
         func isReflecting(wi: Vector, wo: Vector) -> Bool { return false }
 
-        func evaluateLocal(wo: Vector, wi: Vector) async -> RgbSpectrum { return white }
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum { return white }
 
         var bsdfFrame: BsdfFrame { return BsdfFrame() }
 }

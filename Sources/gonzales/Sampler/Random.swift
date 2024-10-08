@@ -1,4 +1,4 @@
-actor RandomSampler: Sampler {
+struct RandomSampler: Sampler {
 
         init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples
@@ -8,16 +8,17 @@ actor RandomSampler: Sampler {
                 samplesPerPixel = instance.samplesPerPixel
         }
 
-        func get1D() async -> RandomVariable {
-                return FloatX.random(in: 0..<1, using: &xoshiro)
+        func get1D() -> RandomVariable {
+                //return FloatX.random(in: 0..<1, using: &xoshiro)
+                return FloatX.random(in: 0..<1)
         }
 
-        func get2D() async -> TwoRandomVariables {
-                return await (get1D(), get1D())
+        func get2D() -> TwoRandomVariables {
+                return (get1D(), get1D())
         }
 
-        func get3D() async -> ThreeRandomVariables {
-                return await (get1D(), get1D(), get1D())
+        func get3D() -> ThreeRandomVariables {
+                return (get1D(), get1D(), get1D())
         }
 
         func clone() async -> Sampler {
@@ -25,7 +26,7 @@ actor RandomSampler: Sampler {
         }
 
         let samplesPerPixel: Int
-        var xoshiro = Xoshiro()
+        //var xoshiro = Xoshiro()
 }
 
 func createRandomSampler(parameters: ParameterDictionary, quick: Bool) throws -> RandomSampler {

@@ -7,8 +7,7 @@ enum Light: Sendable {
         case distant(DistantLight)
         case point(PointLight)
 
-        @MainActor
-        func sample(for reference: Interaction, u: TwoRandomVariables) async -> (
+        func sample(for reference: Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -16,7 +15,7 @@ enum Light: Sendable {
         ) {
                 switch self {
                 case .area(let areaLight):
-                        return await areaLight.sample(for: reference, u: u)
+                        return areaLight.sample(for: reference, u: u)
                 case .infinite(let infiniteLight):
                         return infiniteLight.sample(for: reference, u: u)
                 case .distant(let distantLight):
@@ -26,13 +25,12 @@ enum Light: Sendable {
                 }
         }
 
-        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
-                async throws -> FloatX
+                throws -> FloatX
         {
                 switch self {
                 case .area(let areaLight):
-                        return try await areaLight.probabilityDensityFor(
+                        return try areaLight.probabilityDensityFor(
                                 samplingDirection: direction,
                                 from: reference)
                 case .infinite(let infiniteLight):
@@ -64,11 +62,10 @@ enum Light: Sendable {
                 }
         }
 
-        @MainActor
-        func power() async -> FloatX {
+        func power() -> FloatX {
                 switch self {
                 case .area(let areaLight):
-                        return await areaLight.power()
+                        return areaLight.power()
                 case .infinite(let infiniteLight):
                         return infiniteLight.power()
                 case .distant(let distantLight):

@@ -1,6 +1,5 @@
 struct Conductor {
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)

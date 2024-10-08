@@ -24,13 +24,13 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return await shape.objectBound()
         }
 
-        @MainActor
         func getBsdf(interaction: Interaction) -> GlobalBsdf {
-                return materials[material].getBsdf(interaction: interaction)
+                return material.getBsdf(interaction: interaction)
         }
 
         var shape: Shape
-        var material: MaterialIndex
+        //var material: MaterialIndex
+        var material: Material
         var mediumInterface: MediumInterface?
         var alpha: FloatX
 }

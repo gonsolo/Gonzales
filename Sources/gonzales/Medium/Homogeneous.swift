@@ -8,11 +8,11 @@ final class Homogeneous: Medium {
                 self.scattering = scattering
         }
 
-        func sample(ray: Ray, tHit: FloatX, sampler: Sampler) async -> (RgbSpectrum, MediumInteraction?) {
-                let channel = await Int(sampler.get1D() * 3)
+        func sample(ray: Ray, tHit: FloatX, sampler: Sampler) -> (RgbSpectrum, MediumInteraction?) {
+                let channel = Int(sampler.get1D() * 3)
                 let transmission = absorption + scattering
                 let transmissionChannel = transmission[channel]
-                let distance = await -log(1 - sampler.get1D()) / transmissionChannel
+                let distance = -log(1 - sampler.get1D()) / transmissionChannel
                 let rayParameter = min(distance / length(ray.direction), tHit)
                 let sampledMedium = rayParameter < tHit
                 let position = ray.origin + rayParameter * ray.direction

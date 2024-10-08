@@ -270,10 +270,10 @@ final class EmbreeAccelerator: EmbreeBase {
         }
 
         private func setIDs(id: UInt32, primitive: GeometricPrimitive) {
-                materials[id] = primitive.material
-                if primitive.mediumInterface != nil {
-                        mediumInterfaces[id] = primitive.mediumInterface
-                }
+                //materials[id] = primitive.material
+                //if primitive.mediumInterface != nil {
+                //        mediumInterfaces[id] = primitive.mediumInterface
+                //}
         }
 
         @MainActor

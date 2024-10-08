@@ -2,8 +2,7 @@ import Foundation  // sin, cos
 
 // Is initialized in Scene.init.
 // TODO: Move somewhere reasonable.
-@MainActor
-var sceneDiameter: FloatX = 100.0
+let sceneDiameter: FloatX = 100.0
 
 final class InfiniteLight: Sendable {
 
@@ -17,7 +16,6 @@ final class InfiniteLight: Sendable {
                 self.texture = texture
         }
 
-        @MainActor
         func sample(for reference: Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
@@ -38,13 +36,12 @@ final class InfiniteLight: Sendable {
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
                 guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
-                        warning("Unsupported texture type!")
+                        print("Unsupported texture type!")
                         return (black, direction, pdf, visibility)
                 }
                 return (radiance: color, direction, pdf, visibility)
         }
 
-        @MainActor
         func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
                 throws -> FloatX
         {
@@ -114,7 +111,6 @@ final class InfiniteLight: Sendable {
                 return radiance
         }
 
-        @MainActor
         func power() -> FloatX {
                 let worldRadius = sceneDiameter / 2
                 return FloatX.pi * square(worldRadius) * brightness.average()
