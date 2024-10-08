@@ -53,7 +53,7 @@ final class TileRenderer: Renderer {
 
         private func renderTile(tile: Tile, state: ImmutableState) async throws -> [Sample] {
                 let tileSampler = await self.sampler.clone()
-                let samples = try await tile.render(
+                let samples = try tile.render(
                         reporter: reporter,
                         sampler: tileSampler,
                         camera: self.camera,

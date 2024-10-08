@@ -456,7 +456,7 @@ final class VolumePathIntegrator: Sendable {
                 albedos: inout [RgbSpectrum],
                 firstNormals: inout [Normal],
                 state: ImmutableState
-        ) async throws {
+        ) throws {
                 var skip = Array(repeating: false, count: rays.count)
                 for bounce in bounce...maxDepth {
                         let results = try oneBounce(
@@ -522,7 +522,7 @@ final class VolumePathIntegrator: Sendable {
                 with sampler: Sampler,
                 lightSampler: LightSampler,
                 state: ImmutableState
-        ) async throws
+        ) throws
                 -> [(estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)]
         {
 
@@ -537,7 +537,7 @@ final class VolumePathIntegrator: Sendable {
                 var albedos = Array(repeating: black, count: rays.count)
                 var firstNormals = Array(repeating: zeroNormal, count: rays.count)
                 var interactions = Array(repeating: SurfaceInteraction(), count: rays.count)
-                try await bounces(
+                try bounces(
                         rays: &varRays,
                         interactions: &interactions,
                         tHits: &tHits,

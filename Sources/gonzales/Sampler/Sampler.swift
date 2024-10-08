@@ -9,14 +9,14 @@ protocol Sampler: Sendable {
         func get2D() -> TwoRandomVariables
         func get3D() -> ThreeRandomVariables
         func clone() async -> Sampler
-        func getCameraSample(pixel: Point2i) async -> CameraSample
+        func getCameraSample(pixel: Point2i) -> CameraSample
 
         var samplesPerPixel: Int { get }
 }
 
 extension Sampler {
 
-        func getCameraSample(pixel: Point2i) async -> CameraSample {
+        func getCameraSample(pixel: Point2i) -> CameraSample {
                 return CameraSample(
                         film: (
                                 FloatX(pixel.x) + get1D(),

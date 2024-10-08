@@ -5,7 +5,7 @@
 
 protocol Camera: Sendable {
 
-        func generateRay(cameraSample: CameraSample) async -> Ray
+        func generateRay(cameraSample: CameraSample) -> Ray
 
         func getSampleBounds() async -> Bounds2i
 

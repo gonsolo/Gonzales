@@ -12,21 +12,21 @@ final class Tile: Sendable {
                 scene: Scene,
                 lightSampler: LightSampler,
                 state: ImmutableState
-        ) async throws -> [Sample] {
+        ) throws -> [Sample] {
                 var samples = [Sample]()
                 var cameraSamples = [CameraSample]()
                 var rays = [Ray]()
                 var tHits = [Float]()
                 for pixel in bounds {
                         for _ in 0..<sampler.samplesPerPixel {
-                                let cameraSample = await sampler.getCameraSample(pixel: pixel)
+                                let cameraSample = sampler.getCameraSample(pixel: pixel)
                                 cameraSamples.append(cameraSample)
-                                let ray = await camera.generateRay(cameraSample: cameraSample)
+                                let ray = camera.generateRay(cameraSample: cameraSample)
                                 rays.append(ray)
                                 tHits.append(Float.infinity)
                         }
                 }
-                let radianceAlbedoNormals = try await integrator.getRadiancesAndAlbedos(
+                let radianceAlbedoNormals = try integrator.getRadiancesAndAlbedos(
                         from: rays,
                         tHits: &tHits,
                         with: sampler,
@@ -45,7 +45,7 @@ final class Tile: Sendable {
                                 location: Point2f(x: cameraSample.film.0, y: cameraSample.film.1))
                         samples.append(sample)
                 }
-                await reporter.update()
+                //await reporter.update()
                 return samples
         }
 

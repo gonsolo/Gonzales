@@ -38,7 +38,6 @@ final class PerspectiveCamera: Camera, Transformable {
                 return Ray(origin: origin, direction: direction, cameraSample: cameraSample)
         }
 
-        @MainActor
         func generateRay(cameraSample: CameraSample) -> Ray {
                 let rasterPoint = Point(x: cameraSample.film.0, y: cameraSample.film.1, z: 0)
                 let cameraPoint = cameraTransform.rasterToCamera * rasterPoint
@@ -48,7 +47,7 @@ final class PerspectiveCamera: Camera, Transformable {
                         cameraSample: cameraSample
                 )
                 let ray = depthOfField(ray: pinholeRay, cameraSample: cameraSample)
-                numberCameraRays += 1
+                //numberCameraRays += 1
                 return objectToWorld * ray
         }
 
