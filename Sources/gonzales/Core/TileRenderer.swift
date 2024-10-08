@@ -52,7 +52,7 @@ final class TileRenderer: Renderer {
         }
 
         private func renderTile(tile: Tile, state: ImmutableState) async throws -> [Sample] {
-                let tileSampler = await self.sampler.clone()
+                let tileSampler = self.sampler.clone()
                 let samples = try tile.render(
                         reporter: reporter,
                         sampler: tileSampler,
@@ -68,12 +68,14 @@ final class TileRenderer: Renderer {
         private func renderImage(bounds: Bounds2i) async throws {
                 let immutableState = state.getImmutable()
                 let tiles = generateTiles(from: bounds)
-                await withThrowingTaskGroup(of: Void.self) { group in
+                try await withThrowingTaskGroup(of: [Sample].self) { group in
                         for tile in tiles {
                                 group.addTask {
-                                        let samples = try await self.renderTile(tile: tile, state: immutableState)
-                                        await self.camera.film.add(samples: samples)
+                                        return try await self.renderTile(tile: tile, state: immutableState)
                                 }
+                        }
+                        for try await samples in group {
+                                await self.camera.film.add(samples: samples)
                         }
                 }
         }

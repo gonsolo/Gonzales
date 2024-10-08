@@ -21,7 +21,7 @@ struct RandomSampler: Sampler {
                 return (get1D(), get1D(), get1D())
         }
 
-        func clone() async -> Sampler {
+        func clone() -> Sampler {
                 return RandomSampler(numberOfSamples: samplesPerPixel)
         }
 
