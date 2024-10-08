@@ -251,6 +251,7 @@ struct Triangle: Shape {
                 return uvHit
         }
 
+        //@_noAllocation
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,
@@ -263,8 +264,6 @@ struct Triangle: Shape {
                 }
 
                 let ray = worldToObject * worldRay
-
-                //triangleIntersections += 1
 
                 var p0t: Point = point0 - ray.origin
                 var p1t: Point = point1 - ray.origin
@@ -304,7 +303,6 @@ struct Triangle: Shape {
                 p1t.z *= sz
                 p2t.z *= sz
                 let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
-                //print(det, tScaled, tHit, tHit * det)
                 if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
                         return empty(#line)
                 } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
@@ -397,7 +395,6 @@ struct Triangle: Shape {
                 }
 
                 tHit = t
-                //triangleHits += 1
 
                 interaction.valid = true
                 interaction.position = objectToWorld * pHit

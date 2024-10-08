@@ -7,8 +7,6 @@ protocol Transformable: Sendable {
 
 extension Transformable {
         var worldToObject: Transform {
-                get {
-                        return objectToWorld.inverse
-                }
+                return objectToWorld.inverse
         }
 }

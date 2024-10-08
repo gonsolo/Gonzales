@@ -12,7 +12,7 @@ struct Ray: Sendable {
                 self.origin = origin
                 self.direction = direction
                 self.inverseDirection = Vector(v: 1) / direction
-                self.medium = nil
+                //self.medium = nil
                 self.cameraSample = cameraSample
         }
 
@@ -23,7 +23,7 @@ struct Ray: Sendable {
         let origin: Point
         let direction: Vector
         let inverseDirection: Vector
-        var medium: Medium?
+        //var medium: Medium?
         let cameraSample: CameraSample
 }
 

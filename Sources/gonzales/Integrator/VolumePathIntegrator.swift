@@ -341,11 +341,12 @@ final class VolumePathIntegrator: Sendable {
                 //        return false
                 //}
                 if surfaceInteraction.material.isInterface {
-                        var spawnedRay = surfaceInteraction.spawnRay(
+                        //var spawnedRay = surfaceInteraction.spawnRay(
+                        let spawnedRay = surfaceInteraction.spawnRay(
                                 inDirection: ray.direction)
-                        if let interface = surfaceInteraction.mediumInterface {
-                                spawnedRay.medium = state.namedMedia[interface.interior]
-                        }
+                        //if let interface = surfaceInteraction.mediumInterface {
+                        //spawnedRay.medium = state.namedMedia[interface.interior]
+                        //}
                         ray = spawnedRay
                         try bounces(
                                 ray: &ray,
@@ -401,8 +402,9 @@ final class VolumePathIntegrator: Sendable {
                 skip: Bool,
                 state: ImmutableState
         ) throws -> Bool {
-                let (transmittance, mediumInteraction) =
-                        ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
+                //let (transmittance, mediumInteraction) =
+                //ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
+                let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)
                 pathThroughputWeight *= transmittance
                 if pathThroughputWeight.isBlack {
                         return false
