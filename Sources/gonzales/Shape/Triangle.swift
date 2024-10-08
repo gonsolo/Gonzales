@@ -231,19 +231,16 @@ struct Triangle: Shape {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex2)
         }
 
-        @MainActor
         func objectBound() -> Bounds3f {
                 let (p0, p1, p2) = getLocalPoints()
                 return union(bound: Bounds3f(first: p0, second: p1), point: p2)
         }
 
-        @MainActor
         func worldBound() -> Bounds3f {
-                worldBoundCalled += 1
+                //worldBoundCalled += 1
                 return objectToWorld * objectBound()
         }
 
-        @inline(__always)
         func computeUVHit(b0: FloatX, b1: FloatX, b2: FloatX, uv: (Vector2F, Vector2F, Vector2F))
                 -> Point2f
         {
