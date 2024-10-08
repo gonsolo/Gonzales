@@ -55,12 +55,7 @@ public typealias Bounds3f = Bounds3<FloatX>
 
 extension Bounds3 where T == FloatX {
 
-        @MainActor
-        static var counter = 0
-
-        @MainActor
         init() {
-                Self.counter += 1
                 pMin = Point3(x: FloatX.infinity, y: FloatX.infinity, z: FloatX.infinity)
                 pMax = Point3(x: -FloatX.infinity, y: -FloatX.infinity, z: -FloatX.infinity)
         }
@@ -128,11 +123,7 @@ func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
 
 extension Bounds3 where T == FloatX {
 
-        //@MainActor
-        //static var intersections = 0
-
         func intersects(ray: Ray, tHit: FloatX) -> Bool {
-                //Self.intersections += 1
                 var t0: FloatX = 0.0
                 var t1 = tHit
                 for i in 0..<3 {
@@ -151,11 +142,9 @@ extension Bounds3 where T == FloatX {
                 return true
         }
 
-        @MainActor
         static func statistics() {
                 print("  Bounds3:")
-                print("    Generated:\t\t\t\t\t\t\t\t\(counter)")
-                //print("    Intersections:\t\t\t\t\t\t\t\(intersections)")
+                // TODO
         }
 }
 
