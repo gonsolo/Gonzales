@@ -8,7 +8,7 @@ protocol Sampler: Sendable {
         func get1D() -> RandomVariable
         func get2D() -> TwoRandomVariables
         func get3D() -> ThreeRandomVariables
-        func clone() -> Sampler
+        func clone() -> any Sampler
         func getCameraSample(pixel: Point2i) -> CameraSample
 
         var samplesPerPixel: Int { get }

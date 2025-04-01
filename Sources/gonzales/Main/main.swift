@@ -7,7 +7,7 @@ enum MainError: Error {
         case unknownOption
 }
 
-func handle(_ error: Error) {
+func handle(_ error: any Error) {
         switch error {
         case is ApiError:
                 switch error {

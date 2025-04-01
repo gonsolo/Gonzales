@@ -33,8 +33,8 @@ struct MicrofacetReflection: GlobalBsdf {
         func albedo() -> RgbSpectrum { return white }
 
         var reflectance: RgbSpectrum
-        var distribution: MicrofacetDistribution
-        var fresnel: Fresnel
+        var distribution: any MicrofacetDistribution
+        var fresnel: any Fresnel
 
         let bsdfFrame: BsdfFrame
 }

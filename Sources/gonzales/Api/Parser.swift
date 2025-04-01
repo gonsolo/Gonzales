@@ -298,7 +298,7 @@ final class Parser {
         }
 
         @MainActor
-        private func parseValue(type: String) throws -> Parameter {
+        private func parseValue(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
                         guard let value = try parseFloatX() else {
@@ -362,7 +362,7 @@ final class Parser {
         }
 
         @MainActor
-        private func parseValues(type: String) throws -> Parameter {
+        private func parseValues(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
                         let value = try parseFloatXs()
@@ -396,7 +396,7 @@ final class Parser {
         }
 
         @MainActor
-        private func parseParameter() throws -> (String, Parameter)? {
+        private func parseParameter() throws -> (String, any Parameter)? {
                 parseComments()
                 if scanner.scanString("\"") == nil { return nil }
                 guard let type = scanner.scanUpToCharactersList(from: ["\n", " "]) else {

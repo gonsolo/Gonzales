@@ -11,14 +11,14 @@ final class VolumePathIntegrator: Sendable {
 
         private func brdfDensity(
                 light: Light,
-                interaction: Interaction,
+                interaction: any Interaction,
                 sample: Vector
         ) -> FloatX {
                 return interaction.evaluateProbabilityDensity(wi: sample)
         }
 
         private func chooseLight(
-                sampler: Sampler,
+                sampler: any Sampler,
                 lightSampler: LightSampler
         ) throws
                 -> (Light, FloatX)
@@ -59,8 +59,8 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleLightSource(
                 light: Light,
-                interaction: Interaction,
-                sampler: Sampler
+                interaction: any Interaction,
+                sampler: any Sampler
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
                         for: interaction, u: sampler.get2D())
@@ -77,8 +77,8 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleDistributionFunction(
                 light: Light,
-                interaction: Interaction,
-                sampler: Sampler
+                interaction: any Interaction,
+                sampler: any Sampler
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
@@ -111,8 +111,8 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleLight(
                 light: Light,
-                interaction: Interaction,
-                sampler: Sampler
+                interaction: any Interaction,
+                sampler: any Sampler
         ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
                         light: light,
@@ -127,8 +127,8 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleGlobalBsdf(
                 light: Light,
-                interaction: Interaction,
-                sampler: Sampler
+                interaction: any Interaction,
+                sampler: any Sampler
         ) throws -> RgbSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
                         light: light,
@@ -143,8 +143,8 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleMultipleImportance(
                 light: Light,
-                interaction: Interaction,
-                sampler: Sampler
+                interaction: any Interaction,
+                sampler: any Sampler
         ) throws -> RgbSpectrum {
 
                 let lightSample = try sampleLightSource(
@@ -177,8 +177,8 @@ final class VolumePathIntegrator: Sendable {
 
         private func estimateDirect(
                 light: Light,
-                interaction: Interaction,
-                sampler: Sampler
+                interaction: any Interaction,
+                sampler: any Sampler
         ) throws -> RgbSpectrum {
                 if light.isDelta {
                         return try sampleLight(
@@ -203,8 +203,8 @@ final class VolumePathIntegrator: Sendable {
         }
 
         private func sampleOneLight(
-                at interaction: Interaction,
-                with sampler: Sampler,
+                at interaction: any Interaction,
+                with sampler: any Sampler,
                 lightSampler: LightSampler
         ) throws -> RgbSpectrum {
                 let (light, lightPdf) = try chooseLight(
@@ -232,7 +232,7 @@ final class VolumePathIntegrator: Sendable {
         private func sampleMedium(
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
-                sampler: Sampler,
+                sampler: any Sampler,
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RgbSpectrum, Ray) {
@@ -255,7 +255,7 @@ final class VolumePathIntegrator: Sendable {
                 rays: inout [Ray],
                 bounce: Int,
                 estimates: inout [RgbSpectrum],
-                sampler: Sampler,
+                sampler: any Sampler,
                 pathThroughputWeights: inout [RgbSpectrum],
                 lightSampler: LightSampler,
                 albedos: inout [RgbSpectrum],
@@ -301,7 +301,7 @@ final class VolumePathIntegrator: Sendable {
                 ray: inout Ray,
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
-                sampler: Sampler,
+                sampler: any Sampler,
                 lightSampler: LightSampler
         ) throws -> RgbSpectrum {
                 var mediumRadiance = black
@@ -321,7 +321,7 @@ final class VolumePathIntegrator: Sendable {
                 pathThroughputWeight: inout RgbSpectrum,
                 estimate: inout RgbSpectrum,
                 tHit: inout Float,
-                sampler: Sampler,
+                sampler: any Sampler,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
@@ -394,7 +394,7 @@ final class VolumePathIntegrator: Sendable {
                 ray: inout Ray,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: Sampler,
+                sampler: any Sampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
@@ -452,7 +452,7 @@ final class VolumePathIntegrator: Sendable {
                 tHits: inout [Float],
                 bounce: Int,
                 estimates: inout [RgbSpectrum],
-                sampler: Sampler,
+                sampler: any Sampler,
                 pathThroughputWeights: inout [RgbSpectrum],
                 lightSampler: LightSampler,
                 albedos: inout [RgbSpectrum],
@@ -489,7 +489,7 @@ final class VolumePathIntegrator: Sendable {
                 tHit: inout Float,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: Sampler,
+                sampler: any Sampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
@@ -521,7 +521,7 @@ final class VolumePathIntegrator: Sendable {
         func getRadiancesAndAlbedos(
                 from rays: [Ray],
                 tHits: inout [FloatX],
-                with sampler: Sampler,
+                with sampler: any Sampler,
                 lightSampler: LightSampler,
                 state: ImmutableState
         ) throws

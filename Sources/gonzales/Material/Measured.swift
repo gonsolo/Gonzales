@@ -4,7 +4,7 @@ enum MeasuredError: Error {
 
 struct Measured {
 
-        func getBsdf(interaction: Interaction) -> GlobalBsdf {
+        func getBsdf(interaction: any Interaction) -> any GlobalBsdf {
                 // TODO: Implement this some day
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let diffuseBsdf = DiffuseBsdf(bsdfFrame: bsdfFrame)

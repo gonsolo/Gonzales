@@ -5,7 +5,7 @@ enum DiffuseError: Error {
 
 struct Diffuse {
 
-        func getBsdf(interaction: Interaction) -> GlobalBsdf {
+        func getBsdf(interaction: any Interaction) -> any GlobalBsdf {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black
                 let reflectanceFloat = evaluation as? FloatX

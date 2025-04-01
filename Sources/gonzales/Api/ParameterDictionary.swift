@@ -2,7 +2,7 @@
 ///
 /// Every parameter has a type an a value (or a collection of values).
 
-typealias ParameterDictionary = [String: Parameter]
+typealias ParameterDictionary = [String: any Parameter]
 
 extension ParameterDictionary {
 

@@ -246,7 +246,7 @@ final class EmbreeAccelerator: EmbreeBase {
 @preconcurrency final class EmbreeBuilder: EmbreeBase {
 
         @MainActor
-        init(primitives: [Boundable & Intersectable]) async {
+        init(primitives: [any Boundable & Intersectable]) async {
                 let rtcScene = rtcNewScene(embree.rtcDevice)
                 scene = EmbreeScene(scene: rtcScene)
                 //check(rtcScene)
@@ -282,7 +282,7 @@ final class EmbreeAccelerator: EmbreeBase {
         }
 
         @MainActor
-        private func addPrimitives(primitives: [Boundable & Intersectable]) async {
+        private func addPrimitives(primitives: [any Boundable & Intersectable]) async {
                 //for primitive in primitives {
                 //        switch primitive {
                 //        case let geometricPrimitive as GeometricPrimitive:

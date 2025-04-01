@@ -438,7 +438,7 @@ struct Triangle: Shape {
                 return 0.5 * length(cross(Vector(vector: (p1 - p0)), p2 - p0))
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
                 let b = uniformSampleTriangle(u: u)
                 let (p0, p1, p2) = getLocalPoints()
                 let sampled0: Point = b[0] * p0
@@ -475,7 +475,7 @@ struct Triangle: Shape {
 func createTriangleMeshShape(
         objectToWorld: Transform,
         parameters: ParameterDictionary
-) throws -> [Shape] {
+) throws -> [any Shape] {
         let indices = try parameters.findInts(name: "indices")
         guard indices.count % 3 == 0 else {
                 throw ApiError.input(message: "Triangle indices must be multiplies of 3")
@@ -506,7 +506,7 @@ func createTriangleMesh(
         normals: [Normal],
         uvs: [Vector2F],
         faceIndices: [Int]
-) throws -> [Shape] {
+) throws -> [any Shape] {
         let numberTriangles = indices.count / 3
         let trianglePoints = points
         let triangleNormals = normals

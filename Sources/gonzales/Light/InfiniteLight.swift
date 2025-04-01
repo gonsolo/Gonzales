@@ -16,7 +16,7 @@ final class InfiniteLight: Sendable {
                 self.texture = texture
         }
 
-        func sample(for reference: Interaction, u: TwoRandomVariables) -> (
+        func sample(for reference: any Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -42,7 +42,7 @@ final class InfiniteLight: Sendable {
                 return (radiance: color, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
                 throws -> FloatX
         {
                 let incoming = worldToLight * direction

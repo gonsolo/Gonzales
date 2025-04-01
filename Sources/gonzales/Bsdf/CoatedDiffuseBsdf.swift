@@ -26,7 +26,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         private func evaluateNextEvent(
                 depth: Int,
                 pathThroughputWeight: inout RgbSpectrum,
-                sampler: Sampler,
+                sampler: any Sampler,
                 z: inout FloatX,
                 w: inout Vector,
                 exitZ: FloatX,
@@ -107,7 +107,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         }
 
         private func evaluateOneSample(
-                sampler: Sampler,
+                sampler: any Sampler,
                 wo: Vector,
                 wi: Vector,
                 exitZ: FloatX,
@@ -200,7 +200,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                         // albedo is zero
                         z = (z == thickness) ? 0 : thickness
                         estimate *= transmittance(dz: thickness, w: w)
-                        let interface: LocalBsdf = (z == 0) ? bottomBxdf : topBxdf
+                        let interface: any LocalBsdf = (z == 0) ? bottomBxdf : topBxdf
                         // TODO: u.0 is used above too, have to generate a new one
                         let bs = interface.sampleLocal(wo: -w, u: u)
                         if !bs.isValid {

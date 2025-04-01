@@ -34,7 +34,7 @@ extension Sequence {
 final class PowerLightSampler: Sendable {
 
         @MainActor
-        init(sampler: Sampler, lights: [Light]) async {
+        init(sampler: any Sampler, lights: [Light]) async {
                 self.sampler = sampler
                 self.lights = lights
 
@@ -61,7 +61,7 @@ final class PowerLightSampler: Sendable {
                 return (light, probabilityDensity)
         }
 
-        let sampler: Sampler
+        let sampler: any Sampler
         let lights: [Light]
         let cumulativePowers: [FloatX]
         let totalPower: FloatX

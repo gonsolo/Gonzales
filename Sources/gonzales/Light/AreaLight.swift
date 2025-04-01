@@ -2,19 +2,19 @@ import Foundation
 
 struct AreaLight: Boundable, Intersectable, Sendable {
 
-        init(brightness: RgbSpectrum, shape: Shape, alpha: FloatX) {
+        init(brightness: RgbSpectrum, shape: any Shape, alpha: FloatX) {
                 self.brightness = brightness
                 self.shape = shape
                 self.alpha = alpha
         }
 
-        func emittedRadiance(from interaction: Interaction, inDirection direction: Vector)
+        func emittedRadiance(from interaction: any Interaction, inDirection direction: Vector)
                 -> RgbSpectrum
         {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(for ref: Interaction, u: TwoRandomVariables) -> (
+        func sample(for ref: any Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
@@ -25,7 +25,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return (radiance, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
                 throws -> FloatX
         {
                 return try shape.probabilityDensityFor(
@@ -59,14 +59,14 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 interaction.areaLight = self
         }
 
-        func getBsdf(interaction: Interaction) -> GlobalBsdf {
+        func getBsdf(interaction: any Interaction) -> any GlobalBsdf {
                 let diffuse = Diffuse(
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white))))
                 return diffuse.getBsdf(interaction: interaction)
         }
 
-        let shape: Shape
+        let shape: any Shape
         let brightness: RgbSpectrum
         let alpha: FloatX
 }

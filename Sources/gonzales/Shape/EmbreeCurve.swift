@@ -36,17 +36,17 @@ final class EmbreeCurve: Shape {
                 return bounds
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
                 unimplemented()
         }
 
-        func sample(ref: Interaction, u: TwoRandomVariables) -> (Interaction, FloatX) {
+        func sample(ref: any Interaction, u: TwoRandomVariables) -> (any Interaction, FloatX) {
                 unimplemented()
         }
 
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
-                from interaction: Interaction
+                from interaction: any Interaction
         ) throws -> FloatX {
                 unimplemented()
         }
@@ -65,13 +65,13 @@ func createEmbreeCurveShape(
         controlPoints: [Point],
         widths: (Float, Float),
         objectToWorld: Transform
-) -> [Shape] {
+) -> [any Shape] {
 
         let curve = EmbreeCurve(
                 objectToWorld: objectToWorld,
                 controlPoints: controlPoints,
                 widths: widths)
-        var curves = [Shape]()
+        var curves = [any Shape]()
         curves.append(curve)
         return curves
 }

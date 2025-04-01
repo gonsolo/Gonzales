@@ -346,7 +346,7 @@ final class Curve: Shape {
                 fatalError("Not implemented")
         }
 
-        func sample(u: TwoFloats) -> (interaction: Interaction, pdf: FloatX) {
+        func sample(u: TwoFloats) -> (interaction: any Interaction, pdf: FloatX) {
                 fatalError("Not implemented")
         }
 
@@ -371,12 +371,12 @@ struct CurveCommon {
 }
 
 @MainActor
-func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [Shape] {
+func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [any Shape] {
         let common = CurveCommon(points: points, width: width)
         // The default splitdepth in pbrt is 3 which would make this 8 segments (1 << splitDepth).
         // Let's use 4 for the time being to save a little bit of memory.
         let numberOfSegments = 4
-        var segments = [Shape]()
+        var segments = [any Shape]()
         for i in 0..<numberOfSegments {
                 let n = FloatX(numberOfSegments)
                 let uMin = FloatX(i) / n
@@ -393,8 +393,8 @@ func createBVHCurveShape(
         widths: (Float, Float),
         objectToWorld: Transform,
         degree: Int
-) -> [Shape] {
-        var curves = [Shape]()
+) -> [any Shape] {
+        var curves = [any Shape]()
         let numberOfSegments = controlPoints.count - degree
         for segment in 0..<numberOfSegments {
                 var bezierPoints: FourPoints
@@ -429,7 +429,7 @@ func createBVHCurveShape(
 }
 
 @MainActor
-func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [Shape] {
+func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [any Shape] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")
         let width = try parameters.findOneFloatX(called: "width", else: 0.5)
@@ -438,7 +438,7 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary)
         guard controlPoints.count >= degree + 1 else {
                 throw CurveError.numberControlPoints
         }
-        var curves = [Shape]()
+        var curves = [any Shape]()
         switch acceleratorName {
         case "bvh":
                 curves = createBVHCurveShape(

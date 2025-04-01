@@ -1,7 +1,7 @@
 @preconcurrency import Foundation
 
 @MainActor
-func makeAccelerator(primitives: [Boundable & Intersectable]) async throws -> Accelerator {
+func makeAccelerator(primitives: [any Boundable & Intersectable]) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
                 let builder = await BoundingHierarchyBuilder(primitives: primitives)
@@ -278,7 +278,7 @@ struct Api {
                 if primitives.isEmpty {
                         return
                 }
-                var instance: Boundable & Intersectable
+                var instance: any Boundable & Intersectable
                 let accelerator = try await makeAccelerator(primitives: primitives)
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
@@ -303,7 +303,7 @@ struct Api {
         @MainActor
         func shape(name: String, parameters: ParameterDictionary) throws {
                 var areaLights = [Light]()
-                var prims = [Boundable & Intersectable]()
+                var prims = [any Boundable & Intersectable]()
                 let shapes = try makeShapes(
                         name: name,
                         objectToWorld: currentTransform,
@@ -537,7 +537,7 @@ struct Api {
                 print("\nNumber of primitives: ", options.primitives.count)
                 for primitive in options.primitives {
                         var type = ""
-                        var shape: Shape? = nil
+                        var shape: (any Shape)? = nil
                         if let geom = primitive as? GeometricPrimitive {
                                 type = "GeometricPrimitive"
                                 shape = geom.shape
@@ -553,7 +553,7 @@ struct Api {
                 }
         }
 
-        func dumpCamera(_ camera: Camera) {
+        func dumpCamera(_ camera: any Camera) {
                 if let perspectiveCamera = camera as? PerspectiveCamera {
                         print(perspectiveCamera.objectToWorld)
                 }
@@ -658,7 +658,7 @@ struct Api {
                 objectToWorld: Transform,
                 parameters: ParameterDictionary
         )
-                throws -> [Shape]
+                throws -> [any Shape]
         {
                 switch name {
                 case "bilinearmesh":

@@ -218,7 +218,7 @@ struct DielectricBsdf: GlobalBsdf {
                 return distribution.isSmooth
         }
 
-        let distribution: MicrofacetDistribution
+        let distribution: any MicrofacetDistribution
 
         let refractiveIndexVacuum: FloatX = 1
 

@@ -7,7 +7,7 @@ struct PointLight {
                 self.intensity = intensity
         }
 
-        func sample(for reference: Interaction, u: TwoRandomVariables) -> (
+        func sample(for reference: any Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let direction: Vector = normalized(position - reference.position)
@@ -19,7 +19,7 @@ struct PointLight {
                 return (radiance, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: Interaction)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
                 throws -> FloatX
         {
                 return 0

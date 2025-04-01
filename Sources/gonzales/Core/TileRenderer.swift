@@ -4,9 +4,9 @@ final class TileRenderer: Renderer {
 
         init(
                 accelerator: Accelerator,
-                camera: Camera,
+                camera: any Camera,
                 integrator: VolumePathIntegrator,
-                sampler: Sampler,
+                sampler: any Sampler,
                 scene: Scene,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int)
@@ -91,12 +91,12 @@ final class TileRenderer: Renderer {
                 fflush(stdout)
         }
 
-        let camera: Camera
+        let camera: any Camera
         let accelerator: Accelerator
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
         let reporter: ProgressReporter
-        let sampler: Sampler
+        let sampler: any Sampler
         let scene: Scene
         let bounds: Bounds2i
         let tileSize: (Int, Int)

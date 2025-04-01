@@ -17,13 +17,13 @@ class Options {
         var filterName = "gaussian"
         var filterParameters = ParameterDictionary()
         var lights = [Light]()
-        var primitives = [Boundable & Intersectable]()
-        var objects = ["": [Boundable & Intersectable]()]
+        var primitives = [any Boundable & Intersectable]()
+        var objects = ["": [any Boundable & Intersectable]()]
 
         init() {}
 
         @MainActor
-        func makeFilm(filter: Filter) throws -> Film {
+        func makeFilm(filter: any Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
                 if quick {
@@ -48,7 +48,7 @@ class Options {
                 )
         }
 
-        func makeFilter(name: String, parameters: ParameterDictionary) throws -> Filter {
+        func makeFilter(name: String, parameters: ParameterDictionary) throws -> any Filter {
 
                 func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F {
                         let xwidth = try parameters.findOneFloatX(called: "xradius", else: support.0)
@@ -56,7 +56,7 @@ class Options {
                         return Vector2F(x: xwidth, y: ywidth)
                 }
 
-                var filter: Filter
+                var filter: any Filter
                 switch name {
                 case "box":
                         let support = try makeSupport(withDefault: (0.5, 0.5))
@@ -77,7 +77,7 @@ class Options {
         }
 
         @MainActor
-        func makeCamera() async throws -> Camera {
+        func makeCamera() async throws -> any Camera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter)
@@ -124,7 +124,7 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(scene: Scene, sampler: Sampler) throws -> VolumePathIntegrator {
+        func makeIntegrator(scene: Scene, sampler: any Sampler) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -141,7 +141,7 @@ class Options {
         }
 
         @MainActor
-        func makeSampler(film: Film) throws -> Sampler {
+        func makeSampler(film: Film) throws -> any Sampler {
                 if samplerName != "random" {
                         warning("Unknown sampler, using random sampler.")
                 }
@@ -155,7 +155,7 @@ class Options {
         }
 
         @MainActor
-        func makeRenderer() async throws -> Renderer {
+        func makeRenderer() async throws -> any Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)

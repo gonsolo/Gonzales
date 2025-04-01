@@ -12,7 +12,7 @@ indirect enum Material {
         case interface(Interface)
         case measured(Measured)
 
-        func getBsdf(interaction: Interaction) -> GlobalBsdf {
+        func getBsdf(interaction: any Interaction) -> any GlobalBsdf {
                 switch self {
                 case .areaLight(let areaLight):
                         return areaLight.getBsdf(interaction: interaction)

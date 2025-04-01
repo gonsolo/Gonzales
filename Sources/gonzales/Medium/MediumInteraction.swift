@@ -6,7 +6,7 @@ struct MediumInteraction: Interaction {
                 return scatter
         }
 
-        func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
+        func sampleDistributionFunction(sampler: any Sampler) -> BsdfSample {
                 let (value, wi) = phase.samplePhase(wo: wo, sampler: sampler)
                 return BsdfSample(RgbSpectrum(intensity: value), wi, value)
         }
@@ -23,5 +23,5 @@ struct MediumInteraction: Interaction {
         var uv = Point2f()
         var wo = Vector()
 
-        var phase: PhaseFunction = HenyeyGreenstein()
+        var phase: any PhaseFunction = HenyeyGreenstein()
 }

@@ -7,7 +7,7 @@ struct SurfaceInteraction: Interaction, Sendable {
                 return scatter
         }
 
-        func sampleDistributionFunction(sampler: Sampler) -> BsdfSample {
+        func sampleDistributionFunction(sampler: any Sampler) -> BsdfSample {
                 var (bsdfSample, _) = bsdf.sampleWorld(wo: wo, u: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, shadingNormal)
                 return bsdfSample
@@ -37,7 +37,7 @@ struct SurfaceInteraction: Interaction, Sendable {
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
         var mediumInterface: MediumInterface? = nil
-        var bsdf: GlobalBsdf = DummyBsdf()
+        var bsdf: any GlobalBsdf = DummyBsdf()
 }
 
 extension SurfaceInteraction: CustomStringConvertible {

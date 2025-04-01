@@ -4,7 +4,7 @@ struct RandomSampler: Sampler {
                 samplesPerPixel = numberOfSamples
         }
 
-        init(instance: Sampler) {
+        init(instance: any Sampler) {
                 samplesPerPixel = instance.samplesPerPixel
         }
 
@@ -21,7 +21,7 @@ struct RandomSampler: Sampler {
                 return (get1D(), get1D(), get1D())
         }
 
-        func clone() -> Sampler {
+        func clone() -> any Sampler {
                 return RandomSampler(numberOfSamples: samplesPerPixel)
         }
 

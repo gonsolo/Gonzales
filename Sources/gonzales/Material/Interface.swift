@@ -1,6 +1,6 @@
 struct Interface {
 
-        func getBsdf() -> GlobalBsdf {
+        func getBsdf() -> any GlobalBsdf {
                 // Unimplemented by design
                 unimplemented()
         }

@@ -4,7 +4,7 @@ struct UninstancedMaterial {
 }
 
 struct ImmutableState {
-        let namedMedia: [String: Medium]
+        let namedMedia: [String: any Medium]
 }
 
 struct State {
@@ -19,7 +19,7 @@ struct State {
                         type: "diffuse",
                         parameters: parameters
                 )
-                namedMedia = [String: Medium]()
+                namedMedia = [String: any Medium]()
                 textures = [String: Texture]()
                 ptexCache = PtexCache()
         }
@@ -58,7 +58,7 @@ struct State {
         var currentMaterial: UninstancedMaterial?
 
         var namedMaterials: [String: UninstancedMaterial]
-        var namedMedia: [String: Medium]
+        var namedMedia: [String: any Medium]
 
         var objectName: String? = nil
 

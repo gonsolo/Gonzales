@@ -4,7 +4,7 @@ actor Film: Sendable {
                 case unknownFileType(name: String)
         }
 
-        init(name: String, resolution: Point2i, fileName: String, filter: Filter, crop: Bounds2f) {
+        init(name: String, resolution: Point2i, fileName: String, filter: any Filter, crop: Bounds2f) {
 
                 func upperPoint2i(_ p: Point2f) -> Point2i {
                         return Point2i(x: Int(p.x.rounded(.up)), y: Int(p.y.rounded(.up)))
@@ -143,7 +143,7 @@ actor Film: Sendable {
 
         private let name: String
         private let fileName: String
-        let filter: Filter
+        let filter: any Filter
         var image: Image
         var albedoImage: Image
         var normalImage: Image

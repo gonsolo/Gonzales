@@ -16,6 +16,6 @@ struct Visibility {
                 }
         }
 
-        let from: Interaction
-        let to: Interaction
+        let from: any Interaction
+        let to: any Interaction
 }

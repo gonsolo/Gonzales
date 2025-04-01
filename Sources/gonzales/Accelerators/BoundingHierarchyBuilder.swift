@@ -26,7 +26,7 @@ extension Sequence {
 final class BoundingHierarchyBuilder {
 
         @MainActor
-        internal init(primitives: [Boundable]) async {
+        internal init(primitives: [any Boundable]) async {
                 self.cachedPrimitives = await primitives.enumerated().asyncMap { index, primitive in
                         let bound = await primitive.worldBound()
                         return CachedPrimitive(index: index, bound: bound, center: bound.center)
@@ -362,7 +362,7 @@ final class BoundingHierarchyBuilder {
         private var totalNodes = 0
         private var offsetCounter = 0
         private var cachedPrimitives: [CachedPrimitive]
-        private var primitives: [Boundable]
+        private var primitives: [any Boundable]
 
         var nodes = [BoundingHierarchyNode]()
 }
