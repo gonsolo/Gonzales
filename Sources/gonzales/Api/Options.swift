@@ -155,7 +155,7 @@ class Options {
         }
 
         @MainActor
-        func makeRenderer() async throws -> any Renderer {
+        func makeRenderer() async throws -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
