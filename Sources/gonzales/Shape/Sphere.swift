@@ -41,8 +41,9 @@ final class Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func sample(ref: any Interaction, u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
-
+        func sample(ref: any Interaction, u: TwoRandomVariables)
+                -> (interaction: any Interaction, pdf: FloatX)
+        {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
                         var (interaction, pdf) = sample(u: u)
