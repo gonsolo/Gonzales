@@ -21,7 +21,7 @@ struct State {
                 )
                 namedMedia = [String: any Medium]()
                 textures = [String: Texture]()
-                ptexCache = PtexCache()
+                //ptexCache = PtexCache()
         }
 
         @MainActor
@@ -64,5 +64,5 @@ struct State {
 
         var textures: [String: Texture]
 
-        let ptexCache: PtexCache
+        //let ptexCache: PtexCache
 }

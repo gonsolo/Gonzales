@@ -14,22 +14,22 @@ let package = Package(
                         name: "gonzales",
                         dependencies: [
                                 //"SWCompression",
-                                "embree4",
-                                "openImageIOBridge",
+                                "embree4"  //,
+                                //"openImageIOBridge",
                                 //"cuda",
                                 //"cudaBridge",
-                                "ptexBridge",
+                                //"ptexBridge",
                         ]
                 ),
-                .target(
-                        name: "openImageIOBridge",
-                        dependencies: ["openimageio"],
-                        swiftSettings: [.interoperabilityMode(.Cxx)]
-                ),
-                .target(
-                        name: "ptexBridge",
-                        dependencies: ["ptex"]
-                ),
+                //.target(
+                //        name: "openImageIOBridge",
+                //        dependencies: ["openimageio"],
+                //        swiftSettings: [.interoperabilityMode(.Cxx)]
+                //),
+                //.target(
+                //        name: "ptexBridge",
+                //        dependencies: ["ptex"]
+                //),
                 //.target(
                 //        name: "cudaBridge",
                 //        dependencies: ["cuda"],
@@ -38,7 +38,7 @@ let package = Package(
                 .systemLibrary(name: "embree4"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 //.systemLibrary(name: "cuda", pkgConfig: "cuda"),
-                .systemLibrary(name: "ptex", pkgConfig: "ptex"),
+                //.systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
         cxxLanguageStandard: .cxx20
 )

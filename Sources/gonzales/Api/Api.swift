@@ -709,17 +709,23 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
         let suffix = absoluteFileName.suffix(4)
         switch suffix {
         case ".ptx":
-                return Texture.rgbSpectrumTexture(RgbSpectrumTexture.ptex(Ptex(path: absoluteFileName)))
+                warning("ptex disabled")
+                return Texture.dummy
+                //return Texture.rgbSpectrumTexture(RgbSpectrumTexture.ptex(Ptex(path: absoluteFileName)))
         case ".exr", ".pfm", ".png", ".tga":
                 switch type {
                 case "spectrum", "color":
-                        return Texture.rgbSpectrumTexture(
-                                RgbSpectrumTexture.openImageIoTexture(
-                                        OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        warning("openimageio disabled")
+                        return Texture.dummy
+                        //return Texture.rgbSpectrumTexture(
+                        //        RgbSpectrumTexture.openImageIoTexture(
+                        //                OpenImageIOTexture(path: absoluteFileName, type: type)))
                 case "float":
-                        return Texture.floatTexture(
-                                FloatTexture.openImageIoTexture(
-                                        OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        warning("openimageio disabled")
+                        return Texture.dummy
+                        //return Texture.floatTexture(
+                        //        FloatTexture.openImageIoTexture(
+                        //                OpenImageIOTexture(path: absoluteFileName, type: type)))
                 default:
                         unimplemented()
                 }
