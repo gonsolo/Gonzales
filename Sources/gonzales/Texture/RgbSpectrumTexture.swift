@@ -2,8 +2,8 @@ indirect enum RgbSpectrumTexture: Sendable {
 
         case checkerboard(Checkerboard)
         case constantTexture(ConstantTexture<RgbSpectrum>)
-        //case openImageIoTexture(OpenImageIOTexture)
-        //case ptex(Ptex)
+        case openImageIoTexture(OpenImageIOTexture)
+        case ptex(Ptex)
         case rgbSpectrumMixTexture(RgbSpectrumMixTexture)
         case scaledTexture(ScaledTexture)
 
@@ -13,10 +13,10 @@ indirect enum RgbSpectrumTexture: Sendable {
                         return checkerboard.evaluateRgbSpectrum(at: interaction)
                 case .constantTexture(let constantTexture):
                         return constantTexture.evaluateRgbSpectrum(at: interaction)
-                //case .openImageIoTexture(let openImageIoTexture):
-                //        return openImageIoTexture.evaluateRgbSpectrum(at: interaction)
-                //case .ptex(let ptex):
-                //        return ptex.evaluateRgbSpectrum(at: interaction)
+                case .openImageIoTexture(let openImageIoTexture):
+                        return openImageIoTexture.evaluateRgbSpectrum(at: interaction)
+                case .ptex(let ptex):
+                        return ptex.evaluateRgbSpectrum(at: interaction)
                 case .rgbSpectrumMixTexture(let rgbSpectrumMixTexture):
                         return rgbSpectrumMixTexture.evaluateRgbSpectrum(at: interaction)
                 case .scaledTexture(let scaledTexture):

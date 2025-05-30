@@ -123,7 +123,7 @@ endif
 	# Should not be needed since there is only one module
 	# CROSS 			= -Xswiftc -cross-module-optimization
 
-	#CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
+	CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
 	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
 
 	SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6

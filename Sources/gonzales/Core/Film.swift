@@ -27,10 +27,9 @@ actor Film: Sendable {
 
         private func chooseWriter(name: String) throws -> ImageWriter {
 
-                //if name.hasSuffix(".exr") {
-                        //return ImageWriter.openImageIO(OpenImageIOWriter())
-                //} else if name.hasSuffix(".ascii") {
-                if name.hasSuffix(".ascii") {
+                if name.hasSuffix(".exr") {
+                        return ImageWriter.openImageIO(OpenImageIOWriter())
+                } else if name.hasSuffix(".ascii") {
                         return ImageWriter.ascii(AsciiWriter())
                 } else {
                         throw FilmError.unknownFileType(name: name)

@@ -1,7 +1,7 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
 
-std::shared_ptr<OIIO::TextureSystem> textureSystem;
+OIIO::TextureSystem *textureSystem;
 
 #ifdef __cplusplus
 extern "C" {

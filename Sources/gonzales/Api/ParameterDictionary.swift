@@ -59,11 +59,6 @@ extension ParameterDictionary {
                                 return rgbSpectrumTexture
                         case .rgbSpectrumTexture(let rgbSpectrumTexture):
                                 return rgbSpectrumTexture
-                        case .dummy:
-                                warning("Return dummy texture \(textureName)")
-                                let constantTexture = ConstantTexture<RgbSpectrum>(value: red)
-                                let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
-                                return rgbSpectrumTexture
                         }
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
@@ -90,9 +85,6 @@ extension ParameterDictionary {
                                 return floatTexture
                         case .rgbSpectrumTexture:
                                 print("No named float texture \"\(textureName)\"")
-                                fatalError()
-                        case .dummy:
-                                print("No named dummy texture \"\(textureName)\"")
                                 fatalError()
                         }
                 } else {
