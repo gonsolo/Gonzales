@@ -32,3 +32,15 @@ With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Thread
 ### Acknowledgments
 
 [PBRT](https://www.pbr-book.org/) was an inspiration since it was called lrt.
+
+### Swift patches
+
+For Swift 6.1.2 the following has to be done on Arch Linux because of incompatibility with GCC 15:
+
+```
++ #if 0
+#if __has_include(<math.h>)
+#endif
++ #endif
+```
+in  /usr/lib/swift/lib/swift/_FoundationCShims/_CStdlib.h +55.
