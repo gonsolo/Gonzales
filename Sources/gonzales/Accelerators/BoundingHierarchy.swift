@@ -7,8 +7,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         ) throws {
                 var toVisit = 0
                 var current = 0
-                //var nodesToVisit = FixedArray16<Int>()
-                var nodesToVisit = Array(repeating: 0, count: 32)
+                var nodesToVisit: [32 of Int] = .init(repeating: 0)
                 var nodesVisited = 0
 
                 if nodes.isEmpty { return }

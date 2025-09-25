@@ -15,7 +15,8 @@ PTEXMEM = --ptexmem 1 # GB
 BITTERLI = ~/src/bitterli
 SCENE_NAME = cornell-box
 #SCENE_NAME = bathroom
-SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+SCENE = Scenes/cornell.pbrt
 IMAGE =  $(SCENE_NAME).exr
 IMAGE_PBRT = $(IMAGE)
 
@@ -131,7 +132,8 @@ endif
 	#SWIFT_SUPPRESS 		= -Xswiftc -suppress-warnings
 	WARNINGS_AS_ERRORS 	= -Xswiftc -warnings-as-errors
 	DEBUG_OPTIONS   	= $(UPCOMING_FEATURE) $(SWIFT_CONCURRENCY) $(SWIFT_SUPPRESS) $(SWIFT_VERBOSE) \
-				  $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL) $(WARNINGS_AS_ERRORS)
+				  $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL) \
+				  $(WARNINGS_AS_ERRORS)
 	RELEASE_OPTIONS 	= $(DEBUG_OPTIONS) $(SWIFT_OPTIMIZE)
 	BUILD			= $(SWIFT) build
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
@@ -280,3 +282,5 @@ lldb:
 	$(LLDB) .build/release/gonzales -- $(SINGLERAY) $(SCENE)
 	#$(LLDB) .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
 
+heaptrack:
+	heaptrack $(GONZALES_RELEASE) $(SCENE)
