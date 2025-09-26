@@ -7,7 +7,7 @@ struct SurfaceInteraction: Interaction, Sendable {
                 return scatter
         }
 
-        func sampleDistributionFunction(sampler: any Sampler) -> BsdfSample {
+        func sampleDistributionFunction(sampler: RandomSampler) -> BsdfSample {
                 var (bsdfSample, _) = bsdf.sampleWorld(wo: wo, u: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, shadingNormal)
                 return bsdfSample

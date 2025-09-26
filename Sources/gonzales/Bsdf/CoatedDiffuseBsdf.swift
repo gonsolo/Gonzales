@@ -26,7 +26,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         private func evaluateNextEvent(
                 depth: Int,
                 pathThroughputWeight: inout RgbSpectrum,
-                sampler: any Sampler,
+                sampler: RandomSampler,
                 z: inout FloatX,
                 w: inout Vector,
                 exitZ: FloatX,
@@ -107,7 +107,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         }
 
         private func evaluateOneSample(
-                sampler: any Sampler,
+                sampler: RandomSampler,
                 wo: Vector,
                 wi: Vector,
                 exitZ: FloatX,

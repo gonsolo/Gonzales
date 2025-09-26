@@ -124,7 +124,7 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(scene: Scene, sampler: any Sampler) throws -> VolumePathIntegrator {
+        func makeIntegrator(scene: Scene, sampler: RandomSampler) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -141,7 +141,7 @@ class Options {
         }
 
         @MainActor
-        func makeSampler(film: Film) throws -> any Sampler {
+        func makeSampler(film: Film) throws -> RandomSampler {
                 if samplerName != "random" {
                         warning("Unknown sampler, using random sampler.")
                 }

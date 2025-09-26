@@ -4,7 +4,7 @@ protocol Interaction: Sendable {
         func spawnRay(inDirection direction: Vector) -> Ray
 
         func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum
-        func sampleDistributionFunction(sampler: any Sampler) -> BsdfSample
+        func sampleDistributionFunction(sampler: RandomSampler) -> BsdfSample
         func evaluateProbabilityDensity(wi: Vector) -> FloatX
 
         var dpdu: Vector { get }

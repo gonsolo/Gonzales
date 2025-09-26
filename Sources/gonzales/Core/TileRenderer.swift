@@ -6,7 +6,7 @@ final class TileRenderer: Renderer {
                 accelerator: Accelerator,
                 camera: any Camera,
                 integrator: VolumePathIntegrator,
-                sampler: any Sampler,
+                sampler: RandomSampler,
                 scene: Scene,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int)
@@ -96,7 +96,7 @@ final class TileRenderer: Renderer {
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
         let reporter: ProgressReporter
-        let sampler: any Sampler
+        let sampler: RandomSampler
         let scene: Scene
         let bounds: Bounds2i
         let tileSize: (Int, Int)

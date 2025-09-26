@@ -1,6 +1,6 @@
 final class UniformLightSampler: Sendable {
 
-        init(sampler: any Sampler, lights: [Light]) {
+        init(sampler: RandomSampler, lights: [Light]) {
                 self.sampler = sampler
                 self.lights = lights
         }
@@ -14,6 +14,6 @@ final class UniformLightSampler: Sendable {
                 return (light, probabilityDensity)
         }
 
-        let sampler: any Sampler
+        let sampler: RandomSampler
         let lights: [Light]
 }

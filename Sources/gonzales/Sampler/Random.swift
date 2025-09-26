@@ -1,10 +1,19 @@
-struct RandomSampler: Sampler {
+//struct RandomSampler: Sampler {
+struct RandomSampler {
+        func getCameraSample(pixel: Point2i) -> CameraSample {
+                return CameraSample(
+                        film: (
+                                FloatX(pixel.x) + get1D(),
+                                FloatX(pixel.y) + get1D()
+                        ),
+                        lens: get2D())
+        }
 
         init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples
         }
 
-        init(instance: any Sampler) {
+        init(instance: RandomSampler) {
                 samplesPerPixel = instance.samplesPerPixel
         }
 
@@ -21,7 +30,7 @@ struct RandomSampler: Sampler {
                 return (get1D(), get1D(), get1D())
         }
 
-        func clone() -> any Sampler {
+        func clone() -> RandomSampler {
                 return RandomSampler(numberOfSamples: samplesPerPixel)
         }
 

@@ -7,7 +7,7 @@ final class Tile: Sendable {
 
         func render(
                 reporter: ProgressReporter,
-                sampler: any Sampler,
+                sampler: RandomSampler,
                 camera: any Camera,
                 scene: Scene,
                 lightSampler: LightSampler,
