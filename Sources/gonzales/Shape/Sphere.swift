@@ -171,7 +171,7 @@ final class Sphere: Shape {
         let radius: FloatX
 }
 
-func createSphere(objectToWorld: Transform, parameters: ParameterDictionary) throws -> Sphere {
+func createSphere(objectToWorld: Transform, parameters: ParameterDictionary) throws -> ShapeType {
         let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
-        return Sphere(radius: radius, objectToWorld: objectToWorld)
+        return .sphere(Sphere(radius: radius, objectToWorld: objectToWorld))
 }

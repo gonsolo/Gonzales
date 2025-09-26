@@ -658,7 +658,7 @@ struct Api {
                 objectToWorld: Transform,
                 parameters: ParameterDictionary
         )
-                throws -> [any Shape]
+                throws -> [ShapeType]
         {
                 switch name {
                 case "bilinearmesh":

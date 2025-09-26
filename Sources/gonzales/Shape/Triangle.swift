@@ -475,7 +475,7 @@ struct Triangle: Shape {
 func createTriangleMeshShape(
         objectToWorld: Transform,
         parameters: ParameterDictionary
-) throws -> [any Shape] {
+) throws -> [ShapeType] {
         let indices = try parameters.findInts(name: "indices")
         guard indices.count % 3 == 0 else {
                 throw ApiError.input(message: "Triangle indices must be multiplies of 3")
@@ -506,12 +506,12 @@ func createTriangleMesh(
         normals: [Normal],
         uvs: [Vector2F],
         faceIndices: [Int]
-) throws -> [any Shape] {
+) throws -> [ShapeType] {
         let numberTriangles = indices.count / 3
         let trianglePoints = points
         let triangleNormals = normals
         let triangleUvs = uvs
-        var triangles = [Triangle]()
+        var triangles = [ShapeType]()
 
         let mesh = TriangleMesh(
                 objectToWorld: objectToWorld,
@@ -527,10 +527,10 @@ func createTriangleMesh(
 
         for i in 0..<numberTriangles {
                 triangles.append(
-                        try Triangle(
+                        try .triangle(Triangle(
                                 meshIndex: meshIndex,
                                 number: i,
-                                triangleMeshes: triangleMeshes))
+                                triangleMeshes: triangleMeshes)))
         }
         return triangles
 }

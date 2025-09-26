@@ -5,12 +5,10 @@ final class Disk: Shape {
                 self.radius = radius
         }
 
-        @MainActor
         func worldBound() -> Bounds3f {
                 return objectToWorld * objectBound()
         }
 
-        @MainActor
         func objectBound() -> Bounds3f {
                 // TODO
                 return Bounds3f()
@@ -45,8 +43,8 @@ final class Disk: Shape {
         let radius: FloatX
 }
 
-func createDiskShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [any Shape] {
+func createDiskShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [ShapeType] {
         let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
-        let disk = Disk(objectToWorld: objectToWorld, radius: radius)
-        return [disk]
+        let shape = ShapeType.disk(Disk(objectToWorld: objectToWorld, radius: radius))
+        return [shape]
 }

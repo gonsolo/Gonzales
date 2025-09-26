@@ -365,7 +365,7 @@ struct PlyMesh {
 
 @MainActor
 func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
-        -> [any Shape]
+        -> [ShapeType]
 {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = sceneDirectory + "/" + relativeFileName

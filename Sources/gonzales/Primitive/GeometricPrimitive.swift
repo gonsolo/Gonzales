@@ -28,8 +28,8 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return material.getBsdf(interaction: interaction)
         }
 
-        var shape: any Shape
-        //var material: MaterialIndex
+        //var shape: any Shape
+        var shape: ShapeType
         var material: Material
         var mediumInterface: MediumInterface?
         var alpha: FloatX
