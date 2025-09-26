@@ -3,7 +3,7 @@ indirect enum FloatTexture {
         case floatMixTexture(FloatMixTexture)
         case openImageIoTexture(OpenImageIOTexture)
 
-        func evaluateFloat(at interaction: any Interaction) -> FloatX {
+        func evaluateFloat(at interaction: InteractionType) -> FloatX {
                 switch self {
                 case .constantTexture(let constantTexture):
                         return constantTexture.evaluateFloat(at: interaction)
@@ -14,7 +14,7 @@ indirect enum FloatTexture {
                 }
         }
 
-        func evaluate(at interaction: any Interaction) -> any TextureEvaluation {
+        func evaluate(at interaction: InteractionType) -> any TextureEvaluation {
                 return evaluateFloat(at: interaction)
         }
 }

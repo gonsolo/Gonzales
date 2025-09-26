@@ -11,7 +11,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func brdfDensity(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sample: Vector
         ) -> FloatX {
                 return interaction.evaluateProbabilityDensity(wi: sample)
@@ -59,7 +59,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleLightSource(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sampler: RandomSampler
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
@@ -77,7 +77,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleDistributionFunction(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sampler: RandomSampler
         ) throws -> BsdfSample {
 
@@ -111,7 +111,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleLight(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
@@ -127,7 +127,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleGlobalBsdf(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
@@ -143,7 +143,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func sampleMultipleImportance(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
 
@@ -177,7 +177,7 @@ final class VolumePathIntegrator: Sendable {
 
         private func estimateDirect(
                 light: Light,
-                interaction: any Interaction,
+                interaction: InteractionType,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
                 if light.isDelta {
@@ -203,7 +203,7 @@ final class VolumePathIntegrator: Sendable {
         }
 
         private func sampleOneLight(
-                at interaction: any Interaction,
+                at interaction: InteractionType,
                 with sampler: RandomSampler,
                 lightSampler: LightSampler
         ) throws -> RgbSpectrum {
@@ -236,16 +236,17 @@ final class VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 ray: Ray
         ) throws -> (RgbSpectrum, Ray) {
+                let interaction = InteractionType.medium(mediumInteraction)
                 let estimate =
                         try pathThroughputWeight
                         * sampleOneLight(
-                                at: mediumInteraction,
+                                at: interaction,
                                 with: sampler,
                                 lightSampler: lightSampler)
                 let (_, wi) = mediumInteraction.phase.samplePhase(
                         wo: -ray.direction,
                         sampler: sampler)
-                let spawnedRay = mediumInteraction.spawnRay(inDirection: wi)
+                let spawnedRay = interaction.spawnRay(inDirection: wi)
                 return (estimate, spawnedRay)
         }
 
@@ -328,12 +329,13 @@ final class VolumePathIntegrator: Sendable {
                 state: ImmutableState
         ) throws -> Bool {
                 var surfaceInteraction = interaction
+                let interactionType = InteractionType.surface(surfaceInteraction)
                 if bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
                                 estimate +=
                                         pathThroughputWeight
                                         * areaLight.emittedRadiance(
-                                                from: surfaceInteraction,
+                                                from: .surface(surfaceInteraction),
                                                 inDirection: surfaceInteraction.wo)
                         }
                 }
@@ -341,8 +343,7 @@ final class VolumePathIntegrator: Sendable {
                 //        return false
                 //}
                 if surfaceInteraction.material.isInterface {
-                        //var spawnedRay = surfaceInteraction.spawnRay(
-                        let spawnedRay = surfaceInteraction.spawnRay(
+                        let spawnedRay = interactionType.spawnRay(
                                 inDirection: ray.direction)
                         //if let interface = surfaceInteraction.mediumInterface {
                         //spawnedRay.medium = state.namedMedia[interface.interior]
@@ -369,7 +370,7 @@ final class VolumePathIntegrator: Sendable {
                 let lightEstimate =
                         try pathThroughputWeight
                         * sampleOneLight(
-                                at: surfaceInteraction,
+                                at: interactionType,
                                 with: sampler,
                                 lightSampler: lightSampler)
                 estimate += lightEstimate
@@ -383,7 +384,7 @@ final class VolumePathIntegrator: Sendable {
                 }
                 pathThroughputWeight *= bsdfSample.throughputWeight(
                         normal: surfaceInteraction.normal)
-                let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
+                let spawnedRay = interactionType.spawnRay(inDirection: bsdfSample.incoming)
                 ray = spawnedRay
                 return true
         }

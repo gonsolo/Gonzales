@@ -7,16 +7,16 @@ struct DistantLight {
                 self.direction = normalized(lightToWorld * direction)
         }
 
-        func sample(for reference: any Interaction, u: TwoRandomVariables) -> (
+        func sample(for reference: InteractionType, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let outside = reference.position + direction * 2 * worldRadius
                 let visibility = Visibility(
-                        from: reference, to: SurfaceInteraction(position: outside))
+                        from: reference, to: .surface(SurfaceInteraction(position: outside)))
                 return (brightness, direction, pdf: 1, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: InteractionType)
                 throws -> FloatX
         {
                 return 0

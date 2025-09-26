@@ -1,6 +1,6 @@
 struct ConstantTexture<T: TextureEvaluation>: Sendable {
 
-        func evaluate(at: any Interaction) -> any TextureEvaluation {
+        func evaluate(at: InteractionType) -> any TextureEvaluation {
                 return value
         }
 
@@ -9,13 +9,13 @@ struct ConstantTexture<T: TextureEvaluation>: Sendable {
 
 extension ConstantTexture where T == RgbSpectrum {
 
-        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
+        func evaluateRgbSpectrum(at interaction: InteractionType) -> RgbSpectrum {
                 return evaluate(at: interaction) as! RgbSpectrum
         }
 }
 
 extension ConstantTexture where T == FloatX {
-        func evaluateFloat(at interaction: any Interaction) -> FloatX {
+        func evaluateFloat(at interaction: InteractionType) -> FloatX {
                 return evaluate(at: interaction) as! FloatX
         }
 }

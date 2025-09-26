@@ -16,7 +16,7 @@ struct Ptex {
                 initPtexTexture(path)
         }
 
-        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
+        func evaluateRgbSpectrum(at interaction: InteractionType) -> RgbSpectrum {
                 let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluatePtex(
                         path, interaction.faceIndex, Float(interaction.uv[0]),

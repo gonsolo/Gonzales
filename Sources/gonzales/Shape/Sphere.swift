@@ -31,18 +31,18 @@ final class Sphere: Shape {
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: InteractionType, pdf: FloatX) {
 
                 let localPosition = radius * uniformSampleSphere(u: u)
                 let worldNormal = normalized(objectToWorld * Normal(point: localPosition))
                 let worldPosition = objectToWorld * localPosition
                 let interaction = SurfaceInteraction(position: worldPosition, normal: worldNormal)
                 let pdf: FloatX = 1.0
-                return (interaction, pdf)
+                return (.surface(interaction), pdf)
         }
 
-        func sample(ref: any Interaction, u: TwoRandomVariables)
-                -> (interaction: any Interaction, pdf: FloatX)
+        func sample(ref: InteractionType, u: TwoRandomVariables)
+                -> (interaction: InteractionType, pdf: FloatX)
         {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
@@ -90,7 +90,7 @@ final class Sphere: Shape {
                 let worldPoint = center + radius * Point(worldNormal)
                 let interaction = SurfaceInteraction(position: worldPoint, normal: worldNormal)
                 let pdf: FloatX = 1.0 / (2 * FloatX.pi * (1 - cosThetaMax))
-                return (interaction, pdf)
+                return (.surface(interaction), pdf)
         }
 
         func area() -> FloatX {

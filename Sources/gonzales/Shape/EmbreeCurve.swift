@@ -34,17 +34,17 @@ final class EmbreeCurve: Shape {
                 return bounds
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: InteractionType, pdf: FloatX) {
                 unimplemented()
         }
 
-        func sample(ref: any Interaction, u: TwoRandomVariables) -> (any Interaction, FloatX) {
+        func sample(ref: InteractionType, u: TwoRandomVariables) -> (InteractionType, FloatX) {
                 unimplemented()
         }
 
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
-                from interaction: any Interaction
+                from interaction: InteractionType
         ) throws -> FloatX {
                 unimplemented()
         }
