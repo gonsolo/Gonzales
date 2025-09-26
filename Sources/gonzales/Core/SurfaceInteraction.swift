@@ -37,7 +37,7 @@ struct SurfaceInteraction: Interaction, Sendable {
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
         var mediumInterface: MediumInterface? = nil
-        var bsdf: any GlobalBsdf = DummyBsdf()
+        var bsdf: GlobalBsdfType = .dummyBsdf(DummyBsdf())
 }
 
 extension SurfaceInteraction: CustomStringConvertible {

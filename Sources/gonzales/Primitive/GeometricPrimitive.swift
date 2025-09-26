@@ -24,7 +24,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return await shape.objectBound()
         }
 
-        func getBsdf(interaction: any Interaction) -> any GlobalBsdf {
+        func getBsdf(interaction: any Interaction) -> GlobalBsdfType {
                 return material.getBsdf(interaction: interaction)
         }
 

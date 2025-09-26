@@ -1,6 +1,6 @@
 struct Conductor {
 
-        func getBsdf(interaction: any Interaction) -> some GlobalBsdf {
+        func getBsdf(interaction: any Interaction) -> MicrofacetReflection {
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnel = FresnelConductor(
