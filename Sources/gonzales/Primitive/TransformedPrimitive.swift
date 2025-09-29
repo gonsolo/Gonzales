@@ -15,7 +15,7 @@ final class TransformedPrimitive: Boundable, Intersectable, Sendable {
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
+        ) throws -> IntersectablePrimitive? {
                 let localRay = transform.inverse * ray
                 return try accelerator.intersect_lean(
                         ray: localRay,

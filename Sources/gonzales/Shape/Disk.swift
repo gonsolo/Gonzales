@@ -17,13 +17,13 @@ final class Disk: Shape {
         func intersect_lean(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool{
+        ) throws -> IntersectablePrimitive? {
                 var interaction = SurfaceInteraction()
                 try intersect(ray: worldRay, tHit: &tHit, interaction: &interaction)
                 if interaction.valid {
-                        return true
+                        return .disk(self) 
                 } else {
-                        return false}
+                        return nil}
         }
 
         func intersect(

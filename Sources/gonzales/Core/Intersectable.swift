@@ -3,7 +3,7 @@
 protocol Intersectable {
         func intersect_lean(
                 ray: Ray,
-                tHit: inout FloatX) throws -> Bool
+                tHit: inout FloatX) throws -> IntersectablePrimitive?
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -11,15 +11,19 @@ protocol Intersectable {
 }
 
 enum IntersectablePrimitive: Sendable {
+        case curve(Curve)
+        case embreeCurve(EmbreeCurve)
+        case disk(Disk)
         case geometricPrimitive(GeometricPrimitive)
         case triangle(Triangle)
+        case sphere(Sphere)
         case transformedPrimitive(TransformedPrimitive)
         case areaLight(AreaLight)
 
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX,
-        ) throws -> Bool {
+        ) throws -> IntersectablePrimitive? {
                 switch self {
                 case .areaLight(let areaLight):
                         return try areaLight.intersect_lean(
@@ -27,6 +31,22 @@ enum IntersectablePrimitive: Sendable {
                                 tHit: &tHit)
                 case .geometricPrimitive(let geometricPrimitive):
                         return try geometricPrimitive.intersect_lean(
+                                ray: ray,
+                                tHit: &tHit)
+                case .curve(let curve):
+                        return try curve.intersect_lean(
+                                ray: ray,
+                                tHit: &tHit)
+                case .embreeCurve(let embreeCurve):
+                        return try embreeCurve.intersect_lean(
+                                ray: ray,
+                                tHit: &tHit)
+                case .sphere(let sphere):
+                        return try sphere.intersect_lean(
+                                ray: ray,
+                                tHit: &tHit)
+                case .disk(let disk):
+                        return try disk.intersect_lean(
                                 ray: ray,
                                 tHit: &tHit)
                 case .triangle(let triangle):
@@ -56,8 +76,28 @@ enum IntersectablePrimitive: Sendable {
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)
+                case .disk(let disk):
+                        try disk.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .curve(let curve):
+                        try curve.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .embreeCurve(let embreeCurve):
+                        try embreeCurve.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
                 case .triangle(let triangle):
                         try triangle.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .sphere(let sphere):
+                        try sphere.intersect(
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)

@@ -41,7 +41,7 @@ enum Accelerator: Boundable, Intersectable, Sendable {
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
+        ) throws -> IntersectablePrimitive? {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):
                         return try boundingHierarchy.intersect_lean(

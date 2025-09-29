@@ -52,7 +52,7 @@ enum ShapeType: Shape {
 
     func intersect_lean(
         ray: Ray,
-        tHit: inout FloatX) throws -> Bool{
+        tHit: inout FloatX) throws -> IntersectablePrimitive? {
         
         switch self {
         case .triangle(let triangle):

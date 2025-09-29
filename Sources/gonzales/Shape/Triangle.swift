@@ -255,11 +255,12 @@ struct Triangle: Shape {
         func intersect_lean(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
+        ) throws -> IntersectablePrimitive? {
                 let empty = { (line: Int) in
                         //print("No triangle intersection at line ", line)
                         //Thread.callStackSymbols.forEach { print($0) }
-                        return false
+                        let n: IntersectablePrimitive? = nil
+                        return n
                 }
 
                 let ray = worldToObject * worldRay
@@ -388,7 +389,7 @@ struct Triangle: Shape {
 
                 tHit = t
 
-                return true
+                return .triangle(self)
         }
 
         func intersect(

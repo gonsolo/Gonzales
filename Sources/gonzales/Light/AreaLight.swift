@@ -49,8 +49,8 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
-                if alpha == 0 { return false }
+        ) throws -> IntersectablePrimitive? {
+                if alpha == 0 { return nil }
                 return try shape.intersect_lean(
                         ray: ray,
                         tHit: &tHit)
