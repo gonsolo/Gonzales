@@ -284,6 +284,18 @@ final class Curve: Shape {
                 return overlaps
         }
 
+        func intersect_lean(
+                ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> Bool{
+                var interaction = SurfaceInteraction()
+                try intersect(ray: worldRay, tHit: &tHit, interaction: &interaction)
+                if interaction.valid {
+                        return true
+                } else {
+                        return false}
+        }
+
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX,

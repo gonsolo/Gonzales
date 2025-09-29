@@ -50,6 +50,24 @@ enum ShapeType: Shape {
         }
     }
 
+    func intersect_lean(
+        ray: Ray,
+        tHit: inout FloatX) throws -> Bool{
+        
+        switch self {
+        case .triangle(let triangle):
+            return try triangle.intersect_lean(ray: ray, tHit: &tHit)
+        case .sphere(let sphere):
+            return try sphere.intersect_lean(ray: ray, tHit: &tHit)
+        case .disk(let disk):
+            return try disk.intersect_lean(ray: ray, tHit: &tHit)
+        case .curve(let curve):
+            return try curve.intersect_lean(ray: ray, tHit: &tHit)
+        case .embreeCurve(let embreeCurve):
+            return try embreeCurve.intersect_lean(ray: ray, tHit: &tHit)
+        }
+    }
+
     func intersect(
         ray: Ray,
         tHit: inout FloatX,
