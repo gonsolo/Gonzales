@@ -44,16 +44,28 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 return candidate
         }
 
-        func intersect(
+        //func intersect(
+        //        ray: Ray,
+        //        tHit: inout FloatX,
+        //        interaction: inout SurfaceInteraction
+        //) throws {
+        //        let candidate = try intersect_lean(ray: ray, tHit: &tHit)
+        //        try candidate?.intersect(
+        //                ray: ray,
+        //                tHit: &tHit,
+        //                interaction: &interaction)
+        //}
+
+        func computeInteraction(
                 ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
+                tHit: inout FloatX
+        ) throws -> SurfaceInteraction {
                 let candidate = try intersect_lean(ray: ray, tHit: &tHit)
-                try candidate?.intersect(
-                        ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
+                if let candidate {
+                        return try candidate.computeInteraction(ray: ray, tHit: &tHit)
+                } else { 
+                        return  SurfaceInteraction()
+                }
         }
 
         @MainActor

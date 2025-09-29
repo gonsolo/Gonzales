@@ -42,11 +42,11 @@ extension Sampleable where Self: Intersectable {
         {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
-                var interaction = SurfaceInteraction()
-                try intersect(ray: ray, tHit: &tHit, interaction: &interaction)
-                if !interaction.valid {
+                let candidate = try intersect_lean(ray: ray, tHit: &tHit)
+                if candidate == nil{
                         return 0
                 }
+                let interaction = try computeInteraction(ray: ray, tHit: &tHit)
                 let squaredDistance = distanceSquared(from.position, interaction.position)
                 let angle = absDot(interaction.normal, -direction)
                 let angleTimesArea = angle * area()

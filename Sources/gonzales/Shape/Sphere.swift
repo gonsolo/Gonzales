@@ -180,6 +180,13 @@ final class Sphere: Shape {
                 tHit = shapeHit
         }
 
+        func computeInteraction(
+                ray: Ray,
+                tHit: inout FloatX) throws -> SurfaceInteraction
+        {
+                unimplemented()
+        }
+
         let objectToWorld: Transform
         let radius: FloatX
 }

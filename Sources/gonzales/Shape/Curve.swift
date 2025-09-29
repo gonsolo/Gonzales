@@ -354,6 +354,13 @@ final class Curve: Shape {
                 //interaction = interactionAndT.0
         }
 
+        func computeInteraction(
+                ray: Ray,
+                tHit: inout FloatX) throws -> SurfaceInteraction
+        {
+                unimplemented()
+        }
+
         func area() -> FloatX {
                 fatalError("Not implemented")
         }

@@ -36,10 +36,15 @@ struct Scene: Sendable {
                 if skip {
                         return
                 }
-                try accelerator.intersect(
+                let candidate = try accelerator.intersect_lean(
                         ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
+                        tHit: &tHit)
+                let myInteraction = try candidate?.computeInteraction(
+                        ray: ray,
+                        tHit: &tHit)
+                if let myInteraction {
+                        interaction = myInteraction
+                }
         }
 
         @MainActor
