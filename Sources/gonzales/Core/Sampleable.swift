@@ -9,7 +9,7 @@ protocol Sampleable {
 
         func sample(u: TwoRandomVariables) -> (interaction: InteractionType, pdf: FloatX)
 
-        func sample(ref: InteractionType, u: TwoRandomVariables) -> (InteractionType, FloatX)
+        func sample(position: Point, u: TwoRandomVariables) -> (InteractionType, FloatX)
 
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
@@ -22,10 +22,10 @@ protocol Sampleable {
 
 extension Sampleable {
 
-        func sample(ref: InteractionType, u: TwoRandomVariables) -> (InteractionType, FloatX) {
+        func sample(position: Point , u: TwoRandomVariables) -> (InteractionType, FloatX) {
                 var (intr, pdf) = sample(u: u)
-                let wi: Vector = normalized(intr.position - ref.position)
-                let squaredDistance = distanceSquared(ref.position, intr.position)
+                let wi: Vector = normalized(intr.position - position)
+                let squaredDistance = distanceSquared(position, intr.position)
                 let angle = absDot(Vector(normal: intr.normal), -wi)
                 pdf *= squaredDistance / angle
                 return (intr, pdf)

@@ -17,7 +17,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         func sample(for ref: InteractionType, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
-                let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
+                let (shapeInteraction, pdf) = shape.sample(position: ref.position, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - ref.position)
                 assert(!direction.isNaN)
                 let visibility = Visibility(from: ref.position, to: shapeInteraction.position)
