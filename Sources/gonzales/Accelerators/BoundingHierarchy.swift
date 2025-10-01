@@ -3,14 +3,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> IntersectablePrimitive? {
+        ) throws -> Bool{
                 var toVisit = 0
                 var current = 0
                 var nodesToVisit: [32 of Int] = .init(repeating: 0)
                 var nodesVisited = 0
                 var candidate: IntersectablePrimitive? = nil
 
-                if nodes.isEmpty { return nil }
+                if nodes.isEmpty { return false }
                 while true {
                         nodesVisited += 1
                         let node = nodes[current]
@@ -18,7 +18,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
                                                 let primitive = primitives[node.offset + i]
-                                                if try primitive.intersect_lean(ray: ray, tHit: &tHit) != nil {
+                                                if try primitive.intersect_lean(ray: ray, tHit: &tHit) {
                                                         candidate = primitive
                                                 }
                                         }
@@ -41,7 +41,11 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                 current = nodesToVisit[toVisit]
                         }
                 }
-                return candidate
+                if candidate == nil {
+                        return false
+                } else {
+                        return true
+                }
         }
 
         func intersect(
@@ -49,11 +53,52 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let candidate = try intersect_lean(ray: ray, tHit: &tHit)
+                var toVisit = 0
+                var current = 0
+                var nodesToVisit: [32 of Int] = .init(repeating: 0)
+                var nodesVisited = 0
+                var candidate: IntersectablePrimitive? = nil
+
+                if nodes.isEmpty { return }
+                while true {
+                        nodesVisited += 1
+                        let node = nodes[current]
+                        if node.bounds.intersects(ray: ray, tHit: tHit) {
+                                if node.count > 0 {  // leaf
+                                        for i in 0..<node.count {
+                                                let primitive = primitives[node.offset + i]
+                                                if try primitive.intersect_lean( ray: ray, tHit: &tHit) {
+                                                        candidate = primitive
+                                                }
+                                                //try primitive.intersect(
+                                                //        ray: ray,
+                                                //        tHit: &tHit,
+                                                //        interaction: &interaction)
+                                        }
+                                        if toVisit == 0 { break }
+                                        toVisit -= 1
+                                        current = nodesToVisit[toVisit]
+                                } else {  // interior
+                                        if ray.direction[node.axis] < 0 {
+                                                nodesToVisit[toVisit] = current + 1
+                                                current = node.offset
+                                        } else {
+                                                nodesToVisit[toVisit] = node.offset
+                                                current = current + 1
+                                        }
+                                        toVisit += 1
+                                }
+                        } else {
+                                if toVisit == 0 { break }
+                                toVisit -= 1
+                                current = nodesToVisit[toVisit]
+                        }
+                }
                 try candidate?.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
+                //BoundingHierarchy.boundingHierarchyNodesVisited += nodesVisited
         }
 
         @MainActor

@@ -3,8 +3,8 @@ struct GeometricPrimitive: Boundable, Intersectable {
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> IntersectablePrimitive? {
-                if alpha == 0 { return nil }
+        ) throws -> Bool {
+                if alpha == 0 { return false }
                 return try shape.intersect_lean(
                         ray: ray,
                         tHit: &tHit)
