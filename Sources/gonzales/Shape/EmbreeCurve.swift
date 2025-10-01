@@ -33,13 +33,6 @@ final class EmbreeCurve: Shape {
                 unimplemented()
         }
 
-        func computeInteraction(
-                ray: Ray,
-                tHit: inout FloatX) throws -> SurfaceInteraction
-        {
-                unimplemented()
-        }
-
         func worldBound() -> Bounds3f {
                 return objectToWorld * objectBound()
         }

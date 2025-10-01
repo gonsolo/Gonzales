@@ -26,13 +26,6 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 }
         }
 
-        func computeInteraction(
-                ray: Ray,
-                tHit: inout FloatX) throws -> SurfaceInteraction
-        {
-                return try shape.computeInteraction(ray: ray, tHit: &tHit)
-        }
-
         func worldBound() async -> Bounds3f {
                 return await shape.worldBound()
         }

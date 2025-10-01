@@ -22,28 +22,21 @@ final class TransformedPrimitive: Boundable, Intersectable, Sendable {
                         tHit: &tHit)
         }
 
-        //func intersect(
-        //        ray: Ray,
-        //        tHit: inout FloatX,
-        //        interaction: inout SurfaceInteraction
-        //) throws {
-        //        let localRay = transform.inverse * ray
-        //        // TODO: transform tHit?
-        //        try accelerator.intersect(
-        //                ray: localRay,
-        //                tHit: &tHit,
-        //                interaction: &interaction)
-        //        if !interaction.valid {
-        //                return
-        //        }
-        //        interaction = transform * interaction
-        //}
-
-        func computeInteraction(
+        func intersect(
                 ray: Ray,
-                tHit: inout FloatX) throws -> SurfaceInteraction
-        {
-                unimplemented()
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                let localRay = transform.inverse * ray
+                // TODO: transform tHit?
+                try accelerator.intersect(
+                        ray: localRay,
+                        tHit: &tHit,
+                        interaction: &interaction)
+                if !interaction.valid {
+                        return
+                }
+                interaction = transform * interaction
         }
 
         @MainActor

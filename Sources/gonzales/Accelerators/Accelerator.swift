@@ -14,16 +14,10 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                 case .boundingHierarchy(let boundingHierarchy):
                         for i in 0..<rays.count {
                                 if !skips[i] {
-                                        //try boundingHierarchy.intersect(
-                                        //        ray: rays[i],
-                                        //        tHit: &tHits[i],
-                                        //        interaction: &interactions[i])
-                                        let candidate = try boundingHierarchy.intersect_lean(ray: rays[i], tHit: &tHits[i])
-                                        if candidate != nil {
-                                                let interaction = try boundingHierarchy.computeInteraction(
-                                                        ray: rays[i], tHit: &tHits[i])
-                                                interactions[i] = interaction
-                                        }
+                                        try boundingHierarchy.intersect(
+                                                ray: rays[i],
+                                                tHit: &tHits[i],
+                                                interaction: &interactions[i])
                                 }
                         }
                 //case .embree(let embree):
@@ -56,39 +50,27 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                 }
         }
 
-        //func intersect(
-        //        ray: Ray,
-        //        tHit: inout FloatX,
-        //        interaction: inout SurfaceInteraction
-        //) throws {
-        //        switch self {
-        //        case .boundingHierarchy(let boundingHierarchy):
-        //                try boundingHierarchy.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        //case .embree(let embree):
-        //        //        try embree.intersect(
-        //        //                ray: ray,
-        //        //                tHit: &tHit,
-        //        //                interaction: &interaction)
-        //        //case .optix(let optix):
-        //        //        try optix.intersect(
-        //        //                ray: ray,
-        //        //                tHit: &tHit,
-        //        //                interaction: &interaction)
-        //        }
-        //}
-
-        func computeInteraction(
+        func intersect(
                 ray: Ray,
-                tHit: inout FloatX) throws -> SurfaceInteraction
-        {
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 switch self {
                 case .boundingHierarchy(let boundingHierarchy):
-                        return try boundingHierarchy.computeInteraction(
+                        try boundingHierarchy.intersect(
                                 ray: ray,
-                                tHit: &tHit)
+                                tHit: &tHit,
+                                interaction: &interaction)
+                //case .embree(let embree):
+                //        try embree.intersect(
+                //                ray: ray,
+                //                tHit: &tHit,
+                //                interaction: &interaction)
+                //case .optix(let optix):
+                //        try optix.intersect(
+                //                ray: ray,
+                //                tHit: &tHit,
+                //                interaction: &interaction)
                 }
         }
 

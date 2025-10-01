@@ -34,13 +34,6 @@ final class Disk: Shape {
                 // TODO
         }
 
-        func computeInteraction(
-                ray: Ray,
-                tHit: inout FloatX) throws -> SurfaceInteraction
-        {
-                unimplemented()
-        }
-
         func area() -> FloatX {
                 fatalError("Not implemented")
         }

@@ -4,13 +4,10 @@ protocol Intersectable {
         func intersect_lean(
                 ray: Ray,
                 tHit: inout FloatX) throws -> IntersectablePrimitive?
-        //func intersect(
-        //        ray: Ray,
-        //        tHit: inout FloatX,
-        //        interaction: inout SurfaceInteraction) throws
-        func computeInteraction(
+        func intersect(
                 ray: Ray,
-                tHit: inout FloatX) throws -> SurfaceInteraction
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction) throws
 }
 
 enum IntersectablePrimitive: Sendable {
@@ -63,76 +60,52 @@ enum IntersectablePrimitive: Sendable {
                 }
         }
 
-        func computeInteraction(
+        func intersect(
                 ray: Ray,
-                tHit: inout FloatX
-        ) throws -> SurfaceInteraction {
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
                 switch self {
-                case .triangle(let triangle):
-                       return try triangle.computeInteraction(ray: ray, tHit: &tHit) 
                 case .areaLight(let areaLight):
-                       return try areaLight.computeInteraction(ray: ray, tHit: &tHit) 
-                case .curve:
-                        unimplemented()
-                case .embreeCurve:
-                        unimplemented()
-                case .disk:
-                        unimplemented()
+                        try areaLight.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
                 case .geometricPrimitive(let geometricPrimitive):
-                       return try geometricPrimitive.computeInteraction(ray: ray, tHit: &tHit) 
-                case .sphere:
-                        unimplemented()
-                case .transformedPrimitive:
-                        unimplemented()
+                        try geometricPrimitive.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .disk(let disk):
+                        try disk.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .curve(let curve):
+                        try curve.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .embreeCurve(let embreeCurve):
+                        try embreeCurve.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .triangle(let triangle):
+                        try triangle.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .sphere(let sphere):
+                        try sphere.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
+                case .transformedPrimitive(let transformedPrimitive):
+                        try transformedPrimitive.intersect(
+                                ray: ray,
+                                tHit: &tHit,
+                                interaction: &interaction)
                 }
         }
-
-        //func intersect(
-        //        ray: Ray,
-        //        tHit: inout FloatX,
-        //        interaction: inout SurfaceInteraction
-        //) throws {
-        //        switch self {
-        //        case .areaLight(let areaLight):
-        //                try areaLight.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .geometricPrimitive(let geometricPrimitive):
-        //                try geometricPrimitive.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .disk(let disk):
-        //                try disk.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .curve(let curve):
-        //                try curve.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .embreeCurve(let embreeCurve):
-        //                try embreeCurve.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .triangle(let triangle):
-        //                try triangle.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .sphere(let sphere):
-        //                try sphere.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        case .transformedPrimitive(let transformedPrimitive):
-        //                try transformedPrimitive.intersect(
-        //                        ray: ray,
-        //                        tHit: &tHit,
-        //                        interaction: &interaction)
-        //        }
-        //}
 }

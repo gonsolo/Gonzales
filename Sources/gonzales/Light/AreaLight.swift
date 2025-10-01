@@ -56,31 +56,19 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                         tHit: &tHit)
         }
 
-        //func intersect(
-        //        ray: Ray,
-        //        tHit: inout FloatX,
-        //        interaction: inout SurfaceInteraction
-        //) throws {
-        //        if alpha == 0 { return }
-        //        try shape.intersect(
-        //                ray: ray,
-        //                tHit: &tHit,
-        //                interaction: &interaction)
-        //        interaction.areaLight = self
-        //}
-
-        func computeInteraction(
+        func intersect(
                 ray: Ray,
-                tHit: inout FloatX
-        ) throws -> SurfaceInteraction {
-                var interaction = SurfaceInteraction()
-                if alpha == 0 { return interaction }
-                interaction = try shape.computeInteraction(
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                if alpha == 0 { return }
+                try shape.intersect(
                         ray: ray,
-                        tHit: &tHit)
+                        tHit: &tHit,
+                        interaction: &interaction)
                 interaction.areaLight = self
-                return interaction
         }
+
         func getBsdf(interaction: InteractionType) -> DiffuseBsdf {
                 let diffuse = Diffuse(
                         reflectance: Texture.rgbSpectrumTexture(

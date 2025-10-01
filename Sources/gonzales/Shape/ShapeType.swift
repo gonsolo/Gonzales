@@ -87,18 +87,6 @@ enum ShapeType: Shape {
         }
     }
 
-    func computeInteraction(
-            ray: Ray,
-            tHit: inout FloatX) throws -> SurfaceInteraction
-    {
-        switch self {
-        case .triangle(let triangle):
-            return try triangle.computeInteraction(ray: ray, tHit: &tHit)
-        default:
-                unimplemented()
-        }
-    }
-
     func sample(u: TwoRandomVariables) -> (interaction: InteractionType, pdf: FloatX) {
         switch self {
         case .triangle(let triangle):
