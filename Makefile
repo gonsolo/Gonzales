@@ -1,4 +1,4 @@
-all: d
+all: view
 
 #SINGLERAY = --single 68 2
 #SYNC = --sync
@@ -103,7 +103,7 @@ ifeq ($(OS), Darwin)
 	BUILD_DEBUG = xcodebuild -configuration Debug -scheme gonzales -destination 'platform=OS X,arch=x86_64' build
 	BUILD_RELEASE = xcodebuild -configuration Release -scheme gonzales -destination 'platform=OS X,arch=x86_64' build
 else
-	VIEWER 			= gimp
+	VIEWER 			= loupe
 	PBRT 			= ~/bin/pbrt
 	#LLDB 			= /usr/libexec/swift/bin/lldb
 	LLDB 			= lldb
