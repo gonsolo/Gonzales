@@ -13,7 +13,7 @@ struct PointLight {
                 let direction: Vector = normalized(position - reference.position)
                 let pdf: FloatX = 1.0
                 let visibility = Visibility(
-                        from: reference.position, to: position)
+                        from: reference, to: .surface(SurfaceInteraction(position: position)))
                 let distance2 = distanceSquared(position, reference.position)
                 let radiance = intensity / distance2
                 return (radiance, direction, pdf, visibility)

@@ -12,7 +12,7 @@ struct DistantLight {
         ) {
                 let outside = reference.position + direction * 2 * worldRadius
                 let visibility = Visibility(
-                        from: reference.position, to: outside)
+                        from: reference, to: .surface(SurfaceInteraction(position: outside)))
                 return (brightness, direction, pdf: 1, visibility)
         }
 

@@ -118,8 +118,22 @@ enum InteractionType: Sendable {
         }
     }
 
+    // MARK: - Migrated Extension Logic
+
+    private func offsetRayOrigin(point: Point, direction: Vector) -> Point {
+        let epsilon: FloatX = 0.0001
+        return Point(point + epsilon * direction)
+    }
+
     func spawnRay(inDirection direction: Vector) -> Ray {
         let origin = offsetRayOrigin(point: position, direction: direction)
         return Ray(origin: origin, direction: direction)
+    }
+
+    func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX) {
+        let origin = offsetRayOrigin(point: position, direction: to - position)
+        let direction: Vector = to - origin
+        // Assuming 'shadowEpsilon' is a globally accessible constant
+        return (Ray(origin: origin, direction: direction), FloatX(1.0) - shadowEpsilon)
     }
 }

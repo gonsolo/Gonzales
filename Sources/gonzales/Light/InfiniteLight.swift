@@ -30,8 +30,9 @@ final class InfiniteLight: Sendable {
                         z: cos(theta))
                 let direction = lightToWorld * lightDirection
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
-                let distantPoint = reference.position + direction * sceneDiameter
-                let visibility = Visibility(from: reference.position, to: distantPoint)
+                let distantPoint = SurfaceInteraction(
+                        position: reference.position + direction * sceneDiameter)
+                let visibility = Visibility(from: reference, to: .surface(distantPoint))
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
                 guard let color = texture.evaluate(at: .surface(interaction)) as? RgbSpectrum else {
