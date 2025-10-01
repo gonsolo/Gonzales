@@ -16,7 +16,7 @@ final class InfiniteLight: Sendable {
                 self.texture = texture
         }
 
-        func sample(for reference: InteractionType, u: TwoRandomVariables) -> (
+        func sample(for reference: any Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -32,17 +32,17 @@ final class InfiniteLight: Sendable {
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
                 let distantPoint = SurfaceInteraction(
                         position: reference.position + direction * sceneDiameter)
-                let visibility = Visibility(from: reference, to: .surface(distantPoint))
+                let visibility = Visibility(from: reference, to: distantPoint)
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                guard let color = texture.evaluate(at: .surface(interaction)) as? RgbSpectrum else {
+                guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         print("Unsupported texture type!")
                         return (black, direction, pdf, visibility)
                 }
                 return (radiance: color, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: InteractionType)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
                 throws -> FloatX
         {
                 let incoming = worldToLight * direction
@@ -104,7 +104,7 @@ final class InfiniteLight: Sendable {
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 let uv = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uv: uv)
-                guard let radiance = texture.evaluate(at: .surface(interaction)) as? RgbSpectrum else {
+                guard let radiance = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         print("Unsupported texture type!")
                         return black
                 }

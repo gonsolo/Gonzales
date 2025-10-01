@@ -7,7 +7,7 @@ enum Light: Sendable {
         case distant(DistantLight)
         case point(PointLight)
 
-        func sample(for reference: InteractionType, u: TwoRandomVariables) -> (
+        func sample(for reference: any Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -25,7 +25,7 @@ enum Light: Sendable {
                 }
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: InteractionType)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
                 throws -> FloatX
         {
                 switch self {

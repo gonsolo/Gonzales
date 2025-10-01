@@ -8,13 +8,13 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 self.alpha = alpha
         }
 
-        func emittedRadiance(from interaction: InteractionType, inDirection direction: Vector)
+        func emittedRadiance(from interaction: any Interaction, inDirection direction: Vector)
                 -> RgbSpectrum
         {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(for ref: InteractionType, u: TwoRandomVariables) -> (
+        func sample(for ref: any Interaction, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let (shapeInteraction, pdf) = shape.sample(ref: ref, u: u)
@@ -25,7 +25,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return (radiance, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: InteractionType)
+        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
                 throws -> FloatX
         {
                 return try shape.probabilityDensityFor(
@@ -59,7 +59,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 interaction.areaLight = self
         }
 
-        func getBsdf(interaction: InteractionType) -> DiffuseBsdf {
+        func getBsdf(interaction: any Interaction) -> DiffuseBsdf {
                 let diffuse = Diffuse(
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white))))

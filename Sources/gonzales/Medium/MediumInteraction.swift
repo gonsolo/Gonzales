@@ -1,4 +1,4 @@
-struct MediumInteraction {
+struct MediumInteraction: Interaction {
 
         func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum {
                 let phase = phase.evaluate(wo: wo, wi: wi)

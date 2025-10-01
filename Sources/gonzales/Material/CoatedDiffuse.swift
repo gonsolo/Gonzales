@@ -12,7 +12,7 @@ struct CoatedDiffuse {
                 self.remapRoughness = remapRoughness
         }
 
-        func getBsdf(interaction: InteractionType) -> CoatedDiffuseBsdf {
+        func getBsdf(interaction: any Interaction) -> CoatedDiffuseBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
                 let bsdfFrame = BsdfFrame(interaction: interaction)

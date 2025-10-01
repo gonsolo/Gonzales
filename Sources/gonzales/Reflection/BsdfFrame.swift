@@ -10,7 +10,7 @@ struct BsdfFrame {
                 self.shadingFrame = shadingFrame
         }
 
-        init(interaction: InteractionType) {
+        init(interaction: any Interaction) {
                 let shadingFrame = ShadingFrame(
                         x: Vector(normal: interaction.shadingNormal),
                         y: normalized(interaction.dpdu)

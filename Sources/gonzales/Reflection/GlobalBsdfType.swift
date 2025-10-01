@@ -11,8 +11,6 @@ func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
     switch self {
     case .diffuseBsdf(let bsdf):
         return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
-    case .dummyBsdf(let bsdf):
-        return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
     case .coatedDiffuseBsdf(let bsdf):
         return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
     case .dielectricBsdf(let bsdf):
@@ -22,7 +20,7 @@ func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
     case .geometricPrimitiveBsdf(let bsdf):
         return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
     default:
-        fatalError("Unhandled GlobalBsdfType case in evaluateWorld: \(self)")
+        fatalError("Unhandled GlobalBsdfType case in evaluateWorld")
     }
 }
 

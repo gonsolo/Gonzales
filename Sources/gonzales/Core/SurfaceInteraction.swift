@@ -1,4 +1,4 @@
-struct SurfaceInteraction: Sendable {
+struct SurfaceInteraction: Interaction, Sendable {
 
         func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum {
                 let reflected = bsdf.evaluateWorld(wo: wo, wi: wi)
@@ -18,7 +18,7 @@ struct SurfaceInteraction: Sendable {
         }
 
         mutating func setBsdf() {
-                bsdf = material.getBsdf(interaction: .surface(self))
+                bsdf = material.getBsdf(interaction: self)
         }
 
         var valid = false

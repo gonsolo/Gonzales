@@ -7,13 +7,13 @@
 
 protocol Sampleable {
 
-        func sample(u: TwoRandomVariables) -> (interaction: InteractionType, pdf: FloatX)
+        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX)
 
-        func sample(ref: InteractionType, u: TwoRandomVariables) -> (InteractionType, FloatX)
+        func sample(ref: any Interaction, u: TwoRandomVariables) -> (any Interaction, FloatX)
 
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
-                from interaction: InteractionType
+                from interaction: any Interaction
         )
                 throws -> FloatX
 
@@ -22,7 +22,7 @@ protocol Sampleable {
 
 extension Sampleable {
 
-        func sample(ref: InteractionType, u: TwoRandomVariables) -> (InteractionType, FloatX) {
+        func sample(ref: any Interaction, u: TwoRandomVariables) -> (any Interaction, FloatX) {
                 var (intr, pdf) = sample(u: u)
                 let wi: Vector = normalized(intr.position - ref.position)
                 let squaredDistance = distanceSquared(ref.position, intr.position)
@@ -36,7 +36,7 @@ extension Sampleable where Self: Intersectable {
 
         func probabilityDensityFor(
                 samplingDirection direction: Vector,
-                from: InteractionType
+                from: any Interaction
         )
                 throws -> FloatX
         {
