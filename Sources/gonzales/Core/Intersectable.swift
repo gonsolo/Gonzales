@@ -1,9 +1,6 @@
 /// A type that can be intersected by a ray.
 
 protocol Intersectable {
-        func intersect_lean(
-                ray: Ray,
-                tHit: inout FloatX) throws -> Bool
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
@@ -15,30 +12,6 @@ enum IntersectablePrimitive: Sendable {
         case triangle(Triangle)
         case transformedPrimitive(TransformedPrimitive)
         case areaLight(AreaLight)
-
-        func intersect_lean(
-                ray: Ray,
-                tHit: inout FloatX,
-        ) throws -> Bool {
-                switch self {
-                case .areaLight(let areaLight):
-                        return try areaLight.intersect_lean(
-                                ray: ray,
-                                tHit: &tHit)
-                case .geometricPrimitive(let geometricPrimitive):
-                        return try geometricPrimitive.intersect_lean(
-                                ray: ray,
-                                tHit: &tHit)
-                case .triangle(let triangle):
-                        return try triangle.intersect_lean(
-                                ray: ray,
-                                tHit: &tHit)
-                case .transformedPrimitive(let transformedPrimitive):
-                        return try transformedPrimitive.intersect_lean(
-                                ray: ray,
-                                tHit: &tHit)
-                }
-        }
 
         func intersect(
                 ray: Ray,
