@@ -63,7 +63,7 @@ final class VolumePathIntegrator: Sendable {
                 sampler: RandomSampler
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
-                        for: interaction, u: sampler.get2D())
+                        point: interaction.position, u: sampler.get2D())
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }

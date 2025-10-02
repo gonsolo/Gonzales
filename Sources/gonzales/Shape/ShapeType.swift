@@ -84,18 +84,18 @@ enum ShapeType: Shape {
         }
     }
 
-    func sample(ref: any Interaction, u: TwoRandomVariables) -> (any Interaction, FloatX) {
+    func sample(point: Point, u: TwoRandomVariables) -> (any Interaction, FloatX) {
         switch self {
         case .triangle(let triangle):
-            return triangle.sample(ref: ref, u: u)
+            return triangle.sample(point: point, u: u)
         case .sphere(let sphere):
-            return sphere.sample(ref: ref, u: u)
+            return sphere.sample(point: point, u: u)
         case .disk(let disk):
-            return disk.sample(ref: ref, u: u)
+            return disk.sample(point: point, u: u)
         case .curve(let curve):
-            return curve.sample(ref: ref, u: u)
+            return curve.sample(point: point, u: u)
         case .embreeCurve(let embreeCurve):
-            return embreeCurve.sample(ref: ref, u: u)
+            return embreeCurve.sample(point: point, u: u)
         }
     }
 

@@ -16,7 +16,7 @@ final class InfiniteLight: Sendable {
                 self.texture = texture
         }
 
-        func sample(for reference: any Interaction, u: TwoRandomVariables) -> (
+        func sample(point: Point, u: TwoRandomVariables) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -30,8 +30,8 @@ final class InfiniteLight: Sendable {
                         z: cos(theta))
                 let direction = lightToWorld * lightDirection
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
-                let distantPoint = reference.position + direction * sceneDiameter
-                let visibility = Visibility(from: reference.position, to: distantPoint)
+                let distantPoint = point + direction * sceneDiameter
+                let visibility = Visibility(from: point, to: distantPoint)
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
                 guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
