@@ -1,4 +1,4 @@
-struct BoundingHierarchy: Boundable, Intersectable, Sendable {
+struct BoundingHierarchy<T: Intersectable & Sendable>: Boundable, Intersectable, Sendable {
 
         func intersect(
                 ray: Ray,
@@ -17,8 +17,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         if node.bounds.intersects(ray: ray, tHit: tHit) {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
-                                                let primitive = primitives[node.offset + i]
-                                                intersected = try intersected || primitive.intersect(
+                                                intersected = try intersected || primitives[node.offset + i].intersect(
                                                         ray: ray,
                                                         tHit: &tHit)
                                         }
@@ -61,8 +60,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         if node.bounds.intersects(ray: ray, tHit: tHit) {
                                 if node.count > 0 {  // leaf
                                         for i in 0..<node.count {
-                                                let primitive = primitives[node.offset + i]
-                                                try primitive.intersect(
+                                                try primitives[node.offset + i].intersect(
                                                         ray: ray,
                                                         tHit: &tHit,
                                                         interaction: &interaction)
@@ -105,12 +103,13 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         @MainActor
         static func statistics() {
-                print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
+                //print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
 
-        let primitives: [IntersectablePrimitive]
+        //let primitives: [IntersectablePrimitive]
+        let primitives: [T]
         var nodes = [BoundingHierarchyNode]()
 
-        @MainActor
-        static var boundingHierarchyNodesVisited = 0
+        //@MainActor
+        //static var boundingHierarchyNodesVisited = 0
 }

@@ -4,7 +4,7 @@ struct Statistics {
         func report() {
                 print("Statistics:")
                 BoundingHierarchyBuilder.statistics()
-                BoundingHierarchy.statistics()
+                BoundingHierarchy<IntersectablePrimitive>.statistics()
                 PerspectiveCamera.statistics()
                 Triangle.statistics()
                 Bounds3.statistics()

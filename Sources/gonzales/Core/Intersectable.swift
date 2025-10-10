@@ -10,7 +10,7 @@ protocol Intersectable {
                 interaction: inout SurfaceInteraction) throws
 }
 
-enum IntersectablePrimitive: Sendable {
+enum IntersectablePrimitive: Intersectable, Sendable {
         case geometricPrimitive(GeometricPrimitive)
         case triangle(Triangle)
         case transformedPrimitive(TransformedPrimitive)

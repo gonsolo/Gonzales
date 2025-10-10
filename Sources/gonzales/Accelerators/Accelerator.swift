@@ -1,6 +1,6 @@
 enum Accelerator: Boundable, Intersectable, Sendable {
 
-        case boundingHierarchy(BoundingHierarchy)
+        case boundingHierarchy(BoundingHierarchy<IntersectablePrimitive>)
         //case embree(EmbreeAccelerator)
         //case optix(Optix)
 

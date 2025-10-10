@@ -36,7 +36,7 @@ final class BoundingHierarchyBuilder {
         }
 
         @MainActor
-        internal func getBoundingHierarchy() throws -> BoundingHierarchy {
+        internal func getBoundingHierarchy() throws -> BoundingHierarchy<IntersectablePrimitive> {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
                 let sortedPrimitives = try cachedPrimitives.map {
