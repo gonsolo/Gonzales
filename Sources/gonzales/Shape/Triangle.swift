@@ -163,6 +163,16 @@ struct TriangleMeshes {
 @MainActor
 var triangleMeshBuilder = TriangleMeshBuilder()
 
+struct TriangleIntersection {
+        let t: FloatX
+        let b0: FloatX
+        let b1: FloatX
+        let b2: FloatX
+        let pHit: Point?  // Optional, only needed for SurfaceInteraction, but calculate outside the test for efficiency
+        let dp02: Vector
+        let dp12: Vector
+}
+
 struct Triangle: Shape {
 
         @MainActor
@@ -251,15 +261,15 @@ struct Triangle: Shape {
                 return uvHit
         }
 
-        func intersect(
+        private func getIntersectionData(
                 ray worldRay: Ray,
-                tHit: inout FloatX,
-        ) throws -> Bool {
-                let empty = { (line: Int) in
-                        return false
-                }
+                tHit: inout FloatX
+        ) throws -> TriangleIntersection? {
 
-                let ray = worldToObject * worldRay
+                // Transform the ray to object space
+                let ray = objectToWorld * worldRay
+
+                // --- Setup and Plane Projection ---
 
                 var p0t: Point = point0 - ray.origin
                 var p1t: Point = point1 - ray.origin
@@ -276,6 +286,8 @@ struct Triangle: Shape {
                 let sx: FloatX = -d.x / d.z
                 let sy: FloatX = -d.y / d.z
                 let sz: FloatX = 1.0 / d.z
+
+                // Shearing transformation
                 p0t.x += sx * p0t.z
                 p0t.y += sy * p0t.z
                 p1t.x += sx * p1t.z
@@ -283,27 +295,36 @@ struct Triangle: Shape {
                 p2t.x += sx * p2t.z
                 p2t.y += sy * p2t.z
 
+                // Compute edge functions e0, e1, e2
                 let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
                 let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
                 let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
 
+                // Check edge functions for hit (same sign)
                 if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
-                        return empty(#line)
+                        return nil
                 }
                 let det: FloatX = e0 + e1 + e2
                 if det == 0 {
-                        return empty(#line)
+                        return nil  // Degenerate triangle or ray parallel to plane
                 }
+
+                // --- Compute t value and check range ---
 
                 p0t.z *= sz
                 p1t.z *= sz
                 p2t.z *= sz
                 let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
-                if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
-                        return empty(#line)
-                } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
-                        return empty(#line)
+
+                // Ray t range test against tHit and ray segment limits (0)
+                let hitCondition = det > 0
+                if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
+                {
+                        return nil
                 }
+
+                // --- Intersection found ---
 
                 let invDet: FloatX = 1 / det
                 let b0: FloatX = e0 * invDet
@@ -311,88 +332,29 @@ struct Triangle: Shape {
                 let b2: FloatX = e2 * invDet
                 let t: FloatX = tScaled * invDet
 
-                //let hit0: Point = b0 * point0
-                //let hit1: Point = b1 * point1
-                //let hit2: Point = b2 * point2
-                //let pHit: Point = hit0 + hit1 + hit2
+                tHit = t  // Update closest hit distance
 
+                // Calculate necessary geometric data
                 let dp02 = Vector(point: point0 - point2)
                 let dp12 = Vector(point: point1 - point2)
-                let normal = normalized(Normal(cross(dp02, dp12)))
 
-                let uv = triangleMeshes.getUVFor(
-                        meshIndex: meshIndex,
-                        indices: (vertexIndex0, vertexIndex1, vertexIndex2))
-                //let uvHit = computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
+                return TriangleIntersection(
+                        t: t,
+                        b0: b0,
+                        b1: b1,
+                        b2: b2,
+                        pHit: nil,  // pHit calculation is only needed for SurfaceInteraction
+                        dp02: dp02,
+                        dp12: dp12
+                )
+        }
 
-                let duv02: Vector2F = uv.0 - uv.2
-                let duv12: Vector2F = uv.1 - uv.2
-                let determinantUV: FloatX = duv02[0] * duv12[1] - duv02[1] * duv12[0]
-                let degenerateUV: Bool = abs(determinantUV) < 1e-8
-                var dpdu = up
-                var dpdv = up
-
-                if !degenerateUV {
-                        let invDeterminantUV = 1 / determinantUV
-                        let a: Vector = +duv12[1] * dp02
-                        let b: Vector = +duv02[1] * dp12
-                        let c: Vector = -duv12[0] * dp02
-                        let d: Vector = +duv02[0] * dp12
-                        dpdu = (a - b) * invDeterminantUV
-                        dpdv = (c - d) * invDeterminantUV
-                }
-
-                if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
-                        let ng: Vector = cross(point2 - point0, point1 - point0)
-                        if lengthSquared(ng) == 0 {
-                                return empty(#line)
-                        }
-                        (dpdu, dpdv) = makeCoordinateSystem(from: normalized(ng))
-                }
-
-                var shadingNormal: Normal
-                if !triangleMeshes.hasNormals(meshIndex: meshIndex) {
-                        shadingNormal = normal
-                } else {
-                        let n0 = triangleMeshes.getNormal(
-                                meshIndex: meshIndex, vertexIndex: vertexIndex0)
-                        let sn0 = b0 * n0
-                        let n1 = triangleMeshes.getNormal(
-                                meshIndex: meshIndex, vertexIndex: vertexIndex1)
-                        let sn1 = b1 * n1
-                        let n2 = triangleMeshes.getNormal(
-                                meshIndex: meshIndex, vertexIndex: vertexIndex2)
-                        let sn2 = b2 * n2
-                        shadingNormal = sn0 + sn1 + sn2
-                        if lengthSquared(shadingNormal) > 0 {
-                                shadingNormal = normalized(shadingNormal)
-                        } else {
-                                shadingNormal = Normal(x: 6, y: 6, z: 6)
-                        }
-                }
-
-                var ss = normalized(dpdu)
-                var ts = cross(ss, Vector(normal: shadingNormal))
-                if lengthSquared(ts) > 0 {
-                        ts.normalize()
-                        ss = cross(ts, Vector(normal: shadingNormal))
-                } else {
-                        (ss, ts) = makeCoordinateSystem(from: Vector(normal: shadingNormal))
-                }
-
-                // Set shading geometry
-                dpdu = ss
-
-                //var faceIndex: Int = 0
-                //if triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
-                //        faceIndex = triangleMeshes.getFaceIndex(
-                //                meshIndex: meshIndex,
-                //                index: idx / 3)
-                //}
-
-                tHit = t
-
-                return true
+        func intersect(
+                ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> Bool {
+                // Only need to run the minimal intersection test
+                return try getIntersectionData(ray: worldRay, tHit: &tHit) != nil
         }
 
         func intersect(
@@ -400,77 +362,27 @@ struct Triangle: Shape {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let empty = { (line: Int) in
-                        //print("No triangle intersection at line ", line)
-                        //Thread.callStackSymbols.forEach { print($0) }
-                        return
+                // 1. Run the minimal intersection test
+                guard let data = try getIntersectionData(ray: worldRay, tHit: &tHit) else {
+                        return  // No hit or not the closest hit
                 }
 
-                let ray = worldToObject * worldRay
-
-                var p0t: Point = point0 - ray.origin
-                var p1t: Point = point1 - ray.origin
-                var p2t: Point = point2 - ray.origin
-
-                let kz = maxDimension(abs(ray.direction))
-                let kx = (kz + 1) % 3
-                let ky = (kx + 1) % 3
-                let d: Vector = permute(vector: ray.direction, x: kx, y: ky, z: kz)
-                p0t = permute(point: p0t, x: kx, y: ky, z: kz)
-                p1t = permute(point: p1t, x: kx, y: ky, z: kz)
-                p2t = permute(point: p2t, x: kx, y: ky, z: kz)
-
-                let sx: FloatX = -d.x / d.z
-                let sy: FloatX = -d.y / d.z
-                let sz: FloatX = 1.0 / d.z
-                p0t.x += sx * p0t.z
-                p0t.y += sy * p0t.z
-                p1t.x += sx * p1t.z
-                p1t.y += sy * p1t.z
-                p2t.x += sx * p2t.z
-                p2t.y += sy * p2t.z
-
-                let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
-                let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
-                let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
-
-                if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
-                        return empty(#line)
-                }
-                let det: FloatX = e0 + e1 + e2
-                if det == 0 {
-                        return empty(#line)
-                }
-
-                p0t.z *= sz
-                p1t.z *= sz
-                p2t.z *= sz
-                let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
-                if det < 0 && (tScaled >= 0 || tScaled < tHit * det) {
-                        return empty(#line)
-                } else if det > 0 && (tScaled <= 0 || tScaled > tHit * det) {
-                        return empty(#line)
-                }
-
-                let invDet: FloatX = 1 / det
-                let b0: FloatX = e0 * invDet
-                let b1: FloatX = e1 * invDet
-                let b2: FloatX = e2 * invDet
-                let t: FloatX = tScaled * invDet
-
-                let hit0: Point = b0 * point0
-                let hit1: Point = b1 * point1
-                let hit2: Point = b2 * point2
+                // --- Calculate Hit Point (pHit) ---
+                // This is only needed for the full interaction, so it stays here.
+                let hit0: Point = data.b0 * point0
+                let hit1: Point = data.b1 * point1
+                let hit2: Point = data.b2 * point2
                 let pHit: Point = hit0 + hit1 + hit2
 
-                let dp02 = Vector(point: point0 - point2)
-                let dp12 = Vector(point: point1 - point2)
-                let normal = normalized(Normal(cross(dp02, dp12)))
+                // --- Geometric Normal ---
+                let normal = normalized(Normal(cross(data.dp02, data.dp12)))
+
+                // --- UVs, Tangent Space (dpdu/dpdv), and Shading Normal ---
 
                 let uv = triangleMeshes.getUVFor(
                         meshIndex: meshIndex,
                         indices: (vertexIndex0, vertexIndex1, vertexIndex2))
-                let uvHit = computeUVHit(b0: b0, b1: b1, b2: b2, uv: uv)
+                let uvHit = computeUVHit(b0: data.b0, b1: data.b1, b2: data.b2, uv: uv)
 
                 let duv02: Vector2F = uv.0 - uv.2
                 let duv12: Vector2F = uv.1 - uv.2
@@ -481,10 +393,10 @@ struct Triangle: Shape {
 
                 if !degenerateUV {
                         let invDeterminantUV = 1 / determinantUV
-                        let a: Vector = +duv12[1] * dp02
-                        let b: Vector = +duv02[1] * dp12
-                        let c: Vector = -duv12[0] * dp02
-                        let d: Vector = +duv02[0] * dp12
+                        let a: Vector = +duv12[1] * data.dp02
+                        let b: Vector = +duv02[1] * data.dp12
+                        let c: Vector = -duv12[0] * data.dp02
+                        let d: Vector = +duv02[0] * data.dp12
                         dpdu = (a - b) * invDeterminantUV
                         dpdv = (c - d) * invDeterminantUV
                 }
@@ -492,7 +404,7 @@ struct Triangle: Shape {
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
                         let ng: Vector = cross(point2 - point0, point1 - point0)
                         if lengthSquared(ng) == 0 {
-                                return empty(#line)
+                                return  // Cannot compute valid normal/tangent space
                         }
                         (dpdu, dpdv) = makeCoordinateSystem(from: normalized(ng))
                 }
@@ -503,18 +415,18 @@ struct Triangle: Shape {
                 } else {
                         let n0 = triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex0)
-                        let sn0 = b0 * n0
+                        let sn0 = data.b0 * n0
                         let n1 = triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex1)
-                        let sn1 = b1 * n1
+                        let sn1 = data.b1 * n1
                         let n2 = triangleMeshes.getNormal(
                                 meshIndex: meshIndex, vertexIndex: vertexIndex2)
-                        let sn2 = b2 * n2
+                        let sn2 = data.b2 * n2
                         shadingNormal = sn0 + sn1 + sn2
                         if lengthSquared(shadingNormal) > 0 {
                                 shadingNormal = normalized(shadingNormal)
                         } else {
-                                shadingNormal = Normal(x: 6, y: 6, z: 6)
+                                shadingNormal = Normal(x: 6, y: 6, z: 6)  // Fallback as in original
                         }
                 }
 
@@ -537,13 +449,14 @@ struct Triangle: Shape {
                                 index: idx / 3)
                 }
 
-                tHit = t
+                // --- Finalize SurfaceInteraction ---
+                let rayObjectSpace = objectToWorld * worldRay  // Recalculate object ray for wo
 
                 interaction.valid = true
                 interaction.position = objectToWorld * pHit
                 interaction.normal = normalized(objectToWorld * normal)
                 interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
-                interaction.wo = normalized(objectToWorld * -ray.direction)
+                interaction.wo = normalized(objectToWorld * -rayObjectSpace.direction)
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex
