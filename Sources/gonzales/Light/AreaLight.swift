@@ -2,7 +2,7 @@ import Foundation
 
 struct AreaLight: Boundable, Intersectable, Sendable {
 
-        init(brightness: RgbSpectrum, shape: any Shape, alpha: FloatX) {
+        init(brightness: RgbSpectrum, shape: ShapeType, alpha: FloatX) {
                 self.brightness = brightness
                 self.shape = shape
                 self.alpha = alpha
@@ -76,7 +76,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return diffuse.getBsdf(interaction: interaction)
         }
 
-        let shape: any Shape
+        let shape: ShapeType
         let brightness: RgbSpectrum
         let alpha: FloatX
 }
