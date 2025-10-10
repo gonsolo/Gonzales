@@ -1,4 +1,4 @@
-struct BoundingHierarchy<T: Intersectable & Sendable>: Boundable, Intersectable, Sendable {
+struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         func intersect(
                 ray: Ray,
@@ -106,8 +106,7 @@ struct BoundingHierarchy<T: Intersectable & Sendable>: Boundable, Intersectable,
                 //print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
 
-        //let primitives: [IntersectablePrimitive]
-        let primitives: [T]
+        let primitives: [IntersectablePrimitive]
         var nodes = [BoundingHierarchyNode]()
 
         //@MainActor

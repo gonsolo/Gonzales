@@ -1,4 +1,4 @@
-all: view
+all: debug
 
 #SINGLERAY = --single 68 2
 #SYNC = --sync
