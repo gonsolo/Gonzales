@@ -67,7 +67,7 @@ final class VolumePathIntegrator: Sendable {
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try visibility.unoccluded(scene: scene) else {
+                guard try !visibility.occluded(scene: scene) else {
                         return invalidBsdfSample
                 }
                 let scatter = interaction.evaluateDistributionFunction(wi: wi)
