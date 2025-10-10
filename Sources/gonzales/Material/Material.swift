@@ -12,40 +12,39 @@ indirect enum Material {
         case interface(Interface)
         case measured(Measured)
 
-
-func getBsdf(interaction: SurfaceInteraction) -> GlobalBsdfType {
-    switch self {
-    case .areaLight(let areaLight):
-        let bsdf = areaLight.getBsdf(interaction: interaction)
-        return .diffuseBsdf(bsdf)
-    case .coatedDiffuse(let coatedDiffuse):
-        let bsdf = coatedDiffuse.getBsdf(interaction: interaction)
-        return .coatedDiffuseBsdf(bsdf)
-    case .conductor(let conductor):
-        let bsdf = conductor.getBsdf(interaction: interaction)
-        return .microfaceReflection(bsdf)
-    case .dielectric(let dielectric):
-        let bsdf = dielectric.getBsdf(interaction: interaction)
-        return .dielectricBsdf(bsdf)
-    case .diffuse(let diffuse):
-        let bsdf = diffuse.getBsdf(interaction: interaction)
-        return .diffuseBsdf(bsdf)
-    case .diffuseTransmission(let diffuseTransmission):
-        let bsdf = diffuseTransmission.getBsdf(interaction: interaction)
-        return .diffuseBsdf(bsdf)
-    case .geometricPrimitive(let geometricPrimitive):
-        let bsdf = geometricPrimitive.getBsdf(interaction: interaction)
-        return bsdf
-    case .hair(let hair):
-        let bsdf = hair.getBsdf(interaction: interaction)
-        return .hairBsdf(bsdf)
-    case .interface(let interface):
-        return interface.getBsdf()
-    case .measured(let measured):
-        let bsdf = measured.getBsdf(interaction: interaction)
-        return .diffuseBsdf(bsdf)
-    }
-}
+        func getBsdf(interaction: SurfaceInteraction) -> GlobalBsdfType {
+                switch self {
+                case .areaLight(let areaLight):
+                        let bsdf = areaLight.getBsdf(interaction: interaction)
+                        return .diffuseBsdf(bsdf)
+                case .coatedDiffuse(let coatedDiffuse):
+                        let bsdf = coatedDiffuse.getBsdf(interaction: interaction)
+                        return .coatedDiffuseBsdf(bsdf)
+                case .conductor(let conductor):
+                        let bsdf = conductor.getBsdf(interaction: interaction)
+                        return .microfaceReflection(bsdf)
+                case .dielectric(let dielectric):
+                        let bsdf = dielectric.getBsdf(interaction: interaction)
+                        return .dielectricBsdf(bsdf)
+                case .diffuse(let diffuse):
+                        let bsdf = diffuse.getBsdf(interaction: interaction)
+                        return .diffuseBsdf(bsdf)
+                case .diffuseTransmission(let diffuseTransmission):
+                        let bsdf = diffuseTransmission.getBsdf(interaction: interaction)
+                        return .diffuseBsdf(bsdf)
+                case .geometricPrimitive(let geometricPrimitive):
+                        let bsdf = geometricPrimitive.getBsdf(interaction: interaction)
+                        return bsdf
+                case .hair(let hair):
+                        let bsdf = hair.getBsdf(interaction: interaction)
+                        return .hairBsdf(bsdf)
+                case .interface(let interface):
+                        return interface.getBsdf()
+                case .measured(let measured):
+                        let bsdf = measured.getBsdf(interaction: interaction)
+                        return .diffuseBsdf(bsdf)
+                }
+        }
 
         var isInterface: Bool {
                 switch self {

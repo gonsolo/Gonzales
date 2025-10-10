@@ -670,10 +670,11 @@ func createTriangleMesh(
 
         for i in 0..<numberTriangles {
                 triangles.append(
-                        try .triangle(Triangle(
-                                meshIndex: meshIndex,
-                                number: i,
-                                triangleMeshes: triangleMeshes)))
+                        try .triangle(
+                                Triangle(
+                                        meshIndex: meshIndex,
+                                        number: i,
+                                        triangleMeshes: triangleMeshes)))
         }
         return triangles
 }

@@ -1,4 +1,5 @@
 import Foundation
+
 //import SWCompression
 
 struct Compression {

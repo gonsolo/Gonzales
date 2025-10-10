@@ -271,10 +271,12 @@ flame:
 	perf script|  ../../src/FlameGraph/stackcollapse-perf.pl | swift demangle | ../../src/FlameGraph/flamegraph.pl --width 10000 --height 48 > flame.svg
 	eog -f flame.svg
 
-f: format
-format:
+format_suggest:
 	@clang-format --dry-run $(shell find Sources -name \*.h -o -name \*.cc)
 	@swift-format lint -r Sources/gonzales/
+format:
+	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
+	@swift-format -i -r Sources/gonzales/
 
 codespell:
 	codespell -L inout Sources

@@ -48,7 +48,7 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                                 ray: ray,
                                 tHit: &tHit)
                 }
-         }
+        }
 
         func intersect(
                 ray: Ray,

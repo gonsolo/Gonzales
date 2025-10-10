@@ -3,7 +3,8 @@
 protocol Intersectable {
         func intersect(
                 ray: Ray,
-                tHit: inout FloatX) throws -> Bool
+                tHit: inout FloatX
+        ) throws -> Bool
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
