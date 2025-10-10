@@ -115,6 +115,13 @@ final class Sphere: Shape {
 
         func intersect(
                 ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> Bool {
+                unimplemented()
+        }
+
+        func intersect(
+                ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {

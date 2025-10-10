@@ -14,6 +14,16 @@ final class TransformedPrimitive: Boundable, Intersectable, Sendable {
 
         func intersect(
                 ray: Ray,
+                tHit: inout FloatX
+        ) throws -> Bool {
+                let localRay = transform.inverse * ray
+                return try accelerator.intersect(
+                        ray: localRay,
+                        tHit: &tHit)
+        }
+
+        func intersect(
+                ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {

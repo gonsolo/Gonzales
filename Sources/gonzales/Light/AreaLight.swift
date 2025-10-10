@@ -48,6 +48,16 @@ struct AreaLight: Boundable, Intersectable, Sendable {
 
         func intersect(
                 ray: Ray,
+                tHit: inout FloatX
+        ) throws -> Bool {
+                if alpha == 0 { return false }
+                return try shape.intersect(
+                        ray: ray,
+                        tHit: &tHit)
+        }
+
+        func intersect(
+                ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {

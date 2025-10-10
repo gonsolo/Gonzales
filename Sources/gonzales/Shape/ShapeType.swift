@@ -52,6 +52,24 @@ enum ShapeType: Shape {
 
     func intersect(
         ray: Ray,
+        tHit: inout FloatX) throws -> Bool {
+        
+        switch self {
+        case .triangle(let triangle):
+            try triangle.intersect(ray: ray, tHit: &tHit)
+        case .sphere(let sphere):
+            try sphere.intersect(ray: ray, tHit: &tHit)
+        case .disk(let disk):
+            try disk.intersect(ray: ray, tHit: &tHit)
+        case .curve(let curve):
+            try curve.intersect(ray: ray, tHit: &tHit)
+        case .embreeCurve(let embreeCurve):
+            try embreeCurve.intersect(ray: ray, tHit: &tHit)
+        }
+    }
+
+    func intersect(
+        ray: Ray,
         tHit: inout FloatX,
         interaction: inout SurfaceInteraction) throws {
         

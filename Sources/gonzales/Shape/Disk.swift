@@ -16,14 +16,21 @@ final class Disk: Shape {
 
         func intersect(
                 ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> Bool {
+                unimplemented()
+        }
+
+        func intersect(
+                ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                // TODO
+                unimplemented()
         }
 
         func area() -> FloatX {
-                fatalError("Not implemented")
+                unimplemented()
         }
 
         func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
