@@ -1,6 +1,6 @@
 import Foundation
 
-final class Sphere: Shape {
+struct Sphere: Shape {
 
         init(radius: FloatX, objectToWorld: Transform) {
                 self.radius = radius

@@ -56,7 +56,7 @@ extension Vector2 {
         }
 }
 
-final class Curve: Shape {
+struct Curve: Shape {
 
         @MainActor
         init(objectToWorld: Transform, common: CurveCommon, u: TwoFloats) {

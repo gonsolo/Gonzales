@@ -1,4 +1,4 @@
-final class EmbreeCurve: Shape {
+struct EmbreeCurve: Shape {
 
         @MainActor
         init(

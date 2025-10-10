@@ -1,4 +1,4 @@
-final class Disk: Shape {
+struct Disk: Shape {
 
         init(objectToWorld: Transform, radius: FloatX) {
                 self.objectToWorld = objectToWorld

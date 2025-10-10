@@ -1,6 +1,6 @@
 import Foundation
 
-final class TransformedPrimitive: Boundable, Intersectable, Sendable {
+struct TransformedPrimitive: Boundable, Intersectable, Sendable {
 
         init(
                 //acceleratorIndex: AcceleratorIndex,
