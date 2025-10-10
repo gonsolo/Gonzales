@@ -357,18 +357,12 @@ struct Triangle: Shape {
                 return try getIntersectionData(ray: worldRay, tHit: &tHit) != nil
         }
 
-        func intersect(
-                ray worldRay: Ray,
-                tHit: inout FloatX,
+        private func computeSurfaceInteraction(
+                data: TriangleIntersection,
+                worldRay: Ray,
                 interaction: inout SurfaceInteraction
-        ) throws {
-                // 1. Run the minimal intersection test
-                guard let data = try getIntersectionData(ray: worldRay, tHit: &tHit) else {
-                        return  // No hit or not the closest hit
-                }
-
+        ) {
                 // --- Calculate Hit Point (pHit) ---
-                // This is only needed for the full interaction, so it stays here.
                 let hit0: Point = data.b0 * point0
                 let hit1: Point = data.b1 * point1
                 let hit2: Point = data.b2 * point2
@@ -388,7 +382,7 @@ struct Triangle: Shape {
                 let duv12: Vector2F = uv.1 - uv.2
                 let determinantUV: FloatX = duv02[0] * duv12[1] - duv02[1] * duv12[0]
                 let degenerateUV: Bool = abs(determinantUV) < 1e-8
-                var dpdu = up
+                var dpdu = up  // Assuming 'up' is a predefined Vector (e.g., Vector(0,0,0) or local Y axis)
                 var dpdv = up
 
                 if !degenerateUV {
@@ -450,7 +444,7 @@ struct Triangle: Shape {
                 }
 
                 // --- Finalize SurfaceInteraction ---
-                let rayObjectSpace = objectToWorld * worldRay  // Recalculate object ray for wo
+                let rayObjectSpace = objectToWorld * worldRay
 
                 interaction.valid = true
                 interaction.position = objectToWorld * pHit
@@ -460,6 +454,24 @@ struct Triangle: Shape {
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex
+        }
+
+        func intersect(
+                ray worldRay: Ray,
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                // 1. Run the minimal intersection test to get minimal data
+                guard let data = try getIntersectionData(ray: worldRay, tHit: &tHit) else {
+                        return  // No hit or not the closest hit
+                }
+
+                // 2. Compute the full SurfaceInteraction using the new private method
+                computeSurfaceInteraction(
+                        data: data,
+                        worldRay: worldRay,
+                        interaction: &interaction
+                )
         }
 
         private func getLocalPoint(index: Int) -> Point {
