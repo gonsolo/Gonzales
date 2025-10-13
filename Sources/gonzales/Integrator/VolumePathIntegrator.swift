@@ -30,7 +30,7 @@ final class VolumePathIntegrator: Sendable {
                 rays: Ray,
                 tHits: inout FloatX,
                 bounce: Int,
-                estimates: inout [RgbSpectrum],
+                estimate: inout RgbSpectrum,
                 interactions: inout SurfaceInteraction,
                 skips: [Bool]
         ) throws {
@@ -44,17 +44,15 @@ final class VolumePathIntegrator: Sendable {
                         tHits: &tHits,
                         interactions: &interactions,
                         skips: skips)
-                for i in 0..<1 {
-                        if interactions.valid {
-                                continue
-                        }
+                        //if interactions.valid {
+                        //        continue
+                        //}
                         let radiance = scene.infiniteLights.reduce(
                                 black,
                                 { accumulated, light in accumulated + light.radianceFromInfinity(for: rays)
                                 }
                         )
-                        if bounce == 0 { estimates[i] += radiance }
-                }
+                        if bounce == 0 { estimate += radiance }
         }
 
         private func sampleLightSource(
@@ -254,7 +252,7 @@ final class VolumePathIntegrator: Sendable {
                 tHits: inout Float,
                 rays: inout Ray,
                 bounce: Int,
-                estimates: inout [RgbSpectrum],
+                estimate: inout RgbSpectrum,
                 sampler: RandomSampler,
                 pathThroughputWeights: inout [RgbSpectrum],
                 lightSampler: LightSampler,
@@ -268,7 +266,7 @@ final class VolumePathIntegrator: Sendable {
                         rays: rays,
                         tHits: &tHits,
                         bounce: bounce,
-                        estimates: &estimates,
+                        estimate: &estimate,
                         interactions: &interactions,
                         skips: skips)
                 for i in 0..<1 {
@@ -283,7 +281,7 @@ final class VolumePathIntegrator: Sendable {
                                         tHit: &tHits,
                                         ray: &rays,
                                         bounce: bounce,
-                                        estimate: &estimates[i],
+                                        estimate: &estimate,
                                         sampler: sampler,
                                         pathThroughputWeight: &pathThroughputWeights[i],
                                         lightSampler: lightSampler,
@@ -451,7 +449,7 @@ final class VolumePathIntegrator: Sendable {
                 interactions: inout SurfaceInteraction,
                 tHits: inout Float,
                 bounce: Int,
-                estimates: inout [RgbSpectrum],
+                estimate: inout RgbSpectrum,
                 sampler: RandomSampler,
                 pathThroughputWeights: inout [RgbSpectrum],
                 lightSampler: LightSampler,
@@ -466,7 +464,7 @@ final class VolumePathIntegrator: Sendable {
                                 tHits: &tHits,
                                 rays: &rays,
                                 bounce: bounce,
-                                estimates: &estimates,
+                                estimate: &estimate,
                                 sampler: sampler,
                                 pathThroughputWeights: &pathThroughputWeights,
                                 lightSampler: lightSampler,
@@ -518,14 +516,14 @@ final class VolumePathIntegrator: Sendable {
                 }
         }
 
-        func getRadiancesAndAlbedos(
+        func getRadianceAndAlbedo(
                 from rays: Ray,
                 tHits: inout FloatX,
                 with sampler: RandomSampler,
                 lightSampler: LightSampler,
                 state: ImmutableState
         ) throws
-                -> [(estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)]
+                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
         {
 
                 // Path throughput weight
@@ -534,18 +532,17 @@ final class VolumePathIntegrator: Sendable {
                 //var pathThroughputWeight = white
                 var pathThroughputWeights = Array(repeating: white, count: 1)
 
-                var estimates = Array(repeating: black, count: 1)
+                var estimate = black
                 var varRays = rays
                 var albedos = Array(repeating: black, count: 1)
                 var firstNormals = Array(repeating: zeroNormal, count: 1)
-                //var interactions = Array(repeating: SurfaceInteraction(), count: 1)
                 var interaction = SurfaceInteraction()
                 try bounces(
                         rays: &varRays,
                         interactions: &interaction,
                         tHits: &tHits,
                         bounce: 0,
-                        estimates: &estimates,
+                        estimate: &estimate,
                         sampler: sampler,
                         pathThroughputWeights: &pathThroughputWeights,
                         lightSampler: lightSampler,
@@ -553,18 +550,12 @@ final class VolumePathIntegrator: Sendable {
                         firstNormals: &firstNormals,
                         state: state)
 
-                //intelHack(&albedo)
-                var estimatesAlbedosNormals = [(RgbSpectrum, RgbSpectrum, Normal)]()
-                for i in 0..<1 {
                         let estimateAlbedoNormal = (
-                                estimate: estimates[i],
-                                albedo: albedos[i],
-                                normal: firstNormals[i]
+                                estimate: estimate,
+                                albedo: albedos[0],
+                                normal: firstNormals[0]
                         )
-                        estimatesAlbedosNormals.append(estimateAlbedoNormal)
-                }
-                //}
-                return estimatesAlbedosNormals
+                return estimateAlbedoNormal
         }
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
