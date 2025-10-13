@@ -441,7 +441,6 @@ final class VolumePathIntegrator: Sendable {
 
         func bounces(
                 ray: inout Ray,
-                interactions: inout SurfaceInteraction,
                 tHit: inout Float,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
@@ -452,6 +451,7 @@ final class VolumePathIntegrator: Sendable {
                 firstNormal: inout Normal,
                 state: ImmutableState
         ) throws {
+                var interactions = SurfaceInteraction()
                 var skip = Array(repeating: false, count: 1)
                 for bounce in bounce...maxDepth {
                         let results = try oneBounce(
@@ -530,10 +530,8 @@ final class VolumePathIntegrator: Sendable {
                 var varRay = ray
                 var albedo = black
                 var firstNormal = zeroNormal
-                var interaction = SurfaceInteraction()
                 try bounces(
                         ray: &varRay,
-                        interactions: &interaction,
                         tHit: &tHit,
                         bounce: 0,
                         estimate: &estimate,
