@@ -257,7 +257,7 @@ final class VolumePathIntegrator: Sendable {
                 pathThroughputWeights: inout [RgbSpectrum],
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
-                firstNormals: inout [Normal],
+                firstNormal: inout Normal,
                 skips: [Bool],
                 state: ImmutableState
         ) throws -> [Bool] {
@@ -286,7 +286,7 @@ final class VolumePathIntegrator: Sendable {
                                         pathThroughputWeight: &pathThroughputWeights[i],
                                         lightSampler: lightSampler,
                                         albedo: &albedo,
-                                        firstNormal: &firstNormals[i],
+                                        firstNormal: &firstNormal,
                                         skip: skips[i],
                                         state: state
                                 )
@@ -454,7 +454,7 @@ final class VolumePathIntegrator: Sendable {
                 pathThroughputWeights: inout [RgbSpectrum],
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
-                firstNormals: inout [Normal],
+                firstNormal: inout Normal,
                 state: ImmutableState
         ) throws {
                 var skip = Array(repeating: false, count: 1)
@@ -469,7 +469,7 @@ final class VolumePathIntegrator: Sendable {
                                 pathThroughputWeights: &pathThroughputWeights,
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
-                                firstNormals: &firstNormals,
+                                firstNormal: &firstNormal,
                                 skips: skip,
                                 state: state
                         )
@@ -535,7 +535,7 @@ final class VolumePathIntegrator: Sendable {
                 var estimate = black
                 var varRay = ray
                 var albedo = black
-                var firstNormals = Array(repeating: zeroNormal, count: 1)
+                var firstNormal = zeroNormal
                 var interaction = SurfaceInteraction()
                 try bounces(
                         ray: &varRay,
@@ -547,13 +547,13 @@ final class VolumePathIntegrator: Sendable {
                         pathThroughputWeights: &pathThroughputWeights,
                         lightSampler: lightSampler,
                         albedo: &albedo,
-                        firstNormals: &firstNormals,
+                        firstNormal: &firstNormal,
                         state: state)
 
                 let estimateAlbedoNormal = (
                         estimate: estimate,
                         albedo: albedo,
-                        normal: firstNormals[0]
+                        normal: firstNormal
                 )
                 return estimateAlbedoNormal
         }
