@@ -254,7 +254,7 @@ final class VolumePathIntegrator: Sendable {
                 bounce: Int,
                 estimate: inout RgbSpectrum,
                 sampler: RandomSampler,
-                pathThroughputWeights: inout [RgbSpectrum],
+                pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
@@ -269,29 +269,24 @@ final class VolumePathIntegrator: Sendable {
                         estimate: &estimate,
                         interactions: &interactions,
                         skips: skips)
-                for i in 0..<1 {
-                        if skips[i] {
-                                continue
-                        }
                         if !interactions.valid {
-                                results[i] = false
+                                results[0] = false
                         } else {
-                                results[i] = try oneBounce(
+                                results[0] = try oneBounce(
                                         interaction: &interactions,
                                         tHit: &tHit,
                                         ray: &ray,
                                         bounce: bounce,
                                         estimate: &estimate,
                                         sampler: sampler,
-                                        pathThroughputWeight: &pathThroughputWeights[i],
+                                        pathThroughputWeight: &pathThroughputWeight,
                                         lightSampler: lightSampler,
                                         albedo: &albedo,
                                         firstNormal: &firstNormal,
-                                        skip: skips[i],
+                                        skip: skips[0],
                                         state: state
                                 )
                         }
-                }
                 return results
         }
 
@@ -451,7 +446,7 @@ final class VolumePathIntegrator: Sendable {
                 bounce: Int,
                 estimate: inout RgbSpectrum,
                 sampler: RandomSampler,
-                pathThroughputWeights: inout [RgbSpectrum],
+                pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
@@ -466,7 +461,7 @@ final class VolumePathIntegrator: Sendable {
                                 bounce: bounce,
                                 estimate: &estimate,
                                 sampler: sampler,
-                                pathThroughputWeights: &pathThroughputWeights,
+                                pathThroughputWeight: &pathThroughputWeight,
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
@@ -529,8 +524,7 @@ final class VolumePathIntegrator: Sendable {
                 // Path throughput weight
                 // The product of all GlobalBsdfs and cosines divided by the pdf
                 // Π f |cosθ| / pdf
-                //var pathThroughputWeight = white
-                var pathThroughputWeights = Array(repeating: white, count: 1)
+                var pathThroughputWeight = white
 
                 var estimate = black
                 var varRay = ray
@@ -544,7 +538,7 @@ final class VolumePathIntegrator: Sendable {
                         bounce: 0,
                         estimate: &estimate,
                         sampler: sampler,
-                        pathThroughputWeights: &pathThroughputWeights,
+                        pathThroughputWeight: &pathThroughputWeight,
                         lightSampler: lightSampler,
                         albedo: &albedo,
                         firstNormal: &firstNormal,
