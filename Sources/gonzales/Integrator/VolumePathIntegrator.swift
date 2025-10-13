@@ -31,18 +31,16 @@ final class VolumePathIntegrator: Sendable {
                 tHit: inout FloatX,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                interactions: inout SurfaceInteraction,
+                interaction: inout SurfaceInteraction,
                 skips: [Bool]
         ) throws {
-                for i in 0..<1 {
-                        if !skips[i] {
-                                interactions.valid = false
+                        if !skips[0] {
+                                interaction.valid = false
                         }
-                }
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        interactions: &interactions,
+                        interaction: &interaction,
                         skips: skips)
                 //if interactions.valid {
                 //        continue
@@ -248,7 +246,7 @@ final class VolumePathIntegrator: Sendable {
         }
 
         func oneBounce(
-                interactions: inout SurfaceInteraction,
+                interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
                 bounce: Int,
@@ -267,13 +265,13 @@ final class VolumePathIntegrator: Sendable {
                         tHit: &tHit,
                         bounce: bounce,
                         estimate: &estimate,
-                        interactions: &interactions,
+                        interaction: &interaction,
                         skips: skips)
-                        if !interactions.valid {
+                        if !interaction.valid {
                                 results[0] = false
                         } else {
                                 results[0] = try oneBounce(
-                                        interaction: &interactions,
+                                        interaction: &interaction,
                                         tHit: &tHit,
                                         ray: &ray,
                                         bounce: bounce,
@@ -451,11 +449,11 @@ final class VolumePathIntegrator: Sendable {
                 firstNormal: inout Normal,
                 state: ImmutableState
         ) throws {
-                var interactions = SurfaceInteraction()
+                var interaction = SurfaceInteraction()
                 var skip = Array(repeating: false, count: 1)
                 for bounce in bounce...maxDepth {
                         let results = try oneBounce(
-                                interactions: &interactions,
+                                interaction: &interaction,
                                 tHit: &tHit,
                                 ray: &ray,
                                 bounce: bounce,
