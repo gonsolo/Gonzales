@@ -1,5 +1,31 @@
 struct GeometricPrimitive: Boundable, Intersectable {
 
+        func getIntersectionData(
+                ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> IntersectablePrimitiveIntersection {
+                if alpha == 0 { return .triangle(nil) }
+                return try shape.getIntersectionData(
+                        ray: worldRay,
+                        tHit: &tHit)
+        }
+
+        func computeSurfaceInteraction(
+                data: IntersectablePrimitiveIntersection,
+                worldRay: Ray,
+                interaction: inout SurfaceInteraction
+        ) {
+                if alpha == 0 { return }
+                shape.computeSurfaceInteraction(
+                        data: data,
+                        worldRay: worldRay,
+                        interaction: &interaction)
+                if interaction.valid {
+                        interaction.material = material
+                        interaction.mediumInterface = mediumInterface
+                }
+        }
+
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX

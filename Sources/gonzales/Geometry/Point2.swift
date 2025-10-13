@@ -49,6 +49,14 @@ extension Point2: CustomStringConvertible {
         }
 }
 
+extension Point2: Equatable where T: Equatable {
+        public static func == (lhs: Point2, rhs: Point2) -> Bool {
+                return
+                        lhs.x == rhs.x &&
+                        lhs.y == rhs.y
+        }
+}
+
 extension Point2 where T: FloatingPoint {
         public init() { self.init(x: 0, y: 0) }
         init(from: Vector2<T>) { self.init(x: from.x, y: from.y) }

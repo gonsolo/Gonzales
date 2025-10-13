@@ -50,6 +50,40 @@ enum ShapeType: Shape {
                 }
         }
 
+        func getIntersectionData(
+                ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> IntersectablePrimitiveIntersection {
+                switch self {
+                case .triangle(let triangle):
+                        return try .triangle(triangle.getIntersectionData(ray: worldRay, tHit: &tHit))
+                default:
+                        unimplemented()
+                }
+        }
+
+        func computeSurfaceInteraction(
+                data: IntersectablePrimitiveIntersection,
+                worldRay: Ray,
+                interaction: inout SurfaceInteraction
+        ) {
+                switch self {
+                case .triangle(let triangle):
+                        switch data {
+                        case .triangle(let triangleIntersection):
+                                guard let triangleIntersection = triangleIntersection else {
+                                        return
+                                }
+                                return triangle.computeSurfaceInteraction(
+                                        data: triangleIntersection,
+                                        worldRay: worldRay,
+                                        interaction: &interaction)
+                        }
+                default:
+                        unimplemented()
+                }
+        }
+ 
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX

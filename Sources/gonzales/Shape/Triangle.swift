@@ -174,6 +174,7 @@ struct TriangleIntersection {
 }
 
 struct Triangle: Shape {
+        typealias IntersectionData = TriangleIntersection
 
         @MainActor
         init(
@@ -261,7 +262,7 @@ struct Triangle: Shape {
                 return uvHit
         }
 
-        private func getIntersectionData(
+        func getIntersectionData(
                 ray worldRay: Ray,
                 tHit: inout FloatX
         ) throws -> TriangleIntersection? {
@@ -357,7 +358,7 @@ struct Triangle: Shape {
                 return try getIntersectionData(ray: worldRay, tHit: &tHit) != nil
         }
 
-        private func computeSurfaceInteraction(
+        func computeSurfaceInteraction(
                 data: TriangleIntersection,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction

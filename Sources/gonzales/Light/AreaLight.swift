@@ -46,6 +46,27 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return await shape.objectBound()
         }
 
+        func getIntersectionData(
+                ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> IntersectablePrimitiveIntersection  {
+                if alpha == 0 { return .triangle(nil) }
+                return try shape.getIntersectionData(ray: worldRay, tHit: &tHit)
+        }
+
+        func computeSurfaceInteraction(
+                data: IntersectablePrimitiveIntersection,
+                worldRay: Ray,
+                interaction: inout SurfaceInteraction
+        ) {
+                if alpha == 0 { return }
+                shape.computeSurfaceInteraction(
+                        data: data,
+                        worldRay: worldRay,
+                        interaction: &interaction)
+                interaction.areaLight = self
+        }
+
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX
@@ -79,4 +100,13 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         let shape: ShapeType
         let brightness: RgbSpectrum
         let alpha: FloatX
+}
+
+extension AreaLight: Equatable {
+        static func == (lhs: AreaLight, rhs: AreaLight) -> Bool {
+                return
+                        // TODO lhs.shape == rhs.shape &&
+                        lhs.brightness == rhs.brightness &&
+                        lhs.alpha == rhs.alpha
+        }
 }
