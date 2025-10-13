@@ -87,26 +87,33 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 return intersected
         }
 
-        // --- Public Intersect (Closest Hit & Interaction) ---
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                // The mutable 'tHit' and 'interaction' are passed implicitly by capture
-                // to the closure, which allows the primitives to update them directly.
+                var gi = 0
+                var gnode = BoundingHierarchyNode()
+                var gdata: IntersectablePrimitiveIntersection = .triangle(nil)
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
-                        // Leaf logic for Closest Hit & Interaction:
-                        // Iterate over primitives and update 'tHit' and 'interaction'.
                         for i in 0..<node.count {
                                 let data = try primitives[node.offset + i].getIntersectionData(ray: ray, tHit: &tHit)
-                                primitives[node.offset + i].computeSurfaceInteraction(
-                                        data: data,
-                                        worldRay: ray,
-                                        interaction: &interaction)
+                                switch data {
+                                case .triangle(let triangle):
+                                        if triangle != nil {
+                                                gi = i
+                                                gnode = node
+                                                gdata = data
+                                        }
+                                }
                         }
                 }
+                primitives[gnode.offset + gi].computeSurfaceInteraction(
+                        data: gdata,
+                        worldRay: ray,
+                        interaction: &interaction)
+
         }
 
         @MainActor
