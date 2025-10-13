@@ -21,7 +21,7 @@ final class Tile: Sendable {
                                 var tHit: FloatX = Float.infinity
                                 let radianceAlbedoNormal = try integrator.getRadianceAndAlbedo(
                                         from: ray,
-                                        tHits: &tHit,
+                                        tHit: &tHit,
                                         with: sampler,
                                         lightSampler: lightSampler,
                                         state: state)
