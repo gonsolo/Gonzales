@@ -43,37 +43,23 @@ struct SurfaceInteraction: Interaction, Sendable {
 extension SurfaceInteraction: CustomStringConvertible {
         var description: String {
                 return
-                        "[" +
-                        "valid: \(valid) " +
-                        "pos: \(position) " +
-                        "n: \(normal) " +
-                        "shadingNormal: \(shadingNormal) " +
-                        "wo: \(wo) " +
-                        "dpdu: \(dpdu) " +
-                        "uv: \(uv) " +
-                        "faceIndex: \(faceIndex) " +
-                        "areaLight: \(areaLight as Optional) " +
-                        "material: \(material) " +
-                        "mediumInterface: \(mediumInterface as Optional) " +
-                        "bsdf: \(bsdf) " +
-                        "]"
+                        "[" + "valid: \(valid) " + "pos: \(position) " + "n: \(normal) "
+                        + "shadingNormal: \(shadingNormal) " + "wo: \(wo) " + "dpdu: \(dpdu) " + "uv: \(uv) "
+                        + "faceIndex: \(faceIndex) " + "areaLight: \(areaLight as Optional) "
+                        + "material: \(material) " + "mediumInterface: \(mediumInterface as Optional) "
+                        + "bsdf: \(bsdf) " + "]"
         }
 }
 
 extension SurfaceInteraction: Equatable {
         static func == (lhs: SurfaceInteraction, rhs: SurfaceInteraction) -> Bool {
                 return
-                        lhs.valid == rhs.valid &&
-                        lhs.position == rhs.position &&
-                        lhs.normal == rhs.normal &&
-                        lhs.shadingNormal == rhs.shadingNormal &&
-                        lhs.wo == rhs.wo &&
-                        lhs.dpdu == rhs.dpdu &&
-                        lhs.uv == rhs.uv &&
-                        lhs.faceIndex == rhs.faceIndex &&
-                        lhs.areaLight == rhs.areaLight //&&
-                        //lhs.material == rhs.material &&
-                        //lhs.mediumInterface == rhs.mediumInterface &&
-                        //lhs.bsdf == rhs.bsdf
+                        lhs.valid == rhs.valid && lhs.position == rhs.position && lhs.normal == rhs.normal
+                        && lhs.shadingNormal == rhs.shadingNormal && lhs.wo == rhs.wo && lhs.dpdu == rhs.dpdu
+                        && lhs.uv == rhs.uv && lhs.faceIndex == rhs.faceIndex
+                        && lhs.areaLight == rhs.areaLight  //&&
+                //lhs.material == rhs.material &&
+                //lhs.mediumInterface == rhs.mediumInterface &&
+                //lhs.bsdf == rhs.bsdf
         }
 }

@@ -98,7 +98,8 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
                         for i in 0..<node.count {
-                                let data = try primitives[node.offset + i].getIntersectionData(ray: ray, tHit: &tHit)
+                                let data = try primitives[node.offset + i].getIntersectionData(
+                                        ray: ray, tHit: &tHit)
                                 switch data {
                                 case .triangle(let triangle):
                                         if triangle != nil {

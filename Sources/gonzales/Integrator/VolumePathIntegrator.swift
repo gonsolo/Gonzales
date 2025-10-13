@@ -44,15 +44,15 @@ final class VolumePathIntegrator: Sendable {
                         tHits: &tHits,
                         interactions: &interactions,
                         skips: skips)
-                        //if interactions.valid {
-                        //        continue
-                        //}
-                        let radiance = scene.infiniteLights.reduce(
-                                black,
-                                { accumulated, light in accumulated + light.radianceFromInfinity(for: rays)
-                                }
-                        )
-                        if bounce == 0 { estimate += radiance }
+                //if interactions.valid {
+                //        continue
+                //}
+                let radiance = scene.infiniteLights.reduce(
+                        black,
+                        { accumulated, light in accumulated + light.radianceFromInfinity(for: rays)
+                        }
+                )
+                if bounce == 0 { estimate += radiance }
         }
 
         private func sampleLightSource(
@@ -550,11 +550,11 @@ final class VolumePathIntegrator: Sendable {
                         firstNormals: &firstNormals,
                         state: state)
 
-                        let estimateAlbedoNormal = (
-                                estimate: estimate,
-                                albedo: albedos[0],
-                                normal: firstNormals[0]
-                        )
+                let estimateAlbedoNormal = (
+                        estimate: estimate,
+                        albedo: albedos[0],
+                        normal: firstNormals[0]
+                )
                 return estimateAlbedoNormal
         }
 

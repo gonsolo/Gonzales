@@ -83,7 +83,7 @@ enum ShapeType: Shape {
                         unimplemented()
                 }
         }
- 
+
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX

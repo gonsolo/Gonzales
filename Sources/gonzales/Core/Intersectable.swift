@@ -24,10 +24,10 @@ enum IntersectablePrimitive: Intersectable, Sendable {
         case transformedPrimitive(TransformedPrimitive)
         case areaLight(AreaLight)
 
-       func getIntersectionData(
+        func getIntersectionData(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> IntersectablePrimitiveIntersection  {
+        ) throws -> IntersectablePrimitiveIntersection {
                 switch self {
                 case .areaLight(let areaLight):
                         return try areaLight.getIntersectionData(
@@ -38,9 +38,10 @@ enum IntersectablePrimitive: Intersectable, Sendable {
                                 ray: worldRay,
                                 tHit: &tHit)
                 case .triangle(let triangle):
-                        return try .triangle(triangle.getIntersectionData(
-                                ray: worldRay,
-                                tHit: &tHit))
+                        return try .triangle(
+                                triangle.getIntersectionData(
+                                        ray: worldRay,
+                                        tHit: &tHit))
                 //case .transformedPrimitive(let transformedPrimitive):
                 case .transformedPrimitive:
                         unimplemented()
@@ -86,7 +87,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
                 }
         }
 
-         func intersect(
+        func intersect(
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {

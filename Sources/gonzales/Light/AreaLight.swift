@@ -49,7 +49,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         func getIntersectionData(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> IntersectablePrimitiveIntersection  {
+        ) throws -> IntersectablePrimitiveIntersection {
                 if alpha == 0 { return .triangle(nil) }
                 return try shape.getIntersectionData(ray: worldRay, tHit: &tHit)
         }
@@ -106,7 +106,6 @@ extension AreaLight: Equatable {
         static func == (lhs: AreaLight, rhs: AreaLight) -> Bool {
                 return
                         // TODO lhs.shape == rhs.shape &&
-                        lhs.brightness == rhs.brightness &&
-                        lhs.alpha == rhs.alpha
+                        lhs.brightness == rhs.brightness && lhs.alpha == rhs.alpha
         }
 }
