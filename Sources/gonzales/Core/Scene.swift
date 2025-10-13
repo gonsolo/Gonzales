@@ -15,13 +15,13 @@ struct Scene: Sendable {
         }
 
         func intersect(
-                rays: Ray,
+                ray: Ray,
                 tHit: inout FloatX,
                 interactions: inout SurfaceInteraction,
                 skips: [Bool]
         ) throws {
                 try accelerator.intersect(
-                        ray: rays,
+                        ray: ray,
                         tHit: &tHit,
                         interaction: &interactions)
         }

@@ -27,7 +27,7 @@ final class VolumePathIntegrator: Sendable {
         }
 
         private func intersectOrInfiniteLights(
-                rays: Ray,
+                ray: Ray,
                 tHit: inout FloatX,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
@@ -40,7 +40,7 @@ final class VolumePathIntegrator: Sendable {
                         }
                 }
                 try scene.intersect(
-                        rays: rays,
+                        ray: ray,
                         tHit: &tHit,
                         interactions: &interactions,
                         skips: skips)
@@ -49,7 +49,7 @@ final class VolumePathIntegrator: Sendable {
                 //}
                 let radiance = scene.infiniteLights.reduce(
                         black,
-                        { accumulated, light in accumulated + light.radianceFromInfinity(for: rays)
+                        { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
                         }
                 )
                 if bounce == 0 { estimate += radiance }
@@ -250,7 +250,7 @@ final class VolumePathIntegrator: Sendable {
         func oneBounce(
                 interactions: inout SurfaceInteraction,
                 tHit: inout Float,
-                rays: inout Ray,
+                ray: inout Ray,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
                 sampler: RandomSampler,
@@ -263,7 +263,7 @@ final class VolumePathIntegrator: Sendable {
         ) throws -> [Bool] {
                 var results = Array(repeating: false, count: 1)
                 try intersectOrInfiniteLights(
-                        rays: rays,
+                        ray: ray,
                         tHit: &tHit,
                         bounce: bounce,
                         estimate: &estimate,
@@ -279,7 +279,7 @@ final class VolumePathIntegrator: Sendable {
                                 results[i] = try oneBounce(
                                         interaction: &interactions,
                                         tHit: &tHit,
-                                        ray: &rays,
+                                        ray: &ray,
                                         bounce: bounce,
                                         estimate: &estimate,
                                         sampler: sampler,
@@ -445,7 +445,7 @@ final class VolumePathIntegrator: Sendable {
         }
 
         func bounces(
-                rays: inout Ray,
+                ray: inout Ray,
                 interactions: inout SurfaceInteraction,
                 tHit: inout Float,
                 bounce: Int,
@@ -462,7 +462,7 @@ final class VolumePathIntegrator: Sendable {
                         let results = try oneBounce(
                                 interactions: &interactions,
                                 tHit: &tHit,
-                                rays: &rays,
+                                ray: &ray,
                                 bounce: bounce,
                                 estimate: &estimate,
                                 sampler: sampler,
@@ -517,7 +517,7 @@ final class VolumePathIntegrator: Sendable {
         }
 
         func getRadianceAndAlbedo(
-                from rays: Ray,
+                from ray: Ray,
                 tHit: inout FloatX,
                 with sampler: RandomSampler,
                 lightSampler: LightSampler,
@@ -533,12 +533,12 @@ final class VolumePathIntegrator: Sendable {
                 var pathThroughputWeights = Array(repeating: white, count: 1)
 
                 var estimate = black
-                var varRays = rays
+                var varRay = ray
                 var albedos = Array(repeating: black, count: 1)
                 var firstNormals = Array(repeating: zeroNormal, count: 1)
                 var interaction = SurfaceInteraction()
                 try bounces(
-                        rays: &varRays,
+                        ray: &varRay,
                         interactions: &interaction,
                         tHit: &tHit,
                         bounce: 0,
