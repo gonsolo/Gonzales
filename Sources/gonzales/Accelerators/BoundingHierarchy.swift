@@ -100,38 +100,11 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         // Leaf logic for Closest Hit & Interaction:
                         // Iterate over primitives and update 'tHit' and 'interaction'.
                         for i in 0..<node.count {
-                                //var newTHit = tHit
-                                //var testInteraction = interaction
-                                //assert(testInteraction == interaction)
-                                //let oldpre = interaction
-                                //try primitives[node.offset + i].intersect(
-                                //        ray: ray,
-                                //        tHit: &tHit,
-                                //        interaction: &interaction
-                                //)
-                                //let oldpost = interaction
                                 let data = try primitives[node.offset + i].getIntersectionData(ray: ray, tHit: &tHit)
-                                //let data = try primitives[node.offset + i].getIntersectionData(ray: ray, tHit: &newTHit)
-                                //let newpre = testInteraction
-                                //primitives[node.offset + i].computeSurfaceInteraction(
-                                //        data: data,
-                                //        worldRay: ray,
-                                //        interaction: &testInteraction)
                                 primitives[node.offset + i].computeSurfaceInteraction(
                                         data: data,
                                         worldRay: ray,
                                         interaction: &interaction)
-                                //let newpost = testInteraction
-                                //print("old: ", interaction.material)
-                                //print("new: ", testInteraction.material)
-                                //if interaction != testInteraction {
-                                //        print("oldpre: ", oldpre)
-                                //        print("oldpost: ", oldpost)
-                                //        print("newpre: ", newpre)
-                                //        print("newpost: ", newpost)
-                                //        fatalError("bla")
-                                //}
-
                         }
                 }
         }
