@@ -9,13 +9,13 @@ final class VolumePathIntegrator: Sendable {
                 self.maxDepth = maxDepth
         }
 
-        private func brdfDensity<I: Interaction, D: DistributionModel>(
+        private func brdfDensity<D: DistributionModel>(
                 light: Light,
-                interaction: I,
+                wo: Vector,
                 distributionModel: D,
                 sample: Vector
         ) -> FloatX {
-                return distributionModel.evaluateProbabilityDensity(wo: interaction.wo, wi: sample)
+                return distributionModel.evaluateProbabilityDensity(wo: wo, wi: sample)
         }
 
         private func chooseLight(
@@ -158,7 +158,7 @@ final class VolumePathIntegrator: Sendable {
                         sampler: sampler)
                 let brdfDensity = brdfDensity(
                         light: light,
-                        interaction: interaction,
+                        wo: interaction.wo,
                         distributionModel: distributionModel,
                         sample: lightSample.incoming)
                 let lightWeight = powerHeuristic(f: lightSample.probabilityDensity, g: brdfDensity)
