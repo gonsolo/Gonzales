@@ -9,9 +9,9 @@ final class VolumePathIntegrator: Sendable {
                 self.maxDepth = maxDepth
         }
 
-        private func brdfDensity(
+        private func brdfDensity<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sample: Vector
         ) -> FloatX {
                 return interaction.evaluateProbabilityDensity(wi: sample)
@@ -53,9 +53,9 @@ final class VolumePathIntegrator: Sendable {
                 if bounce == 0 { estimate += radiance }
         }
 
-        private func sampleLightSource(
+        private func sampleLightSource<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sampler: RandomSampler
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
@@ -71,9 +71,9 @@ final class VolumePathIntegrator: Sendable {
                 return BsdfSample(estimate, wi, lightDensity)
         }
 
-        private func sampleDistributionFunction(
+        private func sampleDistributionFunction<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sampler: RandomSampler
         ) throws -> BsdfSample {
 
@@ -105,9 +105,9 @@ final class VolumePathIntegrator: Sendable {
                 return zero
         }
 
-        private func sampleLight(
+        private func sampleLight<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
@@ -121,9 +121,9 @@ final class VolumePathIntegrator: Sendable {
                 }
         }
 
-        private func sampleGlobalBsdf(
+        private func sampleGlobalBsdf<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
@@ -137,9 +137,9 @@ final class VolumePathIntegrator: Sendable {
                 }
         }
 
-        private func sampleMultipleImportance(
+        private func sampleMultipleImportance<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
 
@@ -171,9 +171,9 @@ final class VolumePathIntegrator: Sendable {
                 return a + b
         }
 
-        private func estimateDirect(
+        private func estimateDirect<I: Interaction>(
                 light: Light,
-                interaction: any Interaction,
+                interaction: I,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
                 if light.isDelta {
@@ -198,8 +198,8 @@ final class VolumePathIntegrator: Sendable {
                         sampler: sampler)
         }
 
-        private func sampleOneLight(
-                at interaction: any Interaction,
+        private func sampleOneLight<I: Interaction>(
+                at interaction: I,
                 with sampler: RandomSampler,
                 lightSampler: LightSampler
         ) throws -> RgbSpectrum {

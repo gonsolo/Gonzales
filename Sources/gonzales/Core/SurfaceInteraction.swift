@@ -47,7 +47,7 @@ extension SurfaceInteraction: CustomStringConvertible {
                         + "shadingNormal: \(shadingNormal) " + "wo: \(wo) " + "dpdu: \(dpdu) " + "uv: \(uv) "
                         + "faceIndex: \(faceIndex) " + "areaLight: \(areaLight as Optional) "
                         + "material: \(material) " + "mediumInterface: \(mediumInterface as Optional) "
-                        + "bsdf: \(bsdf) " + "]"
+                        + "]"
         }
 }
 
