@@ -3,10 +3,6 @@ protocol Interaction: Sendable {
         func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX)
         func spawnRay(inDirection direction: Vector) -> Ray
 
-        func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum
-        func sampleDistributionFunction(sampler: RandomSampler) -> BsdfSample
-        func evaluateProbabilityDensity(wi: Vector) -> FloatX
-
         var dpdu: Vector { get }
         var faceIndex: Int { get }
         var normal: Normal { get }

@@ -1,24 +1,13 @@
+protocol DistributionModel {
+        func evaluateDistributionFunction(wo: Vector, wi: Vector, normal: Normal) -> RgbSpectrum
+        func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: RandomSampler) -> BsdfSample
+        func evaluateProbabilityDensity(wo: Vector, wi: Vector) -> FloatX
+}
+
 struct SurfaceInteraction: Interaction, Sendable {
 
-        func evaluateDistributionFunction(wi: Vector) -> RgbSpectrum {
-                let reflected = bsdf.evaluateWorld(wo: wo, wi: wi)
-                let dot = absDot(wi, Vector(normal: shadingNormal))
-                let scatter = reflected * dot
-                return scatter
-        }
-
-        func sampleDistributionFunction(sampler: RandomSampler) -> BsdfSample {
-                var (bsdfSample, _) = bsdf.sampleWorld(wo: wo, u: sampler.get3D())
-                bsdfSample.estimate *= absDot(bsdfSample.incoming, shadingNormal)
-                return bsdfSample
-        }
-
-        func evaluateProbabilityDensity(wi: Vector) -> FloatX {
-                return bsdf.probabilityDensityWorld(wo: wo, wi: wi)
-        }
-
-        mutating func setBsdf() {
-                bsdf = material.getBsdf(interaction: self)
+        func getBsdf() -> GlobalBsdfType {
+                return material.getBsdf(interaction: self)
         }
 
         var valid = false
@@ -37,7 +26,6 @@ struct SurfaceInteraction: Interaction, Sendable {
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
         var mediumInterface: MediumInterface? = nil
-        var bsdf: GlobalBsdfType = .dummyBsdf(DummyBsdf())
 }
 
 extension SurfaceInteraction: CustomStringConvertible {
