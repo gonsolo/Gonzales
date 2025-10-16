@@ -11,7 +11,6 @@ protocol Intersectable {
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction) throws
-
 }
 
 enum IntersectablePrimitiveIntersection {

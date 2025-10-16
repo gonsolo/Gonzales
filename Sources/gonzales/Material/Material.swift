@@ -1,13 +1,12 @@
 ///        A material provides the look of a surface.
 
-indirect enum Material {
+enum Material {
         case areaLight(AreaLight)
         case coatedDiffuse(CoatedDiffuse)
         case conductor(Conductor)
         case dielectric(Dielectric)
         case diffuse(Diffuse)
         case diffuseTransmission(DiffuseTransmission)
-        case geometricPrimitive(GeometricPrimitive)
         case hair(Hair)
         case interface(Interface)
         case measured(Measured)
@@ -32,9 +31,6 @@ indirect enum Material {
                 case .diffuseTransmission(let diffuseTransmission):
                         let bsdf = diffuseTransmission.getBsdf(interaction: interaction)
                         return .diffuseBsdf(bsdf)
-                case .geometricPrimitive(let geometricPrimitive):
-                        let bsdf = geometricPrimitive.getBsdf(interaction: interaction)
-                        return bsdf
                 case .hair(let hair):
                         let bsdf = hair.getBsdf(interaction: interaction)
                         return .hairBsdf(bsdf)
