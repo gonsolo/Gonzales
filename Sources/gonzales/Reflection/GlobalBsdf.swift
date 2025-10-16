@@ -6,7 +6,7 @@ protocol GlobalBsdf: BsdfFrameProtocol, DistributionModel, LocalBsdf, Sendable {
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
- 
+
 extension GlobalBsdf {
 
         func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {

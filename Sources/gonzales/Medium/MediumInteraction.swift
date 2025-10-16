@@ -1,7 +1,7 @@
 struct MediumInteraction: Interaction {
 
-       func getDistributionModel() -> any DistributionModel {
-               return phase 
+        func getDistributionModel() -> any DistributionModel {
+                return phase
         }
 
         var dpdu = Vector()

@@ -35,9 +35,9 @@ final class VolumePathIntegrator: Sendable {
                 interaction: inout SurfaceInteraction,
                 skips: [Bool]
         ) throws {
-                        if !skips[0] {
-                                interaction.valid = false
-                        }
+                if !skips[0] {
+                        interaction.valid = false
+                }
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
@@ -68,7 +68,8 @@ final class VolumePathIntegrator: Sendable {
                 guard try !visibility.occluded(scene: scene) else {
                         return invalidBsdfSample
                 }
-                let scatter = distributionModel.evaluateDistributionFunction(wo: interaction.wo, wi: wi, normal: interaction.shadingNormal)
+                let scatter = distributionModel.evaluateDistributionFunction(
+                        wo: interaction.wo, wi: wi, normal: interaction.shadingNormal)
                 let estimate = scatter * radiance
                 return BsdfSample(estimate, wi, lightDensity)
         }
@@ -81,7 +82,8 @@ final class VolumePathIntegrator: Sendable {
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
-                var bsdfSample = distributionModel.sampleDistributionFunction(wo: interaction.wo, normal: interaction.shadingNormal, sampler: sampler)
+                var bsdfSample = distributionModel.sampleDistributionFunction(
+                        wo: interaction.wo, normal: interaction.shadingNormal, sampler: sampler)
                 guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                         return zero
                 }
@@ -147,7 +149,7 @@ final class VolumePathIntegrator: Sendable {
         private func sampleMultipleImportance<I: Interaction, D: DistributionModel>(
                 light: Light,
                 interaction: I,
-                distributionModel: D, 
+                distributionModel: D,
                 sampler: RandomSampler
         ) throws -> RgbSpectrum {
 
@@ -285,24 +287,24 @@ final class VolumePathIntegrator: Sendable {
                         estimate: &estimate,
                         interaction: &interaction,
                         skips: skips)
-                        if !interaction.valid {
-                                results[0] = false
-                        } else {
-                                results[0] = try oneBounce(
-                                        interaction: &interaction,
-                                        tHit: &tHit,
-                                        ray: &ray,
-                                        bounce: bounce,
-                                        estimate: &estimate,
-                                        sampler: sampler,
-                                        pathThroughputWeight: &pathThroughputWeight,
-                                        lightSampler: lightSampler,
-                                        albedo: &albedo,
-                                        firstNormal: &firstNormal,
-                                        skip: skips[0],
-                                        state: state
-                                )
-                        }
+                if !interaction.valid {
+                        results[0] = false
+                } else {
+                        results[0] = try oneBounce(
+                                interaction: &interaction,
+                                tHit: &tHit,
+                                ray: &ray,
+                                bounce: bounce,
+                                estimate: &estimate,
+                                sampler: sampler,
+                                pathThroughputWeight: &pathThroughputWeight,
+                                lightSampler: lightSampler,
+                                albedo: &albedo,
+                                firstNormal: &firstNormal,
+                                skip: skips[0],
+                                state: state
+                        )
+                }
                 return results
         }
 
