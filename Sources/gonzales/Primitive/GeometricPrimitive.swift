@@ -21,8 +21,8 @@ struct GeometricPrimitive: Boundable, Intersectable {
                         worldRay: worldRay,
                         interaction: &interaction)
                 if interaction.valid {
-                        interaction.material = material
-                        interaction.mediumInterface = mediumInterface
+                        interaction.materialIndex = materialIndex
+                        //interaction.mediumInterface = mediumInterface
                 }
         }
 
@@ -47,8 +47,9 @@ struct GeometricPrimitive: Boundable, Intersectable {
                         tHit: &tHit,
                         interaction: &interaction)
                 if interaction.valid {
-                        interaction.material = material
-                        interaction.mediumInterface = mediumInterface
+                        //interaction.material = material
+                        interaction.materialIndex = materialIndex
+                        //interaction.mediumInterface = mediumInterface
                 }
         }
 
@@ -60,13 +61,14 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return await shape.objectBound()
         }
 
-        func getBsdf(interaction: SurfaceInteraction) -> GlobalBsdfType {
-                return material.getBsdf(interaction: interaction)
-        }
+        //func getBsdf(interaction: SurfaceInteraction) -> GlobalBsdfType {
+        //        return materials[materialIndex].getBsdf(interaction: interaction)
+        //}
 
         //var shape: any Shape
         var shape: ShapeType
-        var material: Material
+        //var material: Material
+        var materialIndex: Int
         var mediumInterface: MediumInterface?
         var alpha: FloatX
 }

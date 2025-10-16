@@ -247,7 +247,7 @@ struct Curve: Shape {
                                 dpdu: worldInteraction.dpdu,
                                 uv: worldInteraction.uv,
                                 faceIndex: worldInteraction.faceIndex,
-                                material: worldInteraction.material)
+                                materialIndex: worldInteraction.materialIndex)
                         return (validWorldInteraction, tHit)
                 }
         }

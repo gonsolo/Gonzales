@@ -332,12 +332,12 @@ struct Api {
                                 prims.append(areaLight)
                         }
                 } else {
-                        //let materialCounter = materials.count
-                        //materials.append(material)
+                        let materialIndex = materials.count
+                        materials.append(material)
                         for shape in shapes {
                                 let geometricPrimitive = GeometricPrimitive(
                                         shape: shape,
-                                        material: material,
+                                        materialIndex: materialIndex,
                                         mediumInterface: state.currentMediumInterface,
                                         alpha: alpha)
                                 prims.append(geometricPrimitive)

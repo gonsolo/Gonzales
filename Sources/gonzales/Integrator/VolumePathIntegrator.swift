@@ -353,28 +353,31 @@ final class VolumePathIntegrator: Sendable {
                 //if surfaceInteraction.material == noMaterial {
                 //        return false
                 //}
-                let bsdf = surfaceInteraction.getBsdf()
-                if surfaceInteraction.material.isInterface {
-                        //var spawnedRay = surfaceInteraction.spawnRay(
-                        let spawnedRay = surfaceInteraction.spawnRay(
-                                inDirection: ray.direction)
-                        //if let interface = surfaceInteraction.mediumInterface {
-                        //spawnedRay.medium = state.namedMedia[interface.interior]
-                        //}
-                        ray = spawnedRay
-                        try bounces(
-                                ray: &ray,
-                                interaction: &interaction,
-                                tHit: &tHit,
-                                bounce: bounce + 1,
-                                estimate: &estimate,
-                                sampler: sampler,
-                                pathThroughputWeight: &pathThroughputWeight,
-                                lightSampler: lightSampler,
-                                albedo: &albedo,
-                                firstNormal: &firstNormal,
-                                state: state)
-                }
+                //let bsdf = surfaceInteraction.getBsdf()
+                assert(surfaceInteraction.materialIndex >= 0)
+                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(interaction: surfaceInteraction)
+
+                //if surfaceInteraction.material.isInterface {
+                //        //var spawnedRay = surfaceInteraction.spawnRay(
+                //        let spawnedRay = surfaceInteraction.spawnRay(
+                //                inDirection: ray.direction)
+                //        //if let interface = surfaceInteraction.mediumInterface {
+                //        //spawnedRay.medium = state.namedMedia[interface.interior]
+                //        //}
+                //        ray = spawnedRay
+                //        try bounces(
+                //                ray: &ray,
+                //                interaction: &interaction,
+                //                tHit: &tHit,
+                //                bounce: bounce + 1,
+                //                estimate: &estimate,
+                //                sampler: sampler,
+                //                pathThroughputWeight: &pathThroughputWeight,
+                //                lightSampler: lightSampler,
+                //                albedo: &albedo,
+                //                firstNormal: &firstNormal,
+                //                state: state)
+                //}
                 if bounce == 0 {
                         albedo = bsdf.albedo()
                         firstNormal = surfaceInteraction.normal

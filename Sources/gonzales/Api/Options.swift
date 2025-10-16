@@ -20,7 +20,15 @@ class Options {
         var primitives = [any Boundable & Intersectable]()
         var objects = ["": [any Boundable & Intersectable]()]
 
-        init() {}
+        var defaultMaterial: Material = Material.diffuse(
+                Diffuse(
+                        reflectance: Texture.rgbSpectrumTexture(
+                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
+
+        @MainActor
+        init() {
+                materials.append(defaultMaterial)
+        }
 
         @MainActor
         func makeFilm(filter: any Filter) throws -> Film {
@@ -162,7 +170,7 @@ class Options {
                 let accelerator = try await makeAccelerator(primitives: primitives)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let scene = Scene(accelerator: accelerator, lights: lights)
+                let scene = Scene(accelerator: accelerator, lights: lights, materials: materials)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights)

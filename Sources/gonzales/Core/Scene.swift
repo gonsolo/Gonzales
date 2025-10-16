@@ -1,9 +1,10 @@
 struct Scene: Sendable {
 
         @MainActor
-        init(accelerator: Accelerator, lights: [Light]) {
+        init(accelerator: Accelerator, lights: [Light], materials: [Material]) {
                 self.accelerator = accelerator
                 self.lights = lights
+                self.materials = materials
                 infiniteLights = lights.compactMap {
                         switch $0 {
                         case .infinite(let infiniteLight):
@@ -63,4 +64,5 @@ struct Scene: Sendable {
         var accelerator: Accelerator
         var lights: [Light]
         var infiniteLights: [InfiniteLight]
+        let materials: [Material]
 }

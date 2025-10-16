@@ -6,10 +6,6 @@ protocol DistributionModel {
 
 struct SurfaceInteraction: Interaction, Sendable {
 
-        func getBsdf() -> GlobalBsdfType {
-                return material.getBsdf(interaction: self)
-        }
-
         var valid = false
         var position = Point()
         var normal = Normal()
@@ -19,13 +15,8 @@ struct SurfaceInteraction: Interaction, Sendable {
         var uv = Point2f()
         var faceIndex = 0
         var areaLight: AreaLight? = nil
-        //var material: MaterialIndex = -1
-
-        var material: Material = Material.diffuse(
-                Diffuse(
-                        reflectance: Texture.rgbSpectrumTexture(
-                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
-        var mediumInterface: MediumInterface? = nil
+        var materialIndex: MaterialIndex = 0
+        //var mediumInterface: MediumInterface? = nil
 }
 
 extension SurfaceInteraction: CustomStringConvertible {
@@ -34,7 +25,7 @@ extension SurfaceInteraction: CustomStringConvertible {
                         "[" + "valid: \(valid) " + "pos: \(position) " + "n: \(normal) "
                         + "shadingNormal: \(shadingNormal) " + "wo: \(wo) " + "dpdu: \(dpdu) " + "uv: \(uv) "
                         + "faceIndex: \(faceIndex) " + "areaLight: \(areaLight as Optional) "
-                        + "material: \(material) " + "mediumInterface: \(mediumInterface as Optional) "
+                        + "materialIndex: \(materialIndex) " //+ "mediumInterface: \(mediumInterface as Optional) "
                         + "]"
         }
 }
