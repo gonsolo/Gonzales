@@ -2,6 +2,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         // --- Private Traversal Logic ---
         // The traversal function accepts a closure 'onLeaf' to execute when a leaf node is reached.
+        //@_noAllocation
         private func traverseHierarchy(
                 ray: Ray,
                 tHit: FloatX,
@@ -137,5 +138,5 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         }
 
         let primitives: [IntersectablePrimitive]
-        var nodes = [BoundingHierarchyNode]()
+        let nodes: [BoundingHierarchyNode]
 }
