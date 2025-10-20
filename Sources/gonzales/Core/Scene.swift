@@ -1,11 +1,10 @@
 struct Scene: Sendable {
 
         @MainActor
-        init(accelerator: Accelerator, lights: [Light], materials: [Material]) {
-                self.accelerator = accelerator
+        init(lights: [Light], materials: [Material]) {
                 self.lights = lights
                 self.materials = materials
-                infiniteLights = lights.compactMap {
+                self.infiniteLights = lights.compactMap {
                         switch $0 {
                         case .infinite(let infiniteLight):
                                 return infiniteLight
@@ -13,6 +12,12 @@ struct Scene: Sendable {
                                 return nil
                         }
                 }
+                self.immutableTriangleMeshes = triangleMeshBuilder.getMeshes()
+                globalScene = self
+        }
+
+        mutating func addAccelerator(accelerator: Accelerator) {
+                self.accelerator = accelerator
         }
 
         func intersect(
@@ -61,8 +66,13 @@ struct Scene: Sendable {
                 return length(bound().diagonal())
         }
 
-        var accelerator: Accelerator
+        var accelerator: Accelerator!
         var lights: [Light]
         var infiniteLights: [InfiniteLight]
         let materials: [Material]
+        let immutableTriangleMeshes: TriangleMeshes
 }
+
+nonisolated(unsafe) var globalScene: Scene?
+
+

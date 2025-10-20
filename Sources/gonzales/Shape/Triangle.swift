@@ -94,20 +94,20 @@ extension Array {
         }
 }
 
-struct TriangleMeshBuilder {
+final class TriangleMeshBuilder {
 
-        mutating func appendMesh(mesh: TriangleMesh) -> Int {
+        func appendMesh(mesh: TriangleMesh) -> Int {
                 var meshIndex = 0
                 meshIndex = meshes.count
                 meshes.append(mesh)
                 return meshIndex
         }
 
-        var meshes: [TriangleMesh] = []
-
         func getMeshes() -> TriangleMeshes {
                 return TriangleMeshes(meshes: meshes)
         }
+
+        private var meshes: [TriangleMesh] = []
 }
 
 struct TriangleMeshes {
@@ -152,11 +152,6 @@ struct TriangleMeshes {
                 return meshes[meshIndex].objectToWorld
         }
 
-        func freeze() -> [TriangleMesh] {
-                let immutableMeshes = meshes
-                return immutableMeshes
-        }
-
         let meshes: [TriangleMesh]
 }
 
@@ -184,14 +179,14 @@ struct Triangle: Shape {
         ) throws {
                 self.meshIndex = meshIndex
                 self.idx = 3 * number
-                self.triangleMeshes = triangleMeshes
 
                 numberOfTriangles += 1
                 triangleMemory += MemoryLayout<Self>.stride
                 let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 guard
-                        vertexIndex0 < pointCount && vertexIndex1 < pointCount
-                                && vertexIndex2 < pointCount
+                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0) < pointCount && 
+                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1) < pointCount && 
+                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2) < pointCount
                 else {
                         throw TriangleError.index
                 }
@@ -216,6 +211,13 @@ struct Triangle: Shape {
                 print("  Ray-Triangle intersection tests:\t\t\t\t", terminator: "")
                 print("\(triangleHits) /\t\(triangleIntersections)\(intersectionRatio)")
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
+        }
+
+        var triangleMeshes: TriangleMeshes {
+                guard let scene = globalScene else {
+                        fatalError("No scene!")
+                }
+                return scene.immutableTriangleMeshes
         }
 
         var vertexIndex0: Int {
@@ -350,12 +352,10 @@ struct Triangle: Shape {
                 )
         }
 
-        //@_noAllocation
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
-                // Only need to run the minimal intersection test
                 return try getIntersectionData(ray: worldRay, tHit: &tHit) != nil
         }
 
@@ -463,7 +463,6 @@ struct Triangle: Shape {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                // 1. Run the minimal intersection test to get minimal data
                 guard let data = try getIntersectionData(ray: worldRay, tHit: &tHit) else {
                         return  // No hit or not the closest hit
                 }
@@ -475,6 +474,7 @@ struct Triangle: Shape {
                         interaction: &interaction
                 )
         }
+
 
         private func getLocalPoint(index: Int) -> Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)
@@ -526,8 +526,8 @@ struct Triangle: Shape {
         @MainActor
         var description: String {
                 var d = "Triangle [ "
-                let (p0, p1, p2) = getLocalPoints()
-                d += p0.description + p1.description + p2.description
+                //let (p0, p1, p2) = getLocalPoints()
+                //d += p0.description + p1.description + p2.description
                 d += " ]"
                 return d
         }
@@ -538,7 +538,7 @@ struct Triangle: Shape {
 
         let meshIndex: Int
         let idx: Int
-        let triangleMeshes: TriangleMeshes
+        //let triangleMeshes: TriangleMeshes
 }
 
 @MainActor

@@ -166,11 +166,12 @@ class Options {
         func makeRenderer() async throws -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
+                var scene = Scene(lights: lights, materials: materials)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try await makeAccelerator(primitives: primitives)
+                scene.addAccelerator(accelerator: accelerator)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let scene = Scene(accelerator: accelerator, lights: lights, materials: materials)
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)
                 //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
                 let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights)

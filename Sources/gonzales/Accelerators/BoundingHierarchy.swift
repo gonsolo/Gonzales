@@ -73,8 +73,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var intersected = false
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
-                        // Leaf logic for Occlusion Query:
-                        // Iterate over primitives and update 'intersected' and 'tHit'.
                         for i in 0..<node.count {
                                 intersected =
                                         try intersected
