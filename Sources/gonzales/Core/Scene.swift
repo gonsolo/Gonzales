@@ -33,11 +33,7 @@ struct Scene: Sendable {
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction,
-                skip: Bool = false
         ) throws {
-                if skip {
-                        return
-                }
                 try accelerator.intersect(
                         ray: ray,
                         tHit: &tHit,
