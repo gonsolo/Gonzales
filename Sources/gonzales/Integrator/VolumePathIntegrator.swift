@@ -32,20 +32,12 @@ final class VolumePathIntegrator: Sendable {
                 tHit: inout FloatX,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                interaction: inout SurfaceInteraction,
-                skips: [Bool]
+                interaction: inout SurfaceInteraction
         ) throws {
-                if !skips[0] {
-                        interaction.valid = false
-                }
                 try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
-                        interaction: &interaction,
-                        skips: skips)
-                //if interactions.valid {
-                //        continue
-                //}
+                        interaction: &interaction)
                 let radiance = scene.infiniteLights.reduce(
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
@@ -276,21 +268,18 @@ final class VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                skips: [Bool],
                 state: ImmutableState
-        ) throws -> [Bool] {
-                var results = Array(repeating: false, count: 1)
+        ) throws -> Bool {
                 try intersectOrInfiniteLights(
                         ray: ray,
                         tHit: &tHit,
                         bounce: bounce,
                         estimate: &estimate,
-                        interaction: &interaction,
-                        skips: skips)
+                        interaction: &interaction)
                 if !interaction.valid {
-                        results[0] = false
+                        return false
                 } else {
-                        results[0] = try oneBounce(
+                        let result = try oneBounce2(
                                 interaction: &interaction,
                                 tHit: &tHit,
                                 ray: &ray,
@@ -301,11 +290,10 @@ final class VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                skip: skips[0],
                                 state: state
                         )
+                        return result
                 }
-                return results
         }
 
         func mediumEstimate<D: DistributionModel>(
@@ -405,7 +393,7 @@ final class VolumePathIntegrator: Sendable {
                 return true
         }
 
-        func oneBounce(
+        func oneBounce2(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
@@ -416,7 +404,6 @@ final class VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                skip: Bool,
                 state: ImmutableState
         ) throws -> Bool {
                 //let (transmittance, mediumInteraction) =
@@ -478,9 +465,8 @@ final class VolumePathIntegrator: Sendable {
                 state: ImmutableState
         ) throws {
                 var interaction = SurfaceInteraction()
-                var skip = Array(repeating: false, count: 1)
                 for bounce in bounce...maxDepth {
-                        let results = try oneBounce(
+                        let _ = try oneBounce(
                                 interaction: &interaction,
                                 tHit: &tHit,
                                 ray: &ray,
@@ -491,14 +477,8 @@ final class VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                skips: skip,
                                 state: state
                         )
-                        for i in 0..<1 {
-                                if !results[i] {
-                                        skip[i] = true
-                                }
-                        }
                 }
         }
 
@@ -515,7 +495,6 @@ final class VolumePathIntegrator: Sendable {
                 firstNormal: inout Normal,
                 state: ImmutableState
         ) throws {
-                var skip = false
                 for bounce in bounce...maxDepth {
                         let result = try oneBounce(
                                 interaction: &interaction,
@@ -528,11 +507,10 @@ final class VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                skip: skip,
                                 state: state
                         )
                         if !result {
-                                skip = true
+                                break
                         }
                 }
         }

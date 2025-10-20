@@ -350,6 +350,7 @@ struct Triangle: Shape {
                 )
         }
 
+        //@_noAllocation
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX
