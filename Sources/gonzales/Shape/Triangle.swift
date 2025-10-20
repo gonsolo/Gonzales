@@ -508,7 +508,7 @@ struct Triangle: Shape {
                 return 0.5 * length(cross(Vector(vector: (p1 - p0)), p2 - p0))
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: SurfaceInteraction, pdf: FloatX) {
                 let b = uniformSampleTriangle(u: u)
                 let (p0, p1, p2) = getLocalPoints()
                 let sampled0: Point = b[0] * p0

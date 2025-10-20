@@ -123,7 +123,7 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: SurfaceInteraction, pdf: FloatX) {
                 switch self {
                 case .triangle(let triangle):
                         return triangle.sample(u: u)
@@ -168,9 +168,9 @@ enum ShapeType: Shape {
                 }
         }
 
-        func probabilityDensityFor(
+        func probabilityDensityFor<I: Interaction>(
                 samplingDirection direction: Vector,
-                from interaction: any Interaction
+                from interaction: I
         ) throws -> FloatX {
                 switch self {
                 case .triangle(let triangle):

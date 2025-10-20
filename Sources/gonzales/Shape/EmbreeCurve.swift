@@ -41,7 +41,7 @@ struct EmbreeCurve: Shape {
                 return bounds
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
+        func sample<I: Interaction>(u: TwoRandomVariables) -> (interaction: I, pdf: FloatX) {
                 unimplemented()
         }
 

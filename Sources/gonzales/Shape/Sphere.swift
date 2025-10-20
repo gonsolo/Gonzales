@@ -31,7 +31,7 @@ struct Sphere: Shape {
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables) -> (interaction: SurfaceInteraction, pdf: FloatX) {
 
                 let localPosition = radius * uniformSampleSphere(u: u)
                 let worldNormal = normalized(objectToWorld * Normal(point: localPosition))

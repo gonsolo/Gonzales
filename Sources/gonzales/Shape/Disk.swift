@@ -33,9 +33,8 @@ struct Disk: Shape {
                 unimplemented()
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: any Interaction, pdf: FloatX) {
-                // TODO
-                return (SurfaceInteraction(), 0)
+        func sample<I: Interaction>(u: TwoRandomVariables) -> (interaction: I, pdf: FloatX) {
+                unimplemented()
         }
 
         public var description: String {

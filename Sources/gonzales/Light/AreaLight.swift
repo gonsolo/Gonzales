@@ -25,7 +25,9 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return (radiance, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(samplingDirection direction: Vector, from reference: any Interaction)
+        func probabilityDensityFor<I: Interaction>(
+                samplingDirection direction: Vector,
+                from reference: I)
                 throws -> FloatX
         {
                 return try shape.probabilityDensityFor(
