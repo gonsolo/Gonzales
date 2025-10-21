@@ -25,7 +25,7 @@ extension SurfaceInteraction: CustomStringConvertible {
                         "[" + "valid: \(valid) " + "pos: \(position) " + "n: \(normal) "
                         + "shadingNormal: \(shadingNormal) " + "wo: \(wo) " + "dpdu: \(dpdu) " + "uv: \(uv) "
                         + "faceIndex: \(faceIndex) " + "areaLight: \(areaLight as Optional) "
-                        + "materialIndex: \(materialIndex) " //+ "mediumInterface: \(mediumInterface as Optional) "
+                        + "materialIndex: \(materialIndex) "  //+ "mediumInterface: \(mediumInterface as Optional) "
                         + "]"
         }
 }

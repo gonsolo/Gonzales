@@ -343,7 +343,8 @@ final class VolumePathIntegrator: Sendable {
                 //}
                 //let bsdf = surfaceInteraction.getBsdf()
                 assert(surfaceInteraction.materialIndex >= 0)
-                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(interaction: surfaceInteraction)
+                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
+                        interaction: surfaceInteraction)
 
                 //if surfaceInteraction.material.isInterface {
                 //        //var spawnedRay = surfaceInteraction.spawnRay(

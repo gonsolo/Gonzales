@@ -1,5 +1,30 @@
 struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
+        init(primitives: [IntersectablePrimitive], nodes: [BoundingHierarchyNode]) {
+                self.primitives = primitives
+                self.nodes = nodes
+                self.primIds = []
+                for primitive in primitives {
+                        switch primitive {
+                        case .geometricPrimitive(let geometricPrimitive):
+                                let primId = PrimId(
+                                        id1: geometricPrimitive.idx, id2: -1, type: .geometricPrimitive)
+                                self.primIds.append(primId)
+                        case .triangle(let triangle):
+                                let primId = PrimId(
+                                        id1: triangle.meshIndex, id2: triangle.idx, type: .triangle)
+                                self.primIds.append(primId)
+                        case .transformedPrimitive(let transformedPrimitive):
+                                let primId = PrimId(
+                                        id1: transformedPrimitive.idx, id2: -1, type: .transformedPrimitive)
+                                self.primIds.append(primId)
+                        case .areaLight(let areaLight):
+                                let primId = PrimId(id1: areaLight.idx, id2: -1, type: .areaLight)
+                                self.primIds.append(primId)
+                        }
+                }
+        }
+
         // --- Private Traversal Logic ---
         // The traversal function accepts a closure 'onLeaf' to execute when a leaf node is reached.
         private func traverseHierarchy(
@@ -74,12 +99,19 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
                         for i in 0..<node.count {
+                                //intersected =
+                                //        try intersected
+                                //        || primitives[node.offset + i].intersect(
+                                //                ray: ray,
+                                //                tHit: &tHit
+                                //        )
+
                                 intersected =
                                         try intersected
-                                        || primitives[node.offset + i].intersect(
+                                        || globalScene!.intersect(
+                                                primId: primIds[node.offset + i],
                                                 ray: ray,
-                                                tHit: &tHit
-                                        )
+                                                tHit: &tHit)
                         }
                 }
                 return intersected
@@ -96,8 +128,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
                         for i in 0..<node.count {
-                                let data = try primitives[node.offset + i].getIntersectionData(
-                                        ray: ray, tHit: &tHit)
+                                //let data = try primitives[node.offset + i].getIntersectionData(
+                                //        ray: ray, tHit: &tHit)
+
+                                let data = try globalScene!.getIntersectionData(
+                                        primId: primIds[node.offset + i],
+                                        ray: ray,
+                                        tHit: &tHit)
+
                                 switch data {
                                 case .triangle(let triangle):
                                         if triangle != nil {
@@ -108,7 +146,13 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                 }
                         }
                 }
-                primitives[gnode.offset + gi].computeSurfaceInteraction(
+                //primitives[gnode.offset + gi].computeSurfaceInteraction(
+                //        data: gdata,
+                //        worldRay: ray,
+                //        interaction: &interaction)
+
+                try globalScene!.computeSurfaceInteraction(
+                        primId: primIds[gnode.offset + gi],
                         data: gdata,
                         worldRay: ray,
                         interaction: &interaction)
@@ -136,4 +180,19 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         let primitives: [IntersectablePrimitive]
         let nodes: [BoundingHierarchyNode]
+
+        var primIds: [PrimId]
+}
+
+enum PrimType: UInt8 {
+        case triangle
+        case geometricPrimitive
+        case transformedPrimitive
+        case areaLight
+}
+
+struct PrimId {
+        let id1: Int
+        let id2: Int
+        let type: PrimType
 }

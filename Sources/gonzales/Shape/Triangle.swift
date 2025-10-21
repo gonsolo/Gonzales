@@ -171,7 +171,6 @@ struct TriangleIntersection {
 struct Triangle: Shape {
         typealias IntersectionData = TriangleIntersection
 
-        @MainActor
         init(
                 meshIndex: Int,
                 number: Int,
@@ -180,13 +179,15 @@ struct Triangle: Shape {
                 self.meshIndex = meshIndex
                 self.idx = 3 * number
 
-                numberOfTriangles += 1
-                triangleMemory += MemoryLayout<Self>.stride
+                //numberOfTriangles += 1
+                //triangleMemory += MemoryLayout<Self>.stride
                 let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 guard
-                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0) < pointCount && 
-                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1) < pointCount && 
-                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2) < pointCount
+                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0) < pointCount
+                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
+                                        < pointCount
+                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
+                                        < pointCount
                 else {
                         throw TriangleError.index
                 }
@@ -474,7 +475,6 @@ struct Triangle: Shape {
                         interaction: &interaction
                 )
         }
-
 
         private func getLocalPoint(index: Int) -> Point {
                 return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)

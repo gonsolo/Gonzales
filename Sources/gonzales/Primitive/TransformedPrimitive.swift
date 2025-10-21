@@ -3,13 +3,13 @@ import Foundation
 struct TransformedPrimitive: Boundable, Intersectable, Sendable {
 
         init(
-                //acceleratorIndex: AcceleratorIndex,
                 accelerator: Accelerator,
-                transform: Transform
+                transform: Transform,
+                idx: Int
         ) {
-                //self.acceleratorIndex = acceleratorIndex
                 self.accelerator = accelerator
                 self.transform = transform
+                self.idx = idx
         }
 
         func intersect(
@@ -52,4 +52,5 @@ struct TransformedPrimitive: Boundable, Intersectable, Sendable {
         //let acceleratorIndex: AcceleratorIndex
         let accelerator: Accelerator
         let transform: Transform
+        let idx: Int
 }

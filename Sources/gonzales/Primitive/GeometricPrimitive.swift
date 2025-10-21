@@ -71,6 +71,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
         var materialIndex: Int
         var mediumInterface: MediumInterface?
         var alpha: FloatX
+        var idx: Int
 }
 
 typealias MaterialIndex = Int

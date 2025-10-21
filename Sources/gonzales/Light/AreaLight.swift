@@ -2,10 +2,11 @@ import Foundation
 
 struct AreaLight: Boundable, Intersectable, Sendable {
 
-        init(brightness: RgbSpectrum, shape: ShapeType, alpha: FloatX) {
+        init(brightness: RgbSpectrum, shape: ShapeType, alpha: FloatX, idx: Int) {
                 self.brightness = brightness
                 self.shape = shape
                 self.alpha = alpha
+                self.idx = idx
         }
 
         func emittedRadiance(from interaction: any Interaction, inDirection direction: Vector)
@@ -27,7 +28,8 @@ struct AreaLight: Boundable, Intersectable, Sendable {
 
         func probabilityDensityFor<I: Interaction>(
                 samplingDirection direction: Vector,
-                from reference: I)
+                from reference: I
+        )
                 throws -> FloatX
         {
                 return try shape.probabilityDensityFor(
@@ -102,6 +104,7 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         let shape: ShapeType
         let brightness: RgbSpectrum
         let alpha: FloatX
+        let idx: Int
 }
 
 extension AreaLight: Equatable {

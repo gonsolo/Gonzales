@@ -278,14 +278,16 @@ struct Api {
                 if primitives.isEmpty {
                         return
                 }
-                var instance: any Boundable & Intersectable
+                //var instance: any Boundable & Intersectable
                 let accelerator = try await makeAccelerator(primitives: primitives)
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
-                instance = TransformedPrimitive(
+                let instance = TransformedPrimitive(
                         accelerator: accelerator,
-                        transform: currentTransform)
+                        transform: currentTransform,
+                        idx: transformedPrimitives.count)
                 options.primitives.append(instance)
+                transformedPrimitives.append(instance)
         }
 
         @MainActor
@@ -326,10 +328,15 @@ struct Api {
                                 else {
                                         throw ParameterError.missing(parameter: "L", function: #function)
                                 }
-                                let areaLight = AreaLight(brightness: brightness, shape: shape, alpha: alpha)
+                                let areaLight = AreaLight(
+                                        brightness: brightness,
+                                        shape: shape,
+                                        alpha: alpha,
+                                        idx: globalAreaLights.count)
                                 let light = Light.area(areaLight)
                                 areaLights.append(light)
                                 prims.append(areaLight)
+                                globalAreaLights.append(areaLight)
                         }
                 } else {
                         let materialIndex = materials.count
@@ -339,8 +346,10 @@ struct Api {
                                         shape: shape,
                                         materialIndex: materialIndex,
                                         mediumInterface: state.currentMediumInterface,
-                                        alpha: alpha)
+                                        alpha: alpha,
+                                        idx: geometricPrimitives.count)
                                 prims.append(geometricPrimitive)
+                                geometricPrimitives.append(geometricPrimitive)
                         }
                 }
                 if let objectName = state.objectName {
@@ -754,3 +763,7 @@ var acceleratorName = "bvh"
 
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
+
+nonisolated(unsafe) var geometricPrimitives = [GeometricPrimitive]()
+nonisolated(unsafe) var transformedPrimitives = [TransformedPrimitive]()
+nonisolated(unsafe) var globalAreaLights = [AreaLight]()

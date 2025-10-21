@@ -36,7 +36,9 @@ final class BoundingHierarchyBuilder {
         }
 
         @MainActor
-        internal func getBoundingHierarchy() throws -> BoundingHierarchy {
+        internal func getSortedPrimitivesAndNodes() throws -> (
+                [IntersectablePrimitive], [BoundingHierarchyNode]
+        ) {
                 BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
                 BoundingHierarchyBuilder.bhNodes += nodes.count
                 let sortedPrimitives = try cachedPrimitives.map {
@@ -55,6 +57,12 @@ final class BoundingHierarchyBuilder {
                         print("Unknown primitive \(primitives[$0.index])")
                         throw BoundingHierarchyBuilderError.unknown
                 }
+                return (sortedPrimitives, nodes)
+        }
+
+        @MainActor
+        internal func getBoundingHierarchy() throws -> BoundingHierarchy {
+                let (sortedPrimitives, nodes) = try getSortedPrimitivesAndNodes()
                 return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
 

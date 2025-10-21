@@ -1,4 +1,4 @@
-struct Scene: Sendable {
+public struct Scene: Sendable {
 
         @MainActor
         init(lights: [Light], materials: [Material]) {
@@ -18,6 +18,74 @@ struct Scene: Sendable {
 
         mutating func addAccelerator(accelerator: Accelerator) {
                 self.accelerator = accelerator
+        }
+
+        func intersect(primId: PrimId, ray: Ray, tHit: inout FloatX) throws -> Bool {
+                switch primId.type {
+                case .triangle:
+                        let triangle = try Triangle(
+                                meshIndex: primId.id1, number: primId.id2,
+                                triangleMeshes: immutableTriangleMeshes)
+                        return try triangle.intersect(ray: ray, tHit: &tHit)
+                case .geometricPrimitive:
+                        let geometricPrimitive = geometricPrimitives[primId.id1]
+                        return try geometricPrimitive.intersect(ray: ray, tHit: &tHit)
+                case .transformedPrimitive:
+                        let transformedPrimitive = transformedPrimitives[primId.id1]
+                        return try transformedPrimitive.intersect(ray: ray, tHit: &tHit)
+                case .areaLight:
+                        let areaLight = globalAreaLights[primId.id1]
+                        return try areaLight.intersect(ray: ray, tHit: &tHit)
+                }
+        }
+
+        func getIntersectionData(primId: PrimId, ray: Ray, tHit: inout FloatX) throws
+                -> IntersectablePrimitiveIntersection
+        {
+                switch primId.type {
+                case .triangle:
+                        let triangle = try Triangle(
+                                meshIndex: primId.id1, number: primId.id2,
+                                triangleMeshes: immutableTriangleMeshes)
+                        return try .triangle(triangle.getIntersectionData(ray: ray, tHit: &tHit))
+                case .geometricPrimitive:
+                        let geometricPrimitive = geometricPrimitives[primId.id1]
+                        return try geometricPrimitive.getIntersectionData(ray: ray, tHit: &tHit)
+                case .transformedPrimitive:
+                        unimplemented()
+                case .areaLight:
+                        let areaLight = globalAreaLights[primId.id1]
+                        return try areaLight.getIntersectionData(ray: ray, tHit: &tHit)
+                }
+        }
+
+        func computeSurfaceInteraction(
+                primId: PrimId,
+                data: IntersectablePrimitiveIntersection,
+                worldRay: Ray,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                switch primId.type {
+                case .triangle:
+                        let triangle = try Triangle(
+                                meshIndex: primId.id1, number: primId.id2,
+                                triangleMeshes: immutableTriangleMeshes)
+                        switch data {
+                        case .triangle(let triangleData):
+                                triangle.computeSurfaceInteraction(
+                                        data: triangleData!, worldRay: worldRay, interaction: &interaction)
+                        }
+                case .geometricPrimitive:
+                        let geometricPrimitive = geometricPrimitives[primId.id1]
+                        return geometricPrimitive.computeSurfaceInteraction(
+                                data: data, worldRay: worldRay, interaction: &interaction)
+                case .transformedPrimitive:
+                        unimplemented()
+                case .areaLight:
+                        let areaLight = globalAreaLights[primId.id1]
+                        return areaLight.computeSurfaceInteraction(
+                                data: data, worldRay: worldRay, interaction: &interaction)
+                }
         }
 
         func intersect(
@@ -57,6 +125,4 @@ struct Scene: Sendable {
         let immutableTriangleMeshes: TriangleMeshes
 }
 
-nonisolated(unsafe) var globalScene: Scene?
-
-
+public nonisolated(unsafe) var globalScene: Scene?
