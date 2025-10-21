@@ -122,36 +122,24 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                var gi = 0
-                //var gnode = BoundingHierarchyNode()
-                var offset = 0
+                var index = 0
                 var gdata: TriangleIntersection? = nil
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
                         for i in 0..<node.count {
-                                //let data = try primitives[node.offset + i].getIntersectionData(
-                                //        ray: ray, tHit: &tHit)
-
                                 let data = try globalScene!.getIntersectionData(
                                         primId: primIds[node.offset + i],
                                         ray: ray,
                                         tHit: &tHit)
 
                                 if data != nil {
-                                        gi = i
-                                        //gnode = node
-                                        offset = node.offset
+                                        index = node.offset + i
                                         gdata = data
                                 }
                         }
                 }
-                //primitives[gnode.offset + gi].computeSurfaceInteraction(
-                //        data: gdata,
-                //        worldRay: ray,
-                //        interaction: &interaction)
-
                 try globalScene!.computeSurfaceInteraction(
-                        primId: primIds[offset + gi],
+                        primId: primIds[index],
                         data: gdata,
                         worldRay: ray,
                         interaction: &interaction)
