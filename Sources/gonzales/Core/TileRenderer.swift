@@ -7,14 +7,14 @@ final class TileRenderer: Renderer {
                 camera: any Camera,
                 integrator: VolumePathIntegrator,
                 sampler: RandomSampler,
-                scene: Scene,
+                //scene: Scene,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int)
         ) async {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
-                self.scene = scene
+                //self.scene = scene
                 self.accelerator = accelerator
                 self.lightSampler = lightSampler
                 self.tileSize = tileSize
@@ -57,7 +57,7 @@ final class TileRenderer: Renderer {
                         reporter: reporter,
                         sampler: tileSampler,
                         camera: self.camera,
-                        scene: scene,
+                        //scene: scene,
                         lightSampler: lightSampler,
                         state: state
                 )
@@ -97,7 +97,7 @@ final class TileRenderer: Renderer {
         let lightSampler: LightSampler
         let reporter: ProgressReporter
         let sampler: RandomSampler
-        let scene: Scene
+        //let scene: Scene
         let bounds: Bounds2i
         let tileSize: (Int, Int)
 }

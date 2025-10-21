@@ -9,7 +9,7 @@ final class Tile: Sendable {
                 reporter: ProgressReporter,
                 sampler: RandomSampler,
                 camera: any Camera,
-                scene: Scene,
+                //scene: Scene,
                 lightSampler: LightSampler,
                 state: ImmutableState
         ) throws -> [Sample] {

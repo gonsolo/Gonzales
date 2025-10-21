@@ -1,4 +1,4 @@
-public struct Scene: Sendable {
+public final class Scene {
 
         @MainActor
         init(lights: [Light], materials: [Material]) {
@@ -16,7 +16,7 @@ public struct Scene: Sendable {
                 globalScene = self
         }
 
-        mutating func addAccelerator(accelerator: Accelerator) {
+        func addAccelerator(accelerator: Accelerator) {
                 self.accelerator = accelerator
         }
 
