@@ -124,7 +124,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         ) throws {
                 var gi = 0
                 var gnode = BoundingHierarchyNode()
-                var gdata: IntersectablePrimitiveIntersection = .triangle(nil)
+                var gdata: TriangleIntersection? = nil
 
                 try traverseHierarchy(ray: ray, tHit: tHit) { node in
                         for i in 0..<node.count {
@@ -136,13 +136,10 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                         ray: ray,
                                         tHit: &tHit)
 
-                                switch data {
-                                case .triangle(let triangle):
-                                        if triangle != nil {
-                                                gi = i
-                                                gnode = node
-                                                gdata = data
-                                        }
+                                if data != nil {
+                                        gi = i
+                                        gnode = node
+                                        gdata = data
                                 }
                         }
                 }

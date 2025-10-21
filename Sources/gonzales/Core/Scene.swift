@@ -40,14 +40,14 @@ public final class Scene {
         }
 
         func getIntersectionData(primId: PrimId, ray: Ray, tHit: inout FloatX) throws
-                -> IntersectablePrimitiveIntersection
+                -> TriangleIntersection?
         {
                 switch primId.type {
                 case .triangle:
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: immutableTriangleMeshes)
-                        return try .triangle(triangle.getIntersectionData(ray: ray, tHit: &tHit))
+                        return try triangle.getIntersectionData(ray: ray, tHit: &tHit)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return try geometricPrimitive.getIntersectionData(ray: ray, tHit: &tHit)
@@ -61,7 +61,7 @@ public final class Scene {
 
         func computeSurfaceInteraction(
                 primId: PrimId,
-                data: IntersectablePrimitiveIntersection,
+                data: TriangleIntersection?,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) throws {
@@ -70,11 +70,8 @@ public final class Scene {
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: immutableTriangleMeshes)
-                        switch data {
-                        case .triangle(let triangleData):
-                                triangle.computeSurfaceInteraction(
-                                        data: triangleData!, worldRay: worldRay, interaction: &interaction)
-                        }
+                        triangle.computeSurfaceInteraction(
+                                data: data!, worldRay: worldRay, interaction: &interaction)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return geometricPrimitive.computeSurfaceInteraction(

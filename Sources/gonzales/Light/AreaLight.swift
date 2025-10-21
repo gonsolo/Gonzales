@@ -53,13 +53,13 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         func getIntersectionData(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> IntersectablePrimitiveIntersection {
-                if alpha == 0 { return .triangle(nil) }
+        ) throws -> TriangleIntersection? {
+                if alpha == 0 { return nil }
                 return try shape.getIntersectionData(ray: worldRay, tHit: &tHit)
         }
 
         func computeSurfaceInteraction(
-                data: IntersectablePrimitiveIntersection,
+                data: TriangleIntersection?,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) {

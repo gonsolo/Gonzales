@@ -13,9 +13,9 @@ protocol Intersectable {
                 interaction: inout SurfaceInteraction) throws
 }
 
-enum IntersectablePrimitiveIntersection {
-        case triangle(TriangleIntersection?)
-}
+//enum IntersectablePrimitiveIntersection {
+//        case triangle(TriangleIntersection?)
+//}
 
 enum IntersectablePrimitive: Intersectable, Sendable {
         case geometricPrimitive(GeometricPrimitive)
@@ -26,7 +26,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
         func getIntersectionData(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> IntersectablePrimitiveIntersection {
+        ) throws -> TriangleIntersection? {
                 switch self {
                 case .areaLight(let areaLight):
                         return try areaLight.getIntersectionData(
@@ -37,24 +37,17 @@ enum IntersectablePrimitive: Intersectable, Sendable {
                                 ray: worldRay,
                                 tHit: &tHit)
                 case .triangle(let triangle):
-                        return try .triangle(
-                                triangle.getIntersectionData(
-                                        ray: worldRay,
-                                        tHit: &tHit))
-                //case .transformedPrimitive(let transformedPrimitive):
+                        return try triangle.getIntersectionData(
+                                ray: worldRay,
+                                tHit: &tHit)
                 case .transformedPrimitive:
                         unimplemented()
-                //        return try transformedPrimitive.intersect(
-                //                ray: ray,
-                //                tHit: &tHit)
-                //default:
-                //        unimplemented()
                 }
 
         }
 
         func computeSurfaceInteraction(
-                data: IntersectablePrimitiveIntersection,
+                data: TriangleIntersection?,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) {
@@ -65,17 +58,10 @@ enum IntersectablePrimitive: Intersectable, Sendable {
                                 worldRay: worldRay,
                                 interaction: &interaction)
                 case .triangle(let triangle):
-                        switch data {
-                        case .triangle(let triangleIntersection):
-                                guard let triangleIntersection = triangleIntersection else {
-                                        return
-                                }
-                                return triangle.computeSurfaceInteraction(
-                                        data: triangleIntersection,
-                                        worldRay: worldRay,
-                                        interaction: &interaction)
-
-                        }
+                        return triangle.computeSurfaceInteraction(
+                                data: data!,
+                                worldRay: worldRay,
+                                interaction: &interaction)
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight(let areaLight):

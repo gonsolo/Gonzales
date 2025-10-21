@@ -159,6 +159,17 @@ struct TriangleMeshes {
 var triangleMeshBuilder = TriangleMeshBuilder()
 
 struct TriangleIntersection {
+        let primId: PrimId
+        let t: FloatX
+        //let b0: FloatX
+        //let b1: FloatX
+        //let b2: FloatX
+        //let pHit: Point?  // Optional, only needed for SurfaceInteraction, but calculate outside the test for efficiency
+        //let dp02: Vector
+        //let dp12: Vector
+}
+
+struct TriangleIntersectionFull {
         let t: FloatX
         let b0: FloatX
         let b1: FloatX
@@ -265,10 +276,10 @@ struct Triangle: Shape {
                 return uvHit
         }
 
-        func getIntersectionData(
+        func getIntersectionDataFull(
                 ray worldRay: Ray,
                 tHit: inout FloatX
-        ) throws -> TriangleIntersection? {
+        ) throws -> TriangleIntersectionFull? {
 
                 // Transform the ray to object space
                 let ray = objectToWorld * worldRay
@@ -342,7 +353,7 @@ struct Triangle: Shape {
                 let dp02 = Vector(point: point0 - point2)
                 let dp12 = Vector(point: point1 - point2)
 
-                return TriangleIntersection(
+                return TriangleIntersectionFull(
                         t: t,
                         b0: b0,
                         b1: b1,
@@ -350,6 +361,95 @@ struct Triangle: Shape {
                         pHit: nil,  // pHit calculation is only needed for SurfaceInteraction
                         dp02: dp02,
                         dp12: dp12
+                )
+        }
+
+        func getIntersectionData(
+                ray worldRay: Ray,
+                tHit: inout FloatX
+        ) throws -> TriangleIntersection? {
+
+                // Transform the ray to object space
+                let ray = objectToWorld * worldRay
+
+                // --- Setup and Plane Projection ---
+
+                var p0t: Point = point0 - ray.origin
+                var p1t: Point = point1 - ray.origin
+                var p2t: Point = point2 - ray.origin
+
+                let kz = maxDimension(abs(ray.direction))
+                let kx = (kz + 1) % 3
+                let ky = (kx + 1) % 3
+                let d: Vector = permute(vector: ray.direction, x: kx, y: ky, z: kz)
+                p0t = permute(point: p0t, x: kx, y: ky, z: kz)
+                p1t = permute(point: p1t, x: kx, y: ky, z: kz)
+                p2t = permute(point: p2t, x: kx, y: ky, z: kz)
+
+                let sx: FloatX = -d.x / d.z
+                let sy: FloatX = -d.y / d.z
+                let sz: FloatX = 1.0 / d.z
+
+                // Shearing transformation
+                p0t.x += sx * p0t.z
+                p0t.y += sy * p0t.z
+                p1t.x += sx * p1t.z
+                p1t.y += sy * p1t.z
+                p2t.x += sx * p2t.z
+                p2t.y += sy * p2t.z
+
+                // Compute edge functions e0, e1, e2
+                let e0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
+                let e1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
+                let e2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
+
+                // Check edge functions for hit (same sign)
+                if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
+                        return nil
+                }
+                let det: FloatX = e0 + e1 + e2
+                if det == 0 {
+                        return nil  // Degenerate triangle or ray parallel to plane
+                }
+
+                // --- Compute t value and check range ---
+
+                p0t.z *= sz
+                p1t.z *= sz
+                p2t.z *= sz
+                let tScaled: FloatX = e0 * p0t.z + e1 * p1t.z + e2 * p2t.z
+
+                // Ray t range test against tHit and ray segment limits (0)
+                let hitCondition = det > 0
+                if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
+                {
+                        return nil
+                }
+
+                // --- Intersection found ---
+
+                let invDet: FloatX = 1 / det
+                //let b0: FloatX = e0 * invDet
+                //let b1: FloatX = e1 * invDet
+                //let b2: FloatX = e2 * invDet
+                let t: FloatX = tScaled * invDet
+
+                tHit = t  // Update closest hit distance
+
+                // Calculate necessary geometric data
+                //let dp02 = Vector(point: point0 - point2)
+                //let dp12 = Vector(point: point1 - point2)
+
+                return TriangleIntersection(
+                        primId: PrimId(id1: meshIndex, id2: idx, type: .triangle),
+                        t: t,
+                        //b0: b0,
+                        //b1: b1,
+                        //b2: b2,
+                        //pHit: nil,  // pHit calculation is only needed for SurfaceInteraction
+                        //dp02: dp02,
+                        //dp12: dp12
                 )
         }
 
@@ -365,6 +465,16 @@ struct Triangle: Shape {
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) {
+                var varT = data.t
+                var data: TriangleIntersectionFull?
+                do {
+                        data = try getIntersectionDataFull(ray: worldRay, tHit: &varT)
+                } catch {
+                        fatalError("getIntersectionDataFull in computeSurfaceInteraction!")
+                }
+                guard let data = data else {
+                       return
+                }
                 // --- Calculate Hit Point (pHit) ---
                 let hit0: Point = data.b0 * point0
                 let hit1: Point = data.b1 * point1
