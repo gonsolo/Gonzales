@@ -1,44 +1,35 @@
-// swift-tools-version:6.0.2
+// swift-tools-version:6.2
 
 import PackageDescription
 
 let package = Package(
         name: "gonzales",
-        dependencies: [
-                //.package(
-                //        url: "https://github.com/tsolomko/SWCompression.git",
-                //        from: "4.8.6")
+        platforms: [
+            .macOS(.v26)
         ],
         targets: [
                 .executableTarget(
                         name: "gonzales",
                         dependencies: [
-                                //"SWCompression",
-                                "embree4",
                                 "openImageIOBridge",
-                                //"cuda",
-                                //"cudaBridge",
                                 "ptexBridge",
-                        ]
+                        ],
                 ),
                 .target(
                         name: "openImageIOBridge",
                         dependencies: ["openimageio"],
+                        cxxSettings: [
+                            .unsafeFlags(["-I/usr/local/include/"])
+                        ],
                         swiftSettings: [.interoperabilityMode(.Cxx)]
                 ),
                 .target(
                         name: "ptexBridge",
                         dependencies: ["ptex"]
                 ),
-                //.target(
-                //        name: "cudaBridge",
-                //        dependencies: ["cuda"],
-                //        swiftSettings: [.interoperabilityMode(.Cxx)]
-                //),
-                .systemLibrary(name: "embree4"),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
-                //.systemLibrary(name: "cuda", pkgConfig: "cuda"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
+        swiftLanguageModes: [ .v6 ],
         cxxLanguageStandard: .cxx20
 )

@@ -1,4 +1,8 @@
+#if os(Linux)
 import Glibc
+#else
+import Darwin
+#endif
 
 enum RenderError: Error {
         case fopen

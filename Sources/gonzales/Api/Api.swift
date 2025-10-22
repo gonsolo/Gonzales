@@ -601,7 +601,7 @@ struct Api {
                         let infiniteLight = try createInfiniteLight(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
-                        immortalize(infiniteLight)
+                        //immortalize(infiniteLight)
                         return Light.infinite(infiniteLight)
                 case "point":
                         let pointLight = try createPointLight(

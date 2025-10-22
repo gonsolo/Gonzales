@@ -1,4 +1,8 @@
+#if os(Linux)
 import Glibc
+#else
+import Darwin
+#endif
 
 struct GaussianFilter: Filter {
 
