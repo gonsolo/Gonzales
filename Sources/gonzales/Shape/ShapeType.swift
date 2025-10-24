@@ -52,11 +52,12 @@ enum ShapeType: Shape {
 
         func getIntersectionData(
                 ray worldRay: Ray,
-                tHit: inout FloatX
-        ) throws -> TriangleIntersection? {
+                tHit: inout FloatX,
+                data: inout TriangleIntersection
+        ) throws -> Bool {
                 switch self {
                 case .triangle(let triangle):
-                        return try triangle.getIntersectionData(ray: worldRay, tHit: &tHit)
+                        return try triangle.getIntersectionData(ray: worldRay, tHit: &tHit, data: &data)
                 default:
                         unimplemented()
                 }

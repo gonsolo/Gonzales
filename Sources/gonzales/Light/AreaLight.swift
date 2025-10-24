@@ -52,10 +52,11 @@ struct AreaLight: Boundable, Intersectable, Sendable {
 
         func getIntersectionData(
                 ray worldRay: Ray,
-                tHit: inout FloatX
-        ) throws -> TriangleIntersection? {
-                if alpha == 0 { return nil }
-                return try shape.getIntersectionData(ray: worldRay, tHit: &tHit)
+                tHit: inout FloatX,
+                data: inout TriangleIntersection
+        ) throws -> Bool {
+                if alpha == 0 { return false }
+                return try shape.getIntersectionData(ray: worldRay, tHit: &tHit, data: &data)
         }
 
         func computeSurfaceInteraction(

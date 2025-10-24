@@ -127,15 +127,17 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var tHit: FloatX
 
                 mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
+                        var currentData = TriangleIntersection()
                         for i in 0..<node.count {
-                                let data = try globalScene!.getIntersectionData(
+                                let intersectionFound = try globalScene!.getIntersectionData(
                                         primId: hierarchy.primIds[node.offset + i],
                                         ray: ray,
-                                        tHit: &tHit)
+                                        tHit: &tHit,
+                                        data: &currentData)
 
-                                if data != nil {
+                                if intersectionFound {
                                         index = node.offset + i
-                                        gdata = data
+                                        gdata = currentData
                                 }
                         }
                 }
@@ -191,6 +193,17 @@ enum PrimType: UInt8 {
 }
 
 struct PrimId {
+        init() {
+                id1 = 0
+                id2 = 0
+                type = .triangle
+        }
+        init(id1: Int, id2: Int, type: PrimType) {
+                self.id1 = id1
+                self.id2 = id2
+                self.type = type
+        }
+
         let id1: Int
         let id2: Int
         let type: PrimType

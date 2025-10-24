@@ -39,23 +39,27 @@ public final class Scene {
                 }
         }
 
-        func getIntersectionData(primId: PrimId, ray: Ray, tHit: inout FloatX) throws
-                -> TriangleIntersection?
+        func getIntersectionData(
+                primId: PrimId,
+                ray: Ray,
+                tHit: inout FloatX,
+                data: inout TriangleIntersection) throws
+                -> Bool
         {
                 switch primId.type {
                 case .triangle:
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: immutableTriangleMeshes)
-                        return try triangle.getIntersectionData(ray: ray, tHit: &tHit)
+                        return try triangle.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.getIntersectionData(ray: ray, tHit: &tHit)
+                        return try geometricPrimitive.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
                         let areaLight = globalAreaLights[primId.id1]
-                        return try areaLight.getIntersectionData(ray: ray, tHit: &tHit)
+                        return try areaLight.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
                 }
         }
 

@@ -159,14 +159,17 @@ struct TriangleMeshes {
 var triangleMeshBuilder = TriangleMeshBuilder()
 
 struct TriangleIntersection {
+        init() {
+                primId = PrimId()
+                t = FloatX.greatestFiniteMagnitude
+        }
+
+        init(primId: PrimId, t: FloatX) {
+                self.primId = primId
+                self.t = t
+        }
         let primId: PrimId
         let t: FloatX
-        //let b0: FloatX
-        //let b1: FloatX
-        //let b2: FloatX
-        //let pHit: Point?  // Optional, only needed for SurfaceInteraction, but calculate outside the test for efficiency
-        //let dp02: Vector
-        //let dp12: Vector
 }
 
 struct TriangleIntersectionFull {
@@ -366,8 +369,9 @@ struct Triangle: Shape {
 
         func getIntersectionData(
                 ray worldRay: Ray,
-                tHit: inout FloatX
-        ) throws -> TriangleIntersection? {
+                tHit: inout FloatX,
+                data: inout TriangleIntersection
+        ) throws -> Bool {
 
                 // Transform the ray to object space
                 let ray = objectToWorld * worldRay
@@ -405,11 +409,11 @@ struct Triangle: Shape {
 
                 // Check edge functions for hit (same sign)
                 if (e0 < 0 || e1 < 0 || e2 < 0) && (e0 > 0 || e1 > 0 || e2 > 0) {
-                        return nil
+                        return false
                 }
                 let det: FloatX = e0 + e1 + e2
                 if det == 0 {
-                        return nil  // Degenerate triangle or ray parallel to plane
+                        return false // Degenerate triangle or ray parallel to plane
                 }
 
                 // --- Compute t value and check range ---
@@ -424,7 +428,7 @@ struct Triangle: Shape {
                 if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
                         || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
                 {
-                        return nil
+                        return false
                 }
 
                 // --- Intersection found ---
@@ -441,23 +445,19 @@ struct Triangle: Shape {
                 //let dp02 = Vector(point: point0 - point2)
                 //let dp12 = Vector(point: point1 - point2)
 
-                return TriangleIntersection(
+                data = TriangleIntersection(
                         primId: PrimId(id1: meshIndex, id2: idx, type: .triangle),
                         t: t,
-                        //b0: b0,
-                        //b1: b1,
-                        //b2: b2,
-                        //pHit: nil,  // pHit calculation is only needed for SurfaceInteraction
-                        //dp02: dp02,
-                        //dp12: dp12
                 )
+                return true
         }
 
         func intersect(
                 ray worldRay: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
-                return try getIntersectionData(ray: worldRay, tHit: &tHit) != nil
+                var notUsed = TriangleIntersection()
+                return try getIntersectionData(ray: worldRay, tHit: &tHit, data: &notUsed)
         }
 
         func computeSurfaceInteraction(
@@ -574,8 +574,9 @@ struct Triangle: Shape {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                guard let data = try getIntersectionData(ray: worldRay, tHit: &tHit) else {
-                        return  // No hit or not the closest hit
+                var data = TriangleIntersection()
+                if try !getIntersectionData(ray: worldRay, tHit: &tHit, data: &data) {
+                        return  
                 }
 
                 // 2. Compute the full SurfaceInteraction using the new private method

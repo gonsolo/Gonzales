@@ -25,21 +25,25 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 
         func getIntersectionData(
                 ray worldRay: Ray,
-                tHit: inout FloatX
-        ) throws -> TriangleIntersection? {
+                tHit: inout FloatX,
+                data: inout TriangleIntersection
+        ) throws -> Bool {
                 switch self {
                 case .areaLight(let areaLight):
                         return try areaLight.getIntersectionData(
                                 ray: worldRay,
-                                tHit: &tHit)
+                                tHit: &tHit,
+                                data: &data)
                 case .geometricPrimitive(let geometricPrimitive):
                         return try geometricPrimitive.getIntersectionData(
                                 ray: worldRay,
-                                tHit: &tHit)
+                                tHit: &tHit,
+                                data: &data)
                 case .triangle(let triangle):
                         return try triangle.getIntersectionData(
                                 ray: worldRay,
-                                tHit: &tHit)
+                                tHit: &tHit,
+                                data: &data)
                 case .transformedPrimitive:
                         unimplemented()
                 }
