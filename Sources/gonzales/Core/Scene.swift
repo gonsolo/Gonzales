@@ -103,6 +103,7 @@ public final class Scene {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction,
         ) throws {
+                unowned let accelerator = accelerator!
                 try accelerator.intersect(
                         ray: ray,
                         tHit: &tHit,

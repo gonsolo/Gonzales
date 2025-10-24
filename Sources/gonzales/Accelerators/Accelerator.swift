@@ -1,6 +1,11 @@
-enum Accelerator: Boundable, Intersectable, Sendable {
+final class Accelerator: Boundable, Intersectable, Sendable {
 
-        case boundingHierarchy(BoundingHierarchy)
+        init(boundingHierarchy: BoundingHierarchy) {
+                self.boundingHierarchy = boundingHierarchy
+        }
+
+        private let boundingHierarchy: BoundingHierarchy
+        //case boundingHierarchy(BoundingHierarchy)
         //case embree(EmbreeAccelerator)
         //case optix(Optix)
 
@@ -10,8 +15,8 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                 interactions: inout [SurfaceInteraction],
                 skips: [Bool]
         ) throws {
-                switch self {
-                case .boundingHierarchy(let boundingHierarchy):
+                //switch self {
+                //case .boundingHierarchy(let boundingHierarchy):
                         for i in 0..<rays.count {
                                 if !skips[i] {
                                         try boundingHierarchy.intersect(
@@ -36,18 +41,18 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                 //                interactions: &interactions,
                 //                skips: skips)
                 }
-        }
+        //}
 
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
-                switch self {
-                case .boundingHierarchy(let boundingHierarchy):
+                //switch self {
+                //case .boundingHierarchy(let boundingHierarchy):
                         try boundingHierarchy.intersect(
                                 ray: ray,
                                 tHit: &tHit)
-                }
+                //}
         }
 
         func intersect(
@@ -55,8 +60,8 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                switch self {
-                case .boundingHierarchy(let boundingHierarchy):
+                //switch self {
+                //case .boundingHierarchy(let boundingHierarchy):
                         try boundingHierarchy.intersect(
                                 ray: ray,
                                 tHit: &tHit,
@@ -71,31 +76,30 @@ enum Accelerator: Boundable, Intersectable, Sendable {
                 //                ray: ray,
                 //                tHit: &tHit,
                 //                interaction: &interaction)
-                }
+                //}
         }
 
         @MainActor
         func objectBound() -> Bounds3f {
-                switch self {
-                case .boundingHierarchy(let boundingHierarchy):
+                //switch self {
+                //case .boundingHierarchy(let boundingHierarchy):
                         return boundingHierarchy.objectBound()
                 //case .embree(let embree):
                 //        return embree.objectBound()
                 //case .optix(let optix):
                 //        return optix.objectBound()
-                }
+                //}
         }
 
         @MainActor
         func worldBound() -> Bounds3f {
-                switch self {
-                case .boundingHierarchy(let boundingHierarchy):
+                //switch self {
+                //case .boundingHierarchy(let boundingHierarchy):
                         return boundingHierarchy.worldBound()
                 //case .embree(let embree):
                 //        return embree.worldBound()
                 //case .optix(let optix):
                 //        return optix.worldBound()
-                }
+                //}
         }
-
 }

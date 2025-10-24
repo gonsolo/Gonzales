@@ -6,7 +6,8 @@ func makeAccelerator(primitives: [any Boundable & Intersectable]) async throws -
         case "bvh":
                 let builder = await BoundingHierarchyBuilder(primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
-                let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
+                //let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
+                let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
                 return accelerator
         //case "embree":
         //        let builder = await EmbreeBuilder(primitives: primitives)

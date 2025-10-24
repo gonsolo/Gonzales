@@ -182,16 +182,16 @@ class Options {
 
                 // The Optix renderer is not thread-safe for now; use just one tile as big as the image.
                 let tileSize = (32, 32)
-                switch accelerator {
-                case .boundingHierarchy:
-                        break
+                //switch accelerator {
+                //case .boundingHierarchy:
+                //        break
                 //case .embree:
                 //        break
                 //case .optix:
                 //        let resolution = camera.film.image.fullResolution
                 //        tileSize.0 = resolution.x
                 //        tileSize.1 = resolution.y
-                }
+                //}
                 return await TileRenderer(
                         accelerator: accelerator,
                         camera: camera,

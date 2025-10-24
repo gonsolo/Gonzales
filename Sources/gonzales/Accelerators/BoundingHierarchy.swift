@@ -3,7 +3,6 @@
 struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         init(primitives: [IntersectablePrimitive], nodes: [BoundingHierarchyNode]) {
-                self.primitives = primitives
                 self.nodes = nodes
                 self.primIds = []
                 for primitive in primitives {
@@ -179,9 +178,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 //print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
 
-        let primitives: [IntersectablePrimitive]
         let nodes: [BoundingHierarchyNode]
-
         var primIds: [PrimId]
 }
 
