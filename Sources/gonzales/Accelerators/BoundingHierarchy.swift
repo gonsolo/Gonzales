@@ -1,3 +1,5 @@
+// BoundingHierarchy.swift
+
 struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         init(primitives: [IntersectablePrimitive], nodes: [BoundingHierarchyNode]) {
@@ -25,31 +27,36 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 }
         }
 
-        // --- Private Traversal Logic ---
-        // The traversal function accepts a closure 'onLeaf' to execute when a leaf node is reached.
-        private func traverseHierarchy(
+        // --- 1. Private Traversal Protocol (The Leaf Logic Interface) ---
+        private protocol LeafProcessor {
+                // processLeaf is declared with 'throws'
+                mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws
+                var tHit: FloatX { get set }
+        }
+
+        // --- 2. Private Traversal Helper (Generic Shared Logic) ---
+        // FIX: Changed 'rethrows' to 'throws' because it calls a throwing method but has no throwing function argument.
+        private func traverseHierarchy<P: LeafProcessor>(
                 ray: Ray,
-                tHit: FloatX,
-                onLeaf: (_ node: BoundingHierarchyNode) throws -> Void
-        ) rethrows {
+                processor: inout P
+        ) throws {
                 var toVisit = 0
                 var current = 0
-                var nodesToVisit: [32 of Int] = .init(repeating: 0)
-                var nodesVisited = 0
+                // Use a fixed-size array/tuple for performance
+                var nodesToVisit: [32 of Int] = .init(repeating: 0) 
 
                 if nodes.isEmpty { return }
 
                 while true {
-                        nodesVisited += 1
                         let node = nodes[current]
 
                         // 1. Check intersection with the bounding box
-                        if node.bounds.intersects(ray: ray, tHit: tHit) {
+                        if node.bounds.intersects(ray: ray, tHit: processor.tHit) {
 
                                 if node.count > 0 {  // leaf node
-
-                                        // 2. Execute the leaf-specific logic provided by the caller
-                                        try onLeaf(node)
+                                        
+                                        // 2. Execute the leaf-specific logic via the protocol method
+                                        try processor.processLeaf(hierarchy: self, node: node, ray: ray)
 
                                         // 3. Move to the next node from the stack (if any)
                                         if toVisit == 0 { break }
@@ -57,18 +64,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                         current = nodesToVisit[toVisit]
 
                                 } else {  // interior node
-
-                                        // 4. Determine child traversal order (closest child first)
-                                        // The children are assumed to be current + 1 and node.offset.
+                                        // 4. Determine child traversal order (Closest child first)
                                         let firstChildIndex: Int
                                         let secondChildIndex: Int
 
                                         if ray.direction[node.axis] < 0 {
-                                                // Negative direction: near child is at node.offset, far child is at current + 1
                                                 firstChildIndex = node.offset
                                                 secondChildIndex = current + 1
                                         } else {
-                                                // Positive direction: near child is at current + 1, far child is at node.offset
                                                 firstChildIndex = current + 1
                                                 secondChildIndex = node.offset
                                         }
@@ -88,47 +91,45 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         }
                 }
         }
-        // ------------------------------------
+        
+        // --- 3. Occlusion Leaf Logic (Value Type) ---
+        private struct OcclusionProcessor: LeafProcessor {
+                var intersected: Bool = false
+                var tHit: FloatX
+
+                mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
+                        for i in 0..<node.count {
+                                intersected =
+                                        try intersected
+                                        || globalScene!.intersect(
+                                                primId: hierarchy.primIds[node.offset + i],
+                                                ray: ray,
+                                                tHit: &tHit)
+                        }
+                }
+        }
 
         // --- Public Intersect (Occlusion Query) ---
         func intersect(
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
-                var intersected = false
-
-                try traverseHierarchy(ray: ray, tHit: tHit) { node in
-                        for i in 0..<node.count {
-                                //intersected =
-                                //        try intersected
-                                //        || primitives[node.offset + i].intersect(
-                                //                ray: ray,
-                                //                tHit: &tHit
-                                //        )
-
-                                intersected =
-                                        try intersected
-                                        || globalScene!.intersect(
-                                                primId: primIds[node.offset + i],
-                                                ray: ray,
-                                                tHit: &tHit)
-                        }
-                }
-                return intersected
+                var processor = OcclusionProcessor(tHit: tHit)
+                try traverseHierarchy(ray: ray, processor: &processor)
+                tHit = processor.tHit
+                return processor.intersected
         }
 
-        func intersect(
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                var index = 0
+        // --- 4. Interaction Leaf Logic (Value Type) ---
+        private struct InteractionProcessor: LeafProcessor {
+                var index: Int = 0
                 var gdata: TriangleIntersection? = nil
+                var tHit: FloatX
 
-                try traverseHierarchy(ray: ray, tHit: tHit) { node in
+                mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
                         for i in 0..<node.count {
                                 let data = try globalScene!.getIntersectionData(
-                                        primId: primIds[node.offset + i],
+                                        primId: hierarchy.primIds[node.offset + i],
                                         ray: ray,
                                         tHit: &tHit)
 
@@ -138,12 +139,23 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                 }
                         }
                 }
+        }
+
+        // --- Public Intersect (Full Interaction Query) ---
+        func intersect(
+                ray: Ray,
+                tHit: inout FloatX,
+                interaction: inout SurfaceInteraction
+        ) throws {
+                var processor = InteractionProcessor(tHit: tHit)
+                try traverseHierarchy(ray: ray, processor: &processor)
+                
+                tHit = processor.tHit
                 try globalScene!.computeSurfaceInteraction(
-                        primId: primIds[index],
-                        data: gdata,
+                        primId: primIds[processor.index],
+                        data: processor.gdata,
                         worldRay: ray,
                         interaction: &interaction)
-
         }
 
         @MainActor

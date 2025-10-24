@@ -113,25 +113,25 @@ else
 		SWIFT		= swift
 endif
 	#SWIFT_VERBOSE		= -v
-	SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
+	#SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
 	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	SWIFT_OPTIMIZE_FLAG	= #-Xswiftc -Ounchecked # -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
-	SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
+	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
 	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
 
 	# Should not be needed since there is only one module
 	# CROSS 			= -Xswiftc -cross-module-optimization
 
-	CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
-	EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
+	#CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
+	#EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
 
-	SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
+	#SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
 
 
 	#SWIFT_SUPPRESS 		= -Xswiftc -suppress-warnings
-	WARNINGS_AS_ERRORS 	= -Xswiftc -warnings-as-errors
+	#WARNINGS_AS_ERRORS 	= -Xswiftc -warnings-as-errors
 	DEBUG_OPTIONS   	= $(UPCOMING_FEATURE) $(SWIFT_CONCURRENCY) $(SWIFT_SUPPRESS) $(SWIFT_VERBOSE) \
 				  $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL) \
 				  $(WARNINGS_AS_ERRORS)
@@ -181,10 +181,10 @@ $(EMBEDDED_C): $(DEVICE_PROGRAMS_PTX)
 	@bin2c -c --padd 0 --type char --name embedded_ptx_code $(DEVICE_PROGRAMS_PTX) > $(EMBEDDED_C)
 
 r: release
-release: #optix
+release:
 	@$(BUILD_RELEASE)
 d: debug
-debug: #optix
+debug:
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug
