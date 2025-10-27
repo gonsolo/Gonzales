@@ -1,13 +1,15 @@
 public final class Scene {
 
-        @MainActor
         init() {
                 accelerator = nil
                 lights = []
                 infiniteLights = []
                 materials = []
-                meshes = triangleMeshBuilder.getMeshes()
-                globalScene = self
+                meshes = TriangleMeshes(meshes: [])
+        }
+
+        func addMeshes(meshes: TriangleMeshes) {
+                self.meshes = meshes
         }
 
         @MainActor
@@ -139,4 +141,3 @@ public final class Scene {
         var meshes: TriangleMeshes
 }
 
-public nonisolated(unsafe) var globalScene: Scene?

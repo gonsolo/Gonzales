@@ -229,10 +229,7 @@ struct Triangle: Shape {
         }
 
         var triangleMeshes: TriangleMeshes {
-                guard let scene = globalScene else {
-                        fatalError("No scene!")
-                }
-                return scene.meshes
+                return globalScene.meshes
         }
 
         var vertexIndex0: Int {

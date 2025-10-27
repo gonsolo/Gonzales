@@ -100,7 +100,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         for i in 0..<node.count {
                                 intersected =
                                         try intersected
-                                        || globalScene!.intersect(
+                                        || globalScene.intersect(
                                                 primId: hierarchy.primIds[node.offset + i],
                                                 ray: ray,
                                                 tHit: &tHit)
@@ -128,7 +128,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
                         var currentData = TriangleIntersection()
                         for i in 0..<node.count {
-                                let intersectionFound = try globalScene!.getIntersectionData(
+                                let intersectionFound = try globalScene.getIntersectionData(
                                         primId: hierarchy.primIds[node.offset + i],
                                         ray: ray,
                                         tHit: &tHit,
@@ -152,7 +152,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 try traverseHierarchy(ray: ray, processor: &processor)
                 
                 tHit = processor.tHit
-                try globalScene!.computeSurfaceInteraction(
+                try globalScene.computeSurfaceInteraction(
                         primId: primIds[processor.index],
                         data: processor.gdata,
                         worldRay: ray,
