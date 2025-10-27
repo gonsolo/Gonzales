@@ -167,7 +167,10 @@ class Options {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 //var scene = Scene(lights: lights, materials: materials)
-                globalScene = Scene(lights: lights, materials: materials)
+                //globalScene = Scene(lights: lights, materials: materials)
+                globalScene = Scene()
+                globalScene!.addLights(lights: lights)
+                globalScene!.addMaterials(materials: materials)
 
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try await makeAccelerator(primitives: primitives)

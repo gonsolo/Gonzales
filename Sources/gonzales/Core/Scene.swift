@@ -1,9 +1,18 @@
 public final class Scene {
 
         @MainActor
-        init(lights: [Light], materials: [Material]) {
+        init() {
+                accelerator = nil
+                lights = []
+                infiniteLights = []
+                materials = []
+                meshes = triangleMeshBuilder.getMeshes()
+                globalScene = self
+        }
+
+        @MainActor
+        func addLights(lights: [Light]) {
                 self.lights = lights
-                self.materials = materials
                 self.infiniteLights = lights.compactMap {
                         switch $0 {
                         case .infinite(let infiniteLight):
@@ -12,8 +21,11 @@ public final class Scene {
                                 return nil
                         }
                 }
-                self.immutableTriangleMeshes = triangleMeshBuilder.getMeshes()
-                globalScene = self
+        }
+
+        @MainActor
+        func addMaterials(materials: [Material]) {
+                self.materials = materials
         }
 
         func addAccelerator(accelerator: Accelerator) {
@@ -25,7 +37,7 @@ public final class Scene {
                 case .triangle:
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
-                                triangleMeshes: immutableTriangleMeshes)
+                                triangleMeshes: meshes)
                         return try triangle.intersect(ray: ray, tHit: &tHit)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
@@ -50,7 +62,7 @@ public final class Scene {
                 case .triangle:
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
-                                triangleMeshes: immutableTriangleMeshes)
+                                triangleMeshes: meshes)
                         return try triangle.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
@@ -73,7 +85,7 @@ public final class Scene {
                 case .triangle:
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
-                                triangleMeshes: immutableTriangleMeshes)
+                                triangleMeshes: meshes)
                         triangle.computeSurfaceInteraction(
                                 data: data!, worldRay: worldRay, interaction: &interaction)
                 case .geometricPrimitive:
@@ -123,8 +135,8 @@ public final class Scene {
         var accelerator: Accelerator!
         var lights: [Light]
         var infiniteLights: [InfiniteLight]
-        let materials: [Material]
-        let immutableTriangleMeshes: TriangleMeshes
+        var materials: [Material]
+        var meshes: TriangleMeshes
 }
 
 public nonisolated(unsafe) var globalScene: Scene?

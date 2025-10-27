@@ -232,7 +232,7 @@ struct Triangle: Shape {
                 guard let scene = globalScene else {
                         fatalError("No scene!")
                 }
-                return scene.immutableTriangleMeshes
+                return scene.meshes
         }
 
         var vertexIndex0: Int {
