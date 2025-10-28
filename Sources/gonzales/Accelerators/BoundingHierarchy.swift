@@ -5,6 +5,8 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         init(primitives: [IntersectablePrimitive], nodes: [BoundingHierarchyNode]) {
                 self.nodes = nodes
                 self.primIds = []
+                //self.boundingScene = scene
+                self.scenePtr = nil
                 for primitive in primitives {
                         switch primitive {
                         case .geometricPrimitive(let geometricPrimitive):
@@ -91,12 +93,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 }
         }
         
-        // --- 3. Occlusion Leaf Logic (Value Type) ---
         private struct OcclusionProcessor: LeafProcessor {
                 var intersected: Bool = false
                 var tHit: FloatX
+                let scenePtr: UnsafeRawPointer
 
                 mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
+                        //let scene = Unmanaged<Scene>.fromOpaque(scenePtr).takeUnretainedValue()
+                        let scene = unsafeBitCast(scenePtr, to: Scene.self)
                         for i in 0..<node.count {
                                 intersected =
                                         try intersected
@@ -113,7 +117,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
-                var processor = OcclusionProcessor(tHit: tHit)
+                var processor = OcclusionProcessor(tHit: tHit, scenePtr: scenePtr)
                 try traverseHierarchy(ray: ray, processor: &processor)
                 tHit = processor.tHit
                 return processor.intersected
@@ -124,6 +128,8 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var index: Int = 0
                 var gdata: TriangleIntersection? = nil
                 var tHit: FloatX
+                //unowned let scene: Scene
+                let scenePtr: UnsafeRawPointer
 
                 mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
                         var currentData = TriangleIntersection()
@@ -148,7 +154,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                var processor = InteractionProcessor(tHit: tHit)
+                var processor = InteractionProcessor(tHit: tHit, scenePtr: scenePtr)
                 try traverseHierarchy(ray: ray, processor: &processor)
                 
                 tHit = processor.tHit
@@ -178,8 +184,15 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 //print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
 
+        mutating func addScene(scene: Scene) {
+                //self.boundingScene = scene 
+                self.scenePtr = Unmanaged.passUnretained(scene).toOpaque()
+        }
+
         let nodes: [BoundingHierarchyNode]
         var primIds: [PrimId]
+        //nonisolated(unsafe) unowned var boundingScene: Scene
+        nonisolated(unsafe) var scenePtr: UnsafeMutableRawPointer!
 }
 
 enum PrimType: UInt8 {

@@ -177,6 +177,7 @@ class Options {
                 let accelerator = try await makeAccelerator(primitives: primitives)
                 //scene.addAccelerator(accelerator: accelerator)
                 scene.addAccelerator(accelerator: accelerator)
+                accelerator.addScene(scene: scene)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(scene: scene, sampler: sampler)

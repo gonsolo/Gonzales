@@ -4,7 +4,7 @@ final class Accelerator: Boundable, Intersectable, Sendable {
                 self.boundingHierarchy = boundingHierarchy
         }
 
-        private let boundingHierarchy: BoundingHierarchy
+        nonisolated(unsafe) private var boundingHierarchy: BoundingHierarchy
         //case boundingHierarchy(BoundingHierarchy)
         //case embree(EmbreeAccelerator)
         //case optix(Optix)
@@ -101,5 +101,9 @@ final class Accelerator: Boundable, Intersectable, Sendable {
                 //case .optix(let optix):
                 //        return optix.worldBound()
                 //}
+        }
+
+        func addScene(scene: Scene) {
+                boundingHierarchy.addScene(scene: scene)
         }
 }
