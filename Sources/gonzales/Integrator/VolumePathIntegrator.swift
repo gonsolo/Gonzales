@@ -34,11 +34,11 @@ final class VolumePathIntegrator: Sendable {
                 estimate: inout RgbSpectrum,
                 interaction: inout SurfaceInteraction
         ) throws {
-                try globalScene.intersect(
+                try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
-                let radiance = globalScene.infiniteLights.reduce(
+                let radiance = scene.infiniteLights.reduce(
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
                         }
@@ -57,7 +57,7 @@ final class VolumePathIntegrator: Sendable {
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try !visibility.occluded(scene: globalScene) else {
+                guard try !visibility.occluded(scene: scene) else {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(
@@ -82,14 +82,14 @@ final class VolumePathIntegrator: Sendable {
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
-                try globalScene.intersect(
+                try scene.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)
                 if brdfInteraction.valid {
                         return zero
                 }
-                for light in globalScene.lights {
+                for light in scene.lights {
                         switch light {
                         case .infinite(let infiniteLight):
                                 let radiance = infiniteLight.radianceFromInfinity(for: ray)
@@ -343,7 +343,7 @@ final class VolumePathIntegrator: Sendable {
                 //}
                 //let bsdf = surfaceInteraction.getBsdf()
                 assert(surfaceInteraction.materialIndex >= 0)
-                let bsdf = globalScene.materials[surfaceInteraction.materialIndex].getBsdf(
+                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
                         interaction: surfaceInteraction)
 
                 //if surfaceInteraction.material.isInterface {

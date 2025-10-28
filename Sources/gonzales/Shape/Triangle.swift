@@ -229,7 +229,7 @@ struct Triangle: Shape {
         }
 
         var triangleMeshes: TriangleMeshes {
-                return globalScene.meshes
+                return scene.meshes
         }
 
         var vertexIndex0: Int {
