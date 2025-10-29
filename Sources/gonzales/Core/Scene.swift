@@ -1,4 +1,4 @@
-public final class Scene {
+struct Scene {
 
         init() {
                 lights = []
@@ -7,12 +7,12 @@ public final class Scene {
                 meshes = TriangleMeshes(meshes: [])
         }
 
-        func addMeshes(meshes: TriangleMeshes) {
+        mutating func addMeshes(meshes: TriangleMeshes) {
                 self.meshes = meshes
         }
 
         @MainActor
-        func addLights(lights: [Light]) {
+        mutating func addLights(lights: [Light]) {
                 self.lights = lights
                 self.infiniteLights = lights.compactMap {
                         switch $0 {
@@ -25,7 +25,7 @@ public final class Scene {
         }
 
         @MainActor
-        func addMaterials(materials: [Material]) {
+        mutating func addMaterials(materials: [Material]) {
                 self.materials = materials
         }
 
