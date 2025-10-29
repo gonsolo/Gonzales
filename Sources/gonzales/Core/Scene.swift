@@ -1,7 +1,6 @@
 public final class Scene {
 
         init() {
-                accelerator = nil
                 lights = []
                 infiniteLights = []
                 materials = []
@@ -28,10 +27,6 @@ public final class Scene {
         @MainActor
         func addMaterials(materials: [Material]) {
                 self.materials = materials
-        }
-
-        func addAccelerator(accelerator: Accelerator) {
-                self.accelerator = accelerator
         }
 
         func intersect(primId: PrimId, ray: Ray, tHit: inout FloatX) throws -> Bool {
@@ -103,29 +98,9 @@ public final class Scene {
                 }
         }
 
-        func intersect(
-                ray: Ray,
-                tHit: inout FloatX
-        ) throws -> Bool {
-                return try accelerator.intersect(
-                        ray: ray,
-                        tHit: &tHit)
-        }
-
-        func intersect(
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction,
-        ) throws {
-                try accelerator.intersect(
-                        ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
-        }
-
         @MainActor
         func bound() -> Bounds3f {
-                return accelerator.worldBound()
+                return g_accelerator.worldBound()
         }
 
         @MainActor
@@ -133,7 +108,6 @@ public final class Scene {
                 return length(bound().diagonal())
         }
 
-        var accelerator: Accelerator!
         var lights: [Light]
         var infiniteLights: [InfiniteLight]
         var materials: [Material]

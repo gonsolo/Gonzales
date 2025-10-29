@@ -1,5 +1,9 @@
 final class Accelerator: Boundable, Intersectable, Sendable {
 
+        init() {
+                self.boundingHierarchy = BoundingHierarchy(primitives: [], nodes: [])
+        }
+
         init(boundingHierarchy: BoundingHierarchy) {
                 self.boundingHierarchy = boundingHierarchy
         }
@@ -101,9 +105,5 @@ final class Accelerator: Boundable, Intersectable, Sendable {
                 //case .optix(let optix):
                 //        return optix.worldBound()
                 //}
-        }
-
-        func addScene(scene: Scene) {
-                boundingHierarchy.addScene(scene: scene)
         }
 }

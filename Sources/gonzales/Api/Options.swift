@@ -171,9 +171,8 @@ class Options {
                 scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
 
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try await makeAccelerator(primitives: primitives)
-                scene.addAccelerator(accelerator: accelerator)
-                accelerator.addScene(scene: scene)
+                g_accelerator = try await makeAccelerator(primitives: primitives)
+                //g_accelerator = accelerator
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler)
@@ -182,7 +181,7 @@ class Options {
                 let tileSize = (32, 32)
 
                 return await TileRenderer(
-                        accelerator: accelerator,
+                        accelerator: g_accelerator,
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
