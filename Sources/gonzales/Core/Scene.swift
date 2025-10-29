@@ -100,7 +100,7 @@ public final class Scene {
 
         @MainActor
         func bound() -> Bounds3f {
-                return g_accelerator.worldBound()
+                return accelerator.worldBound()
         }
 
         @MainActor

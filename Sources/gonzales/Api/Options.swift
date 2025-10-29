@@ -171,8 +171,7 @@ class Options {
                 scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
 
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                g_accelerator = try await makeAccelerator(primitives: primitives)
-                //g_accelerator = accelerator
+                accelerator = try await makeAccelerator(primitives: primitives)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler)
@@ -184,7 +183,6 @@ class Options {
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
-                        //scene: scene,
                         lightSampler: lightSampler,
                         tileSize: tileSize
                 )

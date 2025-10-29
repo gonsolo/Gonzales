@@ -33,7 +33,7 @@ final class VolumePathIntegrator: Sendable {
                 estimate: inout RgbSpectrum,
                 interaction: inout SurfaceInteraction
         ) throws {
-                try g_accelerator.intersect(
+                try accelerator.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
@@ -81,7 +81,7 @@ final class VolumePathIntegrator: Sendable {
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
-                try g_accelerator.intersect(
+                try accelerator.intersect(
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)
