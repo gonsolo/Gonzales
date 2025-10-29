@@ -181,7 +181,6 @@ class Options {
                 let tileSize = (32, 32)
 
                 return await TileRenderer(
-                        accelerator: g_accelerator,
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,
