@@ -4,8 +4,7 @@
 
 final class VolumePathIntegrator: Sendable {
 
-        init(scene: Scene, maxDepth: Int) {
-                //self.scene = scene
+        init(maxDepth: Int) {
                 self.maxDepth = maxDepth
         }
 
@@ -563,6 +562,5 @@ final class VolumePathIntegrator: Sendable {
                 }
         }
 
-        //let scene: Scene
         let maxDepth: Int
 }

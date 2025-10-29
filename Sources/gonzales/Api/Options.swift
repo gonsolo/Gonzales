@@ -132,7 +132,7 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(scene: Scene, sampler: RandomSampler) throws -> VolumePathIntegrator {
+        func makeIntegrator(sampler: RandomSampler) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -145,7 +145,7 @@ class Options {
                         called: "maxdepth",
                         else: 1
                 )
-                return VolumePathIntegrator(scene: scene, maxDepth: maxDepth)
+                return VolumePathIntegrator(maxDepth: maxDepth)
         }
 
         @MainActor
@@ -166,37 +166,21 @@ class Options {
         func makeRenderer() async throws -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
-                //var scene = Scene(lights: lights, materials: materials)
-                //globalScene = Scene(lights: lights, materials: materials)
-                //globalScene = Scene()
                 scene.addLights(lights: lights)
                 scene.addMaterials(materials: materials)
                 scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
 
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try await makeAccelerator(primitives: primitives)
-                //scene.addAccelerator(accelerator: accelerator)
                 scene.addAccelerator(accelerator: accelerator)
                 accelerator.addScene(scene: scene)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let integrator = try makeIntegrator(scene: scene, sampler: sampler)
-                //let lightSampler = UniformLightSampler(sampler: sampler, lights: lights)
+                let integrator = try makeIntegrator(sampler: sampler)
                 let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = LightSampler.power(powerLightSampler)
-
-                // The Optix renderer is not thread-safe for now; use just one tile as big as the image.
                 let tileSize = (32, 32)
-                //switch accelerator {
-                //case .boundingHierarchy:
-                //        break
-                //case .embree:
-                //        break
-                //case .optix:
-                //        let resolution = camera.film.image.fullResolution
-                //        tileSize.0 = resolution.x
-                //        tileSize.1 = resolution.y
-                //}
+
                 return await TileRenderer(
                         accelerator: accelerator,
                         camera: camera,

@@ -99,7 +99,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 let scenePtr: UnsafeRawPointer
 
                 mutating func processLeaf(hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
-                        //let scene = Unmanaged<Scene>.fromOpaque(scenePtr).takeUnretainedValue()
                         let scene = unsafeBitCast(scenePtr, to: Scene.self)
                         for i in 0..<node.count {
                                 intersected =
