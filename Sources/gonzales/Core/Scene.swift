@@ -5,10 +5,15 @@ struct Scene {
                 infiniteLights = []
                 materials = []
                 meshes = TriangleMeshes(meshes: [])
+                geometricPrimitives = []
         }
 
         mutating func addMeshes(meshes: TriangleMeshes) {
                 self.meshes = meshes
+        }
+
+        mutating func addGeometricPrimivites(geometricPrimitives: [GeometricPrimitive]) {
+                self.geometricPrimitives = geometricPrimitives
         }
 
         @MainActor
@@ -112,5 +117,6 @@ struct Scene {
         var infiniteLights: [InfiniteLight]
         var materials: [Material]
         var meshes: TriangleMeshes
+        var geometricPrimitives: [GeometricPrimitive]
 }
 

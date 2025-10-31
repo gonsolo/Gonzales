@@ -169,7 +169,7 @@ class Options {
                 scene.addLights(lights: lights)
                 scene.addMaterials(materials: materials)
                 scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
-
+                scene.addGeometricPrimivites(geometricPrimitives: geometricPrimitives)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 accelerator = try await makeAccelerator(primitives: primitives)
                 cleanUp()
