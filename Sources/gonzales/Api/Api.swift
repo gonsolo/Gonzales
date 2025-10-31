@@ -444,17 +444,18 @@ struct Api {
                 switch textureClass {
                 // bilerp missing
                 case "checkerboard":
-                        let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
-                        let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
-                        let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
-                        let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
-                        let textures = (textureEven, textureOdd)
-                        let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
-                        let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
-                        let scale = (uscale, vscale)
-                        let checkerboard = Checkerboard(textures: textures, scale: scale)
-                        let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
-                        texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                        unimplemented()
+                        //let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
+                        //let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
+                        //let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
+                        //let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
+                        //let textures = (textureEven, textureOdd)
+                        //let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
+                        //let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
+                        //let scale = (uscale, vscale)
+                        //let checkerboard = Checkerboard(textures: textures, scale: scale)
+                        //let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
+                        //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 case "constant":
                         switch type {
                         case "spectrum", "color":
@@ -476,14 +477,15 @@ struct Api {
                 case "mix":
                         switch type {
                         case "color", "spectrum":
-                                let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
-                                let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
-                                let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
-                                        textures: (tex1, tex2), amount: amount)
-                                let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
-                                        rgbSpectrumMixTexture)
-                                texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                                unimplemented()
+                                //let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
+                                //let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
+                                //let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                                //let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
+                                //        textures: (tex1, tex2), amount: amount)
+                                //let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
+                                //        rgbSpectrumMixTexture)
+                                //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
                                 //let tex1 = try parameters.findFloatXTexture(name: "tex1")
                                 //let tex2 = try parameters.findFloatXTexture(name: "tex2")
@@ -499,13 +501,14 @@ struct Api {
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
-                        let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
-                        let scale = Texture.floatTexture(scaleFloatTexture)
-                        let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
-                        let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
-                        let scaledTexture = ScaledTexture(scale: scale, texture: tex)
-                        let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
-                        texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                        unimplemented()
+                        //let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
+                        //let scale = Texture.floatTexture(scaleFloatTexture)
+                        //let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
+                        //let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
+                        //let scaledTexture = ScaledTexture(scale: scale, texture: tex)
+                        //let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
+                        //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 // windy missing
                 // wrinkled missing
                 default:
