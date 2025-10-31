@@ -285,6 +285,7 @@ struct Curve: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
@@ -292,6 +293,7 @@ struct Curve: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction

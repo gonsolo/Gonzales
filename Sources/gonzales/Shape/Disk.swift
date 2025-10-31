@@ -15,6 +15,7 @@ struct Disk: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
@@ -22,6 +23,7 @@ struct Disk: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction

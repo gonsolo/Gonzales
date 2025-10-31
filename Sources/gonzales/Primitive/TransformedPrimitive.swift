@@ -13,16 +13,19 @@ struct TransformedPrimitive: Boundable, Intersectable, Sendable {
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
                 let localRay = transform.inverse * ray
                 return try accelerator.intersect(
+                        scene: scene,
                         ray: localRay,
                         tHit: &tHit)
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
@@ -30,6 +33,7 @@ struct TransformedPrimitive: Boundable, Intersectable, Sendable {
                 let localRay = transform.inverse * ray
                 // TODO: transform tHit?
                 try accelerator.intersect(
+                        scene: scene,
                         ray: localRay,
                         tHit: &tHit,
                         interaction: &interaction)

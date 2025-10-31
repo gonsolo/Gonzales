@@ -36,6 +36,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         // --- 2. Private Traversal Helper (Generic Shared Logic) ---
         // FIX: Changed 'rethrows' to 'throws' because it calls a throwing method but has no throwing function argument.
         private func traverseHierarchy<P: LeafProcessor>(
+                scene: Scene,
                 ray: Ray,
                 processor: inout P
         ) throws {
@@ -109,11 +110,12 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         // --- Public Intersect (Occlusion Query) ---
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
                 var processor = OcclusionProcessor(tHit: tHit)
-                try traverseHierarchy(ray: ray, processor: &processor)
+                try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
                 tHit = processor.tHit
                 return processor.intersected
         }
@@ -141,14 +143,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 }
         }
 
-        // --- Public Intersect (Full Interaction Query) ---
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
                 var processor = InteractionProcessor(tHit: tHit)
-                try traverseHierarchy(ray: ray, processor: &processor)
+                try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
                 
                 tHit = processor.tHit
                 try scene.computeSurfaceInteraction(

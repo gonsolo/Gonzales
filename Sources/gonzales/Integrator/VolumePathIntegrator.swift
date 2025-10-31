@@ -34,6 +34,7 @@ final class VolumePathIntegrator: Sendable {
                 interaction: inout SurfaceInteraction
         ) throws {
                 try accelerator.intersect(
+                        scene: scene,
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
@@ -82,6 +83,7 @@ final class VolumePathIntegrator: Sendable {
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
                 try accelerator.intersect(
+                        scene: scene,
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)

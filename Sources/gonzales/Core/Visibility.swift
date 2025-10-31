@@ -5,6 +5,7 @@ struct Visibility {
         func occluded(scene: Scene) throws -> Bool {
                 var (ray, tHit) = spawnRay(from: from, to: to)
                 return try accelerator.intersect(
+                        scene: scene,
                         ray: ray,
                         tHit: &tHit)
         }

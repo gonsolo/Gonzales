@@ -35,16 +35,16 @@ struct Scene {
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
-                        return try triangle.intersect(ray: ray, tHit: &tHit)
+                        return try triangle.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.intersect(ray: ray, tHit: &tHit)
+                        return try geometricPrimitive.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .transformedPrimitive:
                         let transformedPrimitive = transformedPrimitives[primId.id1]
-                        return try transformedPrimitive.intersect(ray: ray, tHit: &tHit)
+                        return try transformedPrimitive.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .areaLight:
                         let areaLight = globalAreaLights[primId.id1]
-                        return try areaLight.intersect(ray: ray, tHit: &tHit)
+                        return try areaLight.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 

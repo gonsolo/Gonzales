@@ -83,25 +83,27 @@ enum ShapeType: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
 
                 switch self {
                 case .triangle(let triangle):
-                        try triangle.intersect(ray: ray, tHit: &tHit)
+                        try triangle.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .sphere(let sphere):
-                        try sphere.intersect(ray: ray, tHit: &tHit)
+                        try sphere.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .disk(let disk):
-                        try disk.intersect(ray: ray, tHit: &tHit)
+                        try disk.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .curve(let curve):
-                        try curve.intersect(ray: ray, tHit: &tHit)
+                        try curve.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .embreeCurve(let embreeCurve):
-                        try embreeCurve.intersect(ray: ray, tHit: &tHit)
+                        try embreeCurve.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
@@ -109,15 +111,15 @@ enum ShapeType: Shape {
 
                 switch self {
                 case .triangle(let triangle):
-                        try triangle.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+                        try triangle.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 case .sphere(let sphere):
-                        try sphere.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+                        try sphere.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 case .disk(let disk):
-                        try disk.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+                        try disk.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 case .curve(let curve):
-                        try curve.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+                        try curve.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 case .embreeCurve(let embreeCurve):
-                        try embreeCurve.intersect(ray: ray, tHit: &tHit, interaction: &interaction)
+                        try embreeCurve.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 }
         }
 

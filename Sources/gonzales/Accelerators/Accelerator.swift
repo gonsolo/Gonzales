@@ -14,6 +14,7 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         //case optix(Optix)
 
         func intersect(
+                scene: Scene,
                 rays: [Ray],
                 tHits: inout [FloatX],
                 interactions: inout [SurfaceInteraction],
@@ -24,6 +25,7 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                         for i in 0..<rays.count {
                                 if !skips[i] {
                                         try boundingHierarchy.intersect(
+                                                scene: scene,
                                                 ray: rays[i],
                                                 tHit: &tHits[i],
                                                 interaction: &interactions[i])
@@ -48,18 +50,21 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         //}
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
                         try boundingHierarchy.intersect(
+                                scene: scene,
                                 ray: ray,
                                 tHit: &tHit)
                 //}
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
@@ -67,6 +72,7 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
                         try boundingHierarchy.intersect(
+                                scene: scene,
                                 ray: ray,
                                 tHit: &tHit,
                                 interaction: &interaction)

@@ -13,6 +13,7 @@ struct EmbreeCurve: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
         ) throws -> Bool {
@@ -20,6 +21,7 @@ struct EmbreeCurve: Shape {
         }
 
         func intersect(
+                scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
