@@ -1,4 +1,4 @@
-final class Accelerator: Boundable, Intersectable, Sendable {
+struct Accelerator: Boundable, Intersectable, Sendable {
 
         init() {
                 self.boundingHierarchy = BoundingHierarchy(primitives: [], nodes: [])
