@@ -4,7 +4,7 @@ import Foundation  // sin, cos
 // TODO: Move somewhere reasonable.
 let sceneDiameter: FloatX = 100.0
 
-final class InfiniteLight: Sendable {
+struct InfiniteLight: Sendable {
 
         init(
                 lightToWorld: Transform,
