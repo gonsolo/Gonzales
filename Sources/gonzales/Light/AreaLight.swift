@@ -27,13 +27,14 @@ struct AreaLight: Boundable, Intersectable, Sendable {
         }
 
         func probabilityDensityFor<I: Interaction>(
+                scene: Scene,
                 samplingDirection direction: Vector,
                 from reference: I
         )
                 throws -> FloatX
         {
                 return try shape.probabilityDensityFor(
-                        samplingDirection: direction, from: reference)
+                        scene: scene, samplingDirection: direction, from: reference)
         }
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }

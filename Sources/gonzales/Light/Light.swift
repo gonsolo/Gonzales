@@ -25,24 +25,28 @@ enum Light: Sendable {
                 }
         }
 
-        func probabilityDensityFor<I: Interaction>(samplingDirection direction: Vector, from reference: I)
+        func probabilityDensityFor<I: Interaction>(scene: Scene, samplingDirection direction: Vector, from reference: I)
                 throws -> FloatX
         {
                 switch self {
                 case .area(let areaLight):
                         return try areaLight.probabilityDensityFor(
+                                scene: scene,
                                 samplingDirection: direction,
                                 from: reference)
                 case .infinite(let infiniteLight):
                         return try infiniteLight.probabilityDensityFor(
+                                scene: scene,
                                 samplingDirection: direction,
                                 from: reference)
                 case .distant(let distantLight):
                         return try distantLight.probabilityDensityFor(
+                                scene: scene,
                                 samplingDirection: direction,
                                 from: reference)
                 case .point(let pointLight):
                         return try pointLight.probabilityDensityFor(
+                                scene: scene,
                                 samplingDirection: direction,
                                 from: reference)
                 }

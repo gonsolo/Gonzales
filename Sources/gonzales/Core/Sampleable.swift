@@ -12,6 +12,7 @@ protocol Sampleable {
         func sample(point: Point, u: TwoRandomVariables) -> (SurfaceInteraction, FloatX)
 
         func probabilityDensityFor(
+                scene: Scene,
                 samplingDirection direction: Vector,
                 from interaction: SurfaceInteraction
         ) throws -> FloatX
@@ -34,6 +35,7 @@ extension Sampleable {
 extension Sampleable where Self: Intersectable {
 
         func probabilityDensityFor<I: Interaction>(
+                scene: Scene,
                 samplingDirection direction: Vector,
                 from: I
         )

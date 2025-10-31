@@ -169,24 +169,27 @@ enum ShapeType: Shape {
         }
 
         func probabilityDensityFor<I: Interaction>(
+                scene: Scene,
                 samplingDirection direction: Vector,
                 from interaction: I
         ) throws -> FloatX {
                 switch self {
                 case .triangle(let triangle):
                         return try triangle.probabilityDensityFor(
+                                scene: scene,
                                 samplingDirection: direction, from: interaction)
                 case .sphere(let sphere):
                         return try sphere.probabilityDensityFor(
+                                scene: scene,
                                 samplingDirection: direction, from: interaction)
                 case .disk(let disk):
-                        return try disk.probabilityDensityFor(samplingDirection: direction, from: interaction)
+                        return try disk.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
                 case .curve(let curve):
                         return try curve.probabilityDensityFor(
-                                samplingDirection: direction, from: interaction)
+                                scene: scene, samplingDirection: direction, from: interaction)
                 case .embreeCurve(let embreeCurve):
                         return try embreeCurve.probabilityDensityFor(
-                                samplingDirection: direction, from: interaction)
+                                scene: scene, samplingDirection: direction, from: interaction)
                 }
         }
 }

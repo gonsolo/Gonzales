@@ -167,6 +167,7 @@ final class VolumePathIntegrator: Sendable {
                         distributionModel: distributionModel,
                         sampler: sampler)
                 let lightDensity = try light.probabilityDensityFor(
+                                scene: scene,
                         samplingDirection: brdfSample.incoming,
                         from: interaction)
                 let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)
