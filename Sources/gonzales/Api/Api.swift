@@ -485,12 +485,13 @@ struct Api {
                                         rgbSpectrumMixTexture)
                                 texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
-                                let tex1 = try parameters.findFloatXTexture(name: "tex1")
-                                let tex2 = try parameters.findFloatXTexture(name: "tex2")
-                                let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                let floatMixTexture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
-                                let floatTexture = FloatTexture.floatMixTexture(floatMixTexture)
-                                texture = Texture.floatTexture(floatTexture)
+                                //let tex1 = try parameters.findFloatXTexture(name: "tex1")
+                                //let tex2 = try parameters.findFloatXTexture(name: "tex2")
+                                //let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                                //let floatMixTexture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
+                                //let floatTexture = FloatTexture.floatMixTexture(floatMixTexture)
+                                //texture = Texture.floatTexture(floatTexture)
+                                unimplemented()
                         default:
                                 unimplemented()
                         }
