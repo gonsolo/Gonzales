@@ -1,6 +1,6 @@
 @preconcurrency import Foundation
 
-final class TileRenderer: Renderer {
+struct TileRenderer: Renderer {
 
         init(
                 camera: PerspectiveCamera,
@@ -80,7 +80,7 @@ final class TileRenderer: Renderer {
         @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
-                await reporter.reset()
+                //await reporter.reset()
                 try await renderImage(bounds: bounds)
                 try await camera.film.writeImages()
                 print("\n")

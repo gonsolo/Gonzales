@@ -1,12 +1,12 @@
 @preconcurrency import Foundation  // fflush, stdout
 
-actor ProgressReporter {
+struct ProgressReporter {
 
         init() { total = 0 }
 
         init(total: Int) { self.total = total }
 
-        func update() {
+        mutating func update() {
                 if current % frequency == 0 {
                         let percentage = 100 * current / total
                         print("\(percentage)% done", terminator: "\r")
@@ -15,7 +15,7 @@ actor ProgressReporter {
                 current += 1
         }
 
-        func reset() {
+        mutating func reset() {
                 current = 0
         }
 
