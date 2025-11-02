@@ -1,4 +1,4 @@
-final class Tile: Sendable {
+struct Tile: Sendable {
 
         init(integrator: VolumePathIntegrator, bounds: Bounds2i) {
                 self.integrator = integrator
