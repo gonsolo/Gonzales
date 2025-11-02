@@ -1,4 +1,4 @@
-final class UniformLightSampler: Sendable {
+struct UniformLightSampler: Sendable {
 
         init(sampler: RandomSampler, lights: [Light]) {
                 self.sampler = sampler
