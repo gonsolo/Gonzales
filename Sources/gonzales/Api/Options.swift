@@ -85,7 +85,7 @@ class Options {
         }
 
         @MainActor
-        func makeCamera() async throws -> any Camera {
+        func makeCamera() async throws -> PerspectiveCamera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter)

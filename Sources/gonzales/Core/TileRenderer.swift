@@ -3,7 +3,7 @@
 final class TileRenderer: Renderer {
 
         init(
-                camera: any Camera,
+                camera: PerspectiveCamera,
                 integrator: VolumePathIntegrator,
                 sampler: RandomSampler,
                 //scene: Scene,
@@ -88,7 +88,7 @@ final class TileRenderer: Renderer {
                 fflush(stdout)
         }
 
-        let camera: any Camera
+        let camera: PerspectiveCamera
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
         let reporter: ProgressReporter
