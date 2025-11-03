@@ -45,8 +45,9 @@ struct Scene {
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .transformedPrimitive:
-                        let transformedPrimitive = transformedPrimitives[primId.id1]
-                        return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
+                        unimplemented()
+                        //let transformedPrimitive = accessToTransformedPrimitivesNeeded[primId.id1]
+                        //return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .areaLight:
                         let areaLight = globalAreaLights[primId.id1]
                         return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit)
