@@ -163,7 +163,7 @@ class Options {
         }
 
         @MainActor
-        func makeRenderer(geometricPrimitives: [GeometricPrimitive]) async throws -> some Renderer {
+        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight]) async throws -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 var scene = Scene()
@@ -171,6 +171,7 @@ class Options {
                 scene.addMaterials(materials: materials)
                 scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
                 scene.addGeometricPrimitives(geometricPrimitives: geometricPrimitives)
+                scene.addAreaLights(areaLights: areaLights)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try await makeAccelerator(scene: scene, primitives: primitives)
                 cleanUp()

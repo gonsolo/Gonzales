@@ -333,11 +333,11 @@ struct Api {
                                         brightness: brightness,
                                         shape: shape,
                                         alpha: alpha,
-                                        idx: globalAreaLights.count)
+                                        idx: areaLights.count)
                                 let light = Light.area(areaLight)
                                 areaLights.append(light)
                                 prims.append(areaLight)
-                                globalAreaLights.append(areaLight)
+                                self.areaLights.append(areaLight)
                         }
                 } else {
                         let materialIndex = materials.count
@@ -348,9 +348,9 @@ struct Api {
                                         materialIndex: materialIndex,
                                         mediumInterface: state.currentMediumInterface,
                                         alpha: alpha,
-                                        idx: globalGeometricPrimitives.count)
+                                        idx: apiGeometricPrimitives.count)
                                 prims.append(geometricPrimitive)
-                                globalGeometricPrimitives.append(geometricPrimitive)
+                                apiGeometricPrimitives.append(geometricPrimitive)
                         }
                 }
                 if let objectName = state.objectName {
@@ -545,7 +545,7 @@ struct Api {
         func worldEnd() async throws {
                 print("Reading: \(readTimer.elapsed)")
                 if justParse { return }
-                let renderer = try await options.makeRenderer(geometricPrimitives: globalGeometricPrimitives)
+                let renderer = try await options.makeRenderer(geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
                 try await renderer.render()
                 if verbose { statistics.report() }
                 cleanUp()
@@ -678,7 +678,8 @@ struct Api {
                 }
         }
 
-        var globalGeometricPrimitives = [GeometricPrimitive]()
+        var apiGeometricPrimitives = [GeometricPrimitive]()
+        var areaLights = [AreaLight]()
 }
 
 @MainActor
@@ -739,4 +740,3 @@ var acceleratorName = "bvh"
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
 
-nonisolated(unsafe) var globalAreaLights = [AreaLight]()

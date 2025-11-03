@@ -6,6 +6,7 @@ struct Scene {
                 materials = []
                 meshes = TriangleMeshes(meshes: [])
                 geometricPrimitives = []
+                areaLights = []
         }
 
         mutating func addMeshes(meshes: TriangleMeshes) {
@@ -14,6 +15,10 @@ struct Scene {
 
         mutating func addGeometricPrimitives(geometricPrimitives: [GeometricPrimitive]) {
                 self.geometricPrimitives = geometricPrimitives
+        }
+
+        mutating func addAreaLights(areaLights: [AreaLight]) {
+                self.areaLights = areaLights
         }
 
         @MainActor
@@ -49,7 +54,7 @@ struct Scene {
                         //let transformedPrimitive = accessToTransformedPrimitivesNeeded[primId.id1]
                         //return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .areaLight:
-                        let areaLight = globalAreaLights[primId.id1]
+                        let areaLight = areaLights[primId.id1]
                         return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit)
                 }
         }
@@ -74,7 +79,7 @@ struct Scene {
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
-                        let areaLight = globalAreaLights[primId.id1]
+                        let areaLight = areaLights[primId.id1]
                         return try areaLight.getIntersectionData(scene: scene, ray: ray, tHit: &tHit, data: &data)
                 }
         }
@@ -99,7 +104,7 @@ struct Scene {
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
-                        let areaLight = globalAreaLights[primId.id1]
+                        let areaLight = areaLights[primId.id1]
                         return areaLight.computeSurfaceInteraction(
                                 scene: self, data: data, worldRay: worldRay, interaction: &interaction)
                 }
@@ -110,5 +115,6 @@ struct Scene {
         var materials: [Material]
         var meshes: TriangleMeshes
         var geometricPrimitives: [GeometricPrimitive]
+        var areaLights: [AreaLight]
 }
 
