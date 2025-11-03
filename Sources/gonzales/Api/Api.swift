@@ -534,38 +534,6 @@ struct Api {
                 currentTransform = Transform()
         }
 
-        @MainActor
-        func dumpPoints(scene: Scene, _ type: String, _ triangle: Triangle) {
-                let points = triangle.getLocalPoints(scene: scene)
-                print(
-                        type, " { ",
-                        "{", points.0.x, ", ", points.0.y, ", ", points.0.z, "},",
-                        "{", points.1.x, ", ", points.1.y, ", ", points.1.z, "},",
-                        "{", points.2.x, ", ", points.2.y, ", ", points.2.z, "}",
-                        " },")
-        }
-
-        @MainActor
-        func dumpPrimitives() {
-                print("\nNumber of primitives: ", options.primitives.count)
-                for primitive in options.primitives {
-                        var type = ""
-                        var shape: (any Shape)? = nil
-                        if let geom = primitive as? GeometricPrimitive {
-                                type = "GeometricPrimitive"
-                                shape = geom.shape
-                        } else if let areaLight = primitive as? AreaLight {
-                                type = "AreaLight"
-                                shape = areaLight.shape
-                        } else {
-                                print("not geom: ", primitive)
-                        }
-                        if let triangle = shape as? Triangle {
-                                dumpPoints(scene: globalScene, type, triangle)
-                        }
-                }
-        }
-
         func dumpCamera(_ camera: any Camera) {
                 if let perspectiveCamera = camera as? PerspectiveCamera {
                         print(perspectiveCamera.objectToWorld)
