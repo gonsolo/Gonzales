@@ -103,16 +103,6 @@ struct Scene {
                 }
         }
 
-        @MainActor
-        func bound() -> Bounds3f {
-                return accelerator.worldBound()
-        }
-
-        @MainActor
-        func diameter() -> FloatX {
-                return length(bound().diagonal())
-        }
-
         var lights: [Light]
         var infiniteLights: [InfiniteLight]
         var materials: [Material]

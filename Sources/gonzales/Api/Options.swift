@@ -132,7 +132,7 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(sampler: RandomSampler) throws -> VolumePathIntegrator {
+        func makeIntegrator(sampler: RandomSampler, accelerator: Accelerator) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -145,7 +145,7 @@ class Options {
                         called: "maxdepth",
                         else: 1
                 )
-                return VolumePathIntegrator(maxDepth: maxDepth)
+                return VolumePathIntegrator(maxDepth: maxDepth, accelerator: accelerator)
         }
 
         @MainActor
@@ -171,10 +171,10 @@ class Options {
                 scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
                 scene.addGeometricPrimivites(geometricPrimitives: geometricPrimitives)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                accelerator = try await makeAccelerator(primitives: primitives)
+                let accelerator = try await makeAccelerator(primitives: primitives)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let integrator = try makeIntegrator(sampler: sampler)
+                let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator)
                 let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights)
                 let lightSampler = LightSampler.power(powerLightSampler)
                 let tileSize = (32, 32)

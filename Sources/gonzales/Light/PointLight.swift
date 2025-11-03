@@ -7,12 +7,12 @@ struct PointLight {
                 self.intensity = intensity
         }
 
-        func sample(point: Point, u: TwoRandomVariables) -> (
+        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let direction: Vector = normalized(position - point)
                 let pdf: FloatX = 1.0
-                let visibility = Visibility(from: point, to: position)
+                let visibility = Visibility(from: point, to: position, accelerator: accelerator)
                 let distance2 = distanceSquared(position, point)
                 let radiance = intensity / distance2
                 return (radiance, direction, pdf, visibility)

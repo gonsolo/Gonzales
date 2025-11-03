@@ -768,7 +768,6 @@ var acceleratorName = "bvh"
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
 
-nonisolated(unsafe) var accelerator = Accelerator()
 nonisolated(unsafe) var scene = Scene()
 nonisolated(unsafe) var geometricPrimitives = [GeometricPrimitive]()
 nonisolated(unsafe) var transformedPrimitives = [TransformedPrimitive]()

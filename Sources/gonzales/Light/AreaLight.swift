@@ -15,13 +15,13 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(point: Point, u: TwoRandomVariables) -> (
+        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let (shapeInteraction, pdf) = shape.sample(point: point, u: u)
                 let direction: Vector = normalized(shapeInteraction.position - point)
                 assert(!direction.isNaN)
-                let visibility = Visibility(from: point, to: shapeInteraction.position)
+                let visibility = Visibility(from: point, to: shapeInteraction.position, accelerator: accelerator)
                 let radiance = emittedRadiance(from: shapeInteraction, inDirection: -direction)
                 return (radiance, direction, pdf, visibility)
         }

@@ -4,8 +4,9 @@
 
 struct VolumePathIntegrator: Sendable {
 
-        init(maxDepth: Int) {
+        init(maxDepth: Int, accelerator: Accelerator) {
                 self.maxDepth = maxDepth
+                self.accelerator = accelerator
         }
 
         private func brdfDensity<D: DistributionModel>(
@@ -53,7 +54,7 @@ struct VolumePathIntegrator: Sendable {
                 sampler: RandomSampler
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
-                        point: interaction.position, u: sampler.get2D())
+                        point: interaction.position, u: sampler.get2D(), accelerator: accelerator)
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
@@ -566,4 +567,5 @@ struct VolumePathIntegrator: Sendable {
         }
 
         let maxDepth: Int
+        let accelerator: Accelerator
 }

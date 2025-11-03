@@ -12,4 +12,5 @@ struct Visibility {
 
         let from: Point
         let to: Point
+        let accelerator: Accelerator
 }
