@@ -61,7 +61,7 @@ struct VolumePathIntegrator: Sendable {
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try !visibility.occluded(scene: scene) else {
+                guard try !visibility.occluded(scene: scene, accelerator: accelerator) else {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(

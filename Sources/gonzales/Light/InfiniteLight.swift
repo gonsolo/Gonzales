@@ -31,7 +31,7 @@ struct InfiniteLight: Sendable {
                 let direction = lightToWorld * lightDirection
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
                 let distantPoint = point + direction * sceneDiameter
-                let visibility = Visibility(from: point, to: distantPoint, accelerator: accelerator)
+                let visibility = Visibility(from: point, to: distantPoint)
                 let uv = directionToUV(direction: -direction)
                 let interaction = SurfaceInteraction(uv: uv)
                 guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {

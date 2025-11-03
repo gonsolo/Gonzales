@@ -12,7 +12,7 @@ struct DistantLight {
         ) {
                 let outside = point + direction * 2 * worldRadius
                 let visibility = Visibility(
-                        from: point, to: outside, accelerator: accelerator)
+                        from: point, to: outside)
                 return (brightness, direction, pdf: 1, visibility)
         }
 
