@@ -89,7 +89,6 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 //}
         }
 
-        @MainActor
         func objectBound(scene: Scene) -> Bounds3f {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
@@ -101,7 +100,6 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 //}
         }
 
-        @MainActor
         func worldBound(scene: Scene) -> Bounds3f {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
