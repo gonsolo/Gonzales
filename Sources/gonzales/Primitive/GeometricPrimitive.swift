@@ -1,24 +1,28 @@
 struct GeometricPrimitive: Boundable, Intersectable {
 
         func getIntersectionData(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 if alpha == 0 { return false }
                 return try shape.getIntersectionData(
+                        scene: scene,
                         ray: worldRay,
                         tHit: &tHit,
                         data: &data)
         }
 
         func computeSurfaceInteraction(
+                scene: Scene,
                 data: TriangleIntersection?,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) {
                 if alpha == 0 { return }
                 shape.computeSurfaceInteraction(
+                        scene: scene,
                         data: data,
                         worldRay: worldRay,
                         interaction: &interaction)
@@ -59,12 +63,12 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 }
         }
 
-        func worldBound() async -> Bounds3f {
-                return await shape.worldBound()
+        func worldBound(scene: Scene) async -> Bounds3f {
+                return await shape.worldBound(scene: scene)
         }
 
-        func objectBound() async -> Bounds3f {
-                return await shape.objectBound()
+        func objectBound(scene: Scene) async -> Bounds3f {
+                return await shape.objectBound(scene: scene)
         }
 
         //func getBsdf(interaction: SurfaceInteraction) -> GlobalBsdfType {

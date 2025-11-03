@@ -4,6 +4,6 @@
 /// subset of all primitives.
 
 protocol Boundable: Sendable {
-        func objectBound() async -> Bounds3f
-        func worldBound() async -> Bounds3f
+        func objectBound(scene: Scene) async -> Bounds3f
+        func worldBound(scene: Scene) async -> Bounds3f
 }

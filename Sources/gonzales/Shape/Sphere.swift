@@ -11,11 +11,11 @@ struct Sphere: Shape {
                 return "Sphere"
         }
 
-        func worldBound() -> Bounds3f {
-                return objectToWorld * objectBound()
+        func worldBound(scene: Scene) -> Bounds3f {
+                return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound() -> Bounds3f {
+        func objectBound(scene: Scene) -> Bounds3f {
 
                 let p0 = Point(x: -radius, y: -radius, z: -radius)
                 let p1 = Point(x: +radius, y: +radius, z: +radius)
@@ -31,7 +31,7 @@ struct Sphere: Shape {
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
 
                 let localPosition = radius * uniformSampleSphere(u: u)
                 let worldNormal = normalized(objectToWorld * Normal(point: localPosition))
@@ -41,12 +41,12 @@ struct Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func sample(ref: any Interaction, u: TwoRandomVariables)
+        func sample(ref: any Interaction, u: TwoRandomVariables, scene: Scene)
                 -> (interaction: any Interaction, pdf: FloatX)
         {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
-                        var (interaction, pdf) = sample(u: u)
+                        var (interaction, pdf) = sample(u: u, scene: scene)
                         var wi: Vector = interaction.position - ref.position
                         if lengthSquared(wi) == 0 {
                                 pdf = 0
@@ -93,7 +93,7 @@ struct Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func area() -> FloatX {
+        func area(scene: Scene) -> FloatX {
                 return 4 * FloatX.pi * radius * radius
         }
 
@@ -131,7 +131,7 @@ struct Sphere: Shape {
                         return
                 }
 
-                let ray = worldToObject * worldRay
+                let ray = getWorldToObject(scene: scene) * worldRay
                 let ox = ray.origin.x
                 let oy = ray.origin.y
                 let oz = ray.origin.z
@@ -174,6 +174,10 @@ struct Sphere: Shape {
                         uv: uv)
                 interaction = objectToWorld * localInteraction
                 tHit = shapeHit
+        }
+
+        func getObjectToWorld(scene: Scene) -> Transform {
+                return objectToWorld
         }
 
         let objectToWorld: Transform

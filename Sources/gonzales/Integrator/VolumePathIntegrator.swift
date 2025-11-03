@@ -20,11 +20,12 @@ struct VolumePathIntegrator: Sendable {
 
         private func chooseLight(
                 sampler: RandomSampler,
-                lightSampler: LightSampler
+                lightSampler: LightSampler,
+                scene: Scene
         ) throws
                 -> (Light, FloatX)
         {
-                return lightSampler.chooseLight()
+                return lightSampler.chooseLight(scene: scene)
         }
 
         private func intersectOrInfiniteLights(
@@ -35,11 +36,11 @@ struct VolumePathIntegrator: Sendable {
                 interaction: inout SurfaceInteraction
         ) throws {
                 try accelerator.intersect(
-                        scene: scene,
+                        scene: globalScene,
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
-                let radiance = scene.infiniteLights.reduce(
+                let radiance = globalScene.infiniteLights.reduce(
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
                         }
@@ -51,14 +52,15 @@ struct VolumePathIntegrator: Sendable {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler
+                sampler: RandomSampler,
+                scene: Scene
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
-                        point: interaction.position, u: sampler.get2D(), accelerator: accelerator)
+                        point: interaction.position, u: sampler.get2D(), accelerator: accelerator, scene: scene)
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try !visibility.occluded(scene: scene) else {
+                guard try !visibility.occluded(scene: globalScene) else {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(
@@ -84,14 +86,14 @@ struct VolumePathIntegrator: Sendable {
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
                 try accelerator.intersect(
-                        scene: scene,
+                        scene: globalScene,
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)
                 if brdfInteraction.valid {
                         return zero
                 }
-                for light in scene.lights {
+                for light in globalScene.lights {
                         switch light {
                         case .infinite(let infiniteLight):
                                 let radiance = infiniteLight.radianceFromInfinity(for: ray)
@@ -108,13 +110,15 @@ struct VolumePathIntegrator: Sendable {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler
+                sampler: RandomSampler,
+                scene: Scene
         ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler)
+                        sampler: sampler,
+                        scene: scene)
                 if lightSample.probabilityDensity == 0 {
                         return black
                 } else {
@@ -144,14 +148,16 @@ struct VolumePathIntegrator: Sendable {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler
+                sampler: RandomSampler,
+                scene: Scene
         ) throws -> RgbSpectrum {
 
                 let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler)
+                        sampler: sampler,
+                        scene: scene)
                 let brdfDensity = brdfDensity(
                         light: light,
                         wo: interaction.wo,
@@ -168,7 +174,7 @@ struct VolumePathIntegrator: Sendable {
                         distributionModel: distributionModel,
                         sampler: sampler)
                 let lightDensity = try light.probabilityDensityFor(
-                                scene: scene,
+                                scene: globalScene,
                         samplingDirection: brdfSample.incoming,
                         from: interaction)
                 let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)
@@ -183,14 +189,16 @@ struct VolumePathIntegrator: Sendable {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler
+                sampler: RandomSampler,
+                scene: Scene
         ) throws -> RgbSpectrum {
                 if light.isDelta {
                         return try sampleLight(
                                 light: light,
                                 interaction: interaction,
                                 distributionModel: distributionModel,
-                                sampler: sampler)
+                                sampler: sampler,
+                                scene: scene)
                 }
                 // For debugging uncomment one of the two following methods:
                 //return try sampleLight(
@@ -206,23 +214,27 @@ struct VolumePathIntegrator: Sendable {
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler)
+                        sampler: sampler,
+                        scene: scene)
         }
 
         private func sampleOneLight<I: Interaction, D: DistributionModel>(
                 at interaction: I,
                 distributionModel: D,
                 with sampler: RandomSampler,
-                lightSampler: LightSampler
+                lightSampler: LightSampler,
+                scene: Scene
         ) throws -> RgbSpectrum {
                 let (light, lightPdf) = try chooseLight(
                         sampler: sampler,
-                        lightSampler: lightSampler)
+                        lightSampler: lightSampler,
+                        scene: scene)
                 let estimate = try estimateDirect(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler)
+                        sampler: sampler,
+                        scene: scene)
                 return estimate / lightPdf
         }
 
@@ -244,7 +256,8 @@ struct VolumePathIntegrator: Sendable {
                 distributionModel: D,
                 sampler: RandomSampler,
                 lightSampler: LightSampler,
-                ray: Ray
+                ray: Ray,
+                scene: Scene
         ) throws -> (RgbSpectrum, Ray) {
                 let estimate =
                         try pathThroughputWeight
@@ -252,7 +265,8 @@ struct VolumePathIntegrator: Sendable {
                                 at: mediumInteraction,
                                 distributionModel: distributionModel,
                                 with: sampler,
-                                lightSampler: lightSampler)
+                                lightSampler: lightSampler,
+                                scene: scene)
                 let (_, wi) = mediumInteraction.phase.samplePhase(
                         wo: -ray.direction,
                         sampler: sampler)
@@ -271,7 +285,8 @@ struct VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                state: ImmutableState
+                state: ImmutableState,
+                scene: Scene
         ) throws -> Bool {
                 try intersectOrInfiniteLights(
                         ray: ray,
@@ -293,8 +308,8 @@ struct VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                state: state
-                        )
+                                state: state,
+                                scene: scene)
                         return result
                 }
         }
@@ -305,7 +320,8 @@ struct VolumePathIntegrator: Sendable {
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
                 sampler: RandomSampler,
-                lightSampler: LightSampler
+                lightSampler: LightSampler,
+                scene: Scene
         ) throws -> RgbSpectrum {
                 var mediumRadiance = black
                 (mediumRadiance, ray) = try sampleMedium(
@@ -314,7 +330,8 @@ struct VolumePathIntegrator: Sendable {
                         distributionModel: distributionModel,
                         sampler: sampler,
                         lightSampler: lightSampler,
-                        ray: ray)
+                        ray: ray,
+                        scene: scene)
                 return mediumRadiance
         }
 
@@ -329,7 +346,8 @@ struct VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                state: ImmutableState
+                state: ImmutableState,
+                scene: Scene
         ) throws -> Bool {
                 let surfaceInteraction = interaction
                 if bounce == 0 {
@@ -346,7 +364,7 @@ struct VolumePathIntegrator: Sendable {
                 //}
                 //let bsdf = surfaceInteraction.getBsdf()
                 assert(surfaceInteraction.materialIndex >= 0)
-                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
+                let bsdf = globalScene.materials[surfaceInteraction.materialIndex].getBsdf(
                         interaction: surfaceInteraction)
 
                 //if surfaceInteraction.material.isInterface {
@@ -380,7 +398,8 @@ struct VolumePathIntegrator: Sendable {
                                 at: surfaceInteraction,
                                 distributionModel: bsdf,
                                 with: sampler,
-                                lightSampler: lightSampler)
+                                lightSampler: lightSampler,
+                                scene: scene)
                 estimate += lightEstimate
                 let (bsdfSample, _) = bsdf.sampleWorld(
                         wo: surfaceInteraction.wo, u: sampler.get3D())
@@ -408,7 +427,8 @@ struct VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                state: ImmutableState
+                state: ImmutableState,
+                scene: Scene
         ) throws -> Bool {
                 //let (transmittance, mediumInteraction) =
                 //ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
@@ -428,7 +448,8 @@ struct VolumePathIntegrator: Sendable {
                                 mediumInteraction: mediumInteraction,
                                 distributionModel: distributionModel,
                                 sampler: sampler,
-                                lightSampler: lightSampler)
+                                lightSampler: lightSampler,
+                                scene: scene)
                 } else {
                         let result = try surfaceEstimate(
                                 interaction: &interaction,
@@ -441,7 +462,8 @@ struct VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                state: state)
+                                state: state,
+                                scene: scene)
                         guard result else {
                                 return false
                         }
@@ -466,7 +488,8 @@ struct VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                state: ImmutableState
+                state: ImmutableState,
+                scene: Scene
         ) throws {
                 var interaction = SurfaceInteraction()
                 for bounce in bounce...maxDepth {
@@ -481,7 +504,8 @@ struct VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                state: state
+                                state: state,
+                                scene: scene
                         )
                 }
         }
@@ -497,7 +521,8 @@ struct VolumePathIntegrator: Sendable {
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                state: ImmutableState
+                state: ImmutableState,
+                scene: Scene
         ) throws {
                 for bounce in bounce...maxDepth {
                         let result = try oneBounce(
@@ -511,8 +536,8 @@ struct VolumePathIntegrator: Sendable {
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
-                                state: state
-                        )
+                                state: state,
+                                scene: scene)
                         if !result {
                                 break
                         }
@@ -524,7 +549,8 @@ struct VolumePathIntegrator: Sendable {
                 tHit: inout FloatX,
                 with sampler: RandomSampler,
                 lightSampler: LightSampler,
-                state: ImmutableState
+                state: ImmutableState,
+                scene: Scene
         ) throws
                 -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
         {
@@ -548,7 +574,8 @@ struct VolumePathIntegrator: Sendable {
                         lightSampler: lightSampler,
                         albedo: &albedo,
                         firstNormal: &firstNormal,
-                        state: state)
+                        state: state,
+                        scene: scene)
 
                 let estimateAlbedoNormal = (
                         estimate: estimate,

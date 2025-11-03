@@ -1,12 +1,12 @@
 /// A type that can be positioned in the world via Euclidean transformations.
 
 protocol Transformable: Sendable {
-        var objectToWorld: Transform { get }
-        var worldToObject: Transform { get }
+        func getObjectToWorld(scene: Scene) -> Transform
+        func getWorldToObject(scene: Scene) -> Transform
 }
 
 extension Transformable {
-        var worldToObject: Transform {
-                return objectToWorld.inverse
+        func getWorldToObject(scene: Scene) -> Transform {
+                return getObjectToWorld(scene: scene).inverse
         }
 }

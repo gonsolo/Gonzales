@@ -44,12 +44,12 @@ struct TransformedPrimitive: Boundable, Intersectable, Sendable {
         }
 
         @MainActor
-        func worldBound() -> Bounds3f {
-                let bound = transform * accelerator.worldBound()
+        func worldBound(scene: Scene) -> Bounds3f {
+                let bound = transform * accelerator.worldBound(scene: scene)
                 return bound
         }
 
-        func objectBound() -> Bounds3f {
+        func objectBound(scene: Scene) -> Bounds3f {
                 unimplemented()
         }
 

@@ -7,7 +7,7 @@ enum Light: Sendable {
         case distant(DistantLight)
         case point(PointLight)
 
-        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator) -> (
+        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator, scene: Scene) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
@@ -15,7 +15,7 @@ enum Light: Sendable {
         ) {
                 switch self {
                 case .area(let areaLight):
-                        return areaLight.sample(point: point, u: u, accelerator: accelerator)
+                        return areaLight.sample(point: point, u: u, accelerator: accelerator, scene: scene)
                 case .infinite(let infiniteLight):
                         return infiniteLight.sample(point: point, u: u, accelerator: accelerator)
                 case .distant(let distantLight):
@@ -66,10 +66,10 @@ enum Light: Sendable {
                 }
         }
 
-        func power() -> FloatX {
+        func power(scene: Scene) -> FloatX {
                 switch self {
                 case .area(let areaLight):
-                        return areaLight.power()
+                        return areaLight.power(scene: scene)
                 case .infinite(let infiniteLight):
                         return infiniteLight.power()
                 case .distant(let distantLight):

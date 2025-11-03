@@ -66,11 +66,11 @@ struct Curve: Shape {
                 numberOfCurves += 1
         }
 
-        func worldBound() -> Bounds3f {
-                return objectToWorld * objectBound()
+        func worldBound(scene: Scene) -> Bounds3f {
+                return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound() -> Bounds3f {
+        func objectBound(scene: Scene) -> Bounds3f {
                 let points = blossomBezier(points: common.points, u: u)
                 let bounds = union(
                         first: Bounds3f(first: points.0, second: points.1),
@@ -351,11 +351,11 @@ struct Curve: Shape {
                 //interaction = interactionAndT.0
         }
 
-        func area() -> FloatX {
+        func area(scene: Scene) -> FloatX {
                 fatalError("Not implemented")
         }
 
-        func sample<I: Interaction>(u: TwoFloats) -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(u: TwoFloats, scene: Scene) -> (interaction: I, pdf: FloatX) {
                 fatalError("Not implemented")
         }
 
@@ -366,6 +366,10 @@ struct Curve: Shape {
         @MainActor
         static func statistics() {
                 print("  Number of curves:\t\t\t\t\t\t\t\(numberOfCurves)")
+        }
+
+        func getObjectToWorld(scene: Scene) -> Transform {
+                return objectToWorld
         }
 
         let common: CurveCommon

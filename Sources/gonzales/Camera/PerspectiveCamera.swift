@@ -56,6 +56,10 @@ final class PerspectiveCamera: Camera, Transformable {
                 print("  Camera rays traced:\t\t\t\t\t\t\t\(numberCameraRays)")
         }
 
+        func getObjectToWorld(scene: Scene) -> Transform {
+                return objectToWorld
+        }
+
         let fieldOfView: FloatX
         let focalDistance: FloatX
         let lensRadius: FloatX

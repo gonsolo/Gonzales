@@ -1,10 +1,10 @@
 @preconcurrency import Foundation
 
 @MainActor
-func makeAccelerator(primitives: [any Boundable & Intersectable]) async throws -> Accelerator {
+func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable]) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
-                let builder = await BoundingHierarchyBuilder(primitives: primitives)
+                let builder = await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
                 //let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
@@ -279,7 +279,7 @@ struct Api {
                 if primitives.isEmpty {
                         return
                 }
-                let accelerator = try await makeAccelerator(primitives: primitives)
+                let accelerator = try await makeAccelerator(scene: globalScene, primitives: primitives)
                 primitives.removeAll()
                 options.objects[name] = [accelerator]
                 let instance = TransformedPrimitive(
@@ -535,8 +535,8 @@ struct Api {
         }
 
         @MainActor
-        func dumpPoints(_ type: String, _ triangle: Triangle) {
-                let points = triangle.getLocalPoints()
+        func dumpPoints(scene: Scene, _ type: String, _ triangle: Triangle) {
+                let points = triangle.getLocalPoints(scene: scene)
                 print(
                         type, " { ",
                         "{", points.0.x, ", ", points.0.y, ", ", points.0.z, "},",
@@ -561,7 +561,7 @@ struct Api {
                                 print("not geom: ", primitive)
                         }
                         if let triangle = shape as? Triangle {
-                                dumpPoints(type, triangle)
+                                dumpPoints(scene: globalScene, type, triangle)
                         }
                 }
         }
@@ -768,7 +768,7 @@ var acceleratorName = "bvh"
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
 
-nonisolated(unsafe) var scene = Scene()
+nonisolated(unsafe) var globalScene = Scene()
 nonisolated(unsafe) var geometricPrimitives = [GeometricPrimitive]()
 nonisolated(unsafe) var transformedPrimitives = [TransformedPrimitive]()
 nonisolated(unsafe) var globalAreaLights = [AreaLight]()

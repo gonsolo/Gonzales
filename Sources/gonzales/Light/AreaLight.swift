@@ -15,10 +15,10 @@ struct AreaLight: Boundable, Intersectable, Sendable {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator) -> (
+        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator, scene: Scene) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
-                let (shapeInteraction, pdf) = shape.sample(point: point, u: u)
+                let (shapeInteraction, pdf) = shape.sample(point: point, u: u, scene: scene)
                 let direction: Vector = normalized(shapeInteraction.position - point)
                 assert(!direction.isNaN)
                 let visibility = Visibility(from: point, to: shapeInteraction.position, accelerator: accelerator)
@@ -39,34 +39,37 @@ struct AreaLight: Boundable, Intersectable, Sendable {
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
 
-        func power() -> FloatX {
-                return brightness.average() * shape.area() * FloatX.pi
+        func power(scene: Scene) -> FloatX {
+                return brightness.average() * shape.area(scene: scene) * FloatX.pi
         }
 
-        func worldBound() async -> Bounds3f {
-                return await shape.worldBound()
+        func worldBound(scene: Scene) async -> Bounds3f {
+                return await shape.worldBound(scene: scene)
         }
 
-        func objectBound() async -> Bounds3f {
-                return await shape.objectBound()
+        func objectBound(scene: Scene) async -> Bounds3f {
+                return await shape.objectBound(scene: scene)
         }
 
         func getIntersectionData(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 if alpha == 0 { return false }
-                return try shape.getIntersectionData(ray: worldRay, tHit: &tHit, data: &data)
+                return try shape.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
         }
 
         func computeSurfaceInteraction(
+                scene: Scene,
                 data: TriangleIntersection?,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) {
                 if alpha == 0 { return }
                 shape.computeSurfaceInteraction(
+                        scene: scene,
                         data: data,
                         worldRay: worldRay,
                         interaction: &interaction)

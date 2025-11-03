@@ -40,20 +40,21 @@ struct Scene {
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
-                        return try triangle.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try triangle.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .transformedPrimitive:
                         let transformedPrimitive = transformedPrimitives[primId.id1]
-                        return try transformedPrimitive.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .areaLight:
                         let areaLight = globalAreaLights[primId.id1]
-                        return try areaLight.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit)
                 }
         }
 
         func getIntersectionData(
+                scene: Scene,
                 primId: PrimId,
                 ray: Ray,
                 tHit: inout FloatX,
@@ -65,15 +66,15 @@ struct Scene {
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
-                        return try triangle.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
+                        return try triangle.getIntersectionData(scene: scene, ray: ray, tHit: &tHit, data: &data)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
+                        return try geometricPrimitive.getIntersectionData(scene: scene, ray: ray, tHit: &tHit, data: &data)
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
                         let areaLight = globalAreaLights[primId.id1]
-                        return try areaLight.getIntersectionData(ray: ray, tHit: &tHit, data: &data)
+                        return try areaLight.getIntersectionData(scene: scene, ray: ray, tHit: &tHit, data: &data)
                 }
         }
 
@@ -89,17 +90,17 @@ struct Scene {
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
                         triangle.computeSurfaceInteraction(
-                                data: data!, worldRay: worldRay, interaction: &interaction)
+                                scene: self, data: data!, worldRay: worldRay, interaction: &interaction)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return geometricPrimitive.computeSurfaceInteraction(
-                                data: data, worldRay: worldRay, interaction: &interaction)
+                                scene: self, data: data, worldRay: worldRay, interaction: &interaction)
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
                         let areaLight = globalAreaLights[primId.id1]
                         return areaLight.computeSurfaceInteraction(
-                                data: data, worldRay: worldRay, interaction: &interaction)
+                                scene: self, data: data, worldRay: worldRay, interaction: &interaction)
                 }
         }
 

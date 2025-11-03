@@ -228,42 +228,42 @@ struct Triangle: Shape {
                 print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
         }
 
-        var triangleMeshes: TriangleMeshes {
+        func getTriangleMeshes(scene: Scene) -> TriangleMeshes {
                 return scene.meshes
         }
 
-        var vertexIndex0: Int {
-                return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
+        func getVertexIndex0(scene: Scene) -> Int {
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
         }
 
-        var vertexIndex1: Int {
-                return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
+        func getVertexIndex1(scene: Scene) -> Int {
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
         }
 
-        var vertexIndex2: Int {
-                return triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
+        func getVertexIndex2(scene: Scene) -> Int {
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
         }
 
-        var point0: Point {
-                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex0)
+        func getPoint0(scene: Scene) -> Point {
+                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: getVertexIndex0(scene: scene))
         }
 
-        var point1: Point {
-                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex1)
+        func getPoint1(scene: Scene) -> Point {
+                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: getVertexIndex1(scene: scene))
         }
 
-        var point2: Point {
-                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: vertexIndex2)
+        func getPoint2(scene: Scene) -> Point {
+                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: getVertexIndex2(scene: scene))
         }
 
-        func objectBound() -> Bounds3f {
-                let (p0, p1, p2) = getLocalPoints()
+        func objectBound(scene: Scene) -> Bounds3f {
+                let (p0, p1, p2) = getLocalPoints(scene: scene)
                 return union(bound: Bounds3f(first: p0, second: p1), point: p2)
         }
 
-        func worldBound() -> Bounds3f {
+        func worldBound(scene: Scene) -> Bounds3f {
                 //worldBoundCalled += 1
-                return objectToWorld * objectBound()
+                return getObjectToWorld(scene: scene) * objectBound(scene: scene)
         }
 
         func computeUVHit(b0: FloatX, b1: FloatX, b2: FloatX, uv: (Vector2F, Vector2F, Vector2F))
@@ -277,18 +277,19 @@ struct Triangle: Shape {
         }
 
         func getIntersectionDataFull(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX
         ) throws -> TriangleIntersectionFull? {
 
                 // Transform the ray to object space
-                let ray = objectToWorld * worldRay
+                let ray = getObjectToWorld(scene: scene) * worldRay
 
                 // --- Setup and Plane Projection ---
 
-                var p0t: Point = point0 - ray.origin
-                var p1t: Point = point1 - ray.origin
-                var p2t: Point = point2 - ray.origin
+                var p0t: Point = getPoint0(scene: scene) - ray.origin
+                var p1t: Point = getPoint1(scene: scene) - ray.origin
+                var p2t: Point = getPoint2(scene: scene) - ray.origin
 
                 let kz = maxDimension(abs(ray.direction))
                 let kx = (kz + 1) % 3
@@ -350,8 +351,8 @@ struct Triangle: Shape {
                 tHit = t  // Update closest hit distance
 
                 // Calculate necessary geometric data
-                let dp02 = Vector(point: point0 - point2)
-                let dp12 = Vector(point: point1 - point2)
+                let dp02 = Vector(point: getPoint0(scene: scene) - getPoint2(scene: scene))
+                let dp12 = Vector(point: getPoint1(scene: scene) - getPoint2(scene: scene))
 
                 return TriangleIntersectionFull(
                         t: t,
@@ -365,19 +366,20 @@ struct Triangle: Shape {
         }
 
         func getIntersectionData(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 data: inout TriangleIntersection
         ) throws -> Bool {
 
                 // Transform the ray to object space
-                let ray = objectToWorld * worldRay
+                let ray = getObjectToWorld(scene: scene) * worldRay
 
                 // --- Setup and Plane Projection ---
 
-                var p0t: Point = point0 - ray.origin
-                var p1t: Point = point1 - ray.origin
-                var p2t: Point = point2 - ray.origin
+                var p0t: Point = getPoint0(scene: scene) - ray.origin
+                var p1t: Point = getPoint1(scene: scene) - ray.origin
+                var p2t: Point = getPoint2(scene: scene) - ray.origin
 
                 let kz = maxDimension(abs(ray.direction))
                 let kx = (kz + 1) % 3
@@ -455,10 +457,11 @@ struct Triangle: Shape {
                 tHit: inout FloatX
         ) throws -> Bool {
                 var notUsed = TriangleIntersection()
-                return try getIntersectionData(ray: worldRay, tHit: &tHit, data: &notUsed)
+                return try getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &notUsed)
         }
 
         func computeSurfaceInteraction(
+                scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
@@ -466,7 +469,7 @@ struct Triangle: Shape {
                 var varT = data.t
                 var data: TriangleIntersectionFull?
                 do {
-                        data = try getIntersectionDataFull(ray: worldRay, tHit: &varT)
+                        data = try getIntersectionDataFull(scene: scene, ray: worldRay, tHit: &varT)
                 } catch {
                         fatalError("getIntersectionDataFull in computeSurfaceInteraction!")
                 }
@@ -474,9 +477,9 @@ struct Triangle: Shape {
                        return
                 }
                 // --- Calculate Hit Point (pHit) ---
-                let hit0: Point = data.b0 * point0
-                let hit1: Point = data.b1 * point1
-                let hit2: Point = data.b2 * point2
+                let hit0: Point = data.b0 * getPoint0(scene: scene)
+                let hit1: Point = data.b1 * getPoint1(scene: scene)
+                let hit2: Point = data.b2 * getPoint2(scene: scene)
                 let pHit: Point = hit0 + hit1 + hit2
 
                 // --- Geometric Normal ---
@@ -484,9 +487,9 @@ struct Triangle: Shape {
 
                 // --- UVs, Tangent Space (dpdu/dpdv), and Shading Normal ---
 
-                let uv = triangleMeshes.getUVFor(
+                let uv = getTriangleMeshes(scene: scene).getUVFor(
                         meshIndex: meshIndex,
-                        indices: (vertexIndex0, vertexIndex1, vertexIndex2))
+                        indices: (getVertexIndex0(scene: scene), getVertexIndex1(scene: scene), getVertexIndex2(scene: scene)))
                 let uvHit = computeUVHit(b0: data.b0, b1: data.b1, b2: data.b2, uv: uv)
 
                 let duv02: Vector2F = uv.0 - uv.2
@@ -507,7 +510,7 @@ struct Triangle: Shape {
                 }
 
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
-                        let ng: Vector = cross(point2 - point0, point1 - point0)
+                        let ng: Vector = cross(getPoint2(scene: scene) - getPoint0(scene: scene), getPoint1(scene: scene) - getPoint0(scene: scene))
                         if lengthSquared(ng) == 0 {
                                 return  // Cannot compute valid normal/tangent space
                         }
@@ -515,17 +518,17 @@ struct Triangle: Shape {
                 }
 
                 var shadingNormal: Normal
-                if !triangleMeshes.hasNormals(meshIndex: meshIndex) {
+                if !getTriangleMeshes(scene: scene).hasNormals(meshIndex: meshIndex) {
                         shadingNormal = normal
                 } else {
-                        let n0 = triangleMeshes.getNormal(
-                                meshIndex: meshIndex, vertexIndex: vertexIndex0)
+                        let n0 = getTriangleMeshes(scene: scene).getNormal(
+                                meshIndex: meshIndex, vertexIndex: getVertexIndex0(scene: scene))
                         let sn0 = data.b0 * n0
-                        let n1 = triangleMeshes.getNormal(
-                                meshIndex: meshIndex, vertexIndex: vertexIndex1)
+                        let n1 = getTriangleMeshes(scene: scene).getNormal(
+                                meshIndex: meshIndex, vertexIndex: getVertexIndex1(scene: scene))
                         let sn1 = data.b1 * n1
-                        let n2 = triangleMeshes.getNormal(
-                                meshIndex: meshIndex, vertexIndex: vertexIndex2)
+                        let n2 = getTriangleMeshes(scene: scene).getNormal(
+                                meshIndex: meshIndex, vertexIndex: getVertexIndex2(scene: scene))
                         let sn2 = data.b2 * n2
                         shadingNormal = sn0 + sn1 + sn2
                         if lengthSquared(shadingNormal) > 0 {
@@ -548,20 +551,20 @@ struct Triangle: Shape {
                 dpdu = ss
 
                 var faceIndex: Int = 0
-                if triangleMeshes.hasFaceIndices(meshIndex: meshIndex) {
-                        faceIndex = triangleMeshes.getFaceIndex(
+                if getTriangleMeshes(scene: scene).hasFaceIndices(meshIndex: meshIndex) {
+                        faceIndex = getTriangleMeshes(scene: scene).getFaceIndex(
                                 meshIndex: meshIndex,
                                 index: idx / 3)
                 }
 
                 // --- Finalize SurfaceInteraction ---
-                let rayObjectSpace = objectToWorld * worldRay
+                let rayObjectSpace = getObjectToWorld(scene: scene) * worldRay
 
                 interaction.valid = true
-                interaction.position = objectToWorld * pHit
-                interaction.normal = normalized(objectToWorld * normal)
-                interaction.shadingNormal = normalized(objectToWorld * shadingNormal)
-                interaction.wo = normalized(objectToWorld * -rayObjectSpace.direction)
+                interaction.position = getObjectToWorld(scene: scene) * pHit
+                interaction.normal = normalized(getObjectToWorld(scene: scene) * normal)
+                interaction.shadingNormal = normalized(getObjectToWorld(scene: scene) * shadingNormal)
+                interaction.wo = normalized(getObjectToWorld(scene: scene) * -rayObjectSpace.direction)
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex
@@ -574,37 +577,38 @@ struct Triangle: Shape {
                 interaction: inout SurfaceInteraction
         ) throws {
                 var data = TriangleIntersection()
-                if try !getIntersectionData(ray: worldRay, tHit: &tHit, data: &data) {
+                if try !getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data) {
                         return  
                 }
 
                 // 2. Compute the full SurfaceInteraction using the new private method
                 computeSurfaceInteraction(
+                        scene: scene,
                         data: data,
                         worldRay: worldRay,
                         interaction: &interaction
                 )
         }
 
-        private func getLocalPoint(index: Int) -> Point {
-                return triangleMeshes.getPointFor(meshIndex: meshIndex, at: index)
+        private func getLocalPoint(scene: Scene, index: Int) -> Point {
+                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: index)
         }
 
-        private func getWorldPoint(index: Int) -> Point {
-                return objectToWorld * getLocalPoint(index: index)
+        private func getWorldPoint(scene: Scene, index: Int) -> Point {
+                return getObjectToWorld(scene: scene) * getLocalPoint(scene: scene, index: index)
         }
 
-        public func getLocalPoints() -> (Point, Point, Point) {
-                let p0 = getLocalPoint(index: vertexIndex0)
-                let p1 = getLocalPoint(index: vertexIndex1)
-                let p2 = getLocalPoint(index: vertexIndex2)
+        public func getLocalPoints(scene: Scene) -> (Point, Point, Point) {
+                let p0 = getLocalPoint(scene: scene, index: getVertexIndex0(scene: scene))
+                let p1 = getLocalPoint(scene: scene, index: getVertexIndex1(scene: scene))
+                let p2 = getLocalPoint(scene: scene, index: getVertexIndex2(scene: scene))
                 return (p0, p1, p2)
         }
 
-        public func getWorldPoints() -> (Point, Point, Point) {
-                let p0 = getWorldPoint(index: vertexIndex0)
-                let p1 = getWorldPoint(index: vertexIndex1)
-                let p2 = getWorldPoint(index: vertexIndex2)
+        public func getWorldPoints(scene: Scene) -> (Point, Point, Point) {
+                let p0 = getWorldPoint(scene: scene, index: getVertexIndex0(scene: scene))
+                let p1 = getWorldPoint(scene: scene, index: getVertexIndex1(scene: scene))
+                let p2 = getWorldPoint(scene: scene, index: getVertexIndex2(scene: scene))
                 return (p0, p1, p2)
         }
 
@@ -613,23 +617,23 @@ struct Triangle: Shape {
                 return Point2f(x: 1 - su0, y: u.1 * su0)
         }
 
-        func area() -> FloatX {
-                let (p0, p1, p2) = getLocalPoints()
+        func area(scene: Scene) -> FloatX {
+                let (p0, p1, p2) = getLocalPoints(scene: scene)
                 return 0.5 * length(cross(Vector(vector: (p1 - p0)), p2 - p0))
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
                 let b = uniformSampleTriangle(u: u)
-                let (p0, p1, p2) = getLocalPoints()
+                let (p0, p1, p2) = getLocalPoints(scene: scene)
                 let sampled0: Point = b[0] * p0
                 let sampled1: Point = b[1] * p1
                 let sampled2: Point = (1 - b[0] - b[1]) * p2
                 let localPoint: Point = sampled0 + sampled1 + sampled2
                 let localNormal = normalized(Normal(cross(p1 - p0, p2 - p0)))
-                let worldPoint = objectToWorld * localPoint
-                let worldNormal = objectToWorld * localNormal
+                let worldPoint = getObjectToWorld(scene: scene) * localPoint
+                let worldNormal = getObjectToWorld(scene: scene) * localNormal
                 let worldInteraction = SurfaceInteraction(position: worldPoint, normal: worldNormal)
-                let pdf = 1 / area()
+                let pdf = 1 / area(scene: scene)
                 return (worldInteraction, pdf)
         }
 
@@ -642,13 +646,12 @@ struct Triangle: Shape {
                 return d
         }
 
-        var objectToWorld: Transform {
-                return triangleMeshes.getObjectToWorldFor(meshIndex: meshIndex)
+        func getObjectToWorld(scene: Scene) -> Transform {
+                return getTriangleMeshes(scene: scene).getObjectToWorldFor(meshIndex: meshIndex)
         }
 
         let meshIndex: Int
         let idx: Int
-        //let triangleMeshes: TriangleMeshes
 }
 
 @MainActor

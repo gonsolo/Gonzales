@@ -5,11 +5,11 @@ struct Disk: Shape {
                 self.radius = radius
         }
 
-        func worldBound() -> Bounds3f {
-                return objectToWorld * objectBound()
+        func worldBound(scene: Scene) -> Bounds3f {
+                return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound() -> Bounds3f {
+        func objectBound(scene: Scene) -> Bounds3f {
                 // TODO
                 return Bounds3f()
         }
@@ -31,11 +31,11 @@ struct Disk: Shape {
                 unimplemented()
         }
 
-        func area() -> FloatX {
+        func area(scene: Scene) -> FloatX {
                 unimplemented()
         }
 
-        func sample<I: Interaction>(u: TwoRandomVariables) -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(u: TwoRandomVariables, scene: Scene) -> (interaction: I, pdf: FloatX) {
                 unimplemented()
         }
 
@@ -45,6 +45,10 @@ struct Disk: Shape {
 
         static func statistics() {
                 print("TODO")
+        }
+
+        func getObjectToWorld(scene: Scene) -> Transform {
+                return objectToWorld 
         }
 
         let objectToWorld: Transform

@@ -5,65 +5,67 @@ enum ShapeType: Shape {
         case curve(Curve)
         case embreeCurve(EmbreeCurve)
 
-        var objectToWorld: Transform {
+        func getObjectToWorld(scene: Scene) -> Transform {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.objectToWorld
+                        return triangle.getObjectToWorld(scene: scene)
                 case .sphere(let sphere):
-                        return sphere.objectToWorld
+                        return sphere.getObjectToWorld(scene: scene)
                 case .disk(let disk):
-                        return disk.objectToWorld
+                        return disk.getObjectToWorld(scene: scene)
                 case .curve(let curve):
-                        return curve.objectToWorld
+                        return curve.getObjectToWorld(scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.objectToWorld
+                        return embreeCurve.getObjectToWorld(scene: scene)
                 }
         }
 
-        func objectBound() async -> Bounds3f {
+        func objectBound(scene: Scene) async -> Bounds3f {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.objectBound()
+                        return triangle.objectBound(scene: scene)
                 case .sphere(let sphere):
-                        return sphere.objectBound()
+                        return sphere.objectBound(scene: scene)
                 case .disk(let disk):
-                        return disk.objectBound()
+                        return disk.objectBound(scene: scene)
                 case .curve(let curve):
-                        return curve.objectBound()
+                        return curve.objectBound(scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.objectBound()
+                        return embreeCurve.objectBound(scene: scene)
                 }
         }
 
-        func worldBound() async -> Bounds3f {
+        func worldBound(scene: Scene) async -> Bounds3f {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.worldBound()
+                        return triangle.worldBound(scene: scene)
                 case .sphere(let sphere):
-                        return sphere.worldBound()
+                        return sphere.worldBound(scene: scene)
                 case .disk(let disk):
-                        return disk.worldBound()
+                        return disk.worldBound(scene: scene)
                 case .curve(let curve):
-                        return curve.worldBound()
+                        return curve.worldBound(scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.worldBound()
+                        return embreeCurve.worldBound(scene: scene)
                 }
         }
 
         func getIntersectionData(
+                scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout FloatX,
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 switch self {
                 case .triangle(let triangle):
-                        return try triangle.getIntersectionData(ray: worldRay, tHit: &tHit, data: &data)
+                        return try triangle.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 default:
                         unimplemented()
                 }
         }
 
         func computeSurfaceInteraction(
+                scene: Scene,
                 data: TriangleIntersection?,
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
@@ -74,6 +76,7 @@ enum ShapeType: Shape {
                                 return
                         }
                         return triangle.computeSurfaceInteraction(
+                                scene: scene,
                                 data: data,
                                 worldRay: worldRay,
                                 interaction: &interaction)
@@ -123,48 +126,48 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(u: TwoRandomVariables) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+        func sample(u: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.sample(u: u)
+                        return triangle.sample(u: u, scene: scene)
                 case .sphere(let sphere):
-                        return sphere.sample(u: u)
+                        return sphere.sample(u: u, scene: scene)
                 case .disk(let disk):
-                        return disk.sample(u: u)
+                        return disk.sample(u: u, scene: scene)
                 case .curve(let curve):
-                        return curve.sample(u: u)
+                        return curve.sample(u: u, scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.sample(u: u)
+                        return embreeCurve.sample(u: u, scene: scene)
                 }
         }
 
-        func sample(point: Point, u: TwoRandomVariables) -> (SurfaceInteraction, FloatX) {
+        func sample(point: Point, u: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX) {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.sample(point: point, u: u)
+                        return triangle.sample(point: point, u: u, scene: scene)
                 case .sphere(let sphere):
-                        return sphere.sample(point: point, u: u)
+                        return sphere.sample(point: point, u: u, scene: scene)
                 case .disk(let disk):
-                        return disk.sample(point: point, u: u)
+                        return disk.sample(point: point, u: u, scene: scene)
                 case .curve(let curve):
-                        return curve.sample(point: point, u: u)
+                        return curve.sample(point: point, u: u, scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.sample(point: point, u: u)
+                        return embreeCurve.sample(point: point, u: u, scene: scene)
                 }
         }
 
-        func area() -> FloatX {
+        func area(scene: Scene) -> FloatX {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.area()
+                        return triangle.area(scene: scene)
                 case .sphere(let sphere):
-                        return sphere.area()
+                        return sphere.area(scene: scene)
                 case .disk(let disk):
-                        return disk.area()
+                        return disk.area(scene: scene)
                 case .curve(let curve):
-                        return curve.area()
+                        return curve.area(scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.area()
+                        return embreeCurve.area(scene: scene)
                 }
         }
 

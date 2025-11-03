@@ -29,11 +29,11 @@ struct EmbreeCurve: Shape {
                 unimplemented()
         }
 
-        func worldBound() -> Bounds3f {
-                return objectToWorld * objectBound()
+        func worldBound(scene: Scene) -> Bounds3f {
+                return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound() -> Bounds3f {
+        func objectBound(scene: Scene) -> Bounds3f {
                 var bounds = Bounds3f()
                 for point in controlPoints {
                         bounds.add(point: point)
@@ -43,7 +43,7 @@ struct EmbreeCurve: Shape {
                 return bounds
         }
 
-        func sample<I: Interaction>(u: TwoRandomVariables) -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(u: TwoRandomVariables, scene: Scene) -> (interaction: I, pdf: FloatX) {
                 unimplemented()
         }
 
@@ -58,8 +58,12 @@ struct EmbreeCurve: Shape {
                 unimplemented()
         }
 
-        func area() -> FloatX {
+        func area(scene: Scene) -> FloatX {
                 unimplemented()
+        }
+
+        func getObjectToWorld(scene: Scene) -> Transform {
+                return objectToWorld
         }
 
         let objectToWorld: Transform

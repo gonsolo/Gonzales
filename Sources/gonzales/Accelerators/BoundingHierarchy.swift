@@ -130,6 +130,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         var currentData = TriangleIntersection()
                         for i in 0..<node.count {
                                 let intersectionFound = try scene.getIntersectionData(
+                                        scene: scene,
                                         primId: hierarchy.primIds[node.offset + i],
                                         ray: ray,
                                         tHit: &tHit,
@@ -161,12 +162,12 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         }
 
         @MainActor
-        func objectBound() -> Bounds3f {
-                return worldBound()
+        func objectBound(scene: Scene) -> Bounds3f {
+                return worldBound(scene: scene)
         }
 
         @MainActor
-        func worldBound() -> Bounds3f {
+        func worldBound(scene: Scene) -> Bounds3f {
                 if nodes.isEmpty {
                         return Bounds3f()
                 } else {
