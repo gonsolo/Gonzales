@@ -12,7 +12,7 @@ struct Scene {
                 self.meshes = meshes
         }
 
-        mutating func addGeometricPrimivites(geometricPrimitives: [GeometricPrimitive]) {
+        mutating func addGeometricPrimitives(geometricPrimitives: [GeometricPrimitive]) {
                 self.geometricPrimitives = geometricPrimitives
         }
 
