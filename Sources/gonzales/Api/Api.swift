@@ -304,7 +304,7 @@ struct Api {
         }
 
         @MainActor
-        func shape(name: String, parameters: ParameterDictionary) throws {
+        mutating func shape(name: String, parameters: ParameterDictionary) throws {
                 var areaLights = [Light]()
                 var prims = [any Boundable & Intersectable]()
                 let shapes = try makeShapes(
@@ -348,9 +348,9 @@ struct Api {
                                         materialIndex: materialIndex,
                                         mediumInterface: state.currentMediumInterface,
                                         alpha: alpha,
-                                        idx: geometricPrimitives.count)
+                                        idx: globalGeometricPrimitives.count)
                                 prims.append(geometricPrimitive)
-                                geometricPrimitives.append(geometricPrimitive)
+                                globalGeometricPrimitives.append(geometricPrimitive)
                         }
                 }
                 if let objectName = state.objectName {
@@ -545,7 +545,7 @@ struct Api {
         func worldEnd() async throws {
                 print("Reading: \(readTimer.elapsed)")
                 if justParse { return }
-                let renderer = try await options.makeRenderer()
+                let renderer = try await options.makeRenderer(geometricPrimitives: globalGeometricPrimitives)
                 try await renderer.render()
                 if verbose { statistics.report() }
                 cleanUp()
@@ -677,6 +677,8 @@ struct Api {
                         throw ApiError.makeShapes(message: name)
                 }
         }
+
+        var globalGeometricPrimitives = [GeometricPrimitive]()
 }
 
 @MainActor
@@ -737,6 +739,5 @@ var acceleratorName = "bvh"
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
 
-nonisolated(unsafe) var geometricPrimitives = [GeometricPrimitive]()
 nonisolated(unsafe) var transformedPrimitives = [TransformedPrimitive]()
 nonisolated(unsafe) var globalAreaLights = [AreaLight]()

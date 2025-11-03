@@ -163,7 +163,7 @@ class Options {
         }
 
         @MainActor
-        func makeRenderer() async throws -> some Renderer {
+        func makeRenderer(geometricPrimitives: [GeometricPrimitive]) async throws -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 var scene = Scene()
