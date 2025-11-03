@@ -161,12 +161,10 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         interaction: &interaction)
         }
 
-        @MainActor
         func objectBound(scene: Scene) -> Bounds3f {
                 return worldBound(scene: scene)
         }
 
-        @MainActor
         func worldBound(scene: Scene) -> Bounds3f {
                 if nodes.isEmpty {
                         return Bounds3f()
@@ -175,7 +173,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 }
         }
 
-        @MainActor
         static func statistics() {
                 //print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
