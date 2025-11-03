@@ -273,21 +273,22 @@ struct Api {
 
         @MainActor
         func objectInstance(name: String) async throws {
-                guard var primitives = options.objects[name] else {
-                        return
-                }
-                if primitives.isEmpty {
-                        return
-                }
-                let accelerator = try await makeAccelerator(scene: globalScene, primitives: primitives)
-                primitives.removeAll()
-                options.objects[name] = [accelerator]
-                let instance = TransformedPrimitive(
-                        accelerator: accelerator,
-                        transform: currentTransform,
-                        idx: transformedPrimitives.count)
-                options.primitives.append(instance)
-                transformedPrimitives.append(instance)
+                unimplemented()
+                //guard var primitives = options.objects[name] else {
+                //        return
+                //}
+                //if primitives.isEmpty {
+                //        return
+                //}
+                //let accelerator = try await makeAccelerator(scene: accessToSceneNeeded, primitives: primitives)
+                //primitives.removeAll()
+                //options.objects[name] = [accelerator]
+                //let instance = TransformedPrimitive(
+                //        accelerator: accelerator,
+                //        transform: currentTransform,
+                //        idx: transformedPrimitives.count)
+                //options.primitives.append(instance)
+                //transformedPrimitives.append(instance)
         }
 
         @MainActor
@@ -736,7 +737,6 @@ var acceleratorName = "bvh"
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
 
-nonisolated(unsafe) var globalScene = Scene()
 nonisolated(unsafe) var geometricPrimitives = [GeometricPrimitive]()
 nonisolated(unsafe) var transformedPrimitives = [TransformedPrimitive]()
 nonisolated(unsafe) var globalAreaLights = [AreaLight]()

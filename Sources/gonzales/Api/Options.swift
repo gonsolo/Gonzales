@@ -132,7 +132,7 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(sampler: RandomSampler, accelerator: Accelerator) throws -> VolumePathIntegrator {
+        func makeIntegrator(sampler: RandomSampler, accelerator: Accelerator, scene: Scene) throws -> VolumePathIntegrator {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -145,7 +145,7 @@ class Options {
                         called: "maxdepth",
                         else: 1
                 )
-                return VolumePathIntegrator(maxDepth: maxDepth, accelerator: accelerator)
+                return VolumePathIntegrator(maxDepth: maxDepth, accelerator: accelerator, scene: scene)
         }
 
         @MainActor
@@ -166,16 +166,17 @@ class Options {
         func makeRenderer() async throws -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
-                globalScene.addLights(lights: lights)
-                globalScene.addMaterials(materials: materials)
-                globalScene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
-                globalScene.addGeometricPrimitives(geometricPrimitives: geometricPrimitives)
+                var scene = Scene()
+                scene.addLights(lights: lights)
+                scene.addMaterials(materials: materials)
+                scene.addMeshes(meshes: triangleMeshBuilder.getMeshes())
+                scene.addGeometricPrimitives(geometricPrimitives: geometricPrimitives)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try await makeAccelerator(scene: globalScene, primitives: primitives)
+                let accelerator = try await makeAccelerator(scene: scene, primitives: primitives)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
-                let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator)
-                let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights, scene: globalScene)
+                let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
+                let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights, scene: scene)
                 let lightSampler = LightSampler.power(powerLightSampler)
                 let tileSize = (32, 32)
 

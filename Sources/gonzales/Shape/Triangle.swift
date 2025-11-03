@@ -97,8 +97,7 @@ extension Array {
 final class TriangleMeshBuilder {
 
         func appendMesh(mesh: TriangleMesh) -> Int {
-                var meshIndex = 0
-                meshIndex = meshes.count
+                let meshIndex = meshes.count
                 meshes.append(mesh)
                 return meshIndex
         }

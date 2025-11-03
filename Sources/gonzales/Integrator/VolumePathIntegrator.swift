@@ -4,9 +4,10 @@
 
 struct VolumePathIntegrator: Sendable {
 
-        init(maxDepth: Int, accelerator: Accelerator) {
+        init(maxDepth: Int, accelerator: Accelerator, scene: Scene) {
                 self.maxDepth = maxDepth
                 self.accelerator = accelerator
+                self.scene = scene
         }
 
         private func brdfDensity<D: DistributionModel>(
@@ -36,11 +37,11 @@ struct VolumePathIntegrator: Sendable {
                 interaction: inout SurfaceInteraction
         ) throws {
                 try accelerator.intersect(
-                        scene: globalScene,
+                        scene: scene,
                         ray: ray,
                         tHit: &tHit,
                         interaction: &interaction)
-                let radiance = globalScene.infiniteLights.reduce(
+                let radiance = scene.infiniteLights.reduce(
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
                         }
@@ -60,7 +61,7 @@ struct VolumePathIntegrator: Sendable {
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try !visibility.occluded(scene: globalScene) else {
+                guard try !visibility.occluded(scene: scene) else {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(
@@ -86,14 +87,14 @@ struct VolumePathIntegrator: Sendable {
                 var tHit = FloatX.infinity
                 var brdfInteraction = SurfaceInteraction()
                 try accelerator.intersect(
-                        scene: globalScene,
+                        scene: scene,
                         ray: ray,
                         tHit: &tHit,
                         interaction: &brdfInteraction)
                 if brdfInteraction.valid {
                         return zero
                 }
-                for light in globalScene.lights {
+                for light in scene.lights {
                         switch light {
                         case .infinite(let infiniteLight):
                                 let radiance = infiniteLight.radianceFromInfinity(for: ray)
@@ -174,7 +175,7 @@ struct VolumePathIntegrator: Sendable {
                         distributionModel: distributionModel,
                         sampler: sampler)
                 let lightDensity = try light.probabilityDensityFor(
-                                scene: globalScene,
+                                scene: scene,
                         samplingDirection: brdfSample.incoming,
                         from: interaction)
                 let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)
@@ -364,7 +365,7 @@ struct VolumePathIntegrator: Sendable {
                 //}
                 //let bsdf = surfaceInteraction.getBsdf()
                 assert(surfaceInteraction.materialIndex >= 0)
-                let bsdf = globalScene.materials[surfaceInteraction.materialIndex].getBsdf(
+                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
                         interaction: surfaceInteraction)
 
                 //if surfaceInteraction.material.isInterface {
@@ -549,8 +550,7 @@ struct VolumePathIntegrator: Sendable {
                 tHit: inout FloatX,
                 with sampler: RandomSampler,
                 lightSampler: LightSampler,
-                state: ImmutableState,
-                scene: Scene
+                state: ImmutableState
         ) throws
                 -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
         {
@@ -595,4 +595,5 @@ struct VolumePathIntegrator: Sendable {
 
         let maxDepth: Int
         let accelerator: Accelerator
+        let scene: Scene
 }

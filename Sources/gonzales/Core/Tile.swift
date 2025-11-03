@@ -24,8 +24,7 @@ struct Tile: Sendable {
                                         tHit: &tHit,
                                         with: sampler,
                                         lightSampler: lightSampler,
-                                        state: state,
-                                        scene: globalScene)
+                                        state: state)
 
                                 let radiance = radianceAlbedoNormal.0
                                 let albedo = radianceAlbedoNormal.1
