@@ -240,10 +240,10 @@ struct VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
-        private func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum) -> Bool {
+        private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum) -> Bool {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
-                        let roulette = FloatX.random(in: 0..<1)
+                        let roulette = FloatX.random(in: 0..<1, using: &xoshiro)
                         if roulette < probability {
                                 return true
                         }
@@ -276,7 +276,7 @@ struct VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
-        func oneBounce(
+        mutating func oneBounce(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
@@ -418,7 +418,7 @@ struct VolumePathIntegrator {
                 return true
         }
 
-        func oneBounce2(
+        mutating func oneBounce2(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
@@ -480,7 +480,7 @@ struct VolumePathIntegrator {
                 return true
         }
 
-        func bounces(
+        mutating func bounces(
                 ray: inout Ray,
                 tHit: inout Float,
                 bounce: Int,
@@ -512,7 +512,7 @@ struct VolumePathIntegrator {
                 }
         }
 
-        func bounces(
+        mutating func bounces(
                 ray: inout Ray,
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
@@ -546,7 +546,7 @@ struct VolumePathIntegrator {
                 }
         }
 
-        func getRadianceAndAlbedo(
+        mutating func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
                 with sampler: inout RandomSampler,
@@ -597,4 +597,5 @@ struct VolumePathIntegrator {
         let maxDepth: Int
         let accelerator: Accelerator
         let scene: Scene
+        var xoshiro = Xoshiro()
 }

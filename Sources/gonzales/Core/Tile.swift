@@ -5,7 +5,7 @@ struct Tile: Sendable {
                 self.bounds = bounds
         }
 
-        func render(
+        mutating func render(
                 reporter: ProgressReporter,
                 sampler: inout RandomSampler,
                 camera: any Camera,
@@ -42,6 +42,6 @@ struct Tile: Sendable {
                 return samples
         }
 
-        let integrator: VolumePathIntegrator
+        var integrator: VolumePathIntegrator
         let bounds: Bounds2i
 }
