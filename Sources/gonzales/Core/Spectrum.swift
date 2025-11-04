@@ -148,26 +148,21 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 self.init(r: 0, g: 0, b: 0)
         }
 
-        init(x: T, y: T, z: T) {
-                self.x = x
-                self.y = y
-                self.z = z
+        init(x: FloatX, y: FloatX, z: FloatX) {
+                self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
-        init(r: T, g: T, b: T) {
+
+        init(r: FloatX, g: FloatX, b: FloatX) {
                 self.init(x: r, y: g, z: b)
         }
 
-        init(intensity: T) {
-                self.x = intensity
-                self.y = intensity
-                self.z = intensity
+        init(intensity: FloatX) {
+                self.init(x: intensity, y: intensity, z: intensity)
         }
 
         init(rgb: (T, T, T)) {
-                self.x = rgb.0
-                self.y = rgb.1
-                self.z = rgb.2
+                self.init(x: rgb.0, y: rgb.1, z: rgb.2)
         }
 
         var isNaN: Bool {
@@ -178,10 +173,6 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 return r.isInfinite || g.isInfinite || b.isInfinite
         }
 
-        // Conform to Three
-        var x: FloatX
-        var y: FloatX
-        var z: FloatX
 
         // Convenience accessors for RgbSpectrum
         var r: T {
@@ -198,6 +189,21 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 get { return z }
                 set { z = newValue }
         }
+
+        var x: FloatX {
+                get { return xyz.x }
+                set { xyz.x = newValue }
+        }
+        var y: FloatX {
+                get { return xyz.y }
+                set { xyz.y = newValue }
+        }
+        var z: FloatX {
+                get { return xyz.z }
+                set { xyz.z = newValue }
+        }
+
+        var xyz: SIMD4<FloatX>
 }
 
 extension BaseRgbSpectrum: CustomStringConvertible {
