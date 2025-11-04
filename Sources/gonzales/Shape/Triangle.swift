@@ -1,18 +1,3 @@
-@MainActor
-var triangleIntersections = 0
-
-@MainActor
-var triangleHits = 0
-
-@MainActor
-var numberOfTriangles = 0
-
-@MainActor
-var triangleMemory = 0
-
-@MainActor
-var worldBoundCalled = 0
-
 struct TriangleMesh {
 
         init() {
@@ -192,8 +177,6 @@ struct Triangle: Shape {
                 self.meshIndex = meshIndex
                 self.idx = 3 * number
 
-                //numberOfTriangles += 1
-                //triangleMemory += MemoryLayout<Self>.stride
                 let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 guard
                         triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0) < pointCount
@@ -218,13 +201,7 @@ struct Triangle: Shape {
 
         @MainActor
         static func statistics() {
-                print("  Number of triangles:\t\t\t\t\t\t\t\(numberOfTriangles)")
-                print("  Triangle memory:\t\t\t\t\t\t\t\(formatHuman(triangleMemory))")
-                let ratio = Float(triangleHits) / Float(triangleIntersections)
-                let intersectionRatio = String(format: " (%.2f)", ratio)
-                print("  Ray-Triangle intersection tests:\t\t\t\t", terminator: "")
-                print("\(triangleHits) /\t\(triangleIntersections)\(intersectionRatio)")
-                print("  Triangle worldBound calls:\t\t\t\t\t\t\(worldBoundCalled)")
+                // TODO
         }
 
         func getTriangleMeshes(scene: Scene) -> TriangleMeshes {
@@ -261,7 +238,6 @@ struct Triangle: Shape {
         }
 
         func worldBound(scene: Scene) -> Bounds3f {
-                //worldBoundCalled += 1
                 return getObjectToWorld(scene: scene) * objectBound(scene: scene)
         }
 
