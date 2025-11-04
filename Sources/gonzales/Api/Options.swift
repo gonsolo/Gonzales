@@ -183,7 +183,8 @@ class Options {
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
                 let powerLightSampler = await PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
-                let lightSampler = LightSampler.power(powerLightSampler)
+                //let lightSampler = LightSampler.power(powerLightSampler)
+                let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
                 let tileSize = (32, 32)
 
                 return await TileRenderer(

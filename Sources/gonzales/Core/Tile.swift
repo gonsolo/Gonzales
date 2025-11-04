@@ -9,8 +9,7 @@ struct Tile: Sendable {
                 reporter: ProgressReporter,
                 sampler: inout RandomSampler,
                 camera: any Camera,
-                //scene: Scene,
-                lightSampler: LightSampler,
+                lightSampler: inout LightSampler,
                 state: ImmutableState
         ) throws -> [Sample] {
                 var samples = [Sample]()
@@ -23,7 +22,7 @@ struct Tile: Sendable {
                                         from: ray,
                                         tHit: &tHit,
                                         with: &sampler,
-                                        lightSampler: lightSampler,
+                                        lightSampler: &lightSampler,
                                         state: state)
 
                                 let radiance = radianceAlbedoNormal.0
