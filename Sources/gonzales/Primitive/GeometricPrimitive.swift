@@ -64,7 +64,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
         }
 
         func worldBound(scene: Scene) async -> Bounds3f {
-                return await shape.worldBound(scene: scene)
+                return shape.worldBound(scene: scene)
         }
 
         func objectBound(scene: Scene) async -> Bounds3f {

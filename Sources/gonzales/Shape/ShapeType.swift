@@ -20,7 +20,7 @@ enum ShapeType: Shape {
                 }
         }
 
-        func objectBound(scene: Scene) async -> Bounds3f {
+        func objectBound(scene: Scene) -> Bounds3f {
                 switch self {
                 case .triangle(let triangle):
                         return triangle.objectBound(scene: scene)
@@ -35,7 +35,7 @@ enum ShapeType: Shape {
                 }
         }
 
-        func worldBound(scene: Scene) async -> Bounds3f {
+        func worldBound(scene: Scene) -> Bounds3f {
                 switch self {
                 case .triangle(let triangle):
                         return triangle.worldBound(scene: scene)
