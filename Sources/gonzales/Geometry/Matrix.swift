@@ -60,7 +60,6 @@ public struct Matrix: Sendable {
                 return r
         }
 
-        @MainActor
         public func invert(m: Matrix) -> Matrix {
 
                 var indxc = [0, 0, 0, 0]
@@ -161,7 +160,6 @@ public struct Matrix: Sendable {
                 return transposed
         }
 
-        @MainActor
         public var inverse: Matrix {
                 return invert(m: self)
         }

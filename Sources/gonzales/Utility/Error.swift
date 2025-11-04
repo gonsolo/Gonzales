@@ -40,11 +40,8 @@ func notOverridden(function: String = #function, file: String = #file, line: Int
         fatalError()
 }
 
-@MainActor
 func warning(_ message: String) {
-        if verbose {
-                print("Warning: \(message)")
-        }
+        print("Warning: \(message)")
 }
 
 func abort(_ message: String) -> Never {

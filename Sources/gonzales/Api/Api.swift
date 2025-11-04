@@ -547,7 +547,6 @@ struct Api {
                 if justParse { return }
                 let renderer = try await options.makeRenderer(geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
                 try await renderer.render()
-                if verbose { statistics.report() }
                 cleanUp()
         }
 

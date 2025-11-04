@@ -5,14 +5,12 @@ final class Timer {
         @MainActor
         init(_ name: String, newline: Bool = true) {
                 self.name = name
-                if verbose {
-                        if newline {
-                                print(name)
-                        } else {
-                                print(name, terminator: "")
-                        }
-                        fflush(stdout)
+                if newline {
+                        print(name)
+                } else {
+                        print(name, terminator: "")
                 }
+                fflush(stdout)
                 startTime = Date()
         }
 

@@ -10,9 +10,6 @@ let oneMinusEpsilon: FloatX = 0.99999999999999989
 var quick = false
 
 @MainActor
-var verbose = false
-
-@MainActor
 var singleRay = false
 
 @MainActor

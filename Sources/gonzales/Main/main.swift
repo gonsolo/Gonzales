@@ -53,8 +53,6 @@ func parseArguments() throws -> String {
                 switch argument {
                 case "--quick":
                         quick = true
-                case "--verbose":
-                        verbose = true
                 case "--single":
                         guard let sx = iterator.next() else { throw MainError.missingOption }
                         guard let sy = iterator.next() else { throw MainError.missingOption }
