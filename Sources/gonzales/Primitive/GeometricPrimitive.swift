@@ -68,7 +68,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
         }
 
         func objectBound(scene: Scene) async -> Bounds3f {
-                return await shape.objectBound(scene: scene)
+                return shape.objectBound(scene: scene)
         }
 
         //func getBsdf(interaction: SurfaceInteraction) -> GlobalBsdfType {
