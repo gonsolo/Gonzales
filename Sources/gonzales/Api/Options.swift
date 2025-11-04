@@ -89,7 +89,7 @@ class Options {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter)
-                let resolution = await film.getResolution()
+                let resolution = film.getResolution()
                 let frame = FloatX(resolution.x) / FloatX(resolution.y)
                 var screen = Bounds2f()
 

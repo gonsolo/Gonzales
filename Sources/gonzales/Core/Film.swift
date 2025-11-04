@@ -1,4 +1,4 @@
-actor Film: Sendable {
+struct Film {
 
         enum FilmError: Error {
                 case unknownFileType(name: String)
@@ -11,9 +11,10 @@ actor Film: Sendable {
                 }
 
                 self.name = name
-                self.image = Image(resolution: resolution)
-                self.albedoImage = Image(resolution: resolution)
-                self.normalImage = Image(resolution: resolution)
+                self.resolution = resolution
+                //self.image = Image(resolution: resolution)
+                //self.albedoImage = Image(resolution: resolution)
+                //self.normalImage = Image(resolution: resolution)
                 self.fileName = fileName
                 self.filter = filter
                 self.crop = Bounds2i(
@@ -26,7 +27,6 @@ actor Film: Sendable {
         }
 
         private func chooseWriter(name: String) throws -> ImageWriter {
-
                 if name.hasSuffix(".exr") {
                         return ImageWriter.openImageIO(OpenImageIOWriter())
                 } else if name.hasSuffix(".ascii") {
@@ -36,35 +36,38 @@ actor Film: Sendable {
                 }
         }
 
-        func writeImages() async throws {
-                try await writeImage(name: fileName, image: image)
-                try await writeImage(name: "albedo.exr", image: albedoImage)
-                try await writeImage(name: "normal.exr", image: normalImage)
-        }
+        func writeImages(samples: [Sample]) throws {
 
-        func writeImage(name: String, image: Image) async throws {
-                try await image.normalize()
+                var image = Image(resolution: resolution)
+                var albedoImage = Image(resolution: resolution)
+                var normalImage = Image(resolution: resolution)
+
+                add(samples: samples, image: &image, albedoImage: &albedoImage, normalImage: &normalImage)
+
+                try image.normalize()
                 let imageWriter = try chooseWriter(name: name)
-                try await imageWriter.write(fileName: name, crop: crop, image: image)
+                try imageWriter.write(fileName: name, crop: crop, image: image)
+
+                try albedoImage.normalize()
+                let albedoImageWriter = try chooseWriter(name: "albedo.exr")
+                try albedoImageWriter.write(fileName: "albedo.exr", crop: crop, image: image)
+
+                try normalImage.normalize()
+                let normalImageWriter = try chooseWriter(name: "normal.exr")
+                try normalImageWriter.write(fileName: "normal.exr", crop: crop, image: image)
         }
 
-        func add(samples: [Sample]) async {
+        private func add(samples: [Sample], image: inout Image, albedoImage: inout Image, normalImage: inout Image) {
                 for sample in samples {
-                        await add(
+                        add(
                                 value: sample.light,
+                                albedo: sample.albedo,
+                                normal: RgbSpectrum(from: sample.normal),
                                 weight: sample.weight,
                                 location: sample.location,
-                                image: image)
-                        await add(
-                                value: sample.albedo,
-                                weight: sample.weight,
-                                location: sample.location,
-                                image: albedoImage)
-                        await add(
-                                value: RgbSpectrum(from: sample.normal),
-                                weight: sample.weight,
-                                location: sample.location,
-                                image: normalImage)
+                                image: &image,
+                                albedoImage: &albedoImage,
+                                normalImage: &normalImage)
                 }
         }
 
@@ -102,50 +105,61 @@ actor Film: Sendable {
         func filterAndWrite(
                 sample: Point2f,
                 pixel: Point2i,
-                image: Image,
                 value: RgbSpectrum,
-                weight: FloatX
-        ) async {
-                if isWithin(location: pixel, resolution: await image.getResolution()) {
+                albedo: RgbSpectrum,
+                normal: RgbSpectrum,
+                weight: FloatX,
+                image: inout Image,
+                albedoImage: inout Image,
+                normalImage: inout Image
+        ) {
+                if isWithin(location: pixel, resolution: image.getResolution()) {
                         let pixelCenter = Point2f(
                                 x: FloatX(pixel.x) + 0.5,
                                 y: FloatX(pixel.y) + 0.5)
                         let relativeLocation = Point2f(from: sample - pixelCenter)
                         if isWithin(location: relativeLocation, support: filter.support) {
                                 let color = filter.evaluate(atLocation: relativeLocation) * value
+                                let albedoColor = filter.evaluate(atLocation: relativeLocation) * albedo
+                                let normalColor = filter.evaluate(atLocation: relativeLocation) * normal
                                 let weight = filter.evaluate(atLocation: relativeLocation) * weight
-                                await image.addPixel(
-                                        withColor: color,
-                                        withWeight: weight,
-                                        atLocation: pixel)
+                                image.addPixel( withColor: color, withWeight: weight, atLocation: pixel)
+                                albedoImage.addPixel( withColor: albedoColor, withWeight: weight, atLocation: pixel)
+                                normalImage.addPixel( withColor: normalColor, withWeight: weight, atLocation: pixel)
                         }
                 }
         }
 
-        private func add(value: RgbSpectrum, weight: FloatX, location: Point2f, image: Image) async {
+        func add(value: RgbSpectrum, albedo: RgbSpectrum, normal: RgbSpectrum, weight: FloatX, location: Point2f,
+                image: inout Image, albedoImage: inout Image, normalImage: inout Image) {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
                                 let pixelLocation = Point2i(x: x, y: y)
-                                await filterAndWrite(
+                                filterAndWrite(
                                         sample: location,
                                         pixel: pixelLocation,
-                                        image: image,
                                         value: value,
-                                        weight: weight)
+                                        albedo: albedo,
+                                        normal: normal,
+                                        weight: weight,
+                                        image: &image,
+                                        albedoImage: &albedoImage,
+                                        normalImage: &normalImage)
                         }
                 }
         }
 
-        func getResolution() async -> Point2i {
-                return await image.getResolution()
+        func getResolution() -> Point2i {
+                return resolution
         }
 
         private let name: String
         private let fileName: String
         let filter: any Filter
-        var image: Image
-        var albedoImage: Image
-        var normalImage: Image
+        //var image: Image
+        //var albedoImage: Image
+        //var normalImage: Image
+        let resolution: Point2i
         var crop: Bounds2i
 }

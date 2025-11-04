@@ -1,8 +1,10 @@
 import openImageIOBridge
 
-actor OpenImageIOWriter {
+struct OpenImageIOWriter {
 
-        func write(fileName: String, crop: Bounds2i, image: Image) async throws {
+        func write(fileName: String, crop: Bounds2i, image: Image) throws {
+
+                var buffer = [Float]()
 
                 func write(pixel: Pixel, at index: Int) {
                         buffer[index + 0] = Float(pixel.light.r)
@@ -16,7 +18,7 @@ actor OpenImageIOWriter {
                 for y in crop.pMin.y..<crop.pMax.y {
                         for x in crop.pMin.x..<crop.pMax.x {
                                 let location = Point2i(x: x, y: y)
-                                let pixel = await image.getPixel(atLocation: location)
+                                let pixel = image.getPixel(atLocation: location)
                                 let px = x - crop.pMin.x
                                 let py = y - crop.pMin.y
                                 let index = py * resolution.x * 4 + px * 4
@@ -27,11 +29,10 @@ actor OpenImageIOWriter {
         }
 
         func write(fileName: String, image: Image) async throws {
-                let crop = await Bounds2i(
+                let crop = Bounds2i(
                         pMin: Point2i(x: 0, y: 0),
                         pMax: image.getResolution())
-                try await write(fileName: fileName, crop: crop, image: image)
+                try write(fileName: fileName, crop: crop, image: image)
         }
 
-        var buffer = [Float]()
 }

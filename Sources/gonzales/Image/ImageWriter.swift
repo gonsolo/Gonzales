@@ -5,12 +5,12 @@ enum ImageWriter: Sendable {
         case ascii(AsciiWriter)
         case openImageIO(OpenImageIOWriter)
 
-        func write(fileName: String, crop: Bounds2i, image: Image) async throws {
+        func write(fileName: String, crop: Bounds2i, image: Image) throws {
                 switch self {
                 case .ascii(let asciiWriter):
-                        return try await asciiWriter.write(fileName: fileName, crop: crop, image: image)
+                        return try asciiWriter.write(fileName: fileName, crop: crop, image: image)
                 case .openImageIO(let openImageIOWriter):
-                        return try await openImageIOWriter.write(fileName: fileName, crop: crop, image: image)
+                        return try openImageIOWriter.write(fileName: fileName, crop: crop, image: image)
                 }
         }
 }

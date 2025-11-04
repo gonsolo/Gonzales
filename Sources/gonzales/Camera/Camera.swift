@@ -17,7 +17,7 @@ protocol Camera: Sendable {
 extension Camera {
 
         func getSampleBounds() async -> Bounds2i {
-                return await film.getSampleBounds()
+                return film.getSampleBounds()
         }
 
 }

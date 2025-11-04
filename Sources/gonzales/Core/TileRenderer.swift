@@ -71,9 +71,15 @@ struct TileRenderer: Renderer {
                                         return try await self.renderTile(tile: tile, state: immutableState)
                                 }
                         }
+                        var allSamples: [Sample] = []
                         for try await samples in group {
-                                await self.camera.film.add(samples: samples)
+                                allSamples.append(contentsOf: samples)
                         }
+                        //for try await samples in group {
+                        //        await self.camera.film.add(samples: samples)
+                        //}
+                        //self.camera.film.add(samples: allSamples)
+                        try self.camera.film.writeImages(samples: allSamples)
                 }
         }
 
@@ -82,7 +88,7 @@ struct TileRenderer: Renderer {
                 let timer = Timer("Rendering...")
                 //await reporter.reset()
                 try await renderImage(bounds: bounds)
-                try await camera.film.writeImages()
+                //try await camera.film.writeImages()
                 print("\n")
                 print(timer.elapsed)
                 fflush(stdout)

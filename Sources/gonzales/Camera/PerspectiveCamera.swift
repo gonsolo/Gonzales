@@ -18,7 +18,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 self.lensRadius = lensRadius
                 self.film = film
                 let perspective = try Transform.makePerspective(fov: fov, near: 0.01, far: 1000.0)
-                let resolution = await film.getResolution()
+                let resolution = film.getResolution()
                 cameraTransform = try CameraTransform(
                         cameraToScreen: perspective,
                         screenWindow: screenWindow,

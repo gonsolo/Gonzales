@@ -1,4 +1,4 @@
-actor Image {
+struct Image {
 
         init(resolution: Point2i) {
                 fullResolution = resolution
@@ -14,11 +14,11 @@ actor Image {
 
         }
 
-        func normalize() throws {
+        mutating func normalize() throws {
                 pixels = try pixels.map { return try $0.normalized() }
         }
 
-        func addPixel(
+        mutating func addPixel(
                 withColor color: RgbSpectrum,
                 withWeight weight: FloatX,
                 atLocation location: Point2i
