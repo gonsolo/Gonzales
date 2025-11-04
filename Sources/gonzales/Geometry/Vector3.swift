@@ -1,33 +1,23 @@
 public struct Vector3: Sendable, Three {
 
         public init(x: FloatX, y: FloatX, z: FloatX) {
-                self.x = x
-                self.y = y
-                self.z = z
+                self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
         init(v: FloatX) {
-                self.x = v
-                self.y = v
-                self.z = v
+                self.xyz = SIMD4<FloatX>(v, v, v, 1.0)
         }
 
         init() {
-                self.x = 0
-                self.y = 0
-                self.z = 1
+                self.init(x: 0, y: 0, z: 1)
         }
 
         init(vector: Vector3) {
-                self.x = vector.x
-                self.y = vector.y
-                self.z = vector.z
+                self.init(x: vector.x, y: vector.y, z: vector.z)
         }
 
         init(xyz: (FloatX, FloatX, FloatX)) {
-                self.x = xyz.0
-                self.y = xyz.1
-                self.z = xyz.2
+                self.init(x: xyz.0, y: xyz.1, z: xyz.2)
         }
 
         subscript(index: Int) -> FloatX {
@@ -57,24 +47,33 @@ public struct Vector3: Sendable, Three {
                 return x.isZero && y.isZero && z.isZero
         }
 
-        public var x: FloatX
-        public var y: FloatX
-        public var z: FloatX
+        var x: FloatX {
+                get { return xyz.x }
+                set { xyz.x = newValue }
+        }
+
+        var y: FloatX {
+                get { return xyz.y }
+                set { xyz.y = newValue }
+        }
+
+        var z: FloatX {
+                get { return xyz.z }
+                set { xyz.z = newValue }
+        }
+
+        var xyz: SIMD4<FloatX>
 }
 
 extension Vector3 {
         init(point: Point3) {
-                self.x = point.x
-                self.y = point.y
-                self.z = point.z
+                self.init(x: point.x, y: point.y, z: point.z)
         }
 }
 
 extension Vector3 {
         init(normal: Normal3) {
-                self.x = normal.x
-                self.y = normal.y
-                self.z = normal.z
+                self.init(x: normal.x, y: normal.y, z: normal.z)
         }
 }
 
