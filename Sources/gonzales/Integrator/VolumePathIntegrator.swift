@@ -53,7 +53,7 @@ struct VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
@@ -75,12 +75,12 @@ struct VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler
+                sampler: inout RandomSampler
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
                 var bsdfSample = distributionModel.sampleDistributionFunction(
-                        wo: interaction.wo, normal: interaction.shadingNormal, sampler: sampler)
+                        wo: interaction.wo, normal: interaction.shadingNormal, sampler: &sampler)
                 guard bsdfSample.estimate != black && bsdfSample.probabilityDensity > 0 else {
                         return zero
                 }
@@ -112,14 +112,14 @@ struct VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler,
+                        sampler: &sampler,
                         scene: scene)
                 if lightSample.probabilityDensity == 0 {
                         return black
@@ -132,13 +132,13 @@ struct VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler
+                sampler: inout RandomSampler
         ) throws -> RgbSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler)
+                        sampler: &sampler)
                 if bsdfSample.probabilityDensity == 0 {
                         return black
                 } else {
@@ -150,7 +150,7 @@ struct VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
 
@@ -158,7 +158,7 @@ struct VolumePathIntegrator {
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler,
+                        sampler: &sampler,
                         scene: scene)
                 let brdfDensity = brdfDensity(
                         light: light,
@@ -174,7 +174,7 @@ struct VolumePathIntegrator {
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler)
+                        sampler: &sampler)
                 let lightDensity = try light.probabilityDensityFor(
                         scene: scene,
                         samplingDirection: brdfSample.incoming,
@@ -191,7 +191,7 @@ struct VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
                 if light.isDelta {
@@ -199,7 +199,7 @@ struct VolumePathIntegrator {
                                 light: light,
                                 interaction: interaction,
                                 distributionModel: distributionModel,
-                                sampler: sampler,
+                                sampler: &sampler,
                                 scene: scene)
                 }
                 // For debugging uncomment one of the two following methods:
@@ -216,14 +216,14 @@ struct VolumePathIntegrator {
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler,
+                        sampler: &sampler,
                         scene: scene)
         }
 
         private func sampleOneLight<I: Interaction, D: DistributionModel>(
                 at interaction: I,
                 distributionModel: D,
-                with sampler: RandomSampler,
+                with sampler: inout RandomSampler,
                 lightSampler: LightSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
@@ -235,7 +235,7 @@ struct VolumePathIntegrator {
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
-                        sampler: sampler,
+                        sampler: &sampler,
                         scene: scene)
                 return estimate / lightPdf
         }
@@ -256,7 +256,7 @@ struct VolumePathIntegrator {
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 lightSampler: LightSampler,
                 ray: Ray,
                 scene: Scene
@@ -266,12 +266,12 @@ struct VolumePathIntegrator {
                         * sampleOneLight(
                                 at: mediumInteraction,
                                 distributionModel: distributionModel,
-                                with: sampler,
+                                with: &sampler,
                                 lightSampler: lightSampler,
                                 scene: scene)
                 let (_, wi) = mediumInteraction.phase.samplePhase(
                         wo: -ray.direction,
-                        sampler: sampler)
+                        sampler: &sampler)
                 let spawnedRay = mediumInteraction.spawnRay(inDirection: wi)
                 return (estimate, spawnedRay)
         }
@@ -282,7 +282,7 @@ struct VolumePathIntegrator {
                 ray: inout Ray,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
@@ -305,7 +305,7 @@ struct VolumePathIntegrator {
                                 ray: &ray,
                                 bounce: bounce,
                                 estimate: &estimate,
-                                sampler: sampler,
+                                sampler: &sampler,
                                 pathThroughputWeight: &pathThroughputWeight,
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
@@ -321,7 +321,7 @@ struct VolumePathIntegrator {
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 lightSampler: LightSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
@@ -330,7 +330,7 @@ struct VolumePathIntegrator {
                         pathThroughputWeight: pathThroughputWeight,
                         mediumInteraction: mediumInteraction,
                         distributionModel: distributionModel,
-                        sampler: sampler,
+                        sampler: &sampler,
                         lightSampler: lightSampler,
                         ray: ray,
                         scene: scene)
@@ -344,7 +344,7 @@ struct VolumePathIntegrator {
                 pathThroughputWeight: inout RgbSpectrum,
                 estimate: inout RgbSpectrum,
                 tHit: inout Float,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
@@ -399,7 +399,7 @@ struct VolumePathIntegrator {
                         * sampleOneLight(
                                 at: surfaceInteraction,
                                 distributionModel: bsdf,
-                                with: sampler,
+                                with: &sampler,
                                 lightSampler: lightSampler,
                                 scene: scene)
                 estimate += lightEstimate
@@ -424,7 +424,7 @@ struct VolumePathIntegrator {
                 ray: inout Ray,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
@@ -449,7 +449,7 @@ struct VolumePathIntegrator {
                                 pathThroughputWeight: pathThroughputWeight,
                                 mediumInteraction: mediumInteraction,
                                 distributionModel: distributionModel,
-                                sampler: sampler,
+                                sampler: &sampler,
                                 lightSampler: lightSampler,
                                 scene: scene)
                 } else {
@@ -460,7 +460,7 @@ struct VolumePathIntegrator {
                                 pathThroughputWeight: &pathThroughputWeight,
                                 estimate: &estimate,
                                 tHit: &tHit,
-                                sampler: sampler,
+                                sampler: &sampler,
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
                                 firstNormal: &firstNormal,
@@ -485,7 +485,7 @@ struct VolumePathIntegrator {
                 tHit: inout Float,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
@@ -501,7 +501,7 @@ struct VolumePathIntegrator {
                                 ray: &ray,
                                 bounce: bounce,
                                 estimate: &estimate,
-                                sampler: sampler,
+                                sampler: &sampler,
                                 pathThroughputWeight: &pathThroughputWeight,
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
@@ -518,7 +518,7 @@ struct VolumePathIntegrator {
                 tHit: inout Float,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: LightSampler,
                 albedo: inout RgbSpectrum,
@@ -533,7 +533,7 @@ struct VolumePathIntegrator {
                                 ray: &ray,
                                 bounce: bounce,
                                 estimate: &estimate,
-                                sampler: sampler,
+                                sampler: &sampler,
                                 pathThroughputWeight: &pathThroughputWeight,
                                 lightSampler: lightSampler,
                                 albedo: &albedo,
@@ -549,7 +549,7 @@ struct VolumePathIntegrator {
         func getRadianceAndAlbedo(
                 from ray: Ray,
                 tHit: inout FloatX,
-                with sampler: RandomSampler,
+                with sampler: inout RandomSampler,
                 lightSampler: LightSampler,
                 state: ImmutableState
         ) throws
@@ -570,7 +570,7 @@ struct VolumePathIntegrator {
                         tHit: &tHit,
                         bounce: 0,
                         estimate: &estimate,
-                        sampler: sampler,
+                        sampler: &sampler,
                         pathThroughputWeight: &pathThroughputWeight,
                         lightSampler: lightSampler,
                         albedo: &albedo,

@@ -1,6 +1,5 @@
-//struct RandomSampler: Sampler {
 struct RandomSampler {
-        func getCameraSample(pixel: Point2i) -> CameraSample {
+        mutating func getCameraSample(pixel: Point2i) -> CameraSample {
                 return CameraSample(
                         film: (
                                 FloatX(pixel.x) + get1D(),
@@ -17,16 +16,16 @@ struct RandomSampler {
                 samplesPerPixel = instance.samplesPerPixel
         }
 
-        func get1D() -> RandomVariable {
-                //return FloatX.random(in: 0..<1, using: &xoshiro)
-                return FloatX.random(in: 0..<1)
+        mutating func get1D() -> RandomVariable {
+                return FloatX.random(in: 0..<1, using: &xoshiro)
+                //return FloatX.random(in: 0..<1)
         }
 
-        func get2D() -> TwoRandomVariables {
+        mutating func get2D() -> TwoRandomVariables {
                 return (get1D(), get1D())
         }
 
-        func get3D() -> ThreeRandomVariables {
+        mutating func get3D() -> ThreeRandomVariables {
                 return (get1D(), get1D(), get1D())
         }
 
@@ -35,7 +34,7 @@ struct RandomSampler {
         }
 
         let samplesPerPixel: Int
-        //var xoshiro = Xoshiro()
+        var xoshiro = Xoshiro()
 }
 
 func createRandomSampler(parameters: ParameterDictionary, quick: Bool) throws -> RandomSampler {

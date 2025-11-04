@@ -52,7 +52,7 @@ struct PowerLightSampler {
                 self.cumulativePowers = cumulativePowers
         }
 
-        func chooseLight(scene: Scene) -> (Light, FloatX) {
+        mutating func chooseLight(scene: Scene) -> (Light, FloatX) {
                 assert(lights.count > 0)
                 let u = sampler.get1D()
                 let powerIndex = u * totalPower
@@ -62,7 +62,7 @@ struct PowerLightSampler {
                 return (light, probabilityDensity)
         }
 
-        let sampler: RandomSampler
+        var sampler: RandomSampler
         let lights: [Light]
         let cumulativePowers: [FloatX]
         let totalPower: FloatX

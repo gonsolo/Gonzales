@@ -7,7 +7,7 @@ struct Tile: Sendable {
 
         func render(
                 reporter: ProgressReporter,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 camera: any Camera,
                 //scene: Scene,
                 lightSampler: LightSampler,
@@ -22,7 +22,7 @@ struct Tile: Sendable {
                                 let radianceAlbedoNormal = try integrator.getRadianceAndAlbedo(
                                         from: ray,
                                         tHit: &tHit,
-                                        with: sampler,
+                                        with: &sampler,
                                         lightSampler: lightSampler,
                                         state: state)
 

@@ -49,12 +49,11 @@ struct TileRenderer: Renderer {
         }
 
         private func renderTile(tile: Tile, state: ImmutableState) async throws -> [Sample] {
-                let tileSampler = self.sampler.clone()
+                var tileSampler = self.sampler.clone()
                 let samples = try tile.render(
                         reporter: reporter,
-                        sampler: tileSampler,
+                        sampler: &tileSampler,
                         camera: self.camera,
-                        //scene: scene,
                         lightSampler: lightSampler,
                         state: state
                 )

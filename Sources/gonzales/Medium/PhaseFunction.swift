@@ -1,6 +1,6 @@
 protocol PhaseFunction: DistributionModel, Sendable {
         func evaluate(wo: Vector, wi: Vector) -> FloatX
-        func samplePhase(wo: Vector, sampler: RandomSampler) -> (value: FloatX, wi: Vector)
+        func samplePhase(wo: Vector, sampler: inout RandomSampler) -> (value: FloatX, wi: Vector)
 }
 
 extension PhaseFunction {
@@ -15,10 +15,10 @@ extension PhaseFunction {
                 return scatter
         }
 
-        func sampleDistributionFunction(wo: Vector, normal: Normal = zeroNormal, sampler: RandomSampler)
+        func sampleDistributionFunction(wo: Vector, normal: Normal = zeroNormal, sampler: inout RandomSampler)
                 -> BsdfSample
         {
-                let (value, wi) = samplePhase(wo: wo, sampler: sampler)
+                let (value, wi) = samplePhase(wo: wo, sampler: &sampler)
                 return BsdfSample(RgbSpectrum(intensity: value), wi, value)
         }
 

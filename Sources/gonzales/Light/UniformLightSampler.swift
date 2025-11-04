@@ -5,7 +5,7 @@ struct UniformLightSampler {
                 self.lights = lights
         }
 
-        func chooseLight() -> (Light, FloatX) {
+        mutating func chooseLight() -> (Light, FloatX) {
                 assert(lights.count > 0)
                 let u = sampler.get1D()
                 let lightNum = Int(u * FloatX(lights.count))
@@ -14,6 +14,6 @@ struct UniformLightSampler {
                 return (light, probabilityDensity)
         }
 
-        let sampler: RandomSampler
+        var sampler: RandomSampler
         let lights: [Light]
 }

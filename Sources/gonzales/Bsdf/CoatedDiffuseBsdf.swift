@@ -26,7 +26,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         private func evaluateNextEvent(
                 depth: Int,
                 pathThroughputWeight: inout RgbSpectrum,
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 z: inout FloatX,
                 w: inout Vector,
                 exitZ: FloatX,
@@ -107,7 +107,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         }
 
         private func evaluateOneSample(
-                sampler: RandomSampler,
+                sampler: inout RandomSampler,
                 wo: Vector,
                 wi: Vector,
                 exitZ: FloatX,
@@ -130,7 +130,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                                 let nextEstimate = evaluateNextEvent(
                                         depth: depth,
                                         pathThroughputWeight: &pathThroughputWeight,
-                                        sampler: sampler,
+                                        sampler: &sampler,
                                         z: &z,
                                         w: &w,
                                         exitZ: exitZ,
@@ -159,10 +159,10 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 let numberOfSamples = 1
 
                 var estimate = FloatX(numberOfSamples) * topBxdf.evaluateLocal(wo: wo, wi: wi)
-                let sampler = RandomSampler()
+                var sampler = RandomSampler()
                 for _ in 0..<numberOfSamples {
                         evaluateOneSample(
-                                sampler: sampler,
+                                sampler: &sampler,
                                 wo: wo,
                                 wi: wi,
                                 exitZ: exitZ,
@@ -221,7 +221,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 var pdfSum: FloatX = 0
                 let rInterface = bottomBxdf
                 let tInterface = topBxdf
-                let sampler = RandomSampler()
+                var sampler = RandomSampler()
                 let wos = tInterface.sampleLocal(wo: wo, u: sampler.get3D())
                 let wis = tInterface.sampleLocal(wo: wi, u: sampler.get3D())
                 if wos.isValid && wis.isValid {
@@ -250,7 +250,7 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         private func evaluateTT(wo: Vector, wi: Vector) async -> FloatX {
                 let toInterface = topBxdf
                 let tiInterface = bottomBxdf
-                let sampler = RandomSampler()
+                var sampler = RandomSampler()
                 var pdfSum: FloatX = 0
                 let wos = toInterface.sampleLocal(wo: wo, u: sampler.get3D())
                 guard wos.isValid else {
