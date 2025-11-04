@@ -42,15 +42,15 @@ func blossomBezier(points: FourPoints, u: TwoFloats) -> FourPoints {
         return p
 }
 
-extension Point2 {
-        init(_ point: Point3<T>) {
+extension Point2 where T == FloatX {
+        init(_ point: Point3) {
                 self.x = point.x
                 self.y = point.y
         }
 }
 
-extension Vector2 {
-        init(_ point: Point3<T>) {
+extension Vector2 where T == FloatX {
+        init(_ point: Point3) {
                 self.x = point.x
                 self.y = point.y
         }

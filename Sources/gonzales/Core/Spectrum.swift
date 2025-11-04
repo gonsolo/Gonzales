@@ -142,7 +142,7 @@ var namedSpectra: [String: any Spectrum] = [
         "metal-Cu-k": copperExtinctionCoefficients,
 ]
 
-public struct BaseRgbSpectrum<T: FloatingPoint & Sendable>: Initializable, Sendable, Three {
+public struct BaseRgbSpectrum: Initializable, Sendable, Three {
 
         init() {
                 self.init(r: 0, g: 0, b: 0)
@@ -179,9 +179,9 @@ public struct BaseRgbSpectrum<T: FloatingPoint & Sendable>: Initializable, Senda
         }
 
         // Conform to Three
-        var x: T
-        var y: T
-        var z: T
+        var x: FloatX
+        var y: FloatX
+        var z: FloatX
 
         // Convenience accessors for RgbSpectrum
         var r: T {
@@ -214,33 +214,33 @@ extension BaseRgbSpectrum {
         }
 }
 
-extension BaseRgbSpectrum where T: FloatingPoint {
+extension BaseRgbSpectrum {
 
-        public static func * (mul: T, spectrum: BaseRgbSpectrum<T>) -> BaseRgbSpectrum {
+        public static func * (mul: FloatX, spectrum: BaseRgbSpectrum) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
                         r: mul * spectrum.x,
                         g: mul * spectrum.y,
                         b: mul * spectrum.z)
         }
 
-        public static func * (spectrum: BaseRgbSpectrum<T>, mul: T) -> BaseRgbSpectrum {
+        public static func * (spectrum: BaseRgbSpectrum, mul: FloatX) -> BaseRgbSpectrum {
                 return mul * spectrum
         }
 
-        public static func *= (left: inout BaseRgbSpectrum<T>, right: BaseRgbSpectrum<T>) {
+        public static func *= (left: inout BaseRgbSpectrum, right: BaseRgbSpectrum) {
                 left.x *= right.x
                 left.y *= right.y
                 left.z *= right.z
         }
 
-        public static func + (spectrum: BaseRgbSpectrum<T>, value: T) -> BaseRgbSpectrum {
+        public static func + (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
                         r: spectrum.r + value,
                         g: spectrum.g + value,
                         b: spectrum.b + value)
         }
 
-        public static func - (spectrum: BaseRgbSpectrum<T>, value: T) -> BaseRgbSpectrum {
+        public static func - (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
                         r: spectrum.r - value,
                         g: spectrum.g - value,
@@ -248,8 +248,8 @@ extension BaseRgbSpectrum where T: FloatingPoint {
         }
 
         public static func / (
-                numerator: BaseRgbSpectrum<T>,
-                denominator: BaseRgbSpectrum<T>
+                numerator: BaseRgbSpectrum,
+                denominator: BaseRgbSpectrum
         ) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
                         r: numerator.r / denominator.r,
@@ -257,11 +257,11 @@ extension BaseRgbSpectrum where T: FloatingPoint {
                         b: numerator.b / denominator.b)
         }
 
-        public static func == (a: BaseRgbSpectrum<T>, b: BaseRgbSpectrum<T>) -> Bool {
+        public static func == (a: BaseRgbSpectrum, b: BaseRgbSpectrum) -> Bool {
                 return a.r == b.r && a.g == b.g && a.b == b.b
         }
 
-        public static func != (a: BaseRgbSpectrum<T>, b: BaseRgbSpectrum<T>) -> Bool {
+        public static func != (a: BaseRgbSpectrum, b: BaseRgbSpectrum) -> Bool {
                 return !(a == b)
         }
 
@@ -301,7 +301,7 @@ extension BaseRgbSpectrum where T: FloatingPoint {
 
 }
 
-extension BaseRgbSpectrum where T: BinaryFloatingPoint {
+extension BaseRgbSpectrum {
 
         func asRgb() -> RgbSpectrum {
                 return RgbSpectrum(r: FloatX(r), g: FloatX(g), b: FloatX(b))
@@ -315,15 +315,15 @@ extension BaseRgbSpectrum where T: BinaryFloatingPoint {
         }
 }
 
-extension BaseRgbSpectrum where T: FloatingPoint {
+extension BaseRgbSpectrum {
 
-        init(from normal: Normal3<T>) {
+        init(from normal: Normal3) {
                 let normal = normalized(normal)
                 self.init(r: abs(normal.x), g: abs(normal.y), b: abs(normal.z))
         }
 }
 
-typealias RgbSpectrum = BaseRgbSpectrum<FloatX>
+typealias RgbSpectrum = BaseRgbSpectrum
 
 extension RgbSpectrum: Spectrum {}
 

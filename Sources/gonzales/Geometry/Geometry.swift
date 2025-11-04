@@ -45,7 +45,7 @@ func absDot(_ a: Normal, _ b: Vector) -> FloatX {
         return abs(dot(Vector(normal: a), b))
 }
 
-func maxDimension<T: Comparable>(_ vector: Vector3<T>) -> Int {
+func maxDimension(_ vector: Vector3) -> Int {
         return (vector.x > vector.y)
                 ? ((vector.x > vector.z) ? 0 : 2) : ((vector.y > vector.z) ? 1 : 2)
 }

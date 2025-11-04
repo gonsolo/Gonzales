@@ -1,6 +1,6 @@
-public struct Bounds3<T: Comparable & Sendable>: Sendable {
+public struct Bounds3: Sendable {
 
-        init(first: Point3<T>, second: Point3<T>) {
+        init(first: Point3, second: Point3) {
                 self.pMin = Point3(
                         x: min(first.x, second.x),
                         y: min(first.y, second.y),
@@ -11,7 +11,7 @@ public struct Bounds3<T: Comparable & Sendable>: Sendable {
                         z: max(first.z, second.z))
         }
 
-        subscript(index: Int) -> Point3<T> {
+        subscript(index: Int) -> Point3 {
                 get {
                         switch index {
                         case 0: return pMin
@@ -21,7 +21,7 @@ public struct Bounds3<T: Comparable & Sendable>: Sendable {
                 }
         }
 
-        mutating func add(point: Point3<T>) {
+        mutating func add(point: Point3) {
                 if point.x < pMin.x { pMin.x = point.x }
                 if point.y < pMin.y { pMin.y = point.y }
                 if point.z < pMin.z { pMin.z = point.z }
@@ -30,7 +30,7 @@ public struct Bounds3<T: Comparable & Sendable>: Sendable {
                 if point.z > pMax.z { pMax.z = point.z }
         }
 
-        var points: [Point3<T>] {
+        var points: [Point3] {
                 return [
                         Point3(x: pMin.x, y: pMin.y, z: pMin.z),
                         Point3(x: pMin.x, y: pMin.y, z: pMax.z),
@@ -43,17 +43,17 @@ public struct Bounds3<T: Comparable & Sendable>: Sendable {
                 ]
         }
 
-        var pMin: Point3<T>
-        var pMax: Point3<T>
+        var pMin: Point3
+        var pMax: Point3
 }
 
 extension Bounds3: CustomStringConvertible {
         public var description: String { return "Bounds3 [ \(pMin) - \(pMax) ]" }
 }
 
-public typealias Bounds3f = Bounds3<FloatX>
+public typealias Bounds3f = Bounds3
 
-extension Bounds3 where T == FloatX {
+extension Bounds3 {
 
         init() {
                 pMin = Point3(x: FloatX.infinity, y: FloatX.infinity, z: FloatX.infinity)
@@ -85,11 +85,11 @@ extension Bounds3 where T == FloatX {
                 }
         }
 
-        func diagonal() -> Vector3<T> {
+        func diagonal() -> Vector3 {
                 return Vector3(point: pMax - pMin)
         }
 
-        func offset(point: Point3<T>) -> Vector3<T> {
+        func offset(point: Point3) -> Vector3 {
                 var o: Vector3 = point - pMin
                 for i in 0..<3 {
                         if pMax[i] > pMin[i] { o[i] /= pMax[i] - pMin[i] }
@@ -97,7 +97,7 @@ extension Bounds3 where T == FloatX {
                 return o
         }
 
-        func surfaceArea() -> T {
+        func surfaceArea() -> FloatX {
                 let d = diagonal()
                 return 2 * (d.x * d.y + d.x * d.z + d.y * d.z)
         }
@@ -121,7 +121,7 @@ func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
                 second: bounds.pMax + Point(x: delta, y: delta, z: delta))
 }
 
-extension Bounds3 where T == FloatX {
+extension Bounds3 {
 
         func intersects(ray: Ray, tHit: FloatX) -> Bool {
                 var t0: FloatX = 0.0

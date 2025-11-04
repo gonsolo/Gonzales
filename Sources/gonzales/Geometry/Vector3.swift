@@ -1,12 +1,12 @@
-public struct Vector3<T: FloatingPoint & Sendable>: Sendable, Three {
+public struct Vector3: Sendable, Three {
 
-        public init(x: T, y: T, z: T) {
+        public init(x: FloatX, y: FloatX, z: FloatX) {
                 self.x = x
                 self.y = y
                 self.z = z
         }
 
-        init(v: T) {
+        init(v: FloatX) {
                 self.x = v
                 self.y = v
                 self.z = v
@@ -24,13 +24,13 @@ public struct Vector3<T: FloatingPoint & Sendable>: Sendable, Three {
                 self.z = vector.z
         }
 
-        init(xyz: (T, T, T)) {
+        init(xyz: (FloatX, FloatX, FloatX)) {
                 self.x = xyz.0
                 self.y = xyz.1
                 self.z = xyz.2
         }
 
-        subscript(index: Int) -> T {
+        subscript(index: Int) -> FloatX {
                 get {
                         switch index {
                         case 0: return x
@@ -57,18 +57,21 @@ public struct Vector3<T: FloatingPoint & Sendable>: Sendable, Three {
                 return x.isZero && y.isZero && z.isZero
         }
 
-        public var x: T
-        public var y: T
-        public var z: T
+        public var x: FloatX
+        public var y: FloatX
+        public var z: FloatX
 }
 
 extension Vector3 {
-        init(point: Point3<T>) {
+        init(point: Point3) {
                 self.x = point.x
                 self.y = point.y
                 self.z = point.z
         }
-        init(normal: Normal3<T>) {
+}
+
+extension Vector3 {
+        init(normal: Normal3) {
                 self.x = normal.x
                 self.y = normal.y
                 self.z = normal.z
@@ -88,19 +91,19 @@ func cross(_ a: Vector, _ b: Vector) -> Vector {
                 z: a.x * b.y - a.y * b.x)
 }
 
-public typealias Vector = Vector3<FloatX>
+public typealias Vector = Vector3
 
 let nullVector = Vector(x: 0, y: 0, z: 0)
 let up = Vector(x: 0, y: 1, z: 0)
 
-func mirror<T: FloatingPoint>(_ vector: Vector3<T>) -> Vector3<T> {
+func mirror(_ vector: Vector3) -> Vector3 {
         return Vector3(x: -vector.x, y: -vector.y, z: vector.z)
 }
 
-func abs<T: FloatingPoint>(_ vector: Vector3<T>) -> Vector3<T> {
+func abs(_ vector: Vector3) -> Vector3 {
         return Vector3(x: abs(vector.x), y: abs(vector.y), z: abs(vector.z))
 }
 
-func permute<T>(vector: Vector3<T>, x: Int, y: Int, z: Int) -> Vector3<T> {
+func permute(vector: Vector3, x: Int, y: Int, z: Int) -> Vector3 {
         return Vector3(x: vector[x], y: vector[y], z: vector[z])
 }

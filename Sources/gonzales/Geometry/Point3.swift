@@ -1,51 +1,86 @@
-public struct Point3<T: Sendable>: Sendable {
+public struct Point3: Sendable, Three {
 
-        init(x: T, y: T, z: T) {
-                self.xyz = (x, y, z)
+        init() {
+                self.init(x: 0, y: 0, z: 0)
+        }
+
+        init(x: FloatX, y: FloatX, z: FloatX) {
+                self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
         init(_ point: Point3) {
-                self.xyz = (point.x, point.y, point.z)
+                self.xyz = SIMD4<FloatX>(point.x, point.y, point.z, 1.0)
         }
 
-        init(xyz: (T, T, T)) {
-                self.xyz = xyz
+        init(xyz: (FloatX, FloatX, FloatX)) {
+                self.xyz = SIMD4<FloatX>(xyz.0, xyz.1, xyz.2, 1.0)
         }
 
-        subscript(index: Int) -> T {
+        init(_ normal: Normal3) {
+                self.init(
+                        x: normal.x,
+                        y: normal.y,
+                        z: normal.z)
+        }
+
+        subscript(index: Int) -> FloatX {
                 get {
                         switch index {
-                        case 0: return xyz.0
-                        case 1: return xyz.1
-                        case 2: return xyz.2
-                        default: return xyz.0
+                        case 0: return xyz.x
+                        case 1: return xyz.y
+                        case 2: return xyz.z
+                        default: return xyz.x
                         }
                 }
 
                 set(newValue) {
                         switch index {
-                        case 0: xyz.0 = newValue
-                        case 1: xyz.1 = newValue
-                        case 2: xyz.2 = newValue
-                        default: xyz.0 = newValue
+                        case 0: xyz.x = newValue
+                        case 1: xyz.y = newValue
+                        case 2: xyz.z = newValue
+                        default: xyz.x = newValue
                         }
                 }
         }
 
-        var x: T {
-                get { return xyz.0 }
-                set { xyz.0 = newValue }
+        var x: FloatX {
+                get { return xyz.x }
+                set { xyz.x = newValue }
         }
-        var y: T {
-                get { return xyz.1 }
-                set { xyz.1 = newValue }
+        var y: FloatX {
+                get { return xyz.y }
+                set { xyz.y = newValue }
         }
-        var z: T {
-                get { return xyz.2 }
-                set { xyz.2 = newValue }
+        var z: FloatX {
+                get { return xyz.z }
+                set { xyz.z = newValue }
         }
 
-        var xyz: (T, T, T)
+        public static func * (mul: FloatX, point: Point3) -> Point3 {
+                return Point3(x: point.x * mul, y: point.y * mul, z: point.z * mul)
+        }
+
+        public static func / (point: Point3, divisor: FloatX) -> Point3 {
+                return Point3(x: point.x / divisor, y: point.y / divisor, z: point.z / divisor)
+        }
+
+        public static func + (left: Point3, right: Point3) -> Point3 {
+                return Point3(x: left.x + right.x, y: left.y + right.y, z: left.z + right.z)
+        }
+
+        public static func + (left: Point3, right: Vector3) -> Point3 {
+                return Point3(x: left.x + right.x, y: left.y + right.y, z: left.z + right.z)
+        }
+
+        public static func - (left: Point3, right: Point3) -> Point3 {
+                return Point3(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
+        }
+
+        public static func - (left: Point3, right: Point3) -> Vector3 {
+                return Vector3(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
+        }
+
+        var xyz: SIMD4<FloatX>
 }
 
 extension Point3: CustomStringConvertible {
@@ -54,52 +89,13 @@ extension Point3: CustomStringConvertible {
         }
 }
 
-func permute<T>(point: Point3<T>, x: Int, y: Int, z: Int) -> Point3<T> {
+func permute(point: Point3, x: Int, y: Int, z: Int) -> Point3 {
         return Point3(x: point[x], y: point[y], z: point[z])
 }
 
-public typealias Point = Point3<FloatX>
-
-extension Point3: Three where T: FloatingPoint {
-        init() {
-                self.init(x: 0, y: 0, z: 0)
-        }
-}
-
-extension Point3 where T: FloatingPoint {
-        init(_ normal: Normal3<T>) {
-                self.init(
-                        x: normal.x,
-                        y: normal.y,
-                        z: normal.z)
-        }
-}
+public typealias Point = Point3
 
 let origin = Point()
 
-extension Point3 where T: FloatingPoint {
 
-        public static func * (mul: T, point: Point3<T>) -> Point3 {
-                return Point3(x: point.x * mul, y: point.y * mul, z: point.z * mul)
-        }
 
-        public static func / (point: Point3<T>, divisor: T) -> Point3 {
-                return Point3(x: point.x / divisor, y: point.y / divisor, z: point.z / divisor)
-        }
-
-        public static func + (left: Point3<T>, right: Point3<T>) -> Point3 {
-                return Point3(x: left.x + right.x, y: left.y + right.y, z: left.z + right.z)
-        }
-
-        public static func + (left: Point3<T>, right: Vector3<T>) -> Point3 {
-                return Point3(x: left.x + right.x, y: left.y + right.y, z: left.z + right.z)
-        }
-
-        public static func - (left: Point3<T>, right: Point3<T>) -> Point3<T> {
-                return Point3<T>(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
-        }
-
-        public static func - (left: Point3<T>, right: Point3<T>) -> Vector3<T> {
-                return Vector3<T>(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
-        }
-}
