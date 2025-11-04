@@ -41,7 +41,9 @@ struct InfiniteLight {
                 return (radiance: color, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(scene: Scene, samplingDirection direction: Vector, from reference: any Interaction)
+        func probabilityDensityFor(
+                scene: Scene, samplingDirection direction: Vector, from reference: any Interaction
+        )
                 throws -> FloatX
         {
                 let incoming = worldToLight * direction

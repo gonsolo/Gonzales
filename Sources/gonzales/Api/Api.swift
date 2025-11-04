@@ -446,17 +446,17 @@ struct Api {
                 // bilerp missing
                 case "checkerboard":
                         unimplemented()
-                        //let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
-                        //let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
-                        //let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
-                        //let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
-                        //let textures = (textureEven, textureOdd)
-                        //let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
-                        //let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
-                        //let scale = (uscale, vscale)
-                        //let checkerboard = Checkerboard(textures: textures, scale: scale)
-                        //let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
-                        //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                //let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
+                //let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
+                //let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
+                //let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
+                //let textures = (textureEven, textureOdd)
+                //let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
+                //let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
+                //let scale = (uscale, vscale)
+                //let checkerboard = Checkerboard(textures: textures, scale: scale)
+                //let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
+                //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 case "constant":
                         switch type {
                         case "spectrum", "color":
@@ -479,14 +479,14 @@ struct Api {
                         switch type {
                         case "color", "spectrum":
                                 unimplemented()
-                                //let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
-                                //let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
-                                //let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                //let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
-                                //        textures: (tex1, tex2), amount: amount)
-                                //let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
-                                //        rgbSpectrumMixTexture)
-                                //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                        //let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
+                        //let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
+                        //let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                        //let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
+                        //        textures: (tex1, tex2), amount: amount)
+                        //let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
+                        //        rgbSpectrumMixTexture)
+                        //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
                                 //let tex1 = try parameters.findFloatXTexture(name: "tex1")
                                 //let tex2 = try parameters.findFloatXTexture(name: "tex2")
@@ -503,13 +503,13 @@ struct Api {
                         texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
                         unimplemented()
-                        //let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
-                        //let scale = Texture.floatTexture(scaleFloatTexture)
-                        //let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
-                        //let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
-                        //let scaledTexture = ScaledTexture(scale: scale, texture: tex)
-                        //let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
-                        //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                //let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
+                //let scale = Texture.floatTexture(scaleFloatTexture)
+                //let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
+                //let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
+                //let scaledTexture = ScaledTexture(scale: scale, texture: tex)
+                //let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
+                //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 // windy missing
                 // wrinkled missing
                 default:
@@ -545,7 +545,8 @@ struct Api {
         func worldEnd() async throws {
                 print("Reading: \(readTimer.elapsed)")
                 if justParse { return }
-                let renderer = try await options.makeRenderer(geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
+                let renderer = try await options.makeRenderer(
+                        geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
                 try await renderer.render()
                 cleanUp()
         }
@@ -738,4 +739,3 @@ var acceleratorName = "bvh"
 
 @MainActor
 var namedCoordinateSystems = [String: Transform]()
-

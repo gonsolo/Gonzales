@@ -39,7 +39,8 @@ struct PowerLightSampler {
                 self.lights = lights
 
                 var cumulativePowers = [FloatX]()
-                totalPower = await lights.asyncReduce(0, { total, light in total + light.power(scene: scene) })
+                totalPower = await lights.asyncReduce(
+                        0, { total, light in total + light.power(scene: scene) })
                 for (i, light) in lights.enumerated() {
                         if i == 0 {
                                 cumulativePowers.append(light.power(scene: scene))

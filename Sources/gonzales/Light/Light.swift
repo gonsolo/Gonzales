@@ -25,7 +25,9 @@ enum Light: Sendable {
                 }
         }
 
-        func probabilityDensityFor<I: Interaction>(scene: Scene, samplingDirection direction: Vector, from reference: I)
+        func probabilityDensityFor<I: Interaction>(
+                scene: Scene, samplingDirection direction: Vector, from reference: I
+        )
                 throws -> FloatX
         {
                 switch self {

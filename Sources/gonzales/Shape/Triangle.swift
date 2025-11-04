@@ -221,15 +221,18 @@ struct Triangle: Shape {
         }
 
         func getPoint0(scene: Scene) -> Point {
-                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: getVertexIndex0(scene: scene))
+                return getTriangleMeshes(scene: scene).getPointFor(
+                        meshIndex: meshIndex, at: getVertexIndex0(scene: scene))
         }
 
         func getPoint1(scene: Scene) -> Point {
-                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: getVertexIndex1(scene: scene))
+                return getTriangleMeshes(scene: scene).getPointFor(
+                        meshIndex: meshIndex, at: getVertexIndex1(scene: scene))
         }
 
         func getPoint2(scene: Scene) -> Point {
-                return getTriangleMeshes(scene: scene).getPointFor(meshIndex: meshIndex, at: getVertexIndex2(scene: scene))
+                return getTriangleMeshes(scene: scene).getPointFor(
+                        meshIndex: meshIndex, at: getVertexIndex2(scene: scene))
         }
 
         func objectBound(scene: Scene) -> Bounds3f {
@@ -387,7 +390,7 @@ struct Triangle: Shape {
                 }
                 let det: FloatX = e0 + e1 + e2
                 if det == 0 {
-                        return false // Degenerate triangle or ray parallel to plane
+                        return false  // Degenerate triangle or ray parallel to plane
                 }
 
                 // --- Compute t value and check range ---
@@ -449,7 +452,7 @@ struct Triangle: Shape {
                         fatalError("getIntersectionDataFull in computeSurfaceInteraction!")
                 }
                 guard let data = data else {
-                       return
+                        return
                 }
                 // --- Calculate Hit Point (pHit) ---
                 let hit0: Point = data.b0 * getPoint0(scene: scene)
@@ -464,7 +467,10 @@ struct Triangle: Shape {
 
                 let uv = getTriangleMeshes(scene: scene).getUVFor(
                         meshIndex: meshIndex,
-                        indices: (getVertexIndex0(scene: scene), getVertexIndex1(scene: scene), getVertexIndex2(scene: scene)))
+                        indices: (
+                                getVertexIndex0(scene: scene), getVertexIndex1(scene: scene),
+                                getVertexIndex2(scene: scene)
+                        ))
                 let uvHit = computeUVHit(b0: data.b0, b1: data.b1, b2: data.b2, uv: uv)
 
                 let duv02: Vector2F = uv.0 - uv.2
@@ -485,7 +491,9 @@ struct Triangle: Shape {
                 }
 
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
-                        let ng: Vector = cross(getPoint2(scene: scene) - getPoint0(scene: scene), getPoint1(scene: scene) - getPoint0(scene: scene))
+                        let ng: Vector = cross(
+                                getPoint2(scene: scene) - getPoint0(scene: scene),
+                                getPoint1(scene: scene) - getPoint0(scene: scene))
                         if lengthSquared(ng) == 0 {
                                 return  // Cannot compute valid normal/tangent space
                         }
@@ -553,7 +561,7 @@ struct Triangle: Shape {
         ) throws {
                 var data = TriangleIntersection()
                 if try !getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data) {
-                        return  
+                        return
                 }
 
                 // 2. Compute the full SurfaceInteraction using the new private method

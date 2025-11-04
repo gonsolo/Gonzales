@@ -48,7 +48,7 @@ struct Disk: Shape {
         }
 
         func getObjectToWorld(scene: Scene) -> Transform {
-                return objectToWorld 
+                return objectToWorld
         }
 
         let objectToWorld: Transform

@@ -132,7 +132,9 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(sampler: RandomSampler, accelerator: Accelerator, scene: Scene) throws -> VolumePathIntegrator {
+        func makeIntegrator(sampler: RandomSampler, accelerator: Accelerator, scene: Scene) throws
+                -> VolumePathIntegrator
+        {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -163,7 +165,9 @@ class Options {
         }
 
         @MainActor
-        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight]) async throws -> some Renderer {
+        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight]) async throws
+                -> some Renderer
+        {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let scene = Scene(
@@ -177,7 +181,8 @@ class Options {
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
-                let powerLightSampler = await PowerLightSampler(sampler: sampler, lights: lights, scene: scene)
+                let powerLightSampler = await PowerLightSampler(
+                        sampler: sampler, lights: lights, scene: scene)
                 let lightSampler = LightSampler.power(powerLightSampler)
                 let tileSize = (32, 32)
 

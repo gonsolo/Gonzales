@@ -58,7 +58,8 @@ enum ShapeType: Shape {
         ) throws -> Bool {
                 switch self {
                 case .triangle(let triangle):
-                        return try triangle.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                        return try triangle.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 default:
                         unimplemented()
                 }
@@ -122,7 +123,8 @@ enum ShapeType: Shape {
                 case .curve(let curve):
                         try curve.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 case .embreeCurve(let embreeCurve):
-                        try embreeCurve.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
+                        try embreeCurve.intersect(
+                                scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 }
         }
 
@@ -186,7 +188,8 @@ enum ShapeType: Shape {
                                 scene: scene,
                                 samplingDirection: direction, from: interaction)
                 case .disk(let disk):
-                        return try disk.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
+                        return try disk.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: interaction)
                 case .curve(let curve):
                         return try curve.probabilityDensityFor(
                                 scene: scene, samplingDirection: direction, from: interaction)

@@ -18,7 +18,9 @@ struct PointLight {
                 return (radiance, direction, pdf, visibility)
         }
 
-        func probabilityDensityFor(scene: Scene, samplingDirection direction: Vector, from reference: any Interaction)
+        func probabilityDensityFor(
+                scene: Scene, samplingDirection direction: Vector, from reference: any Interaction
+        )
                 throws -> FloatX
         {
                 return 0

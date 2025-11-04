@@ -22,15 +22,15 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         ) throws {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
-                        for i in 0..<rays.count {
-                                if !skips[i] {
-                                        try boundingHierarchy.intersect(
-                                                scene: scene,
-                                                ray: rays[i],
-                                                tHit: &tHits[i],
-                                                interaction: &interactions[i])
-                                }
+                for i in 0..<rays.count {
+                        if !skips[i] {
+                                try boundingHierarchy.intersect(
+                                        scene: scene,
+                                        ray: rays[i],
+                                        tHit: &tHits[i],
+                                        interaction: &interactions[i])
                         }
+                }
                 //case .embree(let embree):
                 //        for i in 0..<rays.count {
                 //                if !skips[i] {
@@ -46,7 +46,7 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 //                tHits: &tHits,
                 //                interactions: &interactions,
                 //                skips: skips)
-                }
+        }
         //}
 
         func intersect(
@@ -56,10 +56,10 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         ) throws -> Bool {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
-                        try boundingHierarchy.intersect(
-                                scene: scene,
-                                ray: ray,
-                                tHit: &tHit)
+                try boundingHierarchy.intersect(
+                        scene: scene,
+                        ray: ray,
+                        tHit: &tHit)
                 //}
         }
 
@@ -71,11 +71,11 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         ) throws {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
-                        try boundingHierarchy.intersect(
-                                scene: scene,
-                                ray: ray,
-                                tHit: &tHit,
-                                interaction: &interaction)
+                try boundingHierarchy.intersect(
+                        scene: scene,
+                        ray: ray,
+                        tHit: &tHit,
+                        interaction: &interaction)
                 //case .embree(let embree):
                 //        try embree.intersect(
                 //                ray: ray,
@@ -92,7 +92,7 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         func objectBound(scene: Scene) -> Bounds3f {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
-                        return boundingHierarchy.objectBound(scene: scene)
+                return boundingHierarchy.objectBound(scene: scene)
                 //case .embree(let embree):
                 //        return embree.objectBound()
                 //case .optix(let optix):
@@ -103,7 +103,7 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         func worldBound(scene: Scene) -> Bounds3f {
                 //switch self {
                 //case .boundingHierarchy(let boundingHierarchy):
-                        return boundingHierarchy.worldBound(scene: scene)
+                return boundingHierarchy.worldBound(scene: scene)
                 //case .embree(let embree):
                 //        return embree.worldBound()
                 //case .optix(let optix):

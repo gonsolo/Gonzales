@@ -57,7 +57,8 @@ struct VolumePathIntegrator {
                 scene: Scene
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
-                        point: interaction.position, u: sampler.get2D(), accelerator: accelerator, scene: scene)
+                        point: interaction.position, u: sampler.get2D(), accelerator: accelerator,
+                        scene: scene)
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample
                 }
@@ -175,7 +176,7 @@ struct VolumePathIntegrator {
                         distributionModel: distributionModel,
                         sampler: sampler)
                 let lightDensity = try light.probabilityDensityFor(
-                                scene: scene,
+                        scene: scene,
                         samplingDirection: brdfSample.incoming,
                         from: interaction)
                 let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)

@@ -29,7 +29,9 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         // --- 1. Private Traversal Protocol (The Leaf Logic Interface) ---
         private protocol LeafProcessor {
                 // processLeaf is declared with 'throws'
-                mutating func processLeaf(scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws
+                mutating func processLeaf(
+                        scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray)
+                        throws
                 var tHit: FloatX { get set }
         }
 
@@ -43,7 +45,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var toVisit = 0
                 var current = 0
                 // Use a fixed-size array/tuple for performance
-                var nodesToVisit: [32 of Int] = .init(repeating: 0) 
+                var nodesToVisit: [32 of Int] = .init(repeating: 0)
 
                 if nodes.isEmpty { return }
 
@@ -54,9 +56,10 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         if node.bounds.intersects(ray: ray, tHit: processor.tHit) {
 
                                 if node.count > 0 {  // leaf node
-                                        
+
                                         // 2. Execute the leaf-specific logic via the protocol method
-                                        try processor.processLeaf(scene: scene, hierarchy: self, node: node, ray: ray)
+                                        try processor.processLeaf(
+                                                scene: scene, hierarchy: self, node: node, ray: ray)
 
                                         // 3. Move to the next node from the stack (if any)
                                         if toVisit == 0 { break }
@@ -91,12 +94,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         }
                 }
         }
-        
+
         private struct OcclusionProcessor: LeafProcessor {
                 var intersected: Bool = false
                 var tHit: FloatX
 
-                mutating func processLeaf(scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
+                mutating func processLeaf(
+                        scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
+                ) throws {
                         for i in 0..<node.count {
                                 intersected =
                                         try intersected
@@ -126,7 +131,9 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var gdata: TriangleIntersection? = nil
                 var tHit: FloatX
 
-                mutating func processLeaf(scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray) throws {
+                mutating func processLeaf(
+                        scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
+                ) throws {
                         var currentData = TriangleIntersection()
                         for i in 0..<node.count {
                                 let intersectionFound = try scene.getIntersectionData(
@@ -152,7 +159,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         ) throws {
                 var processor = InteractionProcessor(tHit: tHit)
                 try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
-                
+
                 tHit = processor.tHit
                 try scene.computeSurfaceInteraction(
                         primId: primIds[processor.index],
