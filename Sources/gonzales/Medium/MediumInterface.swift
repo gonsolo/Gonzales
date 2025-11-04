@@ -1,4 +1,4 @@
-struct MediumInterface: Sendable {
+struct MediumInterface {
 
         init(interior: String, exterior: String) {
                 self.interior = interior

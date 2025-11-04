@@ -1,6 +1,6 @@
 import Foundation
 
-struct TransformedPrimitive: Boundable, Intersectable, Sendable {
+struct TransformedPrimitive: Boundable, Intersectable {
 
         init(
                 accelerator: Accelerator,

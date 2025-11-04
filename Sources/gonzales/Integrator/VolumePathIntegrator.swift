@@ -2,7 +2,7 @@
 // "James Kajiya: The Rendering Equation"
 // DOI: 10.1145/15922.15902
 
-struct VolumePathIntegrator: Sendable {
+struct VolumePathIntegrator {
 
         init(maxDepth: Int, accelerator: Accelerator, scene: Scene) {
                 self.maxDepth = maxDepth

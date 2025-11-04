@@ -1,4 +1,4 @@
-struct ConstantTexture<T: TextureEvaluation>: Sendable {
+struct ConstantTexture<T: TextureEvaluation> {
 
         func evaluate(at: any Interaction) -> any TextureEvaluation {
                 return value
