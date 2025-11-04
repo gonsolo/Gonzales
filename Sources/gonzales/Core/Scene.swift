@@ -1,28 +1,12 @@
 struct Scene {
 
-        init() {
-                lights = []
-                infiniteLights = []
-                materials = []
-                meshes = TriangleMeshes(meshes: [])
-                geometricPrimitives = []
-                areaLights = []
-        }
-
-        mutating func addMeshes(meshes: TriangleMeshes) {
-                self.meshes = meshes
-        }
-
-        mutating func addGeometricPrimitives(geometricPrimitives: [GeometricPrimitive]) {
-                self.geometricPrimitives = geometricPrimitives
-        }
-
-        mutating func addAreaLights(areaLights: [AreaLight]) {
-                self.areaLights = areaLights
-        }
-
-        @MainActor
-        mutating func addLights(lights: [Light]) {
+        init(
+               lights: [Light],
+               materials: [Material],
+               meshes: TriangleMeshes,
+               geometricPrimitives: [GeometricPrimitive],
+               areaLights: [AreaLight]
+        ) {
                 self.lights = lights
                 self.infiniteLights = lights.compactMap {
                         switch $0 {
@@ -32,13 +16,12 @@ struct Scene {
                                 return nil
                         }
                 }
-        }
-
-        @MainActor
-        mutating func addMaterials(materials: [Material]) {
                 self.materials = materials
+                self.meshes = meshes
+                self.geometricPrimitives = geometricPrimitives
+                self.areaLights = areaLights
         }
-
+ 
         func intersect(primId: PrimId, ray: Ray, tHit: inout FloatX) throws -> Bool {
                 switch primId.type {
                 case .triangle:
