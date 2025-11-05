@@ -4,8 +4,6 @@ struct Xoshiro: RandomNumberGenerator {
 
         typealias StateType = (UInt64, UInt64, UInt64, UInt64)
 
-        // This could be anything *except* randomized via /dev/urandom or similar since
-        // then the renderer is close to not debuggable.
         private var state: StateType = (666, 1_234_567, 565_000_565, 939_393_939_393)
 
         public mutating func next() -> UInt64 {
