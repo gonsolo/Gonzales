@@ -270,7 +270,7 @@ memcheck: release
 # while true; do ps aux|grep gonzales|grep -Ev grep|awk '{print $5}' >> gonzales_memory; sleep 5; done
 
 flame:
-	perf script|  ../../src/FlameGraph/stackcollapse-perf.pl | swift demangle | ../../src/FlameGraph/flamegraph.pl --width 10000 --height 48 > flame.svg
+	perf script|  stackcollapse-perf.pl | swift demangle | flamegraph.pl --width 10000 --height 48 > flame.svg
 	eog -f flame.svg
 
 format_suggest:
