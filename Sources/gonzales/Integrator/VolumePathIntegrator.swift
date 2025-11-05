@@ -240,7 +240,9 @@ struct VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
-        private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum) -> Bool {
+        private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
+                -> Bool
+        {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
                         let roulette = FloatX.random(in: 0..<1, using: &xoshiro)

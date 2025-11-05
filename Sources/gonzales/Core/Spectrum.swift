@@ -152,7 +152,6 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
-
         init(r: FloatX, g: FloatX, b: FloatX) {
                 self.init(x: r, y: g, z: b)
         }
@@ -172,7 +171,6 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
         var isInfinite: Bool {
                 return r.isInfinite || g.isInfinite || b.isInfinite
         }
-
 
         // Convenience accessors for RgbSpectrum
         var r: T {

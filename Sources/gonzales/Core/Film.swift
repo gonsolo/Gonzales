@@ -57,7 +57,9 @@ struct Film {
                 try normalImageWriter.write(fileName: "normal.exr", crop: crop, image: image)
         }
 
-        private func add(samples: [Sample], image: inout Image, albedoImage: inout Image, normalImage: inout Image) {
+        private func add(
+                samples: [Sample], image: inout Image, albedoImage: inout Image, normalImage: inout Image
+        ) {
                 for sample in samples {
                         add(
                                 value: sample.light,
@@ -123,15 +125,20 @@ struct Film {
                                 let albedoColor = filter.evaluate(atLocation: relativeLocation) * albedo
                                 let normalColor = filter.evaluate(atLocation: relativeLocation) * normal
                                 let weight = filter.evaluate(atLocation: relativeLocation) * weight
-                                image.addPixel( withColor: color, withWeight: weight, atLocation: pixel)
-                                albedoImage.addPixel( withColor: albedoColor, withWeight: weight, atLocation: pixel)
-                                normalImage.addPixel( withColor: normalColor, withWeight: weight, atLocation: pixel)
+                                image.addPixel(withColor: color, withWeight: weight, atLocation: pixel)
+                                albedoImage.addPixel(
+                                        withColor: albedoColor, withWeight: weight, atLocation: pixel)
+                                normalImage.addPixel(
+                                        withColor: normalColor, withWeight: weight, atLocation: pixel)
                         }
                 }
         }
 
-        func add(value: RgbSpectrum, albedo: RgbSpectrum, normal: RgbSpectrum, weight: FloatX, location: Point2f,
-                image: inout Image, albedoImage: inout Image, normalImage: inout Image) {
+        func add(
+                value: RgbSpectrum, albedo: RgbSpectrum, normal: RgbSpectrum, weight: FloatX,
+                location: Point2f,
+                image: inout Image, albedoImage: inout Image, normalImage: inout Image
+        ) {
                 let bound = generateBound(location: location, radius: filter.support)
                 for x in bound.pMin.x...bound.pMax.x {
                         for y in bound.pMin.y...bound.pMax.y {
