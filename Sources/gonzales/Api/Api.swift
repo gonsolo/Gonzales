@@ -587,54 +587,6 @@ struct Api {
         }
 
         @MainActor
-        private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
-                print("Unknown material \"\(material)\". Creating default.")
-                var parameters = ParameterDictionary()
-                parameters["reflectance"] = [gray]
-                let diffuse = try createDiffuse(parameters: parameters)
-                return Material.diffuse(diffuse)
-        }
-
-        @MainActor
-        func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
-
-                var material: Material
-                switch type {
-                case "coateddiffuse":
-                        let coatedDiffuse = try createCoatedDiffuse(parameters: parameters)
-                        material = Material.coatedDiffuse(coatedDiffuse)
-                // coatedconductor missing
-                case "conductor":
-                        let conductor = try createConductor(parameters: parameters)
-                        material = Material.conductor(conductor)
-                case "dielectric":
-                        let dielectric = try createDielectric(parameters: parameters)
-                        material = Material.dielectric(dielectric)
-                case "diffuse":
-                        let diffuse = try createDiffuse(parameters: parameters)
-                        material = Material.diffuse(diffuse)
-                case "diffusetransmission":
-                        let diffuseTransmission = try createDiffuseTransmission(parameters: parameters)
-                        material = Material.diffuseTransmission(diffuseTransmission)
-                case "hair":
-                        let hair = try createHair(parameters: parameters)
-                        material = Material.hair(hair)
-                case "interface":
-                        let interface = try createInterface(parameters: parameters)
-                        material = Material.interface(interface)
-                case "measured":
-                        let measured = try createMeasured(parameters: parameters)
-                        material = Material.measured(measured)
-                // mix missing
-                // subsurface missing
-                // thindielectric missing
-                default:
-                        material = try makeDefaultMaterial(insteadOf: type)
-                }
-                return material
-        }
-
-        @MainActor
         private func makeShapes(
                 name: String,
                 objectToWorld: Transform,
