@@ -21,7 +21,7 @@ enum Material {
                         return .coatedDiffuseBsdf(bsdf)
                 case .conductor(let conductor):
                         let bsdf = conductor.getBsdf(interaction: interaction)
-                        return .microfaceReflection(bsdf)
+                        return .microfacetReflection(bsdf)
                 case .dielectric(let dielectric):
                         let bsdf = dielectric.getBsdf(interaction: interaction)
                         return .dielectricBsdf(bsdf)

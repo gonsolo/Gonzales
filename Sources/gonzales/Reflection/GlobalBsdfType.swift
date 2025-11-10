@@ -4,35 +4,39 @@ enum GlobalBsdfType: GlobalBsdf {
         case diffuseBsdf(DiffuseBsdf)
         case dummyBsdf(DummyBsdf)
         case hairBsdf(HairBsdf)
-        case microfaceReflection(MicrofacetReflection)
+        case microfacetReflection(MicrofacetReflection)
 
         func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
                 switch self {
-                case .diffuseBsdf(let bsdf):
-                        return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
                 case .dielectricBsdf(let bsdf):
                         return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
+                case .dummyBsdf(let bsdf):
+                        return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
                 case .hairBsdf(let bsdf):
                         return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
-                default:
-                        fatalError("Unhandled GlobalBsdfType case in evaluateWorld")
+                case .microfacetReflection(let bsdf):
+                        return bsdf.evaluateWorld(wo: woWorld, wi: wiWorld)
                 }
         }
 
         func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
                 switch self {
-                case .diffuseBsdf(let bsdf):
-                        return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
                 case .dielectricBsdf(let bsdf):
                         return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
+                case .dummyBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
                 case .hairBsdf(let bsdf):
                         return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
-                default:
-                        fatalError("Unhandled GlobalBsdfType case in probabilityDensityWorld")
+                case .microfacetReflection(let bsdf):
+                        return bsdf.probabilityDensityWorld(wo: woWorld, wi: wiWorld)
                 }
         }
 
@@ -40,60 +44,52 @@ enum GlobalBsdfType: GlobalBsdf {
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 switch self {
-
-                case .diffuseBsdf(let bsdf):
-                        return bsdf.sampleWorld(wo: woWorld, u: u)
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.sampleWorld(wo: woWorld, u: u)
                 case .dielectricBsdf(let bsdf):
                         return bsdf.sampleWorld(wo: woWorld, u: u)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.sampleWorld(wo: woWorld, u: u)
+                case .dummyBsdf(let bsdf):
+                        return bsdf.sampleWorld(wo: woWorld, u: u)
                 case .hairBsdf(let bsdf):
                         return bsdf.sampleWorld(wo: woWorld, u: u)
-                default:
-                        fatalError("Unhandled GlobalBsdfType case in sampleWorld")
+                case .microfacetReflection(let bsdf):
+                        return bsdf.sampleWorld(wo: woWorld, u: u)
                 }
         }
 
         func evaluateLocal(wo woLocal: Vector, wi wiLocal: Vector) -> RgbSpectrum {
                 switch self {
-                case .diffuseBsdf(let bsdf):
-                        return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
                 case .dielectricBsdf(let bsdf):
                         return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
+                case .dummyBsdf(let bsdf):
+                        return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
                 case .hairBsdf(let bsdf):
                         return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
-                default:
-                        fatalError("Unhandled GlobalBsdfType case in evaluateLocal")
+                case .microfacetReflection(let bsdf):
+                        return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
                 }
         }
 
         func albedo() -> RgbSpectrum {
                 switch self {
-                case .diffuseBsdf(let bsdf):
-                        return bsdf.albedo()
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.albedo()
                 case .dielectricBsdf(let bsdf):
                         return bsdf.albedo()
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.albedo()
+                case .dummyBsdf(let bsdf):
+                        return bsdf.albedo()
                 case .hairBsdf(let bsdf):
                         return bsdf.albedo()
-                default:
-                        fatalError("Unhandled GlobalBsdfType case in albedo(): \(self)")
-                }
-
-                func evaluateLocal(wo woLocal: Vector, wi wiLocal: Vector) -> RgbSpectrum {
-                        switch self {
-                        case .coatedDiffuseBsdf(let bsdf):
-                                return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
-                        case .dielectricBsdf(let bsdf):
-                                return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
-                        case .hairBsdf(let bsdf):
-                                return bsdf.evaluateLocal(wo: woLocal, wi: wiLocal)
-                        default:
-                                fatalError("Unhandled GlobalBsdfType case in evaluateLocal")
-                        }
+                case .microfacetReflection(let bsdf):
+                        return bsdf.albedo()
                 }
         }
 
@@ -103,12 +99,14 @@ enum GlobalBsdfType: GlobalBsdf {
                         return bsdf.bsdfFrame
                 case .dielectricBsdf(let bsdf):
                         return bsdf.bsdfFrame
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.bsdfFrame
+                case .dummyBsdf(let bsdf):
+                        return bsdf.bsdfFrame
                 case .hairBsdf(let bsdf):
                         return bsdf.bsdfFrame
-                // Ensure all cases are handled. You must add cases for ConductorBsdf, InterfaceBsdf, etc.
-                default:
-                        // Use a default frame or trap error if you must guarantee interaction data.
-                        fatalError("Unhandled GlobalBsdfType case when accessing bsdfFrame")
+                case .microfacetReflection(let bsdf):
+                        return bsdf.bsdfFrame
                 }
         }
 }

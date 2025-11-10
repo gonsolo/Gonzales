@@ -13,10 +13,10 @@ PTEXMEM = --ptexmem 1 # GB
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
-SCENE_NAME = cornell-box
-#SCENE_NAME = bathroom
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-SCENE = Scenes/cornell.pbrt
+#SCENE_NAME = cornell-box
+SCENE_NAME = bathroom
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#SCENE = Scenes/cornell.pbrt
 IMAGE =  $(SCENE_NAME).exr
 IMAGE_PBRT = $(IMAGE)
 
