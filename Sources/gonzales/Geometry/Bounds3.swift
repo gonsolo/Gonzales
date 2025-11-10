@@ -125,65 +125,65 @@ func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
 // This function must be visible to the code that calls min(t0_v, t1_v).
 @inline(__always)
 func min(_ lhs: Vector3, _ rhs: Vector3) -> Vector3 {
-    // Manually compare and select the minimum component for each axis.
-    // This assumes your Vector3 exposes x, y, z properties.
-    let minX = min(lhs.x, rhs.x)
-    let minY = min(lhs.y, rhs.y)
-    let minZ = min(lhs.z, rhs.z)
+        // Manually compare and select the minimum component for each axis.
+        // This assumes your Vector3 exposes x, y, z properties.
+        let minX = min(lhs.x, rhs.x)
+        let minY = min(lhs.y, rhs.y)
+        let minZ = min(lhs.z, rhs.z)
 
-    // Return a new Vector3 constructed from these three scalar minimums.
-    return Vector3(x: minX, y: minY, z: minZ)
+        // Return a new Vector3 constructed from these three scalar minimums.
+        return Vector3(x: minX, y: minY, z: minZ)
 }
 
 // You would implement max similarly:
 @inline(__always)
 func max(_ lhs: Vector3, _ rhs: Vector3) -> Vector3 {
-    let maxX = max(lhs.x, rhs.x)
-    let maxY = max(lhs.y, rhs.y)
-    let maxZ = max(lhs.z, rhs.z)
+        let maxX = max(lhs.x, rhs.x)
+        let maxY = max(lhs.y, rhs.y)
+        let maxZ = max(lhs.z, rhs.z)
 
-    return Vector3(x: maxX, y: maxY, z: maxZ)
+        return Vector3(x: maxX, y: maxY, z: maxZ)
 }
 
 extension Bounds3 {
 
         @inline(__always)
         func intersects(ray: Ray, tHit: FloatX) -> Bool {
-            // 1. Calculate intersection t-values for all 3 axes simultaneously (SIMD)
-            // t0_v = (pMin - ray.origin) * ray.inverseDirection
-            let t0_v = (pMin - ray.origin) * ray.inverseDirection
-            let t1_v = (pMax - ray.origin) * ray.inverseDirection
-        
-            // 2. Determine component-wise tNear and tFar (SIMD)
-            // The min/max operations on the vector handle the 'swap' logic branchlessly.
-            let tNear_v = min(t0_v, t1_v)
-            var tFar_v = max(t0_v, t1_v)
-        
-            // 3. Apply floating-point error correction (SIMD/Scalar)
-            // Ensure `gamma(n: 3)` is a highly optimized, constant-folding function.
-            let errorCorrection: FloatX = 1.0 + 2.0 * gamma(n: 3)
-            tFar_v *= errorCorrection
-        
-            // 4. Horizontal Reduction: Find the overall tNear and tFar (Scalar operations on SIMD components)
-            // The ray hits the box at the largest tNear and leaves at the smallest tFar.
-        
-            // Find tNear: Max of (tNear_v.x, tNear_v.y, tNear_v.z)
-            var tNear = max(tNear_v.x, tNear_v.y)
-            tNear = max(tNear, tNear_v.z) // This is the horizontal max reduction (max component)
-        
-            // Find tFar: Min of (tFar_v.x, tFar_v.y, tFar_v.z)
-            var tFar = min(tFar_v.x, tFar_v.y)
-            tFar = min(tFar, tFar_v.z) // This is the horizontal min reduction (min component)
-        
-            // 5. Final boundary checks (Scalar)
-            let t_start: FloatX = 0.0
-        
-            // Apply bounds: Max(tNear, 0) and Min(tFar, tHit)
-            tNear = max(tNear, t_start)
-            tFar = min(tFar, tHit)
-        
-            // Final check: does the near hit occur before the current best hit (tHit) and before the ray leaves the far plane?
-            return tNear <= tFar
+                // 1. Calculate intersection t-values for all 3 axes simultaneously (SIMD)
+                // t0_v = (pMin - ray.origin) * ray.inverseDirection
+                let t0_v = (pMin - ray.origin) * ray.inverseDirection
+                let t1_v = (pMax - ray.origin) * ray.inverseDirection
+
+                // 2. Determine component-wise tNear and tFar (SIMD)
+                // The min/max operations on the vector handle the 'swap' logic branchlessly.
+                let tNear_v = min(t0_v, t1_v)
+                var tFar_v = max(t0_v, t1_v)
+
+                // 3. Apply floating-point error correction (SIMD/Scalar)
+                // Ensure `gamma(n: 3)` is a highly optimized, constant-folding function.
+                let errorCorrection: FloatX = 1.0 + 2.0 * gamma(n: 3)
+                tFar_v *= errorCorrection
+
+                // 4. Horizontal Reduction: Find the overall tNear and tFar (Scalar operations on SIMD components)
+                // The ray hits the box at the largest tNear and leaves at the smallest tFar.
+
+                // Find tNear: Max of (tNear_v.x, tNear_v.y, tNear_v.z)
+                var tNear = max(tNear_v.x, tNear_v.y)
+                tNear = max(tNear, tNear_v.z)  // This is the horizontal max reduction (max component)
+
+                // Find tFar: Min of (tFar_v.x, tFar_v.y, tFar_v.z)
+                var tFar = min(tFar_v.x, tFar_v.y)
+                tFar = min(tFar, tFar_v.z)  // This is the horizontal min reduction (min component)
+
+                // 5. Final boundary checks (Scalar)
+                let t_start: FloatX = 0.0
+
+                // Apply bounds: Max(tNear, 0) and Min(tFar, tHit)
+                tNear = max(tNear, t_start)
+                tFar = min(tFar, tHit)
+
+                // Final check: does the near hit occur before the current best hit (tHit) and before the ray leaves the far plane?
+                return tNear <= tFar
         }
 
         static func statistics() {

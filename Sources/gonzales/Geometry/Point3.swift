@@ -96,6 +96,3 @@ func permute(point: Point3, x: Int, y: Int, z: Int) -> Point3 {
 public typealias Point = Point3
 
 let origin = Point()
-
-
-

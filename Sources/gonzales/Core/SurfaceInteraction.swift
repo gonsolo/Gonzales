@@ -1,6 +1,7 @@
 protocol DistributionModel {
         func evaluateDistributionFunction(wo: Vector, wi: Vector, normal: Normal) -> RgbSpectrum
-        func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout RandomSampler) -> BsdfSample
+        func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout RandomSampler)
+                -> BsdfSample
         func evaluateProbabilityDensity(wo: Vector, wi: Vector) -> FloatX
 }
 
