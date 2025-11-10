@@ -104,7 +104,7 @@ ifeq ($(OS), Darwin)
 	BUILD_RELEASE = xcodebuild -configuration Release -scheme gonzales -destination 'platform=OS X,arch=x86_64' build
 else
 	VIEWER 			= loupe
-	PBRT 			= ~/bin/pbrt
+	PBRT 			= ~/src/pbrt-v4/gonsolo/pbrt
 	#LLDB 			= /usr/libexec/swift/bin/lldb
 	LLDB 			= lldb
 	ifeq ($(HOSTNAME), Limone)
@@ -288,3 +288,7 @@ lldb:
 
 heaptrack:
 	heaptrack $(GONZALES_RELEASE) $(SCENE)
+
+perfetto:
+	perf script > gonzales.perf.script
+	python open_trace_in_ui -i gonzales.perf.script
