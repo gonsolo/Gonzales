@@ -6,7 +6,6 @@ struct TileRenderer: Renderer {
                 camera: PerspectiveCamera,
                 integrator: VolumePathIntegrator,
                 sampler: RandomSampler,
-                //scene: Scene,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int)
         ) async {

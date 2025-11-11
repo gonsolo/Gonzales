@@ -15,7 +15,8 @@ struct Tile: Sendable {
                 var samples = [Sample]()
                 for pixel in bounds {
                         for _ in 0..<sampler.samplesPerPixel {
-                                let cameraSample = sampler.getCameraSample(pixel: pixel)
+                                let cameraSample = sampler.getCameraSample(
+                                        pixel: pixel, filter: camera.film.filter)
                                 let ray = camera.generateRay(cameraSample: cameraSample)
                                 var tHit: FloatX = Float.infinity
                                 let radianceAlbedoNormal = try integrator.getRadianceAndAlbedo(
@@ -28,13 +29,20 @@ struct Tile: Sendable {
                                 let radiance = radianceAlbedoNormal.0
                                 let albedo = radianceAlbedoNormal.1
                                 let normal = radianceAlbedoNormal.2
-                                let rayWeight: FloatX = 1.0
+
+                                let dx = cameraSample.film.0 - (FloatX(pixel.x) + 0.5)
+                                let dy = cameraSample.film.1 - (FloatX(pixel.y) + 0.5)
+                                let filterLocation = Point2f(x: dx, y: dy)
+                                let filterValue = camera.film.filter.evaluate(atLocation: filterLocation)
+                                let rayWeight = filterValue / cameraSample.filterWeight
+
                                 let sample = Sample(
                                         light: radiance,
                                         albedo: albedo,
                                         normal: normal,
                                         weight: rayWeight,
-                                        location: Point2f(x: cameraSample.film.0, y: cameraSample.film.1))
+                                        location: Point2f(x: cameraSample.film.0, y: cameraSample.film.1),
+                                        pixel: pixel)
                                 samples.append(sample)
 
                         }

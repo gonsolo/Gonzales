@@ -4,4 +4,5 @@ struct Sample {
         var normal: Normal
         var weight: FloatX
         var location: Point2f
+        var pixel: Point2i
 }

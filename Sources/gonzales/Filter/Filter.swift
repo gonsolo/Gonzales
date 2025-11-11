@@ -4,5 +4,12 @@ protocol Filter: Sendable {
 
         func evaluate(atLocation: Point2f) -> FloatX
 
+        func sample(u: (FloatX, FloatX)) -> FilterSample
+
         var support: Vector2F { get }
+}
+
+struct FilterSample {
+        let location: Point2f
+        let probabilityDensity: FloatX
 }

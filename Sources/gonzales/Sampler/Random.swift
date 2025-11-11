@@ -1,11 +1,23 @@
 struct RandomSampler {
-        mutating func getCameraSample(pixel: Point2i) -> CameraSample {
+
+        mutating func getCameraSample(pixel: Point2i, filter: Filter) -> CameraSample {
+                let ux = get1D()
+                let uy = get1D()
+
+                let filterSample: FilterSample = filter.sample(u: (ux, uy))
+
+                let dx = filterSample.location.x
+                let dy = filterSample.location.y
+
                 return CameraSample(
                         film: (
-                                FloatX(pixel.x) + get1D(),
-                                FloatX(pixel.y) + get1D()
+                                FloatX(pixel.x) + 0.5 + dx,
+                                FloatX(pixel.y) + 0.5 + dy
                         ),
-                        lens: get2D())
+                        lens: get2D(),
+                        filterWeight: filterSample.probabilityDensity
+                )
+
         }
 
         init(numberOfSamples: Int = 1) {
@@ -18,7 +30,6 @@ struct RandomSampler {
 
         mutating func get1D() -> RandomVariable {
                 return FloatX.random(in: 0..<1, using: &xoshiro)
-                //return FloatX.random(in: 0..<1)
         }
 
         mutating func get2D() -> TwoRandomVariables {

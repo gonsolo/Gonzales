@@ -12,9 +12,6 @@ struct Film {
 
                 self.name = name
                 self.resolution = resolution
-                //self.image = Image(resolution: resolution)
-                //self.albedoImage = Image(resolution: resolution)
-                //self.normalImage = Image(resolution: resolution)
                 self.fileName = fileName
                 self.filter = filter
                 self.crop = Bounds2i(
@@ -67,28 +64,11 @@ struct Film {
                                 normal: RgbSpectrum(from: sample.normal),
                                 weight: sample.weight,
                                 location: sample.location,
+                                pixel: sample.pixel,
                                 image: &image,
                                 albedoImage: &albedoImage,
                                 normalImage: &normalImage)
                 }
-        }
-
-        private func getRasterBound(from location: FloatX, delta: FloatX) -> Int {
-                return Int((location + delta).rounded(.towardZero))
-        }
-
-        private func getRasterBounds(from location: FloatX, delta: FloatX) -> (Int, Int) {
-                let min = getRasterBound(from: location, delta: -delta)
-                let max = getRasterBound(from: location, delta: +delta)
-                return (min, max)
-        }
-
-        private func generateBound(location: Point2f, radius: Vector2F) -> Bounds2i {
-                let (xmin, xmax) = getRasterBounds(from: location.x, delta: radius.x)
-                let (ymin, ymax) = getRasterBounds(from: location.y, delta: radius.y)
-                let pMin = Point2i(x: xmin, y: ymin)
-                let pMax = Point2i(x: xmax, y: ymax)
-                return Bounds2i(pMin: pMin, pMax: pMax)
         }
 
         private func isWithin<Point: GetIntXY>(location: Point, resolution: Point)
@@ -104,56 +84,15 @@ struct Film {
                 return abs(location.x) < support.x && abs(location.y) < support.y
         }
 
-        func filterAndWrite(
-                sample: Point2f,
-                pixel: Point2i,
-                value: RgbSpectrum,
-                albedo: RgbSpectrum,
-                normal: RgbSpectrum,
-                weight: FloatX,
-                image: inout Image,
-                albedoImage: inout Image,
-                normalImage: inout Image
-        ) {
-                if isWithin(location: pixel, resolution: image.getResolution()) {
-                        let pixelCenter = Point2f(
-                                x: FloatX(pixel.x) + 0.5,
-                                y: FloatX(pixel.y) + 0.5)
-                        let relativeLocation = Point2f(from: sample - pixelCenter)
-                        if isWithin(location: relativeLocation, support: filter.support) {
-                                let color = filter.evaluate(atLocation: relativeLocation) * value
-                                let albedoColor = filter.evaluate(atLocation: relativeLocation) * albedo
-                                let normalColor = filter.evaluate(atLocation: relativeLocation) * normal
-                                let weight = filter.evaluate(atLocation: relativeLocation) * weight
-                                image.addPixel(withColor: color, withWeight: weight, atLocation: pixel)
-                                albedoImage.addPixel(
-                                        withColor: albedoColor, withWeight: weight, atLocation: pixel)
-                                normalImage.addPixel(
-                                        withColor: normalColor, withWeight: weight, atLocation: pixel)
-                        }
-                }
-        }
-
         func add(
                 value: RgbSpectrum, albedo: RgbSpectrum, normal: RgbSpectrum, weight: FloatX,
-                location: Point2f,
+                location: Point2f, pixel: Point2i,
                 image: inout Image, albedoImage: inout Image, normalImage: inout Image
         ) {
-                let bound = generateBound(location: location, radius: filter.support)
-                for x in bound.pMin.x...bound.pMax.x {
-                        for y in bound.pMin.y...bound.pMax.y {
-                                let pixelLocation = Point2i(x: x, y: y)
-                                filterAndWrite(
-                                        sample: location,
-                                        pixel: pixelLocation,
-                                        value: value,
-                                        albedo: albedo,
-                                        normal: normal,
-                                        weight: weight,
-                                        image: &image,
-                                        albedoImage: &albedoImage,
-                                        normalImage: &normalImage)
-                        }
+                if isWithin(location: pixel, resolution: image.getResolution()) {
+                        image.addPixel(withColor: value, withWeight: weight, atLocation: pixel)
+                        albedoImage.addPixel(withColor: albedo, withWeight: weight, atLocation: pixel)
+                        normalImage.addPixel(withColor: normal, withWeight: weight, atLocation: pixel)
                 }
         }
 
@@ -164,9 +103,6 @@ struct Film {
         private let name: String
         private let fileName: String
         let filter: any Filter
-        //var image: Image
-        //var albedoImage: Image
-        //var normalImage: Image
         let resolution: Point2i
         var crop: Bounds2i
 }
