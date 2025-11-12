@@ -75,7 +75,7 @@ struct TileRenderer: Renderer {
                         for try await samples in group {
                                 allSamples.append(contentsOf: samples)
                         }
-                        try self.camera.film.writeImages(samples: allSamples)
+                        try await self.camera.film.writeImages(samples: allSamples)
                 }
         }
 
