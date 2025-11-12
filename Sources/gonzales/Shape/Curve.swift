@@ -355,7 +355,7 @@ struct Curve: Shape {
                 fatalError("Not implemented")
         }
 
-        func sample<I: Interaction>(u: TwoFloats, scene: Scene) -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(samples: TwoFloats, scene: Scene) -> (interaction: I, pdf: FloatX) {
                 fatalError("Not implemented")
         }
 

@@ -7,7 +7,7 @@ struct DistantLight {
                 self.direction = normalized(lightToWorld * direction)
         }
 
-        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator) -> (
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> (
                 radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
         ) {
                 let outside = point + direction * 2 * worldRadius

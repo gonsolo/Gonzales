@@ -16,14 +16,14 @@ struct InfiniteLight {
                 self.texture = texture
         }
 
-        func sample(point: Point, u: TwoRandomVariables, accelerator: Accelerator) -> (
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> (
                 radiance: RgbSpectrum,
                 direction: Vector,
                 pdf: FloatX,
                 visibility: Visibility
         ) {
-                let theta = u.1 * FloatX.pi
-                let phi = u.0 * 2 * FloatX.pi
+                let theta = samples.1 * FloatX.pi
+                let phi = samples.0 * 2 * FloatX.pi
                 let lightDirection = Vector(
                         x: sin(theta) * cos(phi),
                         y: sin(theta) * sin(phi),

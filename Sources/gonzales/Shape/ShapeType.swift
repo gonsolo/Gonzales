@@ -128,33 +128,33 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(u: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.sample(u: u, scene: scene)
+                        return triangle.sample(samples: samples, scene: scene)
                 case .sphere(let sphere):
-                        return sphere.sample(u: u, scene: scene)
+                        return sphere.sample(samples: samples, scene: scene)
                 case .disk(let disk):
-                        return disk.sample(u: u, scene: scene)
+                        return disk.sample(samples: samples, scene: scene)
                 case .curve(let curve):
-                        return curve.sample(u: u, scene: scene)
+                        return curve.sample(samples: samples, scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.sample(u: u, scene: scene)
+                        return embreeCurve.sample(samples: samples, scene: scene)
                 }
         }
 
-        func sample(point: Point, u: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX) {
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX) {
                 switch self {
                 case .triangle(let triangle):
-                        return triangle.sample(point: point, u: u, scene: scene)
+                        return triangle.sample(point: point, samples: samples, scene: scene)
                 case .sphere(let sphere):
-                        return sphere.sample(point: point, u: u, scene: scene)
+                        return sphere.sample(point: point, samples: samples, scene: scene)
                 case .disk(let disk):
-                        return disk.sample(point: point, u: u, scene: scene)
+                        return disk.sample(point: point, samples: samples, scene: scene)
                 case .curve(let curve):
-                        return curve.sample(point: point, u: u, scene: scene)
+                        return curve.sample(point: point, samples: samples, scene: scene)
                 case .embreeCurve(let embreeCurve):
-                        return embreeCurve.sample(point: point, u: u, scene: scene)
+                        return embreeCurve.sample(point: point, samples: samples, scene: scene)
                 }
         }
 

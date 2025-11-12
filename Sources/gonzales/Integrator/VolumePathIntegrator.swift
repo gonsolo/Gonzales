@@ -57,7 +57,7 @@ struct VolumePathIntegrator {
                 scene: Scene
         ) throws -> BsdfSample {
                 let (radiance, wi, lightDensity, visibility) = light.sample(
-                        point: interaction.position, u: sampler.get2D(), accelerator: accelerator,
+                        point: interaction.position, samples: sampler.get2D(), accelerator: accelerator,
                         scene: scene)
                 guard !radiance.isBlack && !lightDensity.isInfinite else {
                         return invalidBsdfSample

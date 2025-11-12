@@ -595,9 +595,9 @@ struct Triangle: Shape {
                 return (p0, p1, p2)
         }
 
-        private func uniformSampleTriangle(u: TwoRandomVariables) -> Point2f {
-                let su0 = u.0.squareRoot()
-                return Point2f(x: 1 - su0, y: u.1 * su0)
+        private func uniformSampleTriangle(samples: TwoRandomVariables) -> Point2f {
+                let su0 = samples.0.squareRoot()
+                return Point2f(x: 1 - su0, y: samples.1 * su0)
         }
 
         func area(scene: Scene) -> FloatX {
@@ -605,8 +605,8 @@ struct Triangle: Shape {
                 return 0.5 * length(cross(Vector(vector: (p1 - p0)), p2 - p0))
         }
 
-        func sample(u: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
-                let b = uniformSampleTriangle(u: u)
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+                let b = uniformSampleTriangle(samples: samples)
                 let (p0, p1, p2) = getLocalPoints(scene: scene)
                 let sampled0: Point = b[0] * p0
                 let sampled1: Point = b[1] * p1

@@ -23,17 +23,17 @@ struct Sphere: Shape {
                 return Bounds3f(first: p0, second: p1)
         }
 
-        func uniformSampleSphere(u: TwoRandomVariables) -> Point {
+        func uniformSampleSphere(samples: TwoRandomVariables) -> Point {
 
-                let z = 1 - 2 * u.0
+                let z = 1 - 2 * samples.0
                 let r = max(0, 1 - z * z).squareRoot()
-                let phi = 2 * FloatX.pi * u.1
+                let phi = 2 * FloatX.pi * samples.1
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
 
-        func sample(u: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
 
-                let localPosition = radius * uniformSampleSphere(u: u)
+                let localPosition = radius * uniformSampleSphere(samples: samples)
                 let worldNormal = normalized(objectToWorld * Normal(point: localPosition))
                 let worldPosition = objectToWorld * localPosition
                 let interaction = SurfaceInteraction(position: worldPosition, normal: worldNormal)
@@ -41,12 +41,12 @@ struct Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func sample(ref: any Interaction, u: TwoRandomVariables, scene: Scene)
+        func sample(ref: any Interaction, samples: TwoRandomVariables, scene: Scene)
                 -> (interaction: any Interaction, pdf: FloatX)
         {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
-                        var (interaction, pdf) = sample(u: u, scene: scene)
+                        var (interaction, pdf) = sample(samples: samples, scene: scene)
                         var wi: Vector = interaction.position - ref.position
                         if lengthSquared(wi) == 0 {
                                 pdf = 0
@@ -54,7 +54,6 @@ struct Sphere: Shape {
                                 wi = normalized(wi)
                                 pdf *=
                                         distanceSquared(ref.position, interaction.position)
-                                        //absDot(interaction.normal, Normal(vector: -wi))
                                         / absDot(interaction.normal, Normal(-wi))
                         }
                         if pdf.isInfinite { pdf = 0 }
@@ -68,17 +67,17 @@ struct Sphere: Shape {
                 let sinThetaMax2 = sinThetaMax * sinThetaMax
                 let invSinThetaMax = 1 / sinThetaMax
                 let cosThetaMax = max(0, 1 - sinThetaMax2).squareRoot()
-                var cosTheta = (cosThetaMax - 1) * u.0 + 1
+                var cosTheta = (cosThetaMax - 1) * samples.0 + 1
                 var sinTheta2 = 1 - cosTheta * cosTheta
                 if sinThetaMax2 < 0.00068523 {
-                        sinTheta2 = sinThetaMax2 * u.0
+                        sinTheta2 = sinThetaMax2 * samples.0
                         cosTheta = (1 - sinTheta2).squareRoot()
                 }
                 let cosAlpha =
                         sinTheta2 * invSinThetaMax + cosTheta
                         * (max(0, 1 - sinTheta2 * invSinThetaMax * invSinThetaMax)).squareRoot()
                 let sinAlpha = max(0, 1 - cosAlpha * cosAlpha).squareRoot()
-                let phi = u.1 * 2 * FloatX.pi
+                let phi = samples.1 * 2 * FloatX.pi
                 let worldNormal = Normal(
                         sphericalDirection(
                                 sinTheta: sinAlpha,
