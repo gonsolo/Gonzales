@@ -290,8 +290,9 @@ lldb:
 heaptrack:
 	heaptrack $(GONZALES_RELEASE) $(SCENE)
 
-gonzales.perf.script: perf.data
-	perf script > gonzales.perf.script
-
-perfetto: gonzales.perf.script
-	python open_trace_in_ui -i $^
+gonzales.perfscript: perf.data
+	perf script > gonzales.perfscript
+open_trace_in_ui:
+	curl -OL https://github.com/google/perfetto/raw/main/tools/open_trace_in_ui
+perfetto: gonzales.perfscript open_trace_in_ui
+	python open_trace_in_ui -i $<
