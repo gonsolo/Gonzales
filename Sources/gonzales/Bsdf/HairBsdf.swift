@@ -299,12 +299,6 @@ struct HairBsdf: GlobalBsdf {
                 return (FloatX(bits.0) / FloatX(1 << 16), FloatX(bits.1) / FloatX(1 << 16))
         }
 
-        private func demux(_ u: Point2f) -> (FloatX, FloatX, FloatX, FloatX) {
-                let a = demux(u[0])
-                let b = demux(u[1])
-                return (a.0, a.1, b.0, b.1)
-        }
-
         private func sampleTrimmedLogistic(u: FloatX, s: FloatX, a: FloatX, b: FloatX) -> FloatX {
                 let k = logisticCDF(b, s) - logisticCDF(a, s)
                 let x = -s * log(1 / (u * k + logisticCDF(a, s)) - 1)
