@@ -12,7 +12,9 @@ enum CurveError: Error {
 
 typealias TwoPoints = (Point, Point)
 typealias ThreePoints = (Point, Point, Point)
+// swiftlint:disable:next large_tuple
 typealias FourPoints = (Point, Point, Point, Point)
+// swiftlint:disable:next large_tuple
 typealias SevenPoints = (Point, Point, Point, Point, Point, Point, Point)
 
 typealias TwoFloats = (FloatX, FloatX)

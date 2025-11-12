@@ -167,7 +167,8 @@ struct TriangleIntersectionFull {
 }
 
 struct Triangle: Shape {
-        typealias IntersectionData = TriangleIntersection
+        let meshIndex: Int
+        let idx: Int
 
         init(
                 meshIndex: Int,
@@ -189,6 +190,9 @@ struct Triangle: Shape {
                 }
         }
 
+}
+
+extension Triangle {
         static func formatHuman(_ number: Int) -> String {
                 if number > 1024 * 1024 {
                         return String(format: "%.1f", Double(number) / 1024.0 / 1024.0) + "MB"
@@ -634,9 +638,6 @@ struct Triangle: Shape {
         func getObjectToWorld(scene: Scene) -> Transform {
                 return getTriangleMeshes(scene: scene).getObjectToWorldFor(meshIndex: meshIndex)
         }
-
-        let meshIndex: Int
-        let idx: Int
 }
 
 @MainActor
