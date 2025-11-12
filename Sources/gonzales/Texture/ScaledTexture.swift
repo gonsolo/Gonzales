@@ -1,6 +1,6 @@
-//import Foundation
+// import Foundation
 //
-//struct ScaledTexture {
+// struct ScaledTexture {
 //
 //        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
 //                guard let scale = scale.evaluate(at: interaction) as? FloatX else {
@@ -14,4 +14,4 @@
 //
 //        let scale: Texture
 //        let texture: Texture
-//}
+// }

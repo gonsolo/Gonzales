@@ -6,15 +6,15 @@ func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable]) 
         case "bvh":
                 let builder = await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
-                //let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
+                // let accelerator = Accelerator.boundingHierarchy(boundingHierarchy)
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
                 return accelerator
-        //case "embree":
+        // case "embree":
         //        let builder = await EmbreeBuilder(primitives: primitives)
         //        let embree = builder.getAccelerator()
         //        let accelerator = Accelerator.embree(embree)
         //        return accelerator
-        //case "optix":
+        // case "optix":
         //        let optix = try Optix(primitives: primitives)
         //        let accelerator = Accelerator.optix(optix)
         //        return accelerator
@@ -100,7 +100,7 @@ extension Api {
         }
 
         @MainActor
-        func camera(name: String, parameters: ParameterDictionary) throws {
+        func camera(name _: String, parameters: ParameterDictionary) throws {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
                 options.cameraToWorld = currentTransform.inverse
@@ -182,7 +182,7 @@ extension Api {
         }
 
         @MainActor
-        func accelerator(name: String, parameters: ParameterDictionary) throws {
+        func accelerator(name: String, parameters _: ParameterDictionary) throws {
                 switch name {
                 case "bvh":
                         acceleratorName = "bvh"
@@ -277,23 +277,23 @@ extension Api {
         }
 
         @MainActor
-        func objectInstance(name: String) async throws {
+        func objectInstance(name _: String) async throws {
                 unimplemented()
-                //guard var primitives = options.objects[name] else {
+                // guard var primitives = options.objects[name] else {
                 //        return
-                //}
-                //if primitives.isEmpty {
+                // }
+                // if primitives.isEmpty {
                 //        return
-                //}
-                //let accelerator = try await makeAccelerator(scene: accessToSceneNeeded, primitives: primitives)
-                //primitives.removeAll()
-                //options.objects[name] = [accelerator]
-                //let instance = TransformedPrimitive(
+                // }
+                // let accelerator = try await makeAccelerator(scene: accessToSceneNeeded, primitives: primitives)
+                // primitives.removeAll()
+                // options.objects[name] = [accelerator]
+                // let instance = TransformedPrimitive(
                 //        accelerator: accelerator,
                 //        transform: currentTransform,
                 //        idx: transformedPrimitives.count)
-                //options.primitives.append(instance)
-                //transformedPrimitives.append(instance)
+                // options.primitives.append(instance)
+                // transformedPrimitives.append(instance)
         }
 
         @MainActor
@@ -440,8 +440,7 @@ extension Api {
                 textureClass: String,
                 parameters: ParameterDictionary
         )
-                throws
-        {
+                throws {
                 guard type == "spectrum" || type == "float" || type == "color" else {
                         warning("Unimplemented texture type: \(type)")
                         return
@@ -451,17 +450,17 @@ extension Api {
                 // bilerp missing
                 case "checkerboard":
                         unimplemented()
-                //let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
-                //let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
-                //let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
-                //let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
-                //let textures = (textureEven, textureOdd)
-                //let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
-                //let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
-                //let scale = (uscale, vscale)
-                //let checkerboard = Checkerboard(textures: textures, scale: scale)
-                //let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
-                //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                // let rgbSpectrumTextureEven = try parameters.findRgbSpectrumTexture(name: "tex1")
+                // let textureEven = Texture.rgbSpectrumTexture(rgbSpectrumTextureEven)
+                // let rgbSpectrumTextureOdd = try parameters.findRgbSpectrumTexture(name: "tex2")
+                // let textureOdd = Texture.rgbSpectrumTexture(rgbSpectrumTextureOdd)
+                // let textures = (textureEven, textureOdd)
+                // let uscale = try parameters.findOneFloatX(called: "uscale", else: 1)
+                // let vscale = try parameters.findOneFloatX(called: "vscale", else: 1)
+                // let scale = (uscale, vscale)
+                // let checkerboard = Checkerboard(textures: textures, scale: scale)
+                // let rgbSpectrumTexture = RgbSpectrumTexture.checkerboard(checkerboard)
+                // texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 case "constant":
                         switch type {
                         case "spectrum", "color":
@@ -484,21 +483,21 @@ extension Api {
                         switch type {
                         case "color", "spectrum":
                                 unimplemented()
-                        //let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
-                        //let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
-                        //let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                        //let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
+                        // let tex1 = try parameters.findRgbSpectrumTexture(name: "tex1")
+                        // let tex2 = try parameters.findRgbSpectrumTexture(name: "tex2")
+                        // let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                        // let rgbSpectrumMixTexture = RgbSpectrumMixTexture(
                         //        textures: (tex1, tex2), amount: amount)
-                        //let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
+                        // let rgbSpectrumTexture = RgbSpectrumTexture.rgbSpectrumMixTexture(
                         //        rgbSpectrumMixTexture)
-                        //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                        // texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
-                                //let tex1 = try parameters.findFloatXTexture(name: "tex1")
-                                //let tex2 = try parameters.findFloatXTexture(name: "tex2")
-                                //let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
-                                //let floatMixTexture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
-                                //let floatTexture = FloatTexture.floatMixTexture(floatMixTexture)
-                                //texture = Texture.floatTexture(floatTexture)
+                                // let tex1 = try parameters.findFloatXTexture(name: "tex1")
+                                // let tex2 = try parameters.findFloatXTexture(name: "tex2")
+                                // let amount = try parameters.findOneFloatX(called: "amount", else: 0.5)
+                                // let floatMixTexture = FloatMixTexture(textures: (tex1, tex2), amount: amount)
+                                // let floatTexture = FloatTexture.floatMixTexture(floatMixTexture)
+                                // texture = Texture.floatTexture(floatTexture)
                                 unimplemented()
                         default:
                                 unimplemented()
@@ -508,13 +507,13 @@ extension Api {
                         texture = try getTextureFrom(name: fileName, type: type)
                 case "scale":
                         unimplemented()
-                //let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
-                //let scale = Texture.floatTexture(scaleFloatTexture)
-                //let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
-                //let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
-                //let scaledTexture = ScaledTexture(scale: scale, texture: tex)
-                //let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
-                //texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                // let scaleFloatTexture = try parameters.findFloatXTexture(name: "scale")
+                // let scale = Texture.floatTexture(scaleFloatTexture)
+                // let texRgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "tex")
+                // let tex = Texture.rgbSpectrumTexture(texRgbSpectrumTexture)
+                // let scaledTexture = ScaledTexture(scale: scale, texture: tex)
+                // let rgbSpectrumTexture = RgbSpectrumTexture.scaledTexture(scaledTexture)
+                // texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                 // windy missing
                 // wrinkled missing
                 default:
@@ -567,8 +566,7 @@ extension Api {
                 parameters: ParameterDictionary,
                 lightToWorld: Transform
         )
-                throws -> Light
-        {
+                throws -> Light {
                 switch name {
                 case "distant":
                         let distantLight = try createDistantLight(
@@ -579,7 +577,7 @@ extension Api {
                         let infiniteLight = try createInfiniteLight(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
-                        //immortalize(infiniteLight)
+                        // immortalize(infiniteLight)
                         return Light.infinite(infiniteLight)
                 case "point":
                         let pointLight = try createPointLight(
@@ -597,8 +595,7 @@ extension Api {
                 objectToWorld: Transform,
                 parameters: ParameterDictionary
         )
-                throws -> [ShapeType]
-        {
+                throws -> [ShapeType] {
                 switch name {
                 case "bilinearmesh":
                         return []  // Ignore for now

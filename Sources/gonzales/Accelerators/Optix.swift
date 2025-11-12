@@ -1,8 +1,8 @@
-//import Foundation
-//import cuda
-//import cudaBridge
+// import Foundation
+// import cuda
+// import cudaBridge
 //
-//extension vec3f {
+// extension vec3f {
 //        init(point: Point) {
 //                self.init(point.x, point.y, point.z)
 //        }
@@ -10,9 +10,9 @@
 //        init(vector: Vector) {
 //                self.init(vector.x, vector.y, vector.z)
 //        }
-//}
+// }
 //
-//class Optix {
+// class Optix {
 //
 //        init(primitives: [Boundable & Intersectable]) throws {
 //                try add(primitives: primitives)
@@ -198,4 +198,4 @@
 //        var triangleCount = 0
 //        var materials = [Int: MaterialIndex]()
 //        var areaLights = [Int: AreaLight]()
-//}
+// }

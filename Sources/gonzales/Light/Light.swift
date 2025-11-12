@@ -8,8 +8,7 @@ enum Light: Sendable {
         case point(PointLight)
 
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
-                -> LightSample
-        {
+                -> LightSample {
                 switch self {
                 case .area(let areaLight):
                         return areaLight.sample(
@@ -26,8 +25,7 @@ enum Light: Sendable {
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
-                throws -> FloatX
-        {
+                throws -> FloatX {
                 switch self {
                 case .area(let areaLight):
                         return try areaLight.probabilityDensityFor(

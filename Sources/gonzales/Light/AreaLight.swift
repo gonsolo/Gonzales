@@ -10,14 +10,12 @@ struct AreaLight: Boundable, Intersectable {
         }
 
         func emittedRadiance(from interaction: any Interaction, inDirection direction: Vector)
-                -> RgbSpectrum
-        {
+                -> RgbSpectrum {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
-                -> LightSample
-        {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene: Scene)
+                -> LightSample {
                 let (shapeInteraction, pdf) = shape.sample(point: point, samples: samples, scene: scene)
                 let direction: Vector = normalized(shapeInteraction.position - point)
                 assert(!direction.isNaN)
@@ -31,13 +29,12 @@ struct AreaLight: Boundable, Intersectable {
                 samplingDirection direction: Vector,
                 from reference: I
         )
-                throws -> FloatX
-        {
+                throws -> FloatX {
                 return try shape.probabilityDensityFor(
                         scene: scene, samplingDirection: direction, from: reference)
         }
 
-        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum { return black }
+        func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
         func power(scene: Scene) -> FloatX {
                 return brightness.average() * shape.area(scene: scene) * FloatX.pi

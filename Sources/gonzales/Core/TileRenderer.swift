@@ -82,9 +82,9 @@ struct TileRenderer: Renderer {
         @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
-                //await reporter.reset()
+                // await reporter.reset()
                 try await renderImage(bounds: bounds)
-                //try await camera.film.writeImages()
+                // try await camera.film.writeImages()
                 print("\n")
                 print(timer.elapsed)
                 fflush(stdout)

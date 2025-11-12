@@ -101,14 +101,14 @@ struct State {
         var areaLight = ""
         var areaLightParameters = ParameterDictionary()
 
-        var currentMediumInterface: MediumInterface? = nil
+        var currentMediumInterface: MediumInterface?
         var currentNamedMaterial: String
         var currentMaterial: UninstancedMaterial?
 
         var namedMaterials: [String: UninstancedMaterial]
         var namedMedia: [String: any Medium]
 
-        var objectName: String? = nil
+        var objectName: String?
 
         var textures: [String: Texture]
 

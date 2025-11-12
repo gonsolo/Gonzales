@@ -12,6 +12,6 @@ struct Measured {
         }
 }
 
-func createMeasured(parameters: ParameterDictionary) throws -> Measured {
+func createMeasured(parameters _: ParameterDictionary) throws -> Measured {
         return Measured()
 }

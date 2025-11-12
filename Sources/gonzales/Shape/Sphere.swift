@@ -15,7 +15,7 @@ struct Sphere: Shape {
                 return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) -> Bounds3f {
+        func objectBound(scene _: Scene) -> Bounds3f {
 
                 let p0 = Point(x: -radius, y: -radius, z: -radius)
                 let p1 = Point(x: +radius, y: +radius, z: +radius)
@@ -31,7 +31,7 @@ struct Sphere: Shape {
                 return Point(x: r * cos(phi), y: r * sin(phi), z: z)
         }
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(samples: TwoRandomVariables, scene _: Scene) -> (
                 interaction: SurfaceInteraction, pdf: FloatX
         ) {
 
@@ -44,8 +44,7 @@ struct Sphere: Shape {
         }
 
         func sample(ref: any Interaction, samples: TwoRandomVariables, scene: Scene)
-                -> (interaction: any Interaction, pdf: FloatX)
-        {
+                -> (interaction: any Interaction, pdf: FloatX) {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
                         var (interaction, pdf) = sample(samples: samples, scene: scene)
@@ -94,7 +93,7 @@ struct Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func area(scene: Scene) -> FloatX {
+        func area(scene _: Scene) -> FloatX {
                 return 4 * FloatX.pi * radius * radius
         }
 
@@ -115,9 +114,9 @@ struct Sphere: Shape {
         }
 
         func intersect(
-                scene: Scene,
-                ray worldRay: Ray,
-                tHit: inout FloatX
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX
         ) throws -> Bool {
                 unimplemented()
         }
@@ -128,7 +127,7 @@ struct Sphere: Shape {
                 tHit: inout FloatX,
                 interaction: inout SurfaceInteraction
         ) throws {
-                let empty = { (line: Int) in
+                let empty = { (_: Int) in
                         return
                 }
 
@@ -177,7 +176,7 @@ struct Sphere: Shape {
                 tHit = shapeHit
         }
 
-        func getObjectToWorld(scene: Scene) -> Transform {
+        func getObjectToWorld(scene _: Scene) -> Transform {
                 return objectToWorld
         }
 

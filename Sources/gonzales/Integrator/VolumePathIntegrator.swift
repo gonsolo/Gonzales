@@ -19,7 +19,7 @@ struct VolumePathIntegrator {
 extension VolumePathIntegrator {
 
         private func brdfDensity<D: DistributionModel>(
-                light: Light,
+                light _: Light,
                 wo: Vector,
                 distributionModel: D,
                 sample: Vector
@@ -28,12 +28,11 @@ extension VolumePathIntegrator {
         }
 
         private func chooseLight(
-                sampler: RandomSampler,
+                sampler _: RandomSampler,
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws
-                -> (Light, FloatX)
-        {
+                -> (Light, FloatX) {
                 return lightSampler.chooseLight(scene: scene)
         }
 
@@ -80,7 +79,7 @@ extension VolumePathIntegrator {
         }
 
         private func sampleDistributionFunction<I: Interaction, D: DistributionModel>(
-                light: Light,
+                light _: Light,
                 interaction: I,
                 distributionModel: D,
                 sampler: inout RandomSampler
@@ -211,11 +210,11 @@ extension VolumePathIntegrator {
                                 scene: scene)
                 }
                 // For debugging uncomment one of the two following methods:
-                //return try sampleLight(
+                // return try sampleLight(
                 //        light: light,
                 //        interaction: interaction,
                 //        sampler: sampler)
-                //return try sampleGlobalBsdf(
+                // return try sampleGlobalBsdf(
                 //        light: light,
                 //        interaction: interaction,
                 //        sampler: sampler)
@@ -249,8 +248,7 @@ extension VolumePathIntegrator {
         }
 
         private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
-                -> Bool
-        {
+                -> Bool {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
                         let roulette = FloatX.random(in: 0..<1, using: &xoshiro)
@@ -313,12 +311,12 @@ extension VolumePathIntegrator {
                 bounce: Int,
                 pathThroughputWeight: inout RgbSpectrum,
                 estimate: inout RgbSpectrum,
-                tHit: inout Float,
+                tHit _: inout Float,
                 sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
-                state: ImmutableState,
+                state _: ImmutableState,
                 scene: Scene
         ) throws -> Bool {
                 let surfaceInteraction = interaction
@@ -331,15 +329,15 @@ extension VolumePathIntegrator {
                                                 inDirection: surfaceInteraction.wo)
                         }
                 }
-                //if surfaceInteraction.material == noMaterial {
+                // if surfaceInteraction.material == noMaterial {
                 //        return false
-                //}
-                //let bsdf = surfaceInteraction.getBsdf()
+                // }
+                // let bsdf = surfaceInteraction.getBsdf()
                 assert(surfaceInteraction.materialIndex >= 0)
                 let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
                         interaction: surfaceInteraction)
 
-                //if surfaceInteraction.material.isInterface {
+                // if surfaceInteraction.material.isInterface {
                 //        //var spawnedRay = surfaceInteraction.spawnRay(
                 //        let spawnedRay = surfaceInteraction.spawnRay(
                 //                inDirection: ray.direction)
@@ -359,7 +357,7 @@ extension VolumePathIntegrator {
                 //                albedo: &albedo,
                 //                firstNormal: &firstNormal,
                 //                state: state)
-                //}
+                // }
                 if bounce == 0 {
                         albedo = bsdf.albedo()
                         firstNormal = surfaceInteraction.normal
@@ -414,7 +412,7 @@ extension VolumePathIntegrator {
                         return false  // No surface hit, so stop this bounce
                 }
 
-                //let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
+                // let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
                 let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)  // Keeping original implementation
                 pathThroughputWeight *= transmittance
 
@@ -459,8 +457,7 @@ extension VolumePathIntegrator {
                 tHit = FloatX.infinity
                 if stopWithRussianRoulette(
                         bounce: bounce,
-                        pathThroughputWeight: &pathThroughputWeight)
-                {
+                        pathThroughputWeight: &pathThroughputWeight) {
                         return false
                 }
                 return true
@@ -481,7 +478,7 @@ extension VolumePathIntegrator {
         ) throws {
                 var interaction = SurfaceInteraction()
                 for bounce in bounce...maxDepth {
-                        let _ = try oneBounce(
+                        _ = try oneBounce(
                                 interaction: &interaction,
                                 tHit: &tHit,
                                 ray: &ray,
@@ -542,8 +539,7 @@ extension VolumePathIntegrator {
                 lightSampler: inout LightSampler,
                 state: ImmutableState
         ) throws
-                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
-        {
+                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal) {
 
                 // Path throughput weight
                 // The product of all GlobalBsdfs and cosines divided by the pdf

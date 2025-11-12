@@ -34,8 +34,8 @@ struct Scene {
                         return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .transformedPrimitive:
                         unimplemented()
-                //let transformedPrimitive = accessToTransformedPrimitivesNeeded[primId.id1]
-                //return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
+                // let transformedPrimitive = accessToTransformedPrimitivesNeeded[primId.id1]
+                // return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit)
@@ -49,8 +49,7 @@ struct Scene {
                 tHit: inout FloatX,
                 data: inout TriangleIntersection
         ) throws
-                -> Bool
-        {
+                -> Bool {
                 switch primId.type {
                 case .triangle:
                         let triangle = try Triangle(

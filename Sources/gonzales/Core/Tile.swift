@@ -1,12 +1,7 @@
 struct Tile: Sendable {
 
-        init(integrator: VolumePathIntegrator, bounds: Bounds2i) {
-                self.integrator = integrator
-                self.bounds = bounds
-        }
-
         mutating func render(
-                reporter: ProgressReporter,
+                reporter _: ProgressReporter,
                 sampler: inout RandomSampler,
                 camera: any Camera,
                 lightSampler: inout LightSampler,

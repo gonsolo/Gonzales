@@ -6,6 +6,6 @@ struct Interface {
         }
 }
 
-func createInterface(parameters: ParameterDictionary) throws -> Interface {
+func createInterface(parameters _: ParameterDictionary) throws -> Interface {
         return Interface()
 }

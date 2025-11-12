@@ -15,9 +15,9 @@ struct SurfaceInteraction: Interaction, Sendable {
         var dpdu = Vector()
         var uv = Point2f()
         var faceIndex = 0
-        var areaLight: AreaLight? = nil
+        var areaLight: AreaLight?
         var materialIndex: MaterialIndex = 0
-        //var mediumInterface: MediumInterface? = nil
+        // var mediumInterface: MediumInterface? = nil
 }
 
 extension SurfaceInteraction: CustomStringConvertible {
@@ -26,7 +26,7 @@ extension SurfaceInteraction: CustomStringConvertible {
                         "[" + "valid: \(valid) " + "pos: \(position) " + "n: \(normal) "
                         + "shadingNormal: \(shadingNormal) " + "wo: \(wo) " + "dpdu: \(dpdu) " + "uv: \(uv) "
                         + "faceIndex: \(faceIndex) " + "areaLight: \(areaLight as Optional) "
-                        + "materialIndex: \(materialIndex) "  //+ "mediumInterface: \(mediumInterface as Optional) "
+                        + "materialIndex: \(materialIndex) "  // + "mediumInterface: \(mediumInterface as Optional) "
                         + "]"
         }
 }
@@ -37,9 +37,9 @@ extension SurfaceInteraction: Equatable {
                         lhs.valid == rhs.valid && lhs.position == rhs.position && lhs.normal == rhs.normal
                         && lhs.shadingNormal == rhs.shadingNormal && lhs.wo == rhs.wo && lhs.dpdu == rhs.dpdu
                         && lhs.uv == rhs.uv && lhs.faceIndex == rhs.faceIndex
-                        && lhs.areaLight == rhs.areaLight  //&&
-                //lhs.material == rhs.material &&
-                //lhs.mediumInterface == rhs.mediumInterface &&
-                //lhs.bsdf == rhs.bsdf
+                        && lhs.areaLight == rhs.areaLight  // &&
+                // lhs.material == rhs.material &&
+                // lhs.mediumInterface == rhs.mediumInterface &&
+                // lhs.bsdf == rhs.bsdf
         }
 }

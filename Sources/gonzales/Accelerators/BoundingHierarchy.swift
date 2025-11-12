@@ -128,7 +128,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         // --- 4. Interaction Leaf Logic (Value Type) ---
         private struct InteractionProcessor: LeafProcessor {
                 var index: Int = 0
-                var gdata: TriangleIntersection? = nil
+                var gdata: TriangleIntersection?
                 var tHit: FloatX
 
                 mutating func processLeaf(
@@ -172,7 +172,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 return worldBound(scene: scene)
         }
 
-        func worldBound(scene: Scene) -> Bounds3f {
+        func worldBound(scene _: Scene) -> Bounds3f {
                 if nodes.isEmpty {
                         return Bounds3f()
                 } else {
@@ -181,7 +181,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         }
 
         static func statistics() {
-                //print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
+                // print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
         }
 
         let nodes: [BoundingHierarchyNode]

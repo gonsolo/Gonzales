@@ -72,7 +72,7 @@ struct Curve: Shape {
                 return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) -> Bounds3f {
+        func objectBound(scene _: Scene) -> Bounds3f {
                 let points = blossomBezier(points: common.points, u: u)
                 let bounds = union(
                         first: Bounds3f(first: points.0, second: points.1),
@@ -124,7 +124,7 @@ struct Curve: Shape {
                 ray: Ray,
                 tHit: inout FloatX,
                 points: [Point],
-                index: Int = 0,
+                index _: Int = 0,
                 rayToObject: Transform,
                 u: TwoFloats,
                 depth: Int
@@ -139,7 +139,7 @@ struct Curve: Shape {
                         typealias InteractionAndT = (SurfaceInteraction, FloatX)
                         var hits: [InteractionAndT] = [
                                 (SurfaceInteraction(), 0),
-                                (SurfaceInteraction(), 0),
+                                (SurfaceInteraction(), 0)
                         ]
 
                         for segment in 0..<2 {
@@ -147,20 +147,17 @@ struct Curve: Shape {
                                 let maxWidth = computeMaxWidth(
                                         u: (u[segment], u[segment + 1]), width: common.width)
                                 if !overlap(
-                                        points: splitPoints, index: cps, xyz: 1, width: maxWidth)
-                                {
+                                        points: splitPoints, index: cps, xyz: 1, width: maxWidth) {
                                         continue
                                 }
                                 if !overlap(
-                                        points: splitPoints, index: cps, xyz: 0, width: maxWidth)
-                                {
+                                        points: splitPoints, index: cps, xyz: 0, width: maxWidth) {
                                         continue
                                 }
                                 let zMax = rayLength * tHit
                                 if !overlap(
                                         points: splitPoints, index: cps, xyz: 2, width: maxWidth,
-                                        limits: (0, zMax))
-                                {
+                                        limits: (0, zMax)) {
                                         continue
                                 }
                                 hits[segment] = try recursiveIntersect(
@@ -223,7 +220,7 @@ struct Curve: Shape {
                         }
                         // if tHit != nullptr
                         let tHit = pc.z / rayLength
-                        //let pError = Vector(x: 2 * hitWidth, y: 2 * hitWidth, z: 2 * hitWidth)
+                        // let pError = Vector(x: 2 * hitWidth, y: 2 * hitWidth, z: 2 * hitWidth)
                         let (_, dpdu) = evalBezier(points: common.points, u: nu)
                         let dpduPlane = rayToObject.inverse * dpdu
                         let dpdvPlane =
@@ -288,47 +285,47 @@ struct Curve: Shape {
         }
 
         func intersect(
-                scene: Scene,
-                ray worldRay: Ray,
-                tHit: inout FloatX
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX
         ) throws -> Bool {
                 unimplemented()
         }
 
         func intersect(
-                scene: Scene,
-                ray worldRay: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX,
+                interaction _: inout SurfaceInteraction
         ) throws {
                 unimplemented()
-                //let ray = worldToObject * worldRay
-                //let points = blossomBezier(points: common.points, u: u)
-                //let dx = cross(ray.direction, points.3 - points.0)
-                //if lengthSquared(dx) == 0 {
+                // let ray = worldToObject * worldRay
+                // let points = blossomBezier(points: common.points, u: u)
+                // let dx = cross(ray.direction, points.3 - points.0)
+                // if lengthSquared(dx) == 0 {
                 //        throw CurveError.todo
-                //}
-                //let objectToRay = try lookAtTransform(
+                // }
+                // let objectToRay = try lookAtTransform(
                 //        eye: ray.origin, at: ray.origin + ray.direction, up: dx)
-                //var controlPoints = [Point(), Point(), Point(), Point()]
-                //controlPoints[0] = objectToRay * points.0
-                //controlPoints[1] = objectToRay * points.1
-                //controlPoints[2] = objectToRay * points.2
-                //controlPoints[3] = objectToRay * points.3
-                //let maxWidth = computeMaxWidth(u: u, width: common.width)
-                //if !overlap(points: controlPoints, xyz: 1, width: maxWidth) {
+                // var controlPoints = [Point(), Point(), Point(), Point()]
+                // controlPoints[0] = objectToRay * points.0
+                // controlPoints[1] = objectToRay * points.1
+                // controlPoints[2] = objectToRay * points.2
+                // controlPoints[3] = objectToRay * points.3
+                // let maxWidth = computeMaxWidth(u: u, width: common.width)
+                // if !overlap(points: controlPoints, xyz: 1, width: maxWidth) {
                 //        return
-                //}
-                //if !overlap(points: controlPoints, xyz: 0, width: maxWidth) {
+                // }
+                // if !overlap(points: controlPoints, xyz: 0, width: maxWidth) {
                 //        return
-                //}
-                //let rayLength = length(ray.direction)
-                //let zMax = rayLength * tHit
-                //if !overlap(points: controlPoints, xyz: 2, width: maxWidth, limits: (0, zMax)) {
+                // }
+                // let rayLength = length(ray.direction)
+                // let zMax = rayLength * tHit
+                // if !overlap(points: controlPoints, xyz: 2, width: maxWidth, limits: (0, zMax)) {
                 //        return
-                //}
-                //var l0: FloatX = 0
-                //for i in 0..<2 {
+                // }
+                // var l0: FloatX = 0
+                // for i in 0..<2 {
                 //        let px: FloatX = abs(
                 //                controlPoints[i].x - 2.0 * controlPoints[i + 1].x
                 //                        + controlPoints[i + 2].x)
@@ -339,26 +336,26 @@ struct Curve: Shape {
                 //                controlPoints[i].z - 2.0 * controlPoints[i + 1].z
                 //                        + controlPoints[i + 2].z)
                 //        l0 = max(max(l0, px), max(py, pz))
-                //}
-                //let eps = max(common.width.0, common.width.1) * 0.05
-                //let r0 = Int(log2(1.41421356237 * 6.0 * l0 / (8.0 * eps)) / 2.0)
-                //let maxDepth = clamp(value: r0, low: 0, high: 10)
-                //let interactionAndT = try recursiveIntersect(
+                // }
+                // let eps = max(common.width.0, common.width.1) * 0.05
+                // let r0 = Int(log2(1.41421356237 * 6.0 * l0 / (8.0 * eps)) / 2.0)
+                // let maxDepth = clamp(value: r0, low: 0, high: 10)
+                // let interactionAndT = try recursiveIntersect(
                 //        ray: ray,
                 //        tHit: &tHit,
                 //        points: controlPoints,
                 //        rayToObject: objectToRay.inverse,
                 //        u: u,
                 //        depth: maxDepth)
-                //tHit = interactionAndT.1
-                //interaction = interactionAndT.0
+                // tHit = interactionAndT.1
+                // interaction = interactionAndT.0
         }
 
-        func area(scene: Scene) -> FloatX {
+        func area(scene _: Scene) -> FloatX {
                 fatalError("Not implemented")
         }
 
-        func sample<I: Interaction>(samples: TwoFloats, scene: Scene) -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) -> (interaction: I, pdf: FloatX) {
                 fatalError("Not implemented")
         }
 
@@ -371,7 +368,7 @@ struct Curve: Shape {
                 print("  Number of curves:\t\t\t\t\t\t\t\(numberOfCurves)")
         }
 
-        func getObjectToWorld(scene: Scene) -> Transform {
+        func getObjectToWorld(scene _: Scene) -> Transform {
                 return objectToWorld
         }
 

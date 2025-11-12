@@ -47,7 +47,7 @@ final class PerspectiveCamera: Camera, Transformable {
                         cameraSample: cameraSample
                 )
                 let ray = depthOfField(ray: pinholeRay, cameraSample: cameraSample)
-                //numberCameraRays += 1
+                // numberCameraRays += 1
                 return objectToWorld * ray
         }
 
@@ -56,7 +56,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 print("  Camera rays traced:\t\t\t\t\t\t\t\(numberCameraRays)")
         }
 
-        func getObjectToWorld(scene: Scene) -> Transform {
+        func getObjectToWorld(scene _: Scene) -> Transform {
                 return objectToWorld
         }
 

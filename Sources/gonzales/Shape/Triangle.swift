@@ -249,8 +249,7 @@ extension Triangle {
         }
 
         func computeUVHit(b0: FloatX, b1: FloatX, b2: FloatX, uv: (Vector2F, Vector2F, Vector2F))
-                -> Point2f
-        {
+                -> Point2f {
                 let uvHit0: Point2f = b0 * Point2f(from: uv.0)
                 let uvHit1: Point2f = b1 * Point2f(from: uv.1)
                 let uvHit2: Point2f = b2 * Point2f(from: uv.2)
@@ -317,8 +316,7 @@ extension Triangle {
                 // Ray t range test against tHit and ray segment limits (0)
                 let hitCondition = det > 0
                 if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
-                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
-                {
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det)) {
                         return nil
                 }
 
@@ -407,24 +405,23 @@ extension Triangle {
                 // Ray t range test against tHit and ray segment limits (0)
                 let hitCondition = det > 0
                 if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
-                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
-                {
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det)) {
                         return false
                 }
 
                 // --- Intersection found ---
 
                 let invDet: FloatX = 1 / det
-                //let b0: FloatX = e0 * invDet
-                //let b1: FloatX = e1 * invDet
-                //let b2: FloatX = e2 * invDet
+                // let b0: FloatX = e0 * invDet
+                // let b1: FloatX = e1 * invDet
+                // let b2: FloatX = e2 * invDet
                 let t: FloatX = tScaled * invDet
 
                 tHit = t  // Update closest hit distance
 
                 // Calculate necessary geometric data
-                //let dp02 = Vector(point: point0 - point2)
-                //let dp12 = Vector(point: point1 - point2)
+                // let dp02 = Vector(point: point0 - point2)
+                // let dp12 = Vector(point: point1 - point2)
 
                 data = TriangleIntersection(
                         primId: PrimId(id1: meshIndex, id2: idx, type: .triangle),
@@ -629,8 +626,8 @@ extension Triangle {
         @MainActor
         var description: String {
                 var d = "Triangle [ "
-                //let (p0, p1, p2) = getLocalPoints()
-                //d += p0.description + p1.description + p2.description
+                // let (p0, p1, p2) = getLocalPoints()
+                // d += p0.description + p1.description + p2.description
                 d += " ]"
                 return d
         }

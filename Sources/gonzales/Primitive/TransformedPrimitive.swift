@@ -2,16 +2,6 @@ import Foundation
 
 struct TransformedPrimitive: Boundable, Intersectable {
 
-        init(
-                accelerator: Accelerator,
-                transform: Transform,
-                idx: Int
-        ) {
-                self.accelerator = accelerator
-                self.transform = transform
-                self.idx = idx
-        }
-
         func intersect(
                 scene: Scene,
                 ray: Ray,
@@ -49,11 +39,11 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 return bound
         }
 
-        func objectBound(scene: Scene) -> Bounds3f {
+        func objectBound(scene _: Scene) -> Bounds3f {
                 unimplemented()
         }
 
-        //let acceleratorIndex: AcceleratorIndex
+        // let acceleratorIndex: AcceleratorIndex
         let accelerator: Accelerator
         let transform: Transform
         let idx: Int

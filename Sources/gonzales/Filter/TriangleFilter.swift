@@ -4,7 +4,7 @@ struct TriangleFilter: Filter {
                 return max(0, support.x - abs(point.x)) * max(0, support.y - abs(point.y))
         }
 
-        func sample(u: (FloatX, FloatX)) -> FilterSample {
+        func sample(u _: (FloatX, FloatX)) -> FilterSample {
                 unimplemented()
         }
 

@@ -105,8 +105,8 @@ func shell(_ launchPath: String, _ arguments: [String] = []) -> (String?, Int32)
 
 func demangle(symbol: String) -> String {
         if #available(macOS 10.13, *) {
-                //let demangle = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-demangle"
-                //let demangle = "/home/gonsolo/downloads/swift-DEVELOPMENT-SNAPSHOT-2019-11-15-a-ubuntu18.04/usr/bin/swift-demangle"
+                // let demangle = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-demangle"
+                // let demangle = "/home/gonsolo/downloads/swift-DEVELOPMENT-SNAPSHOT-2019-11-15-a-ubuntu18.04/usr/bin/swift-demangle"
                 let demangle = "/home/gonsolo/bin/swift-demangle"
                 let (output, _) = shell(demangle, ["-compact", symbol])
                 return (output!).trimmingCharacters(in: .whitespacesAndNewlines)

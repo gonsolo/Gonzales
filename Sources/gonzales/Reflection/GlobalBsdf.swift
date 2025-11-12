@@ -31,8 +31,7 @@ extension GlobalBsdf {
         }
 
         func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
-                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
-        {
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool) {
                 let woLocal = worldToLocal(world: woWorld)
                 let bsdfSample = sampleLocal(wo: woLocal, u: u)
                 let wiWorld = localToWorld(local: bsdfSample.incoming)
@@ -50,8 +49,7 @@ extension GlobalBsdf {
         }
 
         func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout RandomSampler)
-                -> BsdfSample
-        {
+                -> BsdfSample {
                 var (bsdfSample, _) = sampleWorld(wo: wo, u: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, normal)
                 return bsdfSample

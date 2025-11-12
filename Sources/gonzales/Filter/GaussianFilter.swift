@@ -59,9 +59,7 @@ struct GaussianFilter: Filter {
                         x -= updateTerm(x)
 
                         return x
-                }
-
-                else if absY < 1.0 {
+                } else if absY < 1.0 {
 
                         let zBase: FloatX = (1.0 - absY) / 2.0
                         let z: FloatX = sqrt(-log(zBase))
@@ -88,9 +86,7 @@ struct GaussianFilter: Filter {
                         x -= updateTerm(x)
 
                         return x
-                }
-
-                else if absY == 1.0 {
+                } else if absY == 1.0 {
                         return y.sign == .plus ? .infinity : -.infinity
                 } else {
                         return .nan

@@ -16,7 +16,7 @@ struct InfiniteLight {
                 self.texture = texture
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> LightSample {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator) -> LightSample {
                 let theta = samples.1 * FloatX.pi
                 let phi = samples.0 * 2 * FloatX.pi
                 let lightDirection = Vector(
@@ -38,10 +38,9 @@ struct InfiniteLight {
         }
 
         func probabilityDensityFor(
-                scene: Scene, samplingDirection direction: Vector, from reference: any Interaction
+                scene _: Scene, samplingDirection direction: Vector, from _: any Interaction
         )
-                throws -> FloatX
-        {
+                throws -> FloatX {
                 let incoming = worldToLight * direction
                 let (theta, _) = sphericalCoordinatesFrom(vector: incoming)
                 guard theta > machineEpsilon else { return 0 }
@@ -124,8 +123,7 @@ struct InfiniteLight {
 
 @MainActor
 func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary) throws
-        -> InfiniteLight
-{
+        -> InfiniteLight {
         guard let mapname = try parameters.findString(called: "filename") else {
                 let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
                 let constantTexture = ConstantTexture(value: brightness)

@@ -9,33 +9,33 @@ struct Disk: Shape {
                 return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) -> Bounds3f {
+        func objectBound(scene _: Scene) -> Bounds3f {
                 // TODO
                 return Bounds3f()
         }
 
         func intersect(
-                scene: Scene,
-                ray worldRay: Ray,
-                tHit: inout FloatX
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX
         ) throws -> Bool {
                 unimplemented()
         }
 
         func intersect(
-                scene: Scene,
-                ray worldRay: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX,
+                interaction _: inout SurfaceInteraction
         ) throws {
                 unimplemented()
         }
 
-        func area(scene: Scene) -> FloatX {
+        func area(scene _: Scene) -> FloatX {
                 unimplemented()
         }
 
-        func sample<I: Interaction>(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample<I: Interaction>(samples _: TwoRandomVariables, scene _: Scene) -> (
                 interaction: I, pdf: FloatX
         ) {
                 unimplemented()
@@ -49,7 +49,7 @@ struct Disk: Shape {
                 print("TODO")
         }
 
-        func getObjectToWorld(scene: Scene) -> Transform {
+        func getObjectToWorld(scene _: Scene) -> Transform {
                 return objectToWorld
         }
 

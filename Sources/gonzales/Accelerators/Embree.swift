@@ -1,34 +1,34 @@
-//import Foundation
-//@preconcurrency import embree4
+// import Foundation
+// @preconcurrency import embree4
 //
 //// swift-format-ignore: AlwaysUseLowerCamelCase
-//@_silgen_name("_swift_stdlib_immortalize")
-//func _swift_stdlib_immortalize(_ p: UnsafeMutableRawPointer)
+// @_silgen_name("_swift_stdlib_immortalize")
+// func _swift_stdlib_immortalize(_ p: UnsafeMutableRawPointer)
 //
-//func immortalize(_ o: AnyObject) {
+// func immortalize(_ o: AnyObject) {
 //        withExtendedLifetime(o) {
 //                _swift_stdlib_immortalize(Unmanaged.passUnretained(o).toOpaque())
 //        }
-//}
+// }
 //
-//@MainActor
-//let embree = Embree()
+// @MainActor
+// let embree = Embree()
 //
-//protocol EmbreeBase {
+// protocol EmbreeBase {
 //
 //        func check(_ pointer: Any?)
 //        func embreeError(_ message: String) -> Never
-//}
+// }
 //
-//struct EmbreeScene: @unchecked Sendable {
+// struct EmbreeScene: @unchecked Sendable {
 //        init(scene: OpaquePointer?) {
 //                rtcScene = scene
 //        }
 //
 //        let rtcScene: OpaquePointer?
-//}
+// }
 //
-//extension EmbreeBase {
+// extension EmbreeBase {
 //
 //        func check(_ pointer: Any?) {
 //                guard pointer != nil else {
@@ -41,9 +41,9 @@
 //                exit(-1)
 //        }
 //
-//}
+// }
 //
-//@preconcurrency final class Embree: EmbreeBase {
+// @preconcurrency final class Embree: EmbreeBase {
 //
 //        init() {
 //                rtcDevice = rtcNewDevice(nil)
@@ -55,11 +55,11 @@
 //        }
 //
 //        var rtcDevice: OpaquePointer?
-//}
+// }
 //
-//typealias AcceleratorIndex = Int
+// typealias AcceleratorIndex = Int
 //
-//final class EmbreeAccelerator: EmbreeBase {
+// final class EmbreeAccelerator: EmbreeBase {
 //
 //        init(
 //                bounds: Bounds3f,
@@ -241,9 +241,9 @@
 //        private var areaLights = [UInt32: AreaLight]()
 //        private var triangleUVs = [UInt32: (Vector2F, Vector2F, Vector2F)]()
 //        private var instanceMap = [UInt32: AcceleratorIndex]()
-//}
+// }
 //
-//@preconcurrency final class EmbreeBuilder: EmbreeBase {
+// @preconcurrency final class EmbreeBuilder: EmbreeBase {
 //
 //        @MainActor
 //        init(primitives: [any Boundable & Intersectable]) async {
@@ -569,4 +569,4 @@
 //        private let vec3faSize = 16 * MemoryLayout<Float>.size
 //
 //        private var geomID: UInt32 = 0
-//}
+// }

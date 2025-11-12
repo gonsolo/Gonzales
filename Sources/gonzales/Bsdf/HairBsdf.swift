@@ -305,9 +305,9 @@ struct HairBsdf: GlobalBsdf {
                 return clamp(value: x, low: a, high: b)
         }
 
-        //func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
+        // func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
         //        RgbSpectrum, Vector, FloatX
-        //) {
+        // ) {
         //        var samples = samples
         //        let sinThetaO = wo.x
         //        let cosThetaO = (1 - square(sinThetaO)).squareRoot()
@@ -370,7 +370,7 @@ struct HairBsdf: GlobalBsdf {
         //        pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
         //        let radiance = evaluate(wo, wi)
         //        return (radiance, wi, pdf)
-        //}
+        // }
 
         func albedo() -> RgbSpectrum {
                 // Not correct but should be ok

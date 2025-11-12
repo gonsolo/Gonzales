@@ -51,8 +51,7 @@ struct DielectricBsdf: GlobalBsdf {
         }
 
         private func sampleSpecularReflection(wo: Vector, reflected: FloatX, probabilityReflected: FloatX)
-                -> BsdfSample
-        {
+                -> BsdfSample {
                 let wi = mirror(wo)
                 let estimate = RgbSpectrum(intensity: reflected / absCosTheta(wi))
                 return BsdfSample(estimate, wi, probabilityReflected)

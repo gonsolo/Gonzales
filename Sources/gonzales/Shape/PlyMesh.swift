@@ -52,8 +52,8 @@ struct PlyMesh {
         ) -> T {
                 var value = T()
                 let size = MemoryLayout<T>.size
-                withUnsafeMutableBytes(of: &value) { (valuePointer) -> Void in
-                        data.withUnsafeBytes { (dataPointer) -> Void in
+                withUnsafeMutableBytes(of: &value) { (valuePointer) in
+                        data.withUnsafeBytes { (dataPointer) in
                                 let source = dataPointer.baseAddress! + index
                                 let destination = valuePointer.baseAddress!
                                 switch endianness {
@@ -98,7 +98,6 @@ struct PlyMesh {
                 return Character(UnicodeScalar(data[index]))
         }
 
-        
         // swiftlint:disable:next cyclomatic_complexity function_body_length
         mutating func readPlyHeader(from data: Data) throws {
                 enum HeaderState { case vertex, face, none }
@@ -185,7 +184,7 @@ struct PlyMesh {
                                                                 "Unknown float property \(words[2])"
                                                 )
                                         }
-                                case "list":
+                                        case "list":
                                         switch words[2] {
                                         case "uint":
                                                 listBits = 32
@@ -197,15 +196,14 @@ struct PlyMesh {
                                                                 "Unknown list property \(words[2])"
                                                 )
                                         }
-                                        break
-                                case "int":
+                                        case "int":
                                         switch words[2] {
-                                        case "face_indices": hasFaceIndices = true
+                                        case "face_indices":
+                                            hasFaceIndices = true
                                         default:
                                                 throw ApiError.ply(
                                                         message: "Unknown int property \(words[2])")
                                         }
-                                        break
                                 default:
                                         throw ApiError.ply(message: "Unknown property: \(words[1])")
                                 }
@@ -279,8 +277,7 @@ struct PlyMesh {
                                         && (properties[6].name == Property.PropertyName.u
                                                 || properties[6].name == Property.PropertyName.s)
                                         && (properties[7].name == Property.PropertyName.v
-                                                || properties[7].name == Property.PropertyName.t)
-                                {
+                                                || properties[7].name == Property.PropertyName.t) {
                                         appendPoint(from: data)
                                         appendNormal(from: data)
                                         appendUV(from: data)
@@ -291,8 +288,7 @@ struct PlyMesh {
                                         && properties[4].name == Property.PropertyName.v
                                         && properties[5].name == Property.PropertyName.nx
                                         && properties[6].name == Property.PropertyName.ny
-                                        && properties[7].name == Property.PropertyName.nz
-                                {
+                                        && properties[7].name == Property.PropertyName.nz {
                                         appendPoint(from: data)
                                         appendUV(from: data)
                                         appendNormal(from: data)
@@ -321,10 +317,10 @@ struct PlyMesh {
                         }
                         if numberIndices != 3 {
                                 warning("Number of indices is not 3 but \(numberIndices)")
-                                //throw ApiError.ply(
+                                // throw ApiError.ply(
                                 //        message:
                                 //                "Number of indices must be 3 but is \(numberIndices)"
-                                //)
+                                // )
                         }
                         for _ in 0..<numberIndices {
                                 let index: Int32 = readValue(in: data, at: &dataIndex)
@@ -367,8 +363,7 @@ struct PlyMesh {
 
 @MainActor
 func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
-        -> [ShapeType]
-{
+        -> [ShapeType] {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {

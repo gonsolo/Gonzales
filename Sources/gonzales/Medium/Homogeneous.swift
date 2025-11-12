@@ -8,8 +8,7 @@ final class Homogeneous: Medium {
                 self.scattering = scattering
         }
 
-        func sample(ray: Ray, tHit: FloatX, sampler: inout RandomSampler) -> (RgbSpectrum, MediumInteraction?)
-        {
+        func sample(ray: Ray, tHit: FloatX, sampler: inout RandomSampler) -> (RgbSpectrum, MediumInteraction?) {
                 let channel = Int(sampler.get1D() * 3)
                 let transmission = absorption + scattering
                 let transmissionChannel = transmission[channel]

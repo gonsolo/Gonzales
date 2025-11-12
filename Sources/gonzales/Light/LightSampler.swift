@@ -1,7 +1,7 @@
 struct LightSampler: Sendable {
 
-        //case power(PowerLightSampler)
-        //case uniform(UniformLightSampler)
+        // case power(PowerLightSampler)
+        // case uniform(UniformLightSampler)
 
         var powerLightSampler: PowerLightSampler
 
@@ -9,12 +9,12 @@ struct LightSampler: Sendable {
                 return powerLightSampler.chooseLight(scene: scene)
         }
 
-        //func chooseLight(scene: Scene) -> (Light, FloatX) {
+        // func chooseLight(scene: Scene) -> (Light, FloatX) {
         //        switch self {
         //        case .power(var powerLightSampler):
         //                return powerLightSampler.chooseLight(scene: scene)
         //        case .uniform(var uniformLightSampler):
         //                return uniformLightSampler.chooseLight()
         //        }
-        //}
+        // }
 }

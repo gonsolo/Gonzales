@@ -13,18 +13,18 @@ struct EmbreeCurve: Shape {
         }
 
         func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX
         ) throws -> Bool {
                 unimplemented()
         }
 
         func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
+                scene _: Scene,
+                ray _: Ray,
+                tHit _: inout FloatX,
+                interaction _: inout SurfaceInteraction
         ) throws {
                 unimplemented()
         }
@@ -33,7 +33,7 @@ struct EmbreeCurve: Shape {
                 return objectToWorld * objectBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) -> Bounds3f {
+        func objectBound(scene _: Scene) -> Bounds3f {
                 var bounds = Bounds3f()
                 for point in controlPoints {
                         bounds.add(point: point)
@@ -43,28 +43,28 @@ struct EmbreeCurve: Shape {
                 return bounds
         }
 
-        func sample<I: Interaction>(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample<I: Interaction>(samples _: TwoRandomVariables, scene _: Scene) -> (
                 interaction: I, pdf: FloatX
         ) {
                 unimplemented()
         }
 
-        func sample(ref: any Interaction, u: TwoRandomVariables) -> (any Interaction, FloatX) {
+        func sample(ref _: any Interaction, u _: TwoRandomVariables) -> (any Interaction, FloatX) {
                 unimplemented()
         }
 
         func probabilityDensityFor(
-                samplingDirection direction: Vector,
-                from interaction: any Interaction
+                samplingDirection _: Vector,
+                from _: any Interaction
         ) throws -> FloatX {
                 unimplemented()
         }
 
-        func area(scene: Scene) -> FloatX {
+        func area(scene _: Scene) -> FloatX {
                 unimplemented()
         }
 
-        func getObjectToWorld(scene: Scene) -> Transform {
+        func getObjectToWorld(scene _: Scene) -> Transform {
                 return objectToWorld
         }
 

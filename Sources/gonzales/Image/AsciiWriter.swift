@@ -7,7 +7,7 @@ struct AsciiWriter {
                 let resolution = crop.pMax - crop.pMin
                 var text = String(resolution.x) + " " + String(resolution.y) + "\n"
 
-                func write(pixel: Pixel, at index: Int) {
+                func write(pixel: Pixel, at _: Int) {
                         text.append(String(pixel.light.red))
                         text.append(" ")
                         text.append(String(pixel.light.green))

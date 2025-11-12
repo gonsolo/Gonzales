@@ -60,7 +60,7 @@ public struct Matrix: Sendable {
                 return r
         }
 
-        public func invert(m: Matrix) -> Matrix {
+        public func invert(m _: Matrix) -> Matrix {
 
                 var indxc = [0, 0, 0, 0]
                 var indxr = [0, 0, 0, 0]
@@ -140,7 +140,7 @@ public struct Matrix: Sendable {
                 do {
                         for i in 0..<4 { try reduce(i) }
                         swapColumns()
-                        //return Matrix(minv)
+                        // return Matrix(minv)
                         return Matrix(backing: minv)
                 } catch MatrixError.singularMatrix {
                         warning("Singular matrix encountered!")

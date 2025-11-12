@@ -8,7 +8,7 @@ final class Parser {
         var render = true
         var worldEndSeen = false
 
-        init(fileName: String, render: Bool = true, function: String = #function) throws {
+        init(fileName: String, render: Bool = true, function _: String = #function) throws {
                 self.scanner = try PbrtScanner(path: fileName)
                 self.fileName = fileName
                 self.render = render
@@ -364,7 +364,7 @@ extension Parser {
         }
 
         @MainActor
-        private func blackBodyDummy(value: FloatX) -> [RgbSpectrum] {
+        private func blackBodyDummy(value _: FloatX) -> [RgbSpectrum] {
                 warning("Blackbody emission is not implemented!")
                 return [gray]
         }
