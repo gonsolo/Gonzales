@@ -28,3 +28,6 @@ identifier_name:
     - e
     - w
     - q
+disabled_rules:
+  - force_cast
+  - function_parameter_count

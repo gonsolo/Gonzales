@@ -4,11 +4,19 @@
 
 struct VolumePathIntegrator {
 
+        let maxDepth: Int
+        let accelerator: Accelerator
+        let scene: Scene
+        var xoshiro = Xoshiro()
+
         init(maxDepth: Int, accelerator: Accelerator, scene: Scene) {
                 self.maxDepth = maxDepth
                 self.accelerator = accelerator
                 self.scene = scene
         }
+}
+
+extension VolumePathIntegrator {
 
         private func brdfDensity<D: DistributionModel>(
                 light: Light,
@@ -278,7 +286,7 @@ struct VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
-        func mediumEstimate<D: DistributionModel>(
+        private func mediumEstimate<D: DistributionModel>(
                 ray: inout Ray,
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
@@ -299,7 +307,7 @@ struct VolumePathIntegrator {
                 return mediumRadiance
         }
 
-        func surfaceEstimate(
+        private func surfaceEstimate(
                 interaction: inout SurfaceInteraction,
                 ray: inout Ray,
                 bounce: Int,
@@ -380,7 +388,7 @@ struct VolumePathIntegrator {
                 return true
         }
 
-        mutating func oneBounce(
+        private mutating func oneBounce(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
@@ -458,7 +466,7 @@ struct VolumePathIntegrator {
                 return true
         }
 
-        mutating func bounces(
+        private mutating func bounces(
                 ray: inout Ray,
                 tHit: inout Float,
                 bounce: Int,
@@ -490,7 +498,7 @@ struct VolumePathIntegrator {
                 }
         }
 
-        mutating func bounces(
+        private mutating func bounces(
                 ray: inout Ray,
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
@@ -523,6 +531,9 @@ struct VolumePathIntegrator {
                         }
                 }
         }
+}
+
+extension VolumePathIntegrator {
 
         mutating func getRadianceAndAlbedo(
                 from ray: Ray,
@@ -572,8 +583,4 @@ struct VolumePathIntegrator {
                 }
         }
 
-        let maxDepth: Int
-        let accelerator: Accelerator
-        let scene: Scene
-        var xoshiro = Xoshiro()
 }
