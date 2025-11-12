@@ -108,7 +108,7 @@ extension VolumePathIntegrator {
                         case .infinite(let infiniteLight):
                                 let radiance = infiniteLight.radianceFromInfinity(for: ray)
                                 bsdfSample.estimate *= radiance
-                                return bsdfSample  // TODO: Just one infinite light?
+                                return bsdfSample
                         default:
                                 break
                         }
@@ -413,7 +413,7 @@ extension VolumePathIntegrator {
                         return false  // No surface hit, so stop this bounce
                 }
                 // let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
-                let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)  // Keeping original implementation
+                let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)
                 pathThroughputWeight *= transmittance
 
                 if pathThroughputWeight.isBlack {

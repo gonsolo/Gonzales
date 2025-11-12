@@ -159,20 +159,13 @@ final class PbrtScanner {
                                 return nil
                         }
                         let s = ascii(c)
-                        if match(character: s, in: list) {
+                        if list.contains(s) {
                                 break
                         }
                         string.append(s)
                         scanOne()
                 }
                 return string
-        }
-
-        private func match(character: String, in list: [String]) -> Bool {
-                for l in list {
-                        if character == l { return true }
-                }
-                return false
         }
 
         private func ascii(_ x: UInt8) -> String {

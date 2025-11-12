@@ -36,6 +36,8 @@ identifier_name:
     - uv
     - wo
     - wi
+    - t0
+    - t1
 disabled_rules:
   - force_cast
   - function_parameter_count
