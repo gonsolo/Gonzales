@@ -23,6 +23,33 @@ extension Normal: DefaultInitializable {}
 
 struct PlyMesh {
 
+        enum Endianness {
+                case little
+                case big
+        }
+
+        var plyHeader = PlyHeader()
+        var points = [Point]()
+        var normals = [Normal]()
+        var uvs = [Vector2F]()
+        var indices = [Int]()
+        var faceIndices = [Int]()
+        var hasFaceIndices = false
+        var dataIndex = 0
+        var listBits = 8
+        var endianness = Endianness.little
+
+        @MainActor
+        init(from data: Data) throws {
+                try readPlyHeader(from: data)
+                try readVertices(from: data)
+                try readFaces(from: data)
+        }
+
+}
+
+extension PlyMesh {
+
         struct Property {
                 enum PropertyType { case float, int }
                 enum PropertyName { case x, y, z, nx, ny, nz, s, t, u, v }
@@ -36,14 +63,6 @@ struct PlyMesh {
                 var vertexProperties = [Property]()
         }
 
-        var listBits = 8
-
-        enum Endianness {
-                case little
-                case big
-        }
-
-        var endianness = Endianness.little
 
         private func convert<T: DefaultInitializable>(
                 data: Data,
@@ -336,13 +355,6 @@ struct PlyMesh {
                 }
         }
 
-        @MainActor
-        init(from data: Data) throws {
-                try readPlyHeader(from: data)
-                try readVertices(from: data)
-                try readFaces(from: data)
-        }
-
         mutating func readLine(in data: Data) -> String {
                 var line = ""
                 var c = readCharacter(in: data, at: &dataIndex)
@@ -352,15 +364,6 @@ struct PlyMesh {
                 }
                 return line
         }
-
-        var plyHeader = PlyHeader()
-        var points = [Point]()
-        var normals = [Normal]()
-        var uvs = [Vector2F]()
-        var indices = [Int]()
-        var faceIndices = [Int]()
-        var hasFaceIndices = false
-        var dataIndex = 0
 }
 
 @MainActor
