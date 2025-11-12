@@ -10,13 +10,13 @@ struct ConstantTexture<T: TextureEvaluation> {
 extension ConstantTexture where T == RgbSpectrum {
 
         func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
-                return evaluate(at: interaction) as! RgbSpectrum
+                return value
         }
 }
 
 extension ConstantTexture where T == FloatX {
         func evaluateFloat(at interaction: any Interaction) -> FloatX {
-                return evaluate(at: interaction) as! FloatX
+                return value
         }
 }
 
