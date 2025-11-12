@@ -27,14 +27,14 @@ struct TileRenderer: Renderer {
 
         private func generateTiles(from bounds: Bounds2i) -> [Tile] {
                 var tiles: [Tile] = []
-                var y = bounds.pMin.y
-                while y < bounds.pMax.y {
+                var minY = bounds.pMin.y
+                while minY < bounds.pMax.y {
                         var x = bounds.pMin.x
                         while x < bounds.pMax.x {
-                                let pMin = Point2i(x: x, y: y)
+                                let pMin = Point2i(x: x, y: minY)
                                 let pMax = Point2i(
                                         x: min(x + tileSize.0, bounds.pMax.x),
-                                        y: min(y + tileSize.1, bounds.pMax.y))
+                                        y: min(minY + tileSize.1, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)
                                 let tile = Tile(
                                         integrator: integrator,
@@ -42,7 +42,7 @@ struct TileRenderer: Renderer {
                                 tiles.append(tile)
                                 x += tileSize.0
                         }
-                        y += tileSize.1
+                        minY += tileSize.1
                 }
                 return tiles
         }
