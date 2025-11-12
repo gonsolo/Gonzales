@@ -16,13 +16,11 @@ public struct Vector2<T: Sendable>: Sendable {
         }
 
         subscript(index: Int) -> T {
-                get {
                         switch index {
                         case 0: return x
                         case 1: return y
                         default: return x
                         }
-                }
         }
 
         public var x: T

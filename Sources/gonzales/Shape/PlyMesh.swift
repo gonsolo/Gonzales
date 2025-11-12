@@ -63,7 +63,6 @@ extension PlyMesh {
                 var vertexProperties = [Property]()
         }
 
-
         private func convert<T: DefaultInitializable>(
                 data: Data,
                 at index: inout Data.Index,

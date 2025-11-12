@@ -12,12 +12,10 @@ public struct Bounds3: Sendable {
         }
 
         subscript(index: Int) -> Point3 {
-                get {
-                        switch index {
-                        case 0: return pMin
-                        case 1: return pMax
-                        default: return pMin
-                        }
+                switch index {
+                case 0: return pMin
+                case 1: return pMax
+                default: return pMin
                 }
         }
 
