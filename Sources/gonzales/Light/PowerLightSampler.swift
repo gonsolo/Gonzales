@@ -1,20 +1,20 @@
 import Foundation
 
 // Adapted from https://github.com/kodecocodes/swift-algorithm-club/blob/master/Binary%20Search/BinarySearch.swift
-public func lowerBound<T: Comparable>(_ a: [T], key: T) -> (Int, T) {
+public func lowerBound<T: Comparable>(_ array: [T], key: T) -> (Int, T) {
         var lowerBound = 0
-        var upperBound = a.count
+        var upperBound = array.count
         while lowerBound < upperBound {
                 let midIndex = lowerBound + (upperBound - lowerBound) / 2
-                if a[midIndex] == key {
-                        return (midIndex, a[midIndex])
-                } else if a[midIndex] < key {
+                if array[midIndex] == key {
+                        return (midIndex, array[midIndex])
+                } else if array[midIndex] < key {
                         lowerBound = midIndex + 1
                 } else {
                         upperBound = midIndex
                 }
         }
-        return (lowerBound, a[lowerBound])
+        return (lowerBound, array[lowerBound])
 }
 
 // No async reduce in Swift as for now
