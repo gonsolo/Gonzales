@@ -45,7 +45,6 @@ extension Bounds2i: Sequence {
         public typealias Element = Point2i
 
         public struct Iterator: IteratorProtocol {
-                public typealias Element = Point2i
 
                 init(_ bounds: Bounds2i) {
                         self.bounds = bounds
