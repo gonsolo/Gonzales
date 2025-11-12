@@ -311,72 +311,72 @@ struct HairBsdf: GlobalBsdf {
                 return clamp(value: x, low: a, high: b)
         }
 
-        func sampleLocal(wo: Vector, u: Point2f, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
-                RgbSpectrum, Vector, FloatX
-        ) {
-                let sinThetaO = wo.x
-                let cosThetaO = (1 - square(sinThetaO)).squareRoot()
-                let phiO = atan2(wo.z, wo.y)
-                var fourU = demux(u)
+        //func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
+        //        RgbSpectrum, Vector, FloatX
+        //) {
+        //        var samples = samples
+        //        let sinThetaO = wo.x
+        //        let cosThetaO = (1 - square(sinThetaO)).squareRoot()
+        //        let phiO = atan2(wo.z, wo.y)
 
-                let attenuationPdf = computeAttenuationPdf(cosThetaO: cosThetaO)
-                var p = 0
-                for i in 0..<pMax {
-                        p = i
-                        if fourU.0 < attenuationPdf[p] {
-                                break
-                        }
-                        fourU.0 -= attenuationPdf[p]
-                }
-                let (sinThetaOp, cosThetaOp) = computeThetaOp(
-                        p: p,
-                        sinThetaO: sinThetaO,
-                        cosThetaO: cosThetaO)
-                fourU.1 = max(fourU.1, FloatX(1e-5))
-                let cosTheta = 1 + v[p] * log(fourU.1 + (1 - fourU.1) * exp(-2 / v[p]))
-                let sinTheta = (1 - square(cosTheta)).squareRoot()
-                let cosPhi = cos(2 * FloatX.pi * fourU.2)
-                let sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp
-                let cosThetaI = (1 - square(sinThetaI)).squareRoot()
-                let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
-                let sinGammaT = h / etap
-                let gammaT = asin(sinGammaT)
-                var dphi: FloatX
-                if p < pMax {
-                        let phi = computePhi(p: p, gammaO: gammaO, gammaT: gammaT)
-                        let sampled = sampleTrimmedLogistic(
-                                u: fourU.3,
-                                s: s,
-                                a: -FloatX.pi,
-                                b: FloatX.pi)
-                        dphi = phi + sampled
-                } else {
-                        dphi = 2 * FloatX.pi * fourU.3
-                }
-                let phiI = phiO + dphi
-                let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
-                var pdf: FloatX = 0
-                for p in 0..<pMax {
-                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
-                                p: p,
-                                sinThetaI: sinThetaI,
-                                cosThetaI: cosThetaI,
-                                sinThetaO: sinThetaO,
-                                cosThetaO: cosThetaO,
-                                phi: dphi,
-                                gammaT: gammaT)
-                        pdf += longitudinalScattering * attenuationPdf[p] * azimuthalScattering
-                }
-                let longitudinalScattering = computeLongitudinalScattering(
-                        cosThetaI,
-                        cosThetaO,
-                        sinThetaI,
-                        sinThetaO,
-                        v[pMax])
-                pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
-                let radiance = evaluate(wo, wi)
-                return (radiance, wi, pdf)
-        }
+        //        let attenuationPdf = computeAttenuationPdf(cosThetaO: cosThetaO)
+        //        var p = 0
+        //        for i in 0..<pMax {
+        //                p = i
+        //                if samples.0 < attenuationPdf[p] {
+        //                        break
+        //                }
+        //                samples.0 -= attenuationPdf[p]
+        //        }
+        //        let (sinThetaOp, cosThetaOp) = computeThetaOp(
+        //                p: p,
+        //                sinThetaO: sinThetaO,
+        //                cosThetaO: cosThetaO)
+        //        samples.1 = max(samples.1, FloatX(1e-5))
+        //        let cosTheta = 1 + v[p] * log(samples.1 + (1 - samples.1) * exp(-2 / v[p]))
+        //        let sinTheta = (1 - square(cosTheta)).squareRoot()
+        //        let cosPhi = cos(2 * FloatX.pi * samples.2)
+        //        let sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp
+        //        let cosThetaI = (1 - square(sinThetaI)).squareRoot()
+        //        let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
+        //        let sinGammaT = h / etap
+        //        let gammaT = asin(sinGammaT)
+        //        var dphi: FloatX
+        //        if p < pMax {
+        //                let phi = computePhi(p: p, gammaO: gammaO, gammaT: gammaT)
+        //                let sampled = sampleTrimmedLogistic(
+        //                        u: samples.3,
+        //                        s: s,
+        //                        a: -FloatX.pi,
+        //                        b: FloatX.pi)
+        //                dphi = phi + sampled
+        //        } else {
+        //                dphi = 2 * FloatX.pi * samples.3
+        //        }
+        //        let phiI = phiO + dphi
+        //        let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
+        //        var pdf: FloatX = 0
+        //        for p in 0..<pMax {
+        //                let (longitudinalScattering, azimuthalScattering) = computeScattering(
+        //                        p: p,
+        //                        sinThetaI: sinThetaI,
+        //                        cosThetaI: cosThetaI,
+        //                        sinThetaO: sinThetaO,
+        //                        cosThetaO: cosThetaO,
+        //                        phi: dphi,
+        //                        gammaT: gammaT)
+        //                pdf += longitudinalScattering * attenuationPdf[p] * azimuthalScattering
+        //        }
+        //        let longitudinalScattering = computeLongitudinalScattering(
+        //                cosThetaI,
+        //                cosThetaO,
+        //                sinThetaI,
+        //                sinThetaO,
+        //                v[pMax])
+        //        pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
+        //        let radiance = evaluate(wo, wi)
+        //        return (radiance, wi, pdf)
+        //}
 
         func albedo() -> RgbSpectrum {
                 // Not correct but should be ok
