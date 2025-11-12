@@ -28,8 +28,8 @@ func radians(deg: FloatX) -> FloatX {
         return (FloatX.pi / 180) * deg
 }
 
-func gamma(n: Int) -> FloatX {
-        return (FloatX(n) * machineEpsilon) / (1 - FloatX(n) * machineEpsilon)
+func gamma(count: Int) -> FloatX {
+        return (FloatX(count) * machineEpsilon) / (1 - FloatX(count) * machineEpsilon)
 }
 
 func clamp<T: Comparable>(value: T, low: T, high: T) -> T {
