@@ -6,8 +6,8 @@ struct Film {
 
         init(name: String, resolution: Point2i, fileName: String, filter: any Filter, crop: Bounds2f) {
 
-                func upperPoint2i(_ p: Point2f) -> Point2i {
-                        return Point2i(x: Int(p.x.rounded(.up)), y: Int(p.y.rounded(.up)))
+                func upperPoint2i(_ point: Point2f) -> Point2i {
+                        return Point2i(x: Int(point.x.rounded(.up)), y: Int(point.y.rounded(.up)))
                 }
 
                 self.name = name
