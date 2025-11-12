@@ -84,8 +84,8 @@ struct GaussianFilter: Filter {
                                 (erf(currentX) - y) / (twoOverSqrtPi * exp(-(currentX * currentX)))
                         }
 
-                        x = x - updateTerm(x)
-                        x = x - updateTerm(x)
+                        x -= updateTerm(x)
+                        x -= updateTerm(x)
 
                         return x
                 }
