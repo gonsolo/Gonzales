@@ -434,6 +434,7 @@ extension Api {
         }
 
         @MainActor
+        // swiftlint:disable:next cyclomatic_complexit
         func texture(
                 name: String,
                 type: String,
@@ -615,7 +616,7 @@ extension Api {
                 case "loopsubdiv":
                         return try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
-                                parameters: parameters)  // TODO
+                                parameters: parameters)
                 case "plymesh":
                         return try createPlyMesh(
                                 objectToWorld: objectToWorld,

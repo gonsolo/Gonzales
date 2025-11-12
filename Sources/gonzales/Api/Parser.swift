@@ -210,6 +210,7 @@ extension Parser {
                 return f
         }
 
+        // swiftlint:disable:next large_tuple
         private func parseThreeFloatXs() throws -> (FloatX, FloatX, FloatX)? {
                 guard let x = try parseFloatX() else { return nil }
                 guard let y = try parseFloatX() else { return nil }
@@ -306,6 +307,7 @@ extension Parser {
         }
 
         @MainActor
+        // swiftlint:disable:next cyclomatic_complexity
         private func parseValue(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
@@ -370,6 +372,7 @@ extension Parser {
         }
 
         @MainActor
+        // swiftlint:disable:next cyclomatic_complexity
         private func parseValues(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
@@ -386,7 +389,6 @@ extension Parser {
                 case "point", "point3":
                         return try parsePoints()
                 case "point2":
-                        // TODO: Parse as Point2f
                         return try parseFloatXs()
                 case "rgb", "color", "spectrum":
                         return try parseRGBSpectra()
@@ -432,7 +434,7 @@ extension Parser {
                         let name = nameAndParameter!.0
                         let parameter = nameAndParameter!.1
                         parameters[name] = parameter
-                        parseComments()  // TODO: This does not belong here!
+                        parseComments()
                         nameAndParameter = try parseParameter()
                 }
                 return parameters
