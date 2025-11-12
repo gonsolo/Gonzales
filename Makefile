@@ -280,7 +280,7 @@ format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
 	@swift-format -i -r Sources/gonzales/
 lint:
-	swiftlint 2>/dev/null |grep Film.swift
+	swiftlint Sources/gonzales/Core 2>/dev/null |grep error|head -n1
 codespell:
 	codespell -L inout Sources
 lldb:

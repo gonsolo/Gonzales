@@ -1,37 +1,37 @@
 struct ShadingFrame {
 
         init() {
-                x = nullVector
-                y = nullVector
-                z = nullVector
+                tangent = nullVector
+                bitangent = nullVector
+                normal = nullVector
         }
 
-        init(x: Vector, y: Vector, z: Vector) {
-                self.x = x
-                self.y = y
-                self.z = z
+        init(tangent: Vector, bitangent: Vector, normal: Vector) {
+                self.tangent = tangent
+                self.bitangent = bitangent
+                self.normal = normal
         }
 
-        init(x: Vector, y: Vector) {
-                self.init(x: x, y: y, z: cross(x, y))
+        init(tangent: Vector, bitangent: Vector) {
+                self.init(tangent: tangent, bitangent: bitangent, normal: cross(tangent, bitangent))
         }
 
         func worldToLocal(world: Vector) -> Vector {
                 return normalized(
                         Vector(
-                                x: dot(world, y),
-                                y: dot(world, z),
-                                z: dot(world, x)))
+                                x: dot(world, bitangent),
+                                y: dot(world, normal),
+                                z: dot(world, tangent)))
         }
 
         func localToWorld(local: Vector) -> Vector {
-                let vx = y.x * local.x + z.x * local.y + x.x * local.z
-                let vy = y.y * local.x + z.y * local.y + x.y * local.z
-                let vz = y.z * local.x + z.z * local.y + x.z * local.z
+                let vx = bitangent.x * local.x + normal.x * local.y + tangent.x * local.z
+                let vy = bitangent.y * local.x + normal.y * local.y + tangent.y * local.z
+                let vz = bitangent.z * local.x + normal.z * local.y + tangent.z * local.z
                 return normalized(Vector(x: vx, y: vy, z: vz))
         }
 
-        let x: Vector
-        let y: Vector
-        let z: Vector
+        let tangent: Vector
+        let bitangent: Vector
+        let normal: Vector
 }
