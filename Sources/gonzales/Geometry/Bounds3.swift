@@ -121,17 +121,11 @@ func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
                 second: bounds.pMax + Point(x: delta, y: delta, z: delta))
 }
 
-// Global function to compute the component-wise minimum of two Vector3s
-// This function must be visible to the code that calls min(t0_v, t1_v).
 @inline(__always)
 func min(_ lhs: Vector3, _ rhs: Vector3) -> Vector3 {
-        // Manually compare and select the minimum component for each axis.
-        // This assumes your Vector3 exposes x, y, z properties.
         let minX = min(lhs.x, rhs.x)
         let minY = min(lhs.y, rhs.y)
         let minZ = min(lhs.z, rhs.z)
-
-        // Return a new Vector3 constructed from these three scalar minimums.
         return Vector3(x: minX, y: minY, z: minZ)
 }
 
@@ -149,24 +143,22 @@ extension Bounds3 {
 
         @inline(__always)
         func intersects(ray: Ray, tHit: FloatX) -> Bool {
-                let t0_v = (pMin - ray.origin) * ray.inverseDirection
-                let t1_v = (pMax - ray.origin) * ray.inverseDirection
+                let tMin = (pMin - ray.origin) * ray.inverseDirection
+                let tMax = (pMax - ray.origin) * ray.inverseDirection
 
-                let tNear_v = min(t0_v, t1_v)
-                var tFar_v = max(t0_v, t1_v)
+                let tEntry = min(tMin, tMax)
+                var tExit = max(tMin, tMax)
 
                 let errorCorrection: FloatX = 1.0 + 2.0 * gamma(count: 3)
-                tFar_v *= errorCorrection
+                tExit *= errorCorrection
 
-                var tNear = max(tNear_v.x, tNear_v.y)
-                tNear = max(tNear, tNear_v.z)
+                var tNear = max(tEntry.x, tEntry.y)
+                tNear = max(tNear, tEntry.z)
 
-                var tFar = min(tFar_v.x, tFar_v.y)
-                tFar = min(tFar, tFar_v.z)
+                var tFar = min(tExit.x, tExit.y)
+                tFar = min(tFar, tExit.z)
 
-                let t_start: FloatX = 0.0
-
-                tNear = max(tNear, t_start)
+                tNear = max(tNear, 0.0)
                 tFar = min(tFar, tHit)
 
                 return tNear <= tFar
