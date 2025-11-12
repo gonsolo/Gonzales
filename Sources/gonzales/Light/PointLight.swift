@@ -7,15 +7,14 @@ struct PointLight {
                 self.intensity = intensity
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> (
-                radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
-        ) {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> LightSample
+        {
                 let direction: Vector = normalized(position - point)
                 let pdf: FloatX = 1.0
                 let visibility = Visibility(from: point, to: position)
                 let distance2 = distanceSquared(position, point)
                 let radiance = intensity / distance2
-                return (radiance, direction, pdf, visibility)
+                return LightSample(radiance: radiance, direction: direction, pdf: pdf, visibility: visibility)
         }
 
         func probabilityDensityFor(

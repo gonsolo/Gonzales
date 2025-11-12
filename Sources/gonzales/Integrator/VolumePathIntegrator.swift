@@ -56,19 +56,19 @@ struct VolumePathIntegrator {
                 sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> BsdfSample {
-                let (radiance, wi, lightDensity, visibility) = light.sample(
+                let lightSample = light.sample(
                         point: interaction.position, samples: sampler.get2D(), accelerator: accelerator,
                         scene: scene)
-                guard !radiance.isBlack && !lightDensity.isInfinite else {
+                guard !lightSample.radiance.isBlack && !lightSample.pdf.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try !visibility.occluded(scene: scene, accelerator: accelerator) else {
+                guard try !lightSample.visibility.occluded(scene: scene, accelerator: accelerator) else {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(
-                        wo: interaction.wo, wi: wi, normal: interaction.shadingNormal)
-                let estimate = scatter * radiance
-                return BsdfSample(estimate, wi, lightDensity)
+                        wo: interaction.wo, wi: lightSample.direction, normal: interaction.shadingNormal)
+                let estimate = scatter * lightSample.radiance
+                return BsdfSample(estimate, lightSample.direction, lightSample.pdf)
         }
 
         private func sampleDistributionFunction<I: Interaction, D: DistributionModel>(

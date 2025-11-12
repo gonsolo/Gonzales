@@ -7,12 +7,8 @@ enum Light: Sendable {
         case distant(DistantLight)
         case point(PointLight)
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene) -> (
-                radiance: RgbSpectrum,
-                direction: Vector,
-                pdf: FloatX,
-                visibility: Visibility
-        ) {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene) -> LightSample
+        {
                 switch self {
                 case .area(let areaLight):
                         return areaLight.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
