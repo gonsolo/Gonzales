@@ -81,7 +81,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: all c clean e edit es editScene em editMakefile lldb p perf tags t test \
+.PHONY: all c clean e edit es editScene em editMakefile lint lldb p perf tags t test \
 	test_unchecked test_debug test_release v view wc
 
 PBRT_OPTIONS = --stats #--gpu #--nthreads 1 #--quiet --v 2
@@ -279,7 +279,8 @@ format_suggest:
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
 	@swift-format -i -r Sources/gonzales/
-
+lint:
+	swiftlint 2>/dev/null |grep Film.swift
 codespell:
 	codespell -L inout Sources
 lldb:
