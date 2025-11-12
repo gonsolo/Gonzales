@@ -707,6 +707,7 @@ final class Parser {
                 } while commentFound
         }
 
+        // swiftlint:disable:next cyclomatic_complexity
         @MainActor
         private func handleRenderStatement(_ input: String) async throws {
                 guard let statement = RenderStatement(rawValue: input) else {
