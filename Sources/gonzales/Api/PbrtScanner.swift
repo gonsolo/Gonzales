@@ -138,7 +138,7 @@ final class PbrtScanner {
                         if !scanInt(&exponent) {
                                 exponent = 0
                         }
-                        f = f * pow(Double(10), Double(exponent))
+                        f *= pow(Double(10), Double(exponent))
                 }
 
                 float = FloatX(f)
