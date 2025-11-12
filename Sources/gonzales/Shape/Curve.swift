@@ -139,7 +139,7 @@ struct Curve: Shape {
                         typealias InteractionAndT = (SurfaceInteraction, FloatX)
                         var hits: [InteractionAndT] = [
                                 (SurfaceInteraction(), 0),
-                                (SurfaceInteraction(), 0)
+                                (SurfaceInteraction(), 0),
                         ]
 
                         for segment in 0..<2 {

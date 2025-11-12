@@ -57,3 +57,4 @@ disabled_rules:
   - cyclomatic_complexity
   - identifier_name
   - large_tuple
+  - trailing_comma
