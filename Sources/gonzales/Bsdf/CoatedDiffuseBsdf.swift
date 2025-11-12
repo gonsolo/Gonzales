@@ -201,7 +201,6 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                         z = (z == thickness) ? 0 : thickness
                         estimate *= transmittance(dz: thickness, w: w)
                         let interface: any LocalBsdf = (z == 0) ? bottomBxdf : topBxdf
-                        // TODO: u.0 is used above too, have to generate a new one
                         let bs = interface.sampleLocal(wo: -w, u: u)
                         if !bs.isValid {
                                 return invalidBsdfSample

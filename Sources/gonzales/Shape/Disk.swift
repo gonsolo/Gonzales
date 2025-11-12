@@ -10,8 +10,7 @@ struct Disk: Shape {
         }
 
         func objectBound(scene _: Scene) -> Bounds3f {
-                // TODO
-                return Bounds3f()
+                unimplemented()
         }
 
         func intersect(
@@ -46,7 +45,7 @@ struct Disk: Shape {
         }
 
         static func statistics() {
-                print("TODO")
+                unimplemented()
         }
 
         func getObjectToWorld(scene _: Scene) -> Transform {

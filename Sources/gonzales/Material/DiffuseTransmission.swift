@@ -3,8 +3,6 @@ struct DiffuseTransmission {
         func getBsdf(interaction: any Interaction) -> DiffuseBsdf {
                 let reflectance = reflectance.evaluateRgbSpectrum(at: interaction)
                 let scale = scale.evaluateFloat(at: interaction)
-                // TODO: check same hemisphere and transmission
-                // TODO: transmittance
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let diffuseBsdf = DiffuseBsdf(
                         reflectance: scale * reflectance,

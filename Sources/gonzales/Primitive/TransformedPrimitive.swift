@@ -21,7 +21,6 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 interaction: inout SurfaceInteraction
         ) throws {
                 let localRay = transform.inverse * ray
-                // TODO: transform tHit?
                 try accelerator.intersect(
                         scene: scene,
                         ray: localRay,
