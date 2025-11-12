@@ -78,6 +78,11 @@ extension TimeInterval {
 }
 
 struct Api {
+        var apiGeometricPrimitives = [GeometricPrimitive]()
+        var areaLights = [AreaLight]()
+}
+
+extension Api {
 
         @MainActor
         func attributeBegin() throws {
@@ -629,9 +634,6 @@ struct Api {
                         throw ApiError.makeShapes(message: name)
                 }
         }
-
-        var apiGeometricPrimitives = [GeometricPrimitive]()
-        var areaLights = [AreaLight]()
 }
 
 @MainActor
