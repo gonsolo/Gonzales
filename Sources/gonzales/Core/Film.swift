@@ -59,11 +59,7 @@ struct Film {
         ) {
                 for sample in samples {
                         add(
-                                value: sample.light,
-                                albedo: sample.albedo,
-                                normal: RgbSpectrum(from: sample.normal),
-                                weight: sample.weight,
-                                pixel: sample.pixel,
+                                sample: sample,
                                 image: &image,
                                 albedoImage: &albedoImage,
                                 normalImage: &normalImage)
@@ -84,14 +80,12 @@ struct Film {
         }
 
         func add(
-                value: RgbSpectrum, albedo: RgbSpectrum, normal: RgbSpectrum, weight: FloatX,
-                pixel: Point2i,
-                image: inout Image, albedoImage: inout Image, normalImage: inout Image
+                sample: Sample, image: inout Image, albedoImage: inout Image, normalImage: inout Image
         ) {
-                if isWithin(location: pixel, resolution: image.getResolution()) {
-                        image.addPixel(withColor: value, withWeight: weight, atLocation: pixel)
-                        albedoImage.addPixel(withColor: albedo, withWeight: weight, atLocation: pixel)
-                        normalImage.addPixel(withColor: normal, withWeight: weight, atLocation: pixel)
+                if isWithin(location: sample.pixel, resolution: image.getResolution()) {
+                        image.addPixel(withColor: sample.light, withWeight: sample.weight, atLocation: sample.pixel)
+                        albedoImage.addPixel(withColor: sample.albedo, withWeight: sample.weight, atLocation: sample.pixel)
+                        normalImage.addPixel(withColor: RgbSpectrum(from: sample.normal), withWeight: sample.weight, atLocation: sample.pixel)
                 }
         }
 
