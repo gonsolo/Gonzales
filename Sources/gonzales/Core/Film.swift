@@ -83,9 +83,13 @@ struct Film {
                 sample: Sample, image: inout Image, albedoImage: inout Image, normalImage: inout Image
         ) {
                 if isWithin(location: sample.pixel, resolution: image.getResolution()) {
-                        image.addPixel(withColor: sample.light, withWeight: sample.weight, atLocation: sample.pixel)
-                        albedoImage.addPixel(withColor: sample.albedo, withWeight: sample.weight, atLocation: sample.pixel)
-                        normalImage.addPixel(withColor: RgbSpectrum(from: sample.normal), withWeight: sample.weight, atLocation: sample.pixel)
+                        image.addPixel(
+                                withColor: sample.light, withWeight: sample.weight, atLocation: sample.pixel)
+                        albedoImage.addPixel(
+                                withColor: sample.albedo, withWeight: sample.weight, atLocation: sample.pixel)
+                        normalImage.addPixel(
+                                withColor: RgbSpectrum(from: sample.normal), withWeight: sample.weight,
+                                atLocation: sample.pixel)
                 }
         }
 
