@@ -58,7 +58,7 @@ extension Bounds2i: Sequence {
                         guard times < dx * dy else {
                                 return nil
                         }
-                        times = times + 1
+                        times += 1
                         return Point2i(
                                 x: bounds.pMin.x + times % dx,
                                 y: bounds.pMin.y + times / dx)
