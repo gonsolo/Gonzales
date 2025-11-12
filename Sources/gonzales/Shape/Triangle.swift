@@ -73,9 +73,7 @@ enum TriangleError: Error {
 extension Array {
 
         subscript<Index: BinaryInteger>(i: Index) -> Element {
-                get {
-                        return self[Int(i)]
-                }
+                return self[Int(i)]
         }
 }
 

@@ -30,7 +30,7 @@ public struct Normal3: Sendable, Three {
                 self.z = vector.z
         }
 
-        init(xyz: (T, T, T)) {
+        init(xyz: (FloatType, FloatType, FloatType)) {
                 self.x = xyz.0
                 self.y = xyz.1
                 self.z = xyz.2

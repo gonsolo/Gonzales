@@ -3,28 +3,28 @@
 
 protocol Three {
 
-        associatedtype T: FloatingPoint
+        associatedtype FloatType: FloatingPoint
 
-        init(x: T, y: T, z: T)
+        init(x: FloatType, y: FloatType, z: FloatType)
 
-        var x: T { get set }
-        var y: T { get set }
-        var z: T { get set }
+        var x: FloatType { get set }
+        var y: FloatType { get set }
+        var z: FloatType { get set }
 }
 
-func lengthSquared<T: Three>(_ v: T) -> T.T {
+func lengthSquared<T: Three>(_ v: T) -> T.FloatType {
         return v.x * v.x + v.y * v.y + v.z * v.z
 }
 
-func length<T: Three>(_ v: T) -> T.T {
+func length<T: Three>(_ v: T) -> T.FloatType {
         return lengthSquared(v).squareRoot()
 }
 
-func distanceSquared<T: Three>(_ left: T, _ right: T) -> T.T {
+func distanceSquared<T: Three>(_ left: T, _ right: T) -> T.FloatType {
         return lengthSquared(left - right)
 }
 
-func distance<T: Three>(_ left: T, _ right: T) -> T.T {
+func distance<T: Three>(_ left: T, _ right: T) -> T.FloatType {
         return distanceSquared(left, right).squareRoot()
 }
 
@@ -32,7 +32,7 @@ prefix func - <T: Three>(v: T) -> T {
         return T.init(x: -v.x, y: -v.y, z: -v.z)
 }
 
-func / <T: Three>(v: T, d: T.T) -> T {
+func / <T: Three>(v: T, d: T.FloatType) -> T {
         return T.init(x: v.x / d, y: v.y / d, z: v.z / d)
 }
 
@@ -61,14 +61,14 @@ func - <T: Three>(left: T, right: T) -> T {
                 z: left.z - right.z)
 }
 
-func * <T: Three>(left: T, right: T.T) -> T {
+func * <T: Three>(left: T, right: T.FloatType) -> T {
         return T.init(
                 x: left.x * right,
                 y: left.y * right,
                 z: left.z * right)
 }
 
-func * <T: Three>(left: T.T, right: T) -> T {
+func * <T: Three>(left: T.FloatType, right: T) -> T {
         return right * left
 }
 
@@ -78,13 +78,13 @@ func += <T: Three>(left: inout T, right: T) {
         left.z += right.z
 }
 
-func *= <T: Three>(left: inout T, right: T.T) {
+func *= <T: Three>(left: inout T, right: T.FloatType) {
         left.x *= right
         left.y *= right
         left.z *= right
 }
 
-func /= <T: Three>(left: inout T, right: T.T) {
+func /= <T: Three>(left: inout T, right: T.FloatType) {
         left.x /= right
         left.y /= right
         left.z /= right
@@ -115,10 +115,10 @@ func normalized<T: Three>(_ v: T) -> T {
         return ret
 }
 
-func dot<T: Three>(_ a: T, _ b: T) -> T.T {
+func dot<T: Three>(_ a: T, _ b: T) -> T.FloatType {
         return a.x * b.x + a.y * b.y + a.z * b.z
 }
 
-func absDot<T: Three>(_ a: T, _ b: T) -> T.T {
+func absDot<T: Three>(_ a: T, _ b: T) -> T.FloatType {
         return abs(dot(a, b))
 }

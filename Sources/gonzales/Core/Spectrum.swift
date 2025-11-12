@@ -158,7 +158,7 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 self.init(x: intensity, y: intensity, z: intensity)
         }
 
-        init(rgb: (T, T, T)) {
+        init(rgb: (FloatType, FloatType, FloatType)) {
                 self.init(x: rgb.0, y: rgb.1, z: rgb.2)
         }
 
@@ -171,17 +171,17 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
         }
 
         // Convenience accessors for RgbSpectrum
-        var red: T {
+        var red: FloatType {
                 get { return x }
                 set { x = newValue }
         }
 
-        var green: T {
+        var green: FloatType {
                 get { return y }
                 set { y = newValue }
         }
 
-        var blue: T {
+        var blue: FloatType {
                 get { return z }
                 set { z = newValue }
         }
@@ -274,15 +274,15 @@ extension BaseRgbSpectrum {
                         blue: blue.squareRoot())
         }
 
-        func average() -> T {
+        func average() -> FloatType {
                 return (red + green + blue) / 3
         }
 
-        var maxValue: T {
+        var maxValue: FloatType {
                 return max(red, max(green, blue))
         }
 
-        subscript(index: Int) -> T {
+        subscript(index: Int) -> FloatType {
                 get {
                         switch index {
                         case 0: return red
@@ -309,10 +309,10 @@ extension BaseRgbSpectrum {
                 return RgbSpectrum(red: FloatX(red), green: FloatX(green), blue: FloatX(blue))
         }
 
-        var luminance: T {
-                let rw: T = 0.212671 * red
-                let gw: T = 0.715160 * green
-                let bw: T = 0.072169 * blue
+        var luminance: FloatType {
+                let rw: FloatType = 0.212671 * red
+                let gw: FloatType = 0.715160 * green
+                let bw: FloatType = 0.072169 * blue
                 return rw + gw + bw
         }
 }
