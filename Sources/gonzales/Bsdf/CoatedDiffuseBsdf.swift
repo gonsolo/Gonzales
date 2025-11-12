@@ -2,6 +2,15 @@ import Foundation  // exp
 
 struct CoatedDiffuseBsdf: GlobalBsdf {
 
+        let thickness: FloatX = 0.1
+        let maxDepth = 10
+        let asymmetry: FloatX = 0
+        let reflectance: RgbSpectrum
+        let roughness: (FloatX, FloatX)
+        let topBxdf: DielectricBsdf
+        let bottomBxdf: DiffuseBsdf
+        let bsdfFrame: BsdfFrame
+
         init(
                 reflectance: RgbSpectrum,
                 refractiveIndex: FloatX,
@@ -22,6 +31,9 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                         bsdfFrame: bsdfFrame)
                 self.bsdfFrame = bsdfFrame
         }
+}
+
+extension CoatedDiffuseBsdf {
 
         private func evaluateNextEvent(
                 depth: Int,
@@ -298,19 +310,4 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
         }
 
         func albedo() -> RgbSpectrum { return reflectance }
-
-        let thickness: FloatX = 0.1
-
-        let maxDepth = 10
-
-        // g in PBRT
-        let asymmetry: FloatX = 0
-
-        let reflectance: RgbSpectrum
-        let roughness: (FloatX, FloatX)
-
-        let topBxdf: DielectricBsdf
-        let bottomBxdf: DiffuseBsdf
-
-        let bsdfFrame: BsdfFrame
 }
