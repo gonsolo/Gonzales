@@ -66,16 +66,12 @@ struct Film {
                 }
         }
 
-        private func isWithin<Point: GetIntXY>(location: Point, resolution: Point)
-                -> Bool
-        {
+        private func isWithin<Point: GetIntXY>(location: Point, resolution: Point) -> Bool {
                 return location.x >= 0 && location.y >= 0 && location.x < resolution.x
                         && location.y < resolution.y
         }
 
-        private func isWithin<Point: GetFloatXY, Vector: GetFloatXY>(location: Point, support: Vector)
-                -> Bool
-        {
+        private func isWithin<Point: GetFloatXY, Vector: GetFloatXY>(location: Point, support: Vector) -> Bool {
                 return abs(location.x) < support.x && abs(location.y) < support.y
         }
 
