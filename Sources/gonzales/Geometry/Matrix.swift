@@ -116,7 +116,7 @@ public struct Matrix: Sendable {
                         var irow = 0
                         var icol = 0
                         try choosePivot(irow: &irow, icol: &icol)
-                        ipiv[icol] = ipiv[icol] + 1
+                        ipiv[icol] += 1
                         if irow != icol {
                                 for k in 0..<4 {
                                         let tmp = minv[irow, k]
