@@ -319,7 +319,8 @@ extension HairBsdf {
                 return clamp(value: x, low: a, high: b)
         }
 
-        // func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector) -> RgbSpectrum) async -> (
+        // func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector)
+        //  -> RgbSpectrum) async -> (
         //        RgbSpectrum, Vector, FloatX
         // ) {
         //        var samples = samples

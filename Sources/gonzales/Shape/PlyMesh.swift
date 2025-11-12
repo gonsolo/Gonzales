@@ -50,9 +50,9 @@ struct PlyMesh {
 
 extension PlyMesh {
 
+        enum PropertyType { case float, int }
+        enum PropertyName { case x, y, z, nx, ny, nz, s, t, u, v }
         struct Property {
-                enum PropertyType { case float, int }
-                enum PropertyName { case x, y, z, nx, ny, nz, s, t, u, v }
                 let type: PropertyType
                 let name: PropertyName
         }
@@ -260,55 +260,55 @@ extension PlyMesh {
 
                         if plyHeader.vertexProperties.count == 3 {
                                 guard
-                                        properties[0].name == Property.PropertyName.x
-                                                && properties[1].name == Property.PropertyName.y
-                                                && properties[2].name == Property.PropertyName.z
+                                        properties[0].name == PropertyName.x
+                                                && properties[1].name == PropertyName.y
+                                                && properties[2].name == PropertyName.z
                                 else { throw PlyError.unsupported }
                                 appendPoint(from: data)
                         } else if plyHeader.vertexProperties.count == 5 {
                                 guard
-                                        properties[0].name == Property.PropertyName.x
-                                                && properties[1].name == Property.PropertyName.y
-                                                && properties[2].name == Property.PropertyName.z
-                                                && properties[3].name == Property.PropertyName.u
-                                                && properties[4].name == Property.PropertyName.v
+                                        properties[0].name == PropertyName.x
+                                                && properties[1].name == PropertyName.y
+                                                && properties[2].name == PropertyName.z
+                                                && properties[3].name == PropertyName.u
+                                                && properties[4].name == PropertyName.v
                                 else { throw PlyError.unsupported }
                                 appendPoint(from: data)
                                 appendUV(from: data)
                         } else if plyHeader.vertexProperties.count == 6 {
                                 guard
-                                        properties[0].name == Property.PropertyName.x
-                                                && properties[1].name == Property.PropertyName.y
-                                                && properties[2].name == Property.PropertyName.z
-                                                && properties[3].name == Property.PropertyName.nx
-                                                && properties[4].name == Property.PropertyName.ny
-                                                && properties[5].name == Property.PropertyName.nz
+                                        properties[0].name == PropertyName.x
+                                                && properties[1].name == PropertyName.y
+                                                && properties[2].name == PropertyName.z
+                                                && properties[3].name == PropertyName.nx
+                                                && properties[4].name == PropertyName.ny
+                                                && properties[5].name == PropertyName.nz
                                 else { throw PlyError.unsupported }
                                 appendPoint(from: data)
                                 appendNormal(from: data)
                         } else if plyHeader.vertexProperties.count == 8 {
-                                if properties[0].name == Property.PropertyName.x
-                                        && properties[1].name == Property.PropertyName.y
-                                        && properties[2].name == Property.PropertyName.z
-                                        && properties[3].name == Property.PropertyName.nx
-                                        && properties[4].name == Property.PropertyName.ny
-                                        && properties[5].name == Property.PropertyName.nz
-                                        && (properties[6].name == Property.PropertyName.u
-                                                || properties[6].name == Property.PropertyName.s)
-                                        && (properties[7].name == Property.PropertyName.v
-                                                || properties[7].name == Property.PropertyName.t)
+                                if properties[0].name == PropertyName.x
+                                        && properties[1].name == PropertyName.y
+                                        && properties[2].name == PropertyName.z
+                                        && properties[3].name == PropertyName.nx
+                                        && properties[4].name == PropertyName.ny
+                                        && properties[5].name == PropertyName.nz
+                                        && (properties[6].name == PropertyName.u
+                                                || properties[6].name == PropertyName.s)
+                                        && (properties[7].name == PropertyName.v
+                                                || properties[7].name == PropertyName.t)
                                 {
                                         appendPoint(from: data)
                                         appendNormal(from: data)
                                         appendUV(from: data)
-                                } else if properties[0].name == Property.PropertyName.x
-                                        && properties[1].name == Property.PropertyName.y
-                                        && properties[2].name == Property.PropertyName.z
-                                        && properties[3].name == Property.PropertyName.u
-                                        && properties[4].name == Property.PropertyName.v
-                                        && properties[5].name == Property.PropertyName.nx
-                                        && properties[6].name == Property.PropertyName.ny
-                                        && properties[7].name == Property.PropertyName.nz
+                                } else if properties[0].name == PropertyName.x
+                                        && properties[1].name == PropertyName.y
+                                        && properties[2].name == PropertyName.z
+                                        && properties[3].name == PropertyName.u
+                                        && properties[4].name == PropertyName.v
+                                        && properties[5].name == PropertyName.nx
+                                        && properties[6].name == PropertyName.ny
+                                        && properties[7].name == PropertyName.nz
                                 {
                                         appendPoint(from: data)
                                         appendUV(from: data)
