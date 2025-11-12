@@ -14,10 +14,8 @@ protocol Spectrum {
 struct PiecewiseLinearSpectrum: Spectrum {
 
         private func findIndex(wavelength: FloatX) -> Int {
-                for (index, lambda) in lambdas.enumerated() {
-                        if wavelength < lambda {
-                                return index
-                        }
+                for (index, lambda) in lambdas.enumerated() where wavelength < lambda {
+                        return index
                 }
                 return lambdas.count - 1
         }
