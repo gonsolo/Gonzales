@@ -434,7 +434,6 @@ extension Api {
         }
 
         @MainActor
-        // swiftlint:disable:next cyclomatic_complexit
         func texture(
                 name: String,
                 type: String,
