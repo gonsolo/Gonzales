@@ -80,7 +80,7 @@ struct InfiniteLight {
                 if a == 0 {
                         b = 0
                 } else {
-                        b = b / a
+                        b /= a
                 }
                 var phi = atan(b) * 2 / FloatX.pi
                 if x < y {
