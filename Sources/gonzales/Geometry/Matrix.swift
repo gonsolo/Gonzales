@@ -97,13 +97,11 @@ public struct Matrix: Sendable {
                 }
 
                 func subtractRow(icol: inout Int) {
-                        for j in 0..<4 {
-                                if j != icol {
-                                        let save = minv[j, icol]
-                                        minv[j, icol] = 0
-                                        for k in 0..<4 {
-                                                minv[j, k] -= minv[icol, k] * save
-                                        }
+                        for j in 0..<4 where j != icol {
+                                let save = minv[j, icol]
+                                minv[j, icol] = 0
+                                for k in 0..<4 {
+                                        minv[j, k] -= minv[icol, k] * save
                                 }
                         }
                 }
