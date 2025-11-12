@@ -4,7 +4,7 @@ enum MeasuredError: Error {
 
 struct Measured {
 
-        func getBsdf(interaction: any Interaction) -> DiffuseBsdf {
+        func getBsdf(_: any Interaction) -> DiffuseBsdf {
                 unimplemented()
         }
 }
