@@ -69,18 +69,16 @@ public struct Matrix: Sendable {
 
                 func choosePivot(irow: inout Int, icol: inout Int) throws {
                         var big: FloatX = 0.0
-                        for j in 0..<4 {
-                                if ipiv[j] != 1 {
-                                        for k in 0..<4 {
-                                                if ipiv[k] == 0 {
-                                                        if abs(minv[j, k]) >= big {
-                                                                big = abs(minv[j, k])
-                                                                irow = j
-                                                                icol = k
-                                                        }
-                                                } else if ipiv[k] > 1 {
-                                                        throw MatrixError.singularMatrix
+                        for j in 0..<4 where ipiv[j] != 1 {
+                                for k in 0..<4 {
+                                        if ipiv[k] == 0 {
+                                                if abs(minv[j, k]) >= big {
+                                                        big = abs(minv[j, k])
+                                                        irow = j
+                                                        icol = k
                                                 }
+                                        } else if ipiv[k] > 1 {
+                                                throw MatrixError.singularMatrix
                                         }
                                 }
                         }
