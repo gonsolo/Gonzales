@@ -188,6 +188,7 @@ final class BoundingHierarchyBuilder {
                 range: Range<Int>,
                 counter: Int
         )
+        // swiftlint:disable:next large_tuple
                 -> (start: Int, middle: Int, end: Int, bounds: Bounds3f)
         {
                 var start = 0
@@ -219,15 +220,14 @@ final class BoundingHierarchyBuilder {
                         for i in 0..<nSplits {
                                 boundBelow = union(first: boundBelow, second: buckets[i].bounds)
                                 countBelow += buckets[i].count
-                                costs[i] = costs[i] + FloatX(countBelow) * boundBelow.surfaceArea()
+                                costs[i] += FloatX(countBelow) * boundBelow.surfaceArea()
                         }
                         var countAbove = 0
                         var boundAbove = Bounds3f()
                         for i in (1...nSplits).reversed() {
                                 boundAbove = union(first: boundAbove, second: buckets[i].bounds)
                                 countAbove += buckets[i].count
-                                costs[i - 1] =
-                                        costs[i - 1] + FloatX(countAbove) * boundAbove.surfaceArea()
+                                costs[i - 1] += FloatX(countAbove) * boundAbove.surfaceArea()
                         }
                         var minCostSplitBucket = -1
                         var minCost = FloatX.infinity
