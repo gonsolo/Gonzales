@@ -117,6 +117,7 @@ struct Curve: Shape {
                 return (point, derivative)
         }
 
+        // swiftlint:disable:next function_body_length
         func recursiveIntersect(
                 ray: Ray,
                 tHit: inout FloatX,

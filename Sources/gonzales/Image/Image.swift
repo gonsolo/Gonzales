@@ -25,7 +25,7 @@ struct Image {
         ) {
                 let index = location.y * fullResolution.x + location.x
                 if index >= 0 && index < pixels.count {
-                        pixels[index] = pixels[index] + Pixel(light: color, weight: weight)
+                        pixels[index] += Pixel(light: color, weight: weight)
                 }
         }
 

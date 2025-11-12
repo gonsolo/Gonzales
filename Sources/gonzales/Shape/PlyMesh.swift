@@ -98,6 +98,8 @@ struct PlyMesh {
                 return Character(UnicodeScalar(data[index]))
         }
 
+        // swiftlint:disable:next function_body_length
+        // swiftlint:disable:next cyclomatic_complexity
         mutating func readPlyHeader(from data: Data) throws {
                 enum HeaderState { case vertex, face, none }
                 var headerState = HeaderState.none

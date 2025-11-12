@@ -33,4 +33,8 @@ extension Pixel {
         static func + (left: Pixel, right: Pixel) -> Pixel {
                 return Pixel(light: left.light + right.light, weight: left.weight + right.weight)
         }
+
+        static func += (left: inout Pixel, right: Pixel) {
+                left = left + right
+        }
 }
