@@ -85,15 +85,13 @@ public struct Matrix: Sendable {
                 }
 
                 func swapColumns() {
-                        for j in (0..<4).reversed() {
-                                if indxr[j] != indxc[j] {
-                                        for k in 0..<4 {
-                                                let r = indxr[j]
-                                                let c = indxc[j]
-                                                let tmp = minv[k, r]
-                                                minv[k, r] = minv[k, c]
-                                                minv[k, c] = tmp
-                                        }
+                        for j in (0..<4).reversed() where indxr[j] != indxc[j] {
+                                for k in 0..<4 {
+                                        let r = indxr[j]
+                                        let c = indxc[j]
+                                        let tmp = minv[k, r]
+                                        minv[k, r] = minv[k, c]
+                                        minv[k, c] = tmp
                                 }
                         }
                 }
