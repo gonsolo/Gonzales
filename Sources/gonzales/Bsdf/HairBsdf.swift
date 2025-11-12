@@ -2,6 +2,17 @@ import Foundation  // atan2
 
 struct HairBsdf: GlobalBsdf {
 
+        let pMax = 3
+        var absorption: RgbSpectrum
+        let indexRefraction: FloatX = 1.55
+        let gammaO: FloatX
+        let h: FloatX
+        let s: FloatX
+        var v: [FloatX]
+        var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
+        var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
+        let bsdfFrame: BsdfFrame
+
         init(alpha: FloatX, h: FloatX, absorption: RgbSpectrum, bsdfFrame: BsdfFrame) {
                 self.h = h
                 self.absorption = absorption
@@ -30,6 +41,9 @@ struct HairBsdf: GlobalBsdf {
                 }
                 self.bsdfFrame = bsdfFrame
         }
+}
+
+extension HairBsdf {
 
         private func computeAttenutation(
                 cosThetaO: FloatX,
@@ -376,16 +390,4 @@ struct HairBsdf: GlobalBsdf {
                 // Not correct but should be ok
                 return absorption
         }
-
-        let pMax = 3
-        var absorption: RgbSpectrum
-        let indexRefraction: FloatX = 1.55
-        let gammaO: FloatX
-        let h: FloatX
-        let s: FloatX
-        var v: [FloatX]
-        var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
-        var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
-
-        let bsdfFrame: BsdfFrame
 }
