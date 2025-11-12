@@ -32,14 +32,14 @@ struct GaussianFilter: Filter {
                 let c: [FloatX] = [-1.970840454, -1.624906493, 3.429567803, 1.641345311]
                 let d: [FloatX] = [3.543889200, 1.637067800]
 
-                let abs_y = abs(y)
+                let absY = abs(y)
 
-                if abs_y <= center {
+                if absY <= center {
                         let z = y * y
 
-                        var num_poly = a[3] * z + a[2]
-                        num_poly = num_poly * z + a[1]
-                        let num = num_poly * z + a[0]
+                        var numPoly = a[3] * z + a[2]
+                        numPoly = numPoly * z + a[1]
+                        let num = numPoly * z + a[0]
 
                         var den_poly = b[3] * z + b[2]
                         den_poly = den_poly * z + b[1]
@@ -61,14 +61,14 @@ struct GaussianFilter: Filter {
                         return x
                 }
 
-                else if abs_y < 1.0 {
+                else if absY < 1.0 {
 
-                        let z_base: FloatX = (1.0 - abs_y) / 2.0
+                        let z_base: FloatX = (1.0 - absY) / 2.0
                         let z: FloatX = sqrt(-log(z_base))
 
-                        var num_poly = c[3] * z + c[2]
-                        num_poly = num_poly * z + c[1]
-                        let num = num_poly * z + c[0]
+                        var numPoly = c[3] * z + c[2]
+                        numPoly = numPoly * z + c[1]
+                        let num = numPoly * z + c[0]
 
                         let den_poly = d[1] * z + d[0]
                         let den = den_poly * z + 1.0
@@ -90,7 +90,7 @@ struct GaussianFilter: Filter {
                         return x
                 }
 
-                else if abs_y == 1.0 {
+                else if absY == 1.0 {
                         return y.sign == .plus ? .infinity : -.infinity
                 } else {
                         return .nan
