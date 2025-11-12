@@ -3,6 +3,20 @@ import Foundation  // Scanner, CharacterSet
 @available(OSX 10.15, *)
 final class Parser {
 
+        var scanner: PbrtScanner
+        let fileName: String
+        var render = true
+        var worldEndSeen = false
+
+        init(fileName: String, render: Bool = true, function: String = #function) throws {
+                self.scanner = try PbrtScanner(path: fileName)
+                self.fileName = fileName
+                self.render = render
+        }
+}
+
+extension Parser {
+
         enum RenderStatement: String {
                 case accelerator = "Accelerator"
                 case areaLightSource = "AreaLightSource"
@@ -40,12 +54,6 @@ final class Parser {
                 case translate = "Translate"
                 case worldBegin = "WorldBegin"
                 case worldEnd = "WorldEnd"
-        }
-
-        init(fileName: String, render: Bool = true, function: String = #function) throws {
-                self.scanner = try PbrtScanner(path: fileName)
-                self.fileName = fileName
-                self.render = render
         }
 
         @MainActor
@@ -755,9 +763,4 @@ final class Parser {
                 case .worldEnd: try await parseWorldEnd()
                 }
         }
-
-        var scanner: PbrtScanner
-        let fileName: String
-        var render = true
-        var worldEndSeen = false
 }
