@@ -1,12 +1,12 @@
 Integrator "path" "integer maxdepth" [ 4 ] # gonsolo 65
 Transform [ 1 -0 -0 -0 -0 1 -0 -0 -0 -0 -1 -0 -0 -1 6.8 1  ]
-Sampler "sobol" "integer pixelsamples" [ 1 ] # gonsolo 512
+Sampler "sobol" "integer pixelsamples" [ 8 ] # gonsolo 512
 #Sampler "sobol" "integer pixelsamples" [ 1 ] # gonsolo 512
 
 #PixelFilter "triangle" "float xradius" [ 1 ] "float yradius" [ 1 ]
-#PixelFilter "box" "float xradius" [ 1 ] "float yradius" [ 1 ]
+PixelFilter "box" "float xradius" [ 10 ] "float yradius" [ 10 ]
 #PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ]
-PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
+#PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
 
 # gonsolo
 Accelerator "bvh"
