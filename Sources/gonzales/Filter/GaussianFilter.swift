@@ -106,20 +106,20 @@ struct GaussianFilter: Filter {
 
                         let x = sigma * sqrt(2) * erfinv(y: 2 * uScaled - 1)
 
-                        let pdf_unnormalized =
+                        let pdfUnnormalized =
                                 exp(-x * x / (2 * sigma * sigma)) / (sigma * sqrt(2 * FloatX.pi))
 
-                        let density = pdf_unnormalized / (2 * norm - 1)
+                        let density = pdfUnnormalized / (2 * norm - 1)
 
-                        let clamped_x = max(-radius, min(radius, x))
+                        let clampedX = max(-radius, min(radius, x))
 
-                        return (sample: clamped_x, density: density)
+                        return (sample: clampedX, density: density)
                 }
 
-                let result_x = sample1D(u: u.0, radius: support.x, sigma: sigma)
-                let result_y = sample1D(u: u.1, radius: support.y, sigma: sigma)
-                let location = Point2f(x: result_x.sample, y: result_y.sample)
-                let probabilityDensity = result_x.density * result_y.density
+                let resultX = sample1D(u: u.0, radius: support.x, sigma: sigma)
+                let resultY = sample1D(u: u.1, radius: support.y, sigma: sigma)
+                let location = Point2f(x: resultX.sample, y: resultY.sample)
+                let probabilityDensity = resultX.density * resultY.density
 
                 return FilterSample(location: location, probabilityDensity: probabilityDensity)
         }
