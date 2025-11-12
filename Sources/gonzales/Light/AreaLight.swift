@@ -15,7 +15,8 @@ struct AreaLight: Boundable, Intersectable {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene) -> LightSample
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
+                -> LightSample
         {
                 let (shapeInteraction, pdf) = shape.sample(point: point, samples: samples, scene: scene)
                 let direction: Vector = normalized(shapeInteraction.position - point)

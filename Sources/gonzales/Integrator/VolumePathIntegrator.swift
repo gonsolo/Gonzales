@@ -278,46 +278,6 @@ struct VolumePathIntegrator {
                 return (estimate, spawnedRay)
         }
 
-        mutating func oneBounce(
-                interaction: inout SurfaceInteraction,
-                tHit: inout Float,
-                ray: inout Ray,
-                bounce: Int,
-                estimate: inout RgbSpectrum,
-                sampler: inout RandomSampler,
-                pathThroughputWeight: inout RgbSpectrum,
-                lightSampler: inout LightSampler,
-                albedo: inout RgbSpectrum,
-                firstNormal: inout Normal,
-                state: ImmutableState,
-                scene: Scene
-        ) throws -> Bool {
-                try intersectOrInfiniteLights(
-                        ray: ray,
-                        tHit: &tHit,
-                        bounce: bounce,
-                        estimate: &estimate,
-                        interaction: &interaction)
-                if !interaction.valid {
-                        return false
-                } else {
-                        let result = try oneBounce2(
-                                interaction: &interaction,
-                                tHit: &tHit,
-                                ray: &ray,
-                                bounce: bounce,
-                                estimate: &estimate,
-                                sampler: &sampler,
-                                pathThroughputWeight: &pathThroughputWeight,
-                                lightSampler: &lightSampler,
-                                albedo: &albedo,
-                                firstNormal: &firstNormal,
-                                state: state,
-                                scene: scene)
-                        return result
-                }
-        }
-
         func mediumEstimate<D: DistributionModel>(
                 ray: inout Ray,
                 pathThroughputWeight: RgbSpectrum,
@@ -420,7 +380,7 @@ struct VolumePathIntegrator {
                 return true
         }
 
-        mutating func oneBounce2(
+        mutating func oneBounce(
                 interaction: inout SurfaceInteraction,
                 tHit: inout Float,
                 ray: inout Ray,
@@ -434,16 +394,30 @@ struct VolumePathIntegrator {
                 state: ImmutableState,
                 scene: Scene
         ) throws -> Bool {
-                //let (transmittance, mediumInteraction) =
-                //ray.medium?.sample(ray: ray, tHit: tHit, sampler: sampler) ?? (white, nil)
-                let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)
+
+                try intersectOrInfiniteLights(
+                        ray: ray,
+                        tHit: &tHit,
+                        bounce: bounce,
+                        estimate: &estimate,
+                        interaction: &interaction)
+
+                if !interaction.valid {
+                        return false  // No surface hit, so stop this bounce
+                }
+
+                //let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
+                let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)  // Keeping original implementation
                 pathThroughputWeight *= transmittance
+
                 if pathThroughputWeight.isBlack {
                         return false
                 }
+
                 guard bounce < maxDepth else {
                         return false
                 }
+
                 if let mediumInteraction {
                         let distributionModel = mediumInteraction.getDistributionModel()
                         estimate += try mediumEstimate(
@@ -455,6 +429,7 @@ struct VolumePathIntegrator {
                                 lightSampler: &lightSampler,
                                 scene: scene)
                 } else {
+                        // Surface hit: Perform lighting and generate new ray
                         let result = try surfaceEstimate(
                                 interaction: &interaction,
                                 ray: &ray,
@@ -472,6 +447,7 @@ struct VolumePathIntegrator {
                                 return false
                         }
                 }
+
                 tHit = FloatX.infinity
                 if stopWithRussianRoulette(
                         bounce: bounce,

@@ -7,8 +7,7 @@ struct PointLight {
                 self.intensity = intensity
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> LightSample
-        {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> LightSample {
                 let direction: Vector = normalized(position - point)
                 let pdf: FloatX = 1.0
                 let visibility = Visibility(from: point, to: position)

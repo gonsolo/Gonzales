@@ -128,7 +128,9 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX) {
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+                interaction: SurfaceInteraction, pdf: FloatX
+        ) {
                 switch self {
                 case .triangle(let triangle):
                         return triangle.sample(samples: samples, scene: scene)

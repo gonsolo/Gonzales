@@ -16,8 +16,7 @@ struct InfiniteLight {
                 self.texture = texture
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> LightSample
-        {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator) -> LightSample {
                 let theta = samples.1 * FloatX.pi
                 let phi = samples.0 * 2 * FloatX.pi
                 let lightDirection = Vector(
@@ -32,7 +31,8 @@ struct InfiniteLight {
                 let interaction = SurfaceInteraction(uv: uv)
                 guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         print("Unsupported texture type!")
-                        return LightSample(radiance: black, direction: direction, pdf: pdf, visibility: visibility)
+                        return LightSample(
+                                radiance: black, direction: direction, pdf: pdf, visibility: visibility)
                 }
                 return LightSample(radiance: color, direction: direction, pdf: pdf, visibility: visibility)
         }

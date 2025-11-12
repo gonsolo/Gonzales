@@ -35,7 +35,9 @@ struct Disk: Shape {
                 unimplemented()
         }
 
-        func sample<I: Interaction>(samples: TwoRandomVariables, scene: Scene) -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(samples: TwoRandomVariables, scene: Scene) -> (
+                interaction: I, pdf: FloatX
+        ) {
                 unimplemented()
         }
 

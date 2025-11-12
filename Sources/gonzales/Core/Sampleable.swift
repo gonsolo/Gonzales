@@ -7,7 +7,9 @@
 
 protocol Sampleable {
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (interaction: SurfaceInteraction, pdf: FloatX)
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+                interaction: SurfaceInteraction, pdf: FloatX
+        )
 
         func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX)
 
