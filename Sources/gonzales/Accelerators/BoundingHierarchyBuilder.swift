@@ -25,6 +25,33 @@ extension Sequence {
 
 final class BoundingHierarchyBuilder {
 
+        private let primitivesPerNode = 4
+
+        @MainActor
+        private static var interiorNodes = 0
+
+        @MainActor
+        private static var leafNodes = 0
+
+        @MainActor
+        private static var totalPrimitives = 0
+
+        @MainActor
+        private static var callsToPartition = 0
+
+        @MainActor
+        private static var bhNodes = 0
+
+        @MainActor
+        private static var bhPrimitives = 0
+
+        private var totalNodes = 0
+        private var offsetCounter = 0
+        private var cachedPrimitives: [CachedPrimitive]
+        private var primitives: [any Boundable]
+
+        var nodes = [BoundingHierarchyNode]()
+
         @MainActor
         internal init(scene: Scene, primitives: [any Boundable]) async {
                 self.cachedPrimitives = await primitives.enumerated().asyncMap { index, primitive in
@@ -34,6 +61,9 @@ final class BoundingHierarchyBuilder {
                 self.primitives = primitives
                 buildHierarchy()
         }
+}
+
+extension BoundingHierarchyBuilder {
 
         @MainActor
         internal func getSortedPrimitivesAndNodes() throws -> (
@@ -345,30 +375,4 @@ final class BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.interiorNodes += 1
         }
 
-        private let primitivesPerNode = 4
-
-        @MainActor
-        private static var interiorNodes = 0
-
-        @MainActor
-        private static var leafNodes = 0
-
-        @MainActor
-        private static var totalPrimitives = 0
-
-        @MainActor
-        private static var callsToPartition = 0
-
-        @MainActor
-        private static var bhNodes = 0
-
-        @MainActor
-        private static var bhPrimitives = 0
-
-        private var totalNodes = 0
-        private var offsetCounter = 0
-        private var cachedPrimitives: [CachedPrimitive]
-        private var primitives: [any Boundable]
-
-        var nodes = [BoundingHierarchyNode]()
 }
