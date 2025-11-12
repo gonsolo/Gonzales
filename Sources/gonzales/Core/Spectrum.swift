@@ -26,7 +26,7 @@ struct PiecewiseLinearSpectrum: Spectrum {
                 let red = values[findIndex(wavelength: 630)]
                 let green = values[findIndex(wavelength: 532)]
                 let blue = values[findIndex(wavelength: 465)]
-                return RgbSpectrum(r: red, g: green, b: blue)
+                return RgbSpectrum(red: red, green: green, blue: blue)
         }
 
         let lambdas: [FloatX]
@@ -145,15 +145,15 @@ var namedSpectra: [String: any Spectrum] = [
 public struct BaseRgbSpectrum: Initializable, Sendable, Three {
 
         init() {
-                self.init(r: 0, g: 0, b: 0)
+                self.init(red: 0, green: 0, blue: 0)
         }
 
         init(x: FloatX, y: FloatX, z: FloatX) {
                 self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
-        init(r: FloatX, g: FloatX, b: FloatX) {
-                self.init(x: r, y: g, z: b)
+        init(red: FloatX, green: FloatX, blue: FloatX) {
+                self.init(x: red, y: green, z: blue)
         }
 
         init(intensity: FloatX) {
@@ -222,9 +222,9 @@ extension BaseRgbSpectrum {
 
         public static func * (mul: FloatX, spectrum: BaseRgbSpectrum) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        r: mul * spectrum.x,
-                        g: mul * spectrum.y,
-                        b: mul * spectrum.z)
+                        red: mul * spectrum.x,
+                        green: mul * spectrum.y,
+                        blue: mul * spectrum.z)
         }
 
         public static func * (spectrum: BaseRgbSpectrum, mul: FloatX) -> BaseRgbSpectrum {
@@ -239,16 +239,16 @@ extension BaseRgbSpectrum {
 
         public static func + (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        r: spectrum.r + value,
-                        g: spectrum.g + value,
-                        b: spectrum.b + value)
+                        red: spectrum.r + value,
+                        green: spectrum.g + value,
+                        blue: spectrum.b + value)
         }
 
         public static func - (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        r: spectrum.r - value,
-                        g: spectrum.g - value,
-                        b: spectrum.b - value)
+                        red: spectrum.r - value,
+                        green: spectrum.g - value,
+                        blue: spectrum.b - value)
         }
 
         public static func / (
@@ -256,9 +256,9 @@ extension BaseRgbSpectrum {
                 denominator: BaseRgbSpectrum
         ) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        r: numerator.r / denominator.r,
-                        g: numerator.g / denominator.g,
-                        b: numerator.b / denominator.b)
+                        red: numerator.r / denominator.r,
+                        green: numerator.g / denominator.g,
+                        blue: numerator.b / denominator.b)
         }
 
         public static func == (a: BaseRgbSpectrum, b: BaseRgbSpectrum) -> Bool {
@@ -271,9 +271,9 @@ extension BaseRgbSpectrum {
 
         public func squareRoot() -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        r: r.squareRoot(),
-                        g: g.squareRoot(),
-                        b: b.squareRoot())
+                        red: r.squareRoot(),
+                        green: g.squareRoot(),
+                        blue: b.squareRoot())
         }
 
         func average() -> T {
@@ -308,7 +308,7 @@ extension BaseRgbSpectrum {
 extension BaseRgbSpectrum {
 
         func asRgb() -> RgbSpectrum {
-                return RgbSpectrum(r: FloatX(r), g: FloatX(g), b: FloatX(b))
+                return RgbSpectrum(red: FloatX(r), green: FloatX(g), blue: FloatX(b))
         }
 
         var luminance: T {
@@ -323,7 +323,7 @@ extension BaseRgbSpectrum {
 
         init(from normal: Normal3) {
                 let normal = normalized(normal)
-                self.init(r: abs(normal.x), g: abs(normal.y), b: abs(normal.z))
+                self.init(red: abs(normal.x), green: abs(normal.y), blue: abs(normal.z))
         }
 }
 
@@ -334,22 +334,22 @@ extension RgbSpectrum: Spectrum {}
 let black = RgbSpectrum(intensity: 0)
 let gray = RgbSpectrum(intensity: 0.5)
 let white = RgbSpectrum(intensity: 1)
-let red = RgbSpectrum(r: 1, g: 0, b: 0)
-let blue = RgbSpectrum(r: 0, g: 0, b: 1)
-let green = RgbSpectrum(r: 0, g: 1, b: 0)
+let red = RgbSpectrum(red: 1, green: 0, blue: 0)
+let blue = RgbSpectrum(red: 0, green: 0, blue: 1)
+let green = RgbSpectrum(red: 0, green: 1, blue: 0)
 
 func pow(base: RgbSpectrum, exp: FloatX) -> RgbSpectrum {
         return RgbSpectrum(
-                r: pow(base.r, exp),
-                g: pow(base.g, exp),
-                b: pow(base.b, exp))
+                red: pow(base.r, exp),
+                green: pow(base.g, exp),
+                blue: pow(base.b, exp))
 }
 
 func exp(_ x: RgbSpectrum) -> RgbSpectrum {
         return RgbSpectrum(
-                r: exp(x.r),
-                g: exp(x.g),
-                b: exp(x.b))
+                red: exp(x.r),
+                green: exp(x.g),
+                blue: exp(x.b))
 }
 
 func gammaLinearToSrgb(light: RgbSpectrum) -> RgbSpectrum {

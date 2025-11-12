@@ -1,2 +1,7 @@
 opt_in_rules:
   - unused_parameter
+identifier_name:
+  excluded:
+    - x
+    - y
+    - z

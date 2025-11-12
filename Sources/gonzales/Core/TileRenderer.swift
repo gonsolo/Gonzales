@@ -29,18 +29,18 @@ struct TileRenderer: Renderer {
                 var tiles: [Tile] = []
                 var minY = bounds.pMin.y
                 while minY < bounds.pMax.y {
-                        var x = bounds.pMin.x
-                        while x < bounds.pMax.x {
-                                let pMin = Point2i(x: x, y: minY)
+                        var minX = bounds.pMin.x
+                        while minX < bounds.pMax.x {
+                                let pMin = Point2i(x: minX, y: minY)
                                 let pMax = Point2i(
-                                        x: min(x + tileSize.0, bounds.pMax.x),
+                                        x: min(minX + tileSize.0, bounds.pMax.x),
                                         y: min(minY + tileSize.1, bounds.pMax.y))
                                 let bounds = Bounds2i(pMin: pMin, pMax: pMax)
                                 let tile = Tile(
                                         integrator: integrator,
                                         bounds: bounds)
                                 tiles.append(tile)
-                                x += tileSize.0
+                                minX += tileSize.0
                         }
                         minY += tileSize.1
                 }

@@ -4,8 +4,8 @@ struct Hair {
                 eumelaninConcentration: FloatX,
                 pheomelaninConcentration: FloatX = 0
         ) -> RgbSpectrum {
-                let eumelaninAbsorptionCoefficient = RgbSpectrum(r: 0.419, g: 0.697, b: 1.37)
-                let pheomelaninAbsorptionCoefficient = RgbSpectrum(r: 0.187, g: 0.4, b: 1.05)
+                let eumelaninAbsorptionCoefficient = RgbSpectrum(red: 0.419, green: 0.697, blue: 1.37)
+                let pheomelaninAbsorptionCoefficient = RgbSpectrum(red: 0.187, green: 0.4, blue: 1.05)
                 let eumelaninAbsorption = eumelaninConcentration * eumelaninAbsorptionCoefficient
                 let pheomelaninAbsorption = pheomelaninConcentration * pheomelaninAbsorptionCoefficient
                 return eumelaninAbsorption + pheomelaninAbsorption
