@@ -7,9 +7,9 @@ struct OpenImageIOWriter {
                 var buffer = [Float]()
 
                 func write(pixel: Pixel, at index: Int) {
-                        buffer[index + 0] = Float(pixel.light.r)
-                        buffer[index + 1] = Float(pixel.light.g)
-                        buffer[index + 2] = Float(pixel.light.b)
+                        buffer[index + 0] = Float(pixel.light.red)
+                        buffer[index + 1] = Float(pixel.light.green)
+                        buffer[index + 2] = Float(pixel.light.blue)
                         buffer[index + 3] = 1
                 }
 

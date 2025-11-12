@@ -16,7 +16,7 @@ struct Pixel {
         }
 
         func intensity() -> FloatX {
-                return (light.r + light.g + light.b) / 3.0
+                return (light.red + light.green + light.blue) / 3.0
         }
 
         var light: RgbSpectrum

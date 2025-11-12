@@ -165,25 +165,25 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
         }
 
         var isNaN: Bool {
-                return r.isNaN || g.isNaN || b.isNaN
+                return red.isNaN || green.isNaN || blue.isNaN
         }
 
         var isInfinite: Bool {
-                return r.isInfinite || g.isInfinite || b.isInfinite
+                return red.isInfinite || green.isInfinite || blue.isInfinite
         }
 
         // Convenience accessors for RgbSpectrum
-        var r: T {
+        var red: T {
                 get { return x }
                 set { x = newValue }
         }
 
-        var g: T {
+        var green: T {
                 get { return y }
                 set { y = newValue }
         }
 
-        var b: T {
+        var blue: T {
                 get { return z }
                 set { z = newValue }
         }
@@ -207,14 +207,14 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
 extension BaseRgbSpectrum: CustomStringConvertible {
 
         public var description: String {
-                return "[ \(r) \(g) \(b) ]"
+                return "[ \(red) \(green) \(blue) ]"
         }
 }
 
 extension BaseRgbSpectrum {
 
         var isBlack: Bool {
-                return r == 0 && g == 0 && b == 0
+                return red == 0 && green == 0 && blue == 0
         }
 }
 
@@ -239,16 +239,16 @@ extension BaseRgbSpectrum {
 
         public static func + (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        red: spectrum.r + value,
-                        green: spectrum.g + value,
-                        blue: spectrum.b + value)
+                        red: spectrum.red + value,
+                        green: spectrum.green + value,
+                        blue: spectrum.blue + value)
         }
 
         public static func - (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        red: spectrum.r - value,
-                        green: spectrum.g - value,
-                        blue: spectrum.b - value)
+                        red: spectrum.red - value,
+                        green: spectrum.green - value,
+                        blue: spectrum.blue - value)
         }
 
         public static func / (
@@ -256,49 +256,49 @@ extension BaseRgbSpectrum {
                 denominator: BaseRgbSpectrum
         ) -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        red: numerator.r / denominator.r,
-                        green: numerator.g / denominator.g,
-                        blue: numerator.b / denominator.b)
+                        red: numerator.red / denominator.red,
+                        green: numerator.green / denominator.green,
+                        blue: numerator.blue / denominator.blue)
         }
 
-        public static func == (a: BaseRgbSpectrum, b: BaseRgbSpectrum) -> Bool {
-                return a.r == b.r && a.g == b.g && a.b == b.b
+        public static func == (lhs: BaseRgbSpectrum, rhs: BaseRgbSpectrum) -> Bool {
+                return lhs.red == rhs.red && lhs.green == rhs.green && lhs.blue == rhs.blue
         }
 
-        public static func != (a: BaseRgbSpectrum, b: BaseRgbSpectrum) -> Bool {
-                return !(a == b)
+        public static func != (lhs: BaseRgbSpectrum, rhs: BaseRgbSpectrum) -> Bool {
+                return !(lhs == rhs)
         }
 
         public func squareRoot() -> BaseRgbSpectrum {
                 return BaseRgbSpectrum(
-                        red: r.squareRoot(),
-                        green: g.squareRoot(),
-                        blue: b.squareRoot())
+                        red: red.squareRoot(),
+                        green: green.squareRoot(),
+                        blue: blue.squareRoot())
         }
 
         func average() -> T {
-                return (r + g + b) / 3
+                return (red + green + blue) / 3
         }
 
         var maxValue: T {
-                return max(r, max(g, b))
+                return max(red, max(green, blue))
         }
 
         subscript(index: Int) -> T {
                 get {
                         switch index {
-                        case 0: return r
-                        case 1: return g
-                        case 2: return b
-                        default: return r
+                        case 0: return red
+                        case 1: return green
+                        case 2: return blue
+                        default: return red
                         }
                 }
                 set(newValue) {
                         switch index {
-                        case 0: r = newValue
-                        case 1: g = newValue
-                        case 2: b = newValue
-                        default: r = newValue
+                        case 0: red = newValue
+                        case 1: green = newValue
+                        case 2: blue = newValue
+                        default: red = newValue
                         }
                 }
         }
@@ -308,13 +308,13 @@ extension BaseRgbSpectrum {
 extension BaseRgbSpectrum {
 
         func asRgb() -> RgbSpectrum {
-                return RgbSpectrum(red: FloatX(r), green: FloatX(g), blue: FloatX(b))
+                return RgbSpectrum(red: FloatX(red), green: FloatX(green), blue: FloatX(blue))
         }
 
         var luminance: T {
-                let rw: T = 0.212671 * r
-                let gw: T = 0.715160 * g
-                let bw: T = 0.072169 * b
+                let rw: T = 0.212671 * red
+                let gw: T = 0.715160 * green
+                let bw: T = 0.072169 * blue
                 return rw + gw + bw
         }
 }
@@ -340,30 +340,30 @@ let green = RgbSpectrum(red: 0, green: 1, blue: 0)
 
 func pow(base: RgbSpectrum, exp: FloatX) -> RgbSpectrum {
         return RgbSpectrum(
-                red: pow(base.r, exp),
-                green: pow(base.g, exp),
-                blue: pow(base.b, exp))
+                red: pow(base.red, exp),
+                green: pow(base.green, exp),
+                blue: pow(base.blue, exp))
 }
 
 func exp(_ x: RgbSpectrum) -> RgbSpectrum {
         return RgbSpectrum(
-                red: exp(x.r),
-                green: exp(x.g),
-                blue: exp(x.b))
+                red: exp(x.red),
+                green: exp(x.green),
+                blue: exp(x.blue))
 }
 
 func gammaLinearToSrgb(light: RgbSpectrum) -> RgbSpectrum {
         var converted = RgbSpectrum()
-        converted.r = gammaLinearToSrgb(value: light.r)
-        converted.g = gammaLinearToSrgb(value: light.g)
-        converted.b = gammaLinearToSrgb(value: light.b)
+        converted.red = gammaLinearToSrgb(value: light.red)
+        converted.green = gammaLinearToSrgb(value: light.green)
+        converted.blue = gammaLinearToSrgb(value: light.blue)
         return converted
 }
 
 func gammaSrgbToLinear(light: RgbSpectrum) -> RgbSpectrum {
         var converted = RgbSpectrum()
-        converted.r = gammaSrgbToLinear(value: light.r)
-        converted.g = gammaSrgbToLinear(value: light.g)
-        converted.b = gammaSrgbToLinear(value: light.b)
+        converted.red = gammaSrgbToLinear(value: light.red)
+        converted.green = gammaSrgbToLinear(value: light.green)
+        converted.blue = gammaSrgbToLinear(value: light.blue)
         return converted
 }

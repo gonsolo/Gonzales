@@ -591,8 +591,8 @@ struct VolumePathIntegrator {
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
         // denoiser can't read. Make white a little colorful
         private func intelHack(_ albedo: inout RgbSpectrum) {
-                if albedo.r == albedo.g && albedo.r == albedo.b {
-                        albedo.r += 0.01
+                if albedo.red == albedo.green && albedo.red == albedo.blue {
+                        albedo.red += 0.01
                 }
         }
 

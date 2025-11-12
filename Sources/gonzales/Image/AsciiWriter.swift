@@ -8,11 +8,11 @@ struct AsciiWriter {
                 var text = String(resolution.x) + " " + String(resolution.y) + "\n"
 
                 func write(pixel: Pixel, at index: Int) {
-                        text.append(String(pixel.light.r))
+                        text.append(String(pixel.light.red))
                         text.append(" ")
-                        text.append(String(pixel.light.g))
+                        text.append(String(pixel.light.green))
                         text.append(" ")
-                        text.append(String(pixel.light.b))
+                        text.append(String(pixel.light.blue))
                         text.append(" ")
                         text.append("1.0")
                         text.append(" ")
