@@ -41,18 +41,18 @@ struct GaussianFilter: Filter {
                         numPoly = numPoly * z + a[1]
                         let num = numPoly * z + a[0]
 
-                        var den_poly = b[3] * z + b[2]
-                        den_poly = den_poly * z + b[1]
-                        den_poly = den_poly * z + b[0]
-                        let den = den_poly * z + 1.0
+                        var denPoly = b[3] * z + b[2]
+                        denPoly = denPoly * z + b[1]
+                        denPoly = denPoly * z + b[0]
+                        let den = denPoly * z + 1.0
 
                         var x = y * num / den
 
                         let pi = FloatX.pi
-                        let two_over_sqrt_pi = 2.0 / sqrt(pi)
+                        let twoOverSqrtPi = 2.0 / sqrt(pi)
 
-                        let updateTerm: (FloatX) -> FloatX = { current_x in
-                                (erf(current_x) - y) / (two_over_sqrt_pi * exp(-(current_x * current_x)))
+                        let updateTerm: (FloatX) -> FloatX = { currentX in
+                                (erf(currentX) - y) / (twoOverSqrtPi * exp(-(currentX * currentX)))
                         }
 
                         x = x - updateTerm(x)
@@ -63,25 +63,25 @@ struct GaussianFilter: Filter {
 
                 else if absY < 1.0 {
 
-                        let z_base: FloatX = (1.0 - absY) / 2.0
-                        let z: FloatX = sqrt(-log(z_base))
+                        let zBase: FloatX = (1.0 - absY) / 2.0
+                        let z: FloatX = sqrt(-log(zBase))
 
                         var numPoly = c[3] * z + c[2]
                         numPoly = numPoly * z + c[1]
                         let num = numPoly * z + c[0]
 
-                        let den_poly = d[1] * z + d[0]
-                        let den = den_poly * z + 1.0
+                        let denPoly = d[1] * z + d[0]
+                        let den = denPoly * z + 1.0
 
-                        let sign_y: FloatX = y.sign == .plus ? 1.0 : -1.0
+                        let signY: FloatX = y.sign == .plus ? 1.0 : -1.0
 
-                        var x = sign_y * num / den
+                        var x = signY * num / den
 
                         let pi = FloatX.pi
-                        let two_over_sqrt_pi = 2.0 / sqrt(pi)
+                        let twoOverSqrtPi = 2.0 / sqrt(pi)
 
-                        let updateTerm: (FloatX) -> FloatX = { current_x in
-                                (erf(current_x) - y) / (two_over_sqrt_pi * exp(-(current_x * current_x)))
+                        let updateTerm: (FloatX) -> FloatX = { currentX in
+                                (erf(currentX) - y) / (twoOverSqrtPi * exp(-(currentX * currentX)))
                         }
 
                         x = x - updateTerm(x)
@@ -98,9 +98,6 @@ struct GaussianFilter: Filter {
         }
 
         func sample(u: (FloatX, FloatX)) -> FilterSample {
-
-                let u_x = u.0
-                let u_y = u.1
 
                 func sample1D(u: FloatX, radius: FloatX, sigma: FloatX) -> (sample: FloatX, density: FloatX) {
                         let norm = 0.5 * (1 + erf(radius / (sigma * sqrt(2))))
@@ -119,8 +116,8 @@ struct GaussianFilter: Filter {
                         return (sample: clamped_x, density: density)
                 }
 
-                let result_x = sample1D(u: u_x, radius: support.x, sigma: sigma)
-                let result_y = sample1D(u: u_y, radius: support.y, sigma: sigma)
+                let result_x = sample1D(u: u.0, radius: support.x, sigma: sigma)
+                let result_y = sample1D(u: u.1, radius: support.y, sigma: sigma)
                 let location = Point2f(x: result_x.sample, y: result_y.sample)
                 let probabilityDensity = result_x.density * result_y.density
 
