@@ -184,7 +184,7 @@ struct PlyMesh {
                                                                 "Unknown float property \(words[2])"
                                                 )
                                         }
-                                        case "list":
+                                case "list":
                                         switch words[2] {
                                         case "uint":
                                                 listBits = 32
@@ -196,10 +196,10 @@ struct PlyMesh {
                                                                 "Unknown list property \(words[2])"
                                                 )
                                         }
-                                        case "int":
+                                case "int":
                                         switch words[2] {
                                         case "face_indices":
-                                            hasFaceIndices = true
+                                                hasFaceIndices = true
                                         default:
                                                 throw ApiError.ply(
                                                         message: "Unknown int property \(words[2])")
@@ -277,7 +277,8 @@ struct PlyMesh {
                                         && (properties[6].name == Property.PropertyName.u
                                                 || properties[6].name == Property.PropertyName.s)
                                         && (properties[7].name == Property.PropertyName.v
-                                                || properties[7].name == Property.PropertyName.t) {
+                                                || properties[7].name == Property.PropertyName.t)
+                                {
                                         appendPoint(from: data)
                                         appendNormal(from: data)
                                         appendUV(from: data)
@@ -288,7 +289,8 @@ struct PlyMesh {
                                         && properties[4].name == Property.PropertyName.v
                                         && properties[5].name == Property.PropertyName.nx
                                         && properties[6].name == Property.PropertyName.ny
-                                        && properties[7].name == Property.PropertyName.nz {
+                                        && properties[7].name == Property.PropertyName.nz
+                                {
                                         appendPoint(from: data)
                                         appendUV(from: data)
                                         appendNormal(from: data)
@@ -363,7 +365,8 @@ struct PlyMesh {
 
 @MainActor
 func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
-        -> [ShapeType] {
+        -> [ShapeType]
+{
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {

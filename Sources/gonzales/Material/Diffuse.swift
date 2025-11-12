@@ -35,7 +35,8 @@ func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
                 return Diffuse(reflectance: texture)
         }
         if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: gray)
-                as? RgbSpectrum {
+                as? RgbSpectrum
+        {
                 let constantTexture = ConstantTexture<RgbSpectrum>(value: reflectanceSpectrum)
                 let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
                 let texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)

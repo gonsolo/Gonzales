@@ -41,7 +41,8 @@ extension Sampleable where Self: Intersectable {
                 samplingDirection direction: Vector,
                 from: I
         )
-                throws -> FloatX {
+                throws -> FloatX
+        {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
                 var interaction = SurfaceInteraction()

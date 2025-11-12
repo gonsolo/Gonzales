@@ -39,7 +39,7 @@ public struct Bounds3: Sendable {
                         Point3(x: pMax.x, y: pMin.y, z: pMin.z),
                         Point3(x: pMax.x, y: pMin.y, z: pMax.z),
                         Point3(x: pMax.x, y: pMax.y, z: pMin.z),
-                        Point3(x: pMax.x, y: pMax.y, z: pMax.z)
+                        Point3(x: pMax.x, y: pMax.y, z: pMax.z),
                 ]
         }
 

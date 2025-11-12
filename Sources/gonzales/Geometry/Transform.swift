@@ -78,7 +78,8 @@ extension Transform: CustomStringConvertible {
 
 extension Transform {
         static public func makePerspective(fov: FloatX, near: FloatX, far _: FloatX) throws
-                -> Transform {
+                -> Transform
+        {
                 let persp = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: 1, t12: 0, t13: 0,

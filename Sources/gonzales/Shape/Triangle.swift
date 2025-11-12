@@ -249,7 +249,8 @@ extension Triangle {
         }
 
         func computeUVHit(b0: FloatX, b1: FloatX, b2: FloatX, uv: (Vector2F, Vector2F, Vector2F))
-                -> Point2f {
+                -> Point2f
+        {
                 let uvHit0: Point2f = b0 * Point2f(from: uv.0)
                 let uvHit1: Point2f = b1 * Point2f(from: uv.1)
                 let uvHit2: Point2f = b2 * Point2f(from: uv.2)
@@ -316,7 +317,8 @@ extension Triangle {
                 // Ray t range test against tHit and ray segment limits (0)
                 let hitCondition = det > 0
                 if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
-                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det)) {
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
+                {
                         return nil
                 }
 
@@ -405,7 +407,8 @@ extension Triangle {
                 // Ray t range test against tHit and ray segment limits (0)
                 let hitCondition = det > 0
                 if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
-                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det)) {
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
+                {
                         return false
                 }
 

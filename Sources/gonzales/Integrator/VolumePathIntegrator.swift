@@ -32,7 +32,8 @@ extension VolumePathIntegrator {
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws
-                -> (Light, FloatX) {
+                -> (Light, FloatX)
+        {
                 return lightSampler.chooseLight(scene: scene)
         }
 
@@ -248,7 +249,8 @@ extension VolumePathIntegrator {
         }
 
         private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
-                -> Bool {
+                -> Bool
+        {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
                         let roulette = FloatX.random(in: 0..<1, using: &xoshiro)
@@ -457,7 +459,8 @@ extension VolumePathIntegrator {
                 tHit = FloatX.infinity
                 if stopWithRussianRoulette(
                         bounce: bounce,
-                        pathThroughputWeight: &pathThroughputWeight) {
+                        pathThroughputWeight: &pathThroughputWeight)
+                {
                         return false
                 }
                 return true
@@ -539,7 +542,8 @@ extension VolumePathIntegrator {
                 lightSampler: inout LightSampler,
                 state: ImmutableState
         ) throws
-                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal) {
+                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
+        {
 
                 // Path throughput weight
                 // The product of all GlobalBsdfs and cosines divided by the pdf

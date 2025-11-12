@@ -133,7 +133,8 @@ class Options {
 
         @MainActor
         func makeIntegrator(sampler _: RandomSampler, accelerator: Accelerator, scene: Scene) throws
-                -> VolumePathIntegrator {
+                -> VolumePathIntegrator
+        {
                 switch options.integratorName {
                 case "path": break
                 case "volpath": break
@@ -165,7 +166,8 @@ class Options {
 
         @MainActor
         func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight]) async throws
-                -> some Renderer {
+                -> some Renderer
+        {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let scene = Scene(

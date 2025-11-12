@@ -6,7 +6,8 @@ struct CameraTransform {
                 screenWindow: Bounds2f,
                 resolution: Point2i
         )
-                throws {
+                throws
+        {
                 self.cameraToScreen = cameraToScreen
                 let resolutionScale = try Transform.makeScale(
                         x: FloatX(resolution.x),

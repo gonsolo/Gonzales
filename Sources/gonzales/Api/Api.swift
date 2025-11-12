@@ -440,7 +440,8 @@ extension Api {
                 textureClass: String,
                 parameters: ParameterDictionary
         )
-                throws {
+                throws
+        {
                 guard type == "spectrum" || type == "float" || type == "color" else {
                         warning("Unimplemented texture type: \(type)")
                         return
@@ -566,7 +567,8 @@ extension Api {
                 parameters: ParameterDictionary,
                 lightToWorld: Transform
         )
-                throws -> Light {
+                throws -> Light
+        {
                 switch name {
                 case "distant":
                         let distantLight = try createDistantLight(
@@ -595,7 +597,8 @@ extension Api {
                 objectToWorld: Transform,
                 parameters: ParameterDictionary
         )
-                throws -> [ShapeType] {
+                throws -> [ShapeType]
+        {
                 switch name {
                 case "bilinearmesh":
                         return []  // Ignore for now

@@ -143,12 +143,14 @@ final class BoundingHierarchyBuilder {
         }
 
         private func isSmaller(_ a: CachedPrimitive, _ b: CachedPrimitive, in dimension: Int)
-                -> Bool {
+                -> Bool
+        {
                 return isSmaller(a, b.center[dimension], in: dimension)
         }
 
         private func splitMiddle(bounds: Bounds3f, dimension: Int, range: Range<Int>)
-                -> (start: Int, middle: Int, end: Int) {
+                -> (start: Int, middle: Int, end: Int)
+        {
                 let pivot = (bounds.pMin[dimension] + bounds.pMax[dimension]) / 2
                 let mid = cachedPrimitives[range].partition(by: {
                         isSmaller($0, pivot, in: dimension)
@@ -162,7 +164,8 @@ final class BoundingHierarchyBuilder {
         }
 
         private func splitEqual(bounds _: Bounds3f, dimension: Int, range: Range<Int>)
-                -> (start: Int, middle: Int, end: Int) {
+                -> (start: Int, middle: Int, end: Int)
+        {
                 // There is no nth_element so let's sort for now
                 cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
                 let start = range.first!
@@ -185,8 +188,9 @@ final class BoundingHierarchyBuilder {
                 range: Range<Int>,
                 counter: Int
         )
-        // swiftlint:disable:next large_tuple
-                -> (start: Int, middle: Int, end: Int, bounds: Bounds3f) {
+                // swiftlint:disable:next large_tuple
+                -> (start: Int, middle: Int, end: Int, bounds: Bounds3f)
+        {
                 var start = 0
                 var mid = 0
                 var end = 0
@@ -285,7 +289,8 @@ final class BoundingHierarchyBuilder {
 
                 if bounds.surfaceArea() == 0
                         || range.count == 1
-                        || centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
+                        || centroidBounds.pMax[dim] == centroidBounds.pMin[dim]
+                {
                         addLeafNode(
                                 offset: offsetCounter,
                                 bounds: bounds,

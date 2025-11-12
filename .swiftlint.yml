@@ -31,3 +31,4 @@ identifier_name:
 disabled_rules:
   - force_cast
   - function_parameter_count
+  - opening_brace
