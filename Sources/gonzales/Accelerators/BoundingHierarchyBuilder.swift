@@ -231,11 +231,9 @@ final class BoundingHierarchyBuilder {
                         }
                         var minCostSplitBucket = -1
                         var minCost = FloatX.infinity
-                        for i in 0..<nSplits {
-                                if costs[i] < minCost {
-                                        minCost = costs[i]
-                                        minCostSplitBucket = i
-                                }
+                        for i in 0..<nSplits where costs[i] < minCost {
+                                minCost = costs[i]
+                                minCostSplitBucket = i
                         }
                         let leafCost = FloatX(range.count)
 
