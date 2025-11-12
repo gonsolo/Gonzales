@@ -1,3 +1,7 @@
+file_length:
+  - 600
+function_body_length:
+  - 60
 opt_in_rules:
   - unused_parameter
 identifier_name:
@@ -28,6 +32,10 @@ identifier_name:
     - e
     - w
     - q
+    - to
+    - uv
+    - wo
+    - wi
 disabled_rules:
   - force_cast
   - function_parameter_count

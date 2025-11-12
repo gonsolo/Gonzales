@@ -33,7 +33,7 @@ struct DistantLight {
 
         let direction: Vector
         let brightness: RgbSpectrum
-        let worldRadius: FloatX = 100.0  // TODO
+        let worldRadius: FloatX = 100.0
 }
 
 func createDistantLight(lightToWorld: Transform, parameters: ParameterDictionary) throws

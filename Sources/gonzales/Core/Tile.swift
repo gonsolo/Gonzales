@@ -14,16 +14,12 @@ struct Tile: Sendable {
                                         pixel: pixel, filter: camera.film.filter)
                                 let ray = camera.generateRay(cameraSample: cameraSample)
                                 var tHit: FloatX = Float.infinity
-                                let radianceAlbedoNormal = try integrator.getRadianceAndAlbedo(
+                                let rayTraceSample = try integrator.evaluateRayPath(
                                         from: ray,
                                         tHit: &tHit,
                                         with: &sampler,
                                         lightSampler: &lightSampler,
                                         state: state)
-
-                                let radiance = radianceAlbedoNormal.0
-                                let albedo = radianceAlbedoNormal.1
-                                let normal = radianceAlbedoNormal.2
 
                                 let dx = cameraSample.film.0 - (FloatX(pixel.x) + 0.5)
                                 let dy = cameraSample.film.1 - (FloatX(pixel.y) + 0.5)
@@ -32,13 +28,12 @@ struct Tile: Sendable {
                                 let rayWeight = filterValue / cameraSample.filterWeight
 
                                 let sample = Sample(
-                                        light: radiance,
-                                        albedo: albedo,
-                                        normal: normal,
+                                        light: rayTraceSample.estimate,
+                                        albedo: rayTraceSample.albedo,
+                                        normal: rayTraceSample.normal,
                                         weight: rayWeight,
                                         pixel: pixel)
                                 samples.append(sample)
-
                         }
                 }
                 return samples

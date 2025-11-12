@@ -119,7 +119,6 @@ struct AreaLight: Boundable, Intersectable {
 extension AreaLight: Equatable {
         static func == (lhs: AreaLight, rhs: AreaLight) -> Bool {
                 return
-                        // TODO lhs.shape == rhs.shape &&
                         lhs.brightness == rhs.brightness && lhs.alpha == rhs.alpha
         }
 }

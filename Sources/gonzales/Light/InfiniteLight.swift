@@ -1,7 +1,5 @@
 import Foundation  // sin, cos
 
-// Is initialized in Scene.init.
-// TODO: Move somewhere reasonable.
 let sceneDiameter: FloatX = 100.0
 
 struct InfiniteLight {

@@ -409,11 +409,9 @@ extension VolumePathIntegrator {
                         bounce: bounce,
                         estimate: &estimate,
                         interaction: &interaction)
-
                 if !interaction.valid {
                         return false  // No surface hit, so stop this bounce
                 }
-
                 // let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
                 let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)  // Keeping original implementation
                 pathThroughputWeight *= transmittance
@@ -421,11 +419,9 @@ extension VolumePathIntegrator {
                 if pathThroughputWeight.isBlack {
                         return false
                 }
-
                 guard bounce < maxDepth else {
                         return false
                 }
-
                 if let mediumInteraction {
                         let distributionModel = mediumInteraction.getDistributionModel()
                         estimate += try mediumEstimate(
@@ -533,16 +529,22 @@ extension VolumePathIntegrator {
         }
 }
 
+struct RayTraceSample {
+        let estimate: RgbSpectrum
+        let albedo: RgbSpectrum
+        let normal: Normal
+}
+
 extension VolumePathIntegrator {
 
-        mutating func getRadianceAndAlbedo(
+        mutating func evaluateRayPath(
                 from ray: Ray,
                 tHit: inout FloatX,
                 with sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 state: ImmutableState
         ) throws
-                -> (estimate: RgbSpectrum, albedo: RgbSpectrum, normal: Normal)
+                -> RayTraceSample
         {
 
                 // Path throughput weight
@@ -567,12 +569,11 @@ extension VolumePathIntegrator {
                         state: state,
                         scene: scene)
 
-                let estimateAlbedoNormal = (
+                return RayTraceSample(
                         estimate: estimate,
                         albedo: albedo,
                         normal: firstNormal
                 )
-                return estimateAlbedoNormal
         }
 
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
