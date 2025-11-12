@@ -9,45 +9,6 @@ struct Accelerator: Boundable, Intersectable, Sendable {
         }
 
         nonisolated(unsafe) private var boundingHierarchy: BoundingHierarchy
-        // case boundingHierarchy(BoundingHierarchy)
-        // case embree(EmbreeAccelerator)
-        // case optix(Optix)
-
-        func intersect(
-                scene: Scene,
-                rays: [Ray],
-                tHits: inout [FloatX],
-                interactions: inout [SurfaceInteraction],
-                skips: [Bool]
-        ) throws {
-                // switch self {
-                // case .boundingHierarchy(let boundingHierarchy):
-                for i in 0..<rays.count {
-                        if !skips[i] {
-                                try boundingHierarchy.intersect(
-                                        scene: scene,
-                                        ray: rays[i],
-                                        tHit: &tHits[i],
-                                        interaction: &interactions[i])
-                        }
-                }
-                // case .embree(let embree):
-                //        for i in 0..<rays.count {
-                //                if !skips[i] {
-                //                        try embree.intersect(
-                //                                ray: rays[i],
-                //                                tHit: &tHits[i],
-                //                                interaction: &interactions[i])
-                //                }
-                //        }
-                // case .optix(let optix):
-                //        try optix.intersect(
-                //                rays: rays,
-                //                tHits: &tHits,
-                //                interactions: &interactions,
-                //                skips: skips)
-        }
-        // }
 
         func intersect(
                 scene: Scene,
