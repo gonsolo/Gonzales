@@ -63,7 +63,6 @@ struct Film {
                                 albedo: sample.albedo,
                                 normal: RgbSpectrum(from: sample.normal),
                                 weight: sample.weight,
-                                location: sample.location,
                                 pixel: sample.pixel,
                                 image: &image,
                                 albedoImage: &albedoImage,
@@ -86,7 +85,7 @@ struct Film {
 
         func add(
                 value: RgbSpectrum, albedo: RgbSpectrum, normal: RgbSpectrum, weight: FloatX,
-                location: Point2f, pixel: Point2i,
+                pixel: Point2i,
                 image: inout Image, albedoImage: inout Image, normalImage: inout Image
         ) {
                 if isWithin(location: pixel, resolution: image.getResolution()) {

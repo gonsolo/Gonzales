@@ -41,7 +41,6 @@ struct Tile: Sendable {
                                         albedo: albedo,
                                         normal: normal,
                                         weight: rayWeight,
-                                        location: Point2f(x: cameraSample.film.0, y: cameraSample.film.1),
                                         pixel: pixel)
                                 samples.append(sample)
 

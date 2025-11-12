@@ -6,7 +6,7 @@ Sampler "sobol" "integer pixelsamples" [ 8 ] # gonsolo 512
 #PixelFilter "triangle" "float xradius" [ 1 ] "float yradius" [ 1 ]
 #PixelFilter "box" "float xradius" [ 1 ] "float yradius" [ 1 ]
 #PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ]
-PixelFilter "gaussian" "float xradius" [ 50 ] "float yradius" [ 50 ] "float sigma" [25]
+PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
 
 # gonsolo
 Accelerator "bvh"
