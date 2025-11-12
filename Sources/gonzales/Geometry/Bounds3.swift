@@ -91,8 +91,8 @@ extension Bounds3 {
 
         func offset(point: Point3) -> Vector3 {
                 var o: Vector3 = point - pMin
-                for i in 0..<3 {
-                        if pMax[i] > pMin[i] { o[i] /= pMax[i] - pMin[i] }
+                for i in 0..<3 where pMax[i] > pMin[i] {
+                        o[i] /= pMax[i] - pMin[i]
                 }
                 return o
         }
