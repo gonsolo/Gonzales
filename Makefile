@@ -213,9 +213,9 @@ view_denoised:
 	$(CONVERT) -type truecolor -endian LSB $(IMAGE) $(PFM)
 	$(CONVERT) -type truecolor -endian LSB albedo.exr albedo.pfm
 	$(CONVERT) -type truecolor -endian LSB normal.exr normal.pfm
-	#$(DENOISE) -hdr $(PFM) -alb albedo.pfm -nrm normal.pfm -o denoised.albnrm.pfm
-	$(DENOISE) -hdr $(PFM) -o denoised.albnrm.pfm
-	$(VIEWER) denoised.albnrm.pfm
+	$(DENOISE) -hdr $(PFM) -alb albedo.pfm -nrm normal.pfm -o denoised.albnrm.pfm
+	#$(DENOISE) -hdr $(PFM) -o denoised.albnrm.pfm
+	gimp denoised.albnrm.pfm
 
 v: view
 vr: view_release
