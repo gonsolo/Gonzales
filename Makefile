@@ -205,8 +205,7 @@ clean:
 	@rm -rf gonzales.xcodeproj flame.svg perf.data perf.data.old Package.resolved
 	@rm -f $(EMBEDDED_C) .build/devicePrograms.ptx
 
-#CONVERT = magick convert
-CONVERT = convert
+CONVERT = magick 
 DENOISE = oidnDenoise
 vn: view_denoised
 view_denoised:

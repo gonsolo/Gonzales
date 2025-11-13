@@ -22,7 +22,6 @@ struct TileRenderer: Renderer {
                 } else {
                         bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)
                 }
-                reporter = ProgressReporter(total: bounds.area() * sampler.samplesPerPixel)
         }
 
         private func generateTiles(from bounds: Bounds2i) -> [Tile] {
@@ -47,12 +46,12 @@ struct TileRenderer: Renderer {
                 return tiles
         }
 
-        private func renderTile(tile: Tile, state: ImmutableState) async throws -> [Sample] {
+        //private func renderTile(tile: Tile, state: ImmutableState) async throws -> [Sample] {
+        private func renderTile(tile: Tile, state: ImmutableState) throws -> [Sample] {
                 var tileSampler = self.sampler.clone()
                 var lightSampler = self.lightSampler
                 var tile = tile
                 let samples = try tile.render(
-                        reporter: reporter,
                         sampler: &tileSampler,
                         camera: self.camera,
                         lightSampler: &lightSampler,
@@ -61,30 +60,120 @@ struct TileRenderer: Renderer {
                 return samples
         }
 
+@MainActor
+func runProgressReporter(reporter: ProgressReporter) async {
+    let reportInterval: Duration = .milliseconds(500)
+
+    // Helper function using only basic types and math
+    func formatTime(_ interval: TimeInterval) -> String {
+        let interval = Int(interval.rounded())
+        let seconds = interval % 60
+        let minutes = (interval / 60) % 60
+        let hours = interval / 3600
+
+        if hours > 0 {
+            return String(format: "%dh %dm %ds", hours, minutes, seconds)
+        } else if minutes > 0 {
+            return String(format: "%dm %ds", minutes, seconds)
+        } else {
+            return String(format: "%.1fs", Double(seconds))
+        }
+    }
+
+    while !Task.isCancelled {
+        do {
+            try await Task.sleep(for: reportInterval)
+
+            let metrics = await reporter.getProgressMetrics()
+
+            // Calculate Estimated Total Time (ETT)
+            let predictedTotalTime = metrics.averageTimePerTile * Double(metrics.total)
+
+            let percentage = (Double(metrics.completed) / Double(metrics.total)) * 100.0
+
+            let progressString = String(format:
+                "Progress: %d / %d (%.1f%%) | Elapsed: %@ | Total Est.: %@",
+                metrics.completed,
+                metrics.total,
+                percentage,
+                formatTime(metrics.timeElapsed),
+                formatTime(max(0, predictedTotalTime)) // Display ETT
+            )
+
+            // Periodic Update
+            print(progressString, terminator: "\r")
+            fflush(stdout)
+
+            if metrics.completed >= metrics.total {
+                break
+            }
+        } catch {
+            break
+        }
+    }
+
+    // Final output cleanup
+    let finalMetrics = await reporter.getProgressMetrics()
+    if finalMetrics.completed == finalMetrics.total {
+        let finalString = "Progress: \(finalMetrics.total) / \(finalMetrics.total) (100.0%) - Rendering Complete. Total Time: \(formatTime(finalMetrics.timeElapsed))\n"
+
+        print(finalString, terminator: "")
+        fflush(stdout)
+    }
+}
+
+
         @MainActor
         private func renderImage(bounds: Bounds2i) async throws {
                 let immutableState = state.getImmutable()
                 let tiles = generateTiles(from: bounds)
+                let reporter = ProgressReporter(total: tiles.count)
+
+                //setbuf(stderr, nil)
+
+                async let _: Void = runProgressReporter(reporter: reporter)
+
+                let renderingQueue = DispatchQueue(
+                        label: "com.renderer.heavy-work", qos: .userInitiated, attributes: .concurrent)
+
                 try await withThrowingTaskGroup(of: [Sample].self) { group in
                         for tile in tiles {
+
                                 group.addTask {
-                                        return try await self.renderTile(tile: tile, state: immutableState)
+
+                                        return try await withCheckedThrowingContinuation { continuation in
+
+                                                renderingQueue.async {
+                                                        do {
+                                                                let samples = try self.renderTile(
+                                                                        tile: tile, state: immutableState)
+
+                                                                Task {
+                                                                        await reporter.tileFinished()
+                                                                }
+
+                                                                continuation.resume(returning: samples)
+
+                                                        } catch {
+                                                                continuation.resume(throwing: error)
+                                                        }
+                                                }
+                                        }
                                 }
                         }
+
                         var allSamples: [Sample] = []
                         for try await samples in group {
                                 allSamples.append(contentsOf: samples)
                         }
+
                         try await self.camera.film.writeImages(samples: allSamples)
                 }
         }
-
         @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
-                // await reporter.reset()
                 try await renderImage(bounds: bounds)
-                // try await camera.film.writeImages()
                 print("\n")
                 print(timer.elapsed)
                 fflush(stdout)
@@ -93,7 +182,6 @@ struct TileRenderer: Renderer {
         let camera: PerspectiveCamera
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
-        let reporter: ProgressReporter
         let sampler: RandomSampler
         let bounds: Bounds2i
         let tileSize: (Int, Int)

@@ -1,25 +1,24 @@
-@preconcurrency import Foundation  // fflush, stdout
+//@preconcurrency import Foundation  // fflush, stdout
 
-struct ProgressReporter {
+import Foundation
 
-        init() { total = 0 }
+actor ProgressReporter {
+    let total: Int
+    private var completed: Int = 0
+    private let startTime = Date()
 
-        init(total: Int) { self.total = total }
+    init(total: Int) {
+        self.total = total
+    }
 
-        mutating func update() {
-                if current % frequency == 0 {
-                        let percentage = 100 * current / total
-                        print("\(percentage)% done", terminator: "\r")
-                        fflush(stdout)
-                }
-                current += 1
-        }
+    func tileFinished() {
+        completed += 1
+    }
 
-        mutating func reset() {
-                current = 0
-        }
+    func getProgressMetrics() -> (completed: Int, total: Int, timeElapsed: TimeInterval, averageTimePerTile: TimeInterval) {
+        let timeElapsed = Date().timeIntervalSince(startTime)
+        let avg = completed > 0 ? timeElapsed / Double(completed) : 0
 
-        var current = 0
-        let total: Int
-        let frequency: Int = 10000
+        return (completed: completed, total: total, timeElapsed: timeElapsed, averageTimePerTile: avg)
+    }
 }
