@@ -1,0 +1,4 @@
+- Write image block by block from threads
+- Sobol sampler
+- Re-test Bitterli scenes
+- Re-test and time Moana
