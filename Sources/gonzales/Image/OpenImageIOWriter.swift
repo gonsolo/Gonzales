@@ -3,8 +3,18 @@ import Foundation // Needed for MemoryLayout
 
 actor OpenImageIOWriter {
 
-        func write(fileName: String, crop: Bounds2i, image: Image, tileSize: (Int, Int)) throws {
+        func write(fileName: String, image: Image, tileSize: (Int, Int), crop: Bounds2i? = nil) async throws {
 
+                // 1. Determine the final crop bounds
+                let finalCrop: Bounds2i
+                if let explicitCrop = crop {
+                    finalCrop = explicitCrop
+                } else {
+                    // Default to full image resolution if no crop is provided
+                    finalCrop = Bounds2i(pMin: Point2i(x: 0, y: 0), pMax: image.getResolution())
+                }
+
+                // 2. Prepare the pixel buffer
                 var buffer = [Float]()
 
                 func write(pixel: Pixel, at index: Int) {
@@ -14,20 +24,20 @@ actor OpenImageIOWriter {
                         buffer[index + 3] = 1
                 }
 
-                let resolution = crop.pMax - crop.pMin
+                let resolution = finalCrop.pMax - finalCrop.pMin
                 buffer = [Float](repeating: 0, count: resolution.x * resolution.y * 4)
-                for y in crop.pMin.y..<crop.pMax.y {
-                        for x in crop.pMin.x..<crop.pMax.x {
+                for y in finalCrop.pMin.y..<finalCrop.pMax.y {
+                        for x in finalCrop.pMin.x..<finalCrop.pMax.x {
                                 let location = Point2i(x: x, y: y)
                                 let pixel = image.getPixel(atLocation: location)
-                                let px = x - crop.pMin.x
-                                let py = y - crop.pMin.y
+                                let px = x - finalCrop.pMin.x
+                                let py = y - finalCrop.pMin.y
                                 let index = py * resolution.x * 4 + px * 4
                                 write(pixel: pixel, at: index)
                         }
                 }
                 
-                // --- HOISTED TILING LOGIC START ---
+                // 3. OpenImageIO Tiling and Writing Logic
                 
                 let xres = Int32(resolution.x)
                 let yres = Int32(resolution.y)
@@ -35,27 +45,27 @@ actor OpenImageIOWriter {
                 let tileHeight = Int32(tileSize.1)
                 let channels: Int32 = 4
 
-                // 1. Open the file
+                // Open the file
                 guard let outputPointer = openImageForTiledWriting(
                     fileName, xres, yres, tileWidth, tileHeight, channels) else {
                     return
                 }
 
-                // 2. Ensure the output pointer is closed and deleted when the function exits
+                // Ensure the output pointer is closed and deleted when the function exits
                 defer {
                     closeImageOutput(outputPointer)
                 }
 
-                // 3. Stride Calculations (Calculated in Swift)
+                // Stride Calculations
                 let floatSize = Int64(MemoryLayout<Float>.size)
-                let channelStride = floatSize // 4 bytes
-                let xStride = Int64(channels) * channelStride // 16 bytes
-                let yStride = Int64(xres) * xStride // xres * 16 bytes
+                let channelStride = floatSize
+                let xStride = Int64(channels) * channelStride
+                let yStride = Int64(xres) * xStride
 
                 let nxtiles = (xres + tileWidth - 1) / tileWidth
                 let nytiles = (yres + tileHeight - 1) / tileHeight
                 
-                // 4. Tiling Loop (Hoisted from C++)
+                // Tiling Loop
                 buffer.withUnsafeBufferPointer { bufferPointer in
                     guard let pixels = bufferPointer.baseAddress else { return }
                     
@@ -66,24 +76,14 @@ actor OpenImageIOWriter {
                                 pixels,
                                 xres, channels,
                                 Int32(tx), Int32(ty), tileWidth, tileHeight,
-                                channelStride, xStride, yStride // Stride values as Int64
+                                channelStride, xStride, yStride
                             )
                             
                             if !success {
-                                return // Exit on first tile write failure
+                                return
                             }
                         }
                     }
                 }
-                
-                // --- HOISTED TILING LOGIC END ---
         }
-
-        func write(fileName: String, image: Image, tileSize: (Int, Int)) async throws {
-                let crop = Bounds2i(
-                        pMin: Point2i(x: 0, y: 0),
-                        pMax: image.getResolution())
-                try write(fileName: fileName, crop: crop, image: image, tileSize: tileSize)
-        }
-
 }

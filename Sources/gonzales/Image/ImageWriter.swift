@@ -11,7 +11,7 @@ enum ImageWriter: Sendable {
                         return try asciiWriter.write(fileName: fileName, crop: crop, image: image)
                 case .openImageIO(let openImageIOWriter):
                         return try await openImageIOWriter.write(
-                                fileName: fileName, crop: crop, image: image, tileSize: tileSize)
+                                fileName: fileName, image: image, tileSize: tileSize, crop: crop)
                 }
         }
 }
