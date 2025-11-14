@@ -55,10 +55,10 @@ void writeImageInTiles(const char *filename_c, const float *pixels, const int xr
 
                         OIIO::image_span<const float> tile_span(tile_ptr, (ptrdiff_t)channels,
                                                                 (size_t)tileWidth, (size_t)tileHeight,
-                                                                1,              // depth (z-dimension)
-                                                                channel_stride, // channel stride
-                                                                x_stride,       // x stride
-                                                                y_stride        // y stride
+                                                                1,
+                                                                channel_stride,
+                                                                x_stride,
+                                                                y_stride
                         );
 
                         if (!out->write_tile(x_begin, y_begin, 0, tile_span)) {
@@ -75,16 +75,6 @@ cleanup:
 void writeImage(const char *filename_c, const float *pixels, const int xres, const int yres,
                 const int tileWidth, const int tileHeight) {
         writeImageInTiles(filename_c, pixels, xres, yres, tileWidth, tileHeight);
-        // const int channels = 4; // RGBA
-        // std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(filename_c);
-        // if (!out)
-        //         return;
-        // OIIO::ImageSpec spec(xres, yres, channels, OIIO::TypeDesc::FLOAT);
-        // spec.tile_width = tileWidth;
-        // spec.tile_height = tileHeight;
-        // out->open(filename_c, spec);
-        // out->write_image(OIIO::TypeDesc::FLOAT, pixels);
-        // out->close();
 }
 
 #ifdef __cplusplus
