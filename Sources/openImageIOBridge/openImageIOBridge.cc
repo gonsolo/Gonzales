@@ -22,6 +22,42 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
 }
 
+#include <OpenImageIO/imageio.h>
+#include <OpenImageIO/typedesc.h>
+#include <algorithm>
+#include <iostream>
+#include <memory>
+
+// Helper function to write a single tile
+bool writeTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty,
+               int tileWidth, int tileHeight, ptrdiff_t channel_stride, ptrdiff_t x_stride,
+               ptrdiff_t y_stride) {
+
+        int x_begin = tx * tileWidth;
+        int y_begin = ty * tileHeight;
+
+        // Calculate the offset to the start of this tile in the full image buffer
+        ptrdiff_t index_offset = (ptrdiff_t)y_begin * xres + x_begin;
+        const float *tile_ptr = pixels + index_offset * channels;
+
+        // Create the image_span using the tile's dimensions and the full image's strides
+        OIIO::image_span<const float> tile_span(tile_ptr, (ptrdiff_t)channels, (size_t)tileWidth,
+                                                (size_t)tileHeight,
+                                                1,              // depth
+                                                channel_stride, // channel stride
+                                                x_stride,       // x stride
+                                                y_stride        // y stride (full image row stride)
+        );
+
+        if (!out->write_tile(x_begin, y_begin, 0, tile_span)) {
+                std::cerr << "ERROR: Fehler beim Schreiben der Kachel (" << tx << "," << ty
+                          << "): " << out->geterror() << std::endl;
+                return false;
+        }
+        return true;
+}
+
+// Main function to write the image in tiles
 void writeImageInTiles(const char *filename_c, const float *pixels, const int xres, const int yres,
                        const int tileWidth, const int tileHeight) {
 
@@ -39,6 +75,7 @@ void writeImageInTiles(const char *filename_c, const float *pixels, const int xr
                 return;
         }
 
+        // Pre-calculate strides (used by writeTile)
         const ptrdiff_t channel_stride = sizeof(float);
         const ptrdiff_t x_stride = channels * channel_stride;
         const ptrdiff_t y_stride = (ptrdiff_t)xres * x_stride;
@@ -48,26 +85,15 @@ void writeImageInTiles(const char *filename_c, const float *pixels, const int xr
 
         for (int ty = 0; ty < nytiles; ++ty) {
                 for (int tx = 0; tx < nxtiles; ++tx) {
-                        int x_begin = tx * tileWidth;
-                        int y_begin = ty * tileHeight;
-                        ptrdiff_t index_offset = (ptrdiff_t)y_begin * xres + x_begin;
-                        const float *tile_ptr = pixels + index_offset * channels;
 
-                        OIIO::image_span<const float> tile_span(tile_ptr, (ptrdiff_t)channels,
-                                                                (size_t)tileWidth, (size_t)tileHeight,
-                                                                1,
-                                                                channel_stride,
-                                                                x_stride,
-                                                                y_stride
-                        );
-
-                        if (!out->write_tile(x_begin, y_begin, 0, tile_span)) {
-                                std::cerr << "ERROR: Fehler beim Schreiben der Kachel (" << tx << "," << ty
-                                          << "): " << out->geterror() << std::endl;
+                        // Call the factored function
+                        if (!writeTile(out.get(), pixels, xres, channels, tx, ty, tileWidth, tileHeight,
+                                       channel_stride, x_stride, y_stride)) {
                                 goto cleanup;
                         }
                 }
         }
+
 cleanup:
         out->close();
 }
