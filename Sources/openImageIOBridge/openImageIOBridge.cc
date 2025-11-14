@@ -3,6 +3,69 @@
 
 std::shared_ptr<OIIO::TextureSystem> textureSystem;
 
+std::unique_ptr<OIIO::ImageOutput> openImageForTiledWriting(const char *filename_c, int xres, int yres,
+                                                            int tileWidth, int tileHeight, int channels) {
+
+        std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(filename_c);
+        if (!out)
+                return nullptr;
+
+        OIIO::ImageSpec spec(xres, yres, channels, OIIO::TypeDesc::FLOAT);
+        spec.tile_width = tileWidth;
+        spec.tile_height = tileHeight;
+
+        if (!out->open(filename_c, spec)) {
+                std::cerr << "ERROR: Could not open file: " << out->geterror() << std::endl;
+                return nullptr;
+        }
+
+        return out;
+}
+
+bool writeTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty,
+               int tileWidth, int tileHeight, ptrdiff_t channel_stride, ptrdiff_t x_stride,
+               ptrdiff_t y_stride) {
+
+        int x_begin = tx * tileWidth;
+        int y_begin = ty * tileHeight;
+
+        ptrdiff_t index_offset = (ptrdiff_t)y_begin * xres + x_begin;
+        const float *tile_ptr = pixels + index_offset * channels;
+
+        OIIO::image_span<const float> tile_span(tile_ptr, (ptrdiff_t)channels, (size_t)tileWidth,
+                                                (size_t)tileHeight, 1, channel_stride, x_stride, y_stride);
+
+        if (!out->write_tile(x_begin, y_begin, 0, tile_span)) {
+                std::cerr << "ERROR: Failed to write tile (" << tx << "," << ty << "): " << out->geterror()
+                          << std::endl;
+                return false;
+        }
+        return true;
+}
+
+bool writeTiledImageBody(OIIO::ImageOutput *out, const float *pixels, int xres, int yres, int tileWidth,
+                         int tileHeight, int channels) {
+
+        const ptrdiff_t channel_stride = sizeof(float);
+        const ptrdiff_t x_stride = channels * channel_stride;
+        const ptrdiff_t y_stride = (ptrdiff_t)xres * x_stride;
+
+        int nxtiles = (xres + tileWidth - 1) / tileWidth;
+        int nytiles = (yres + tileHeight - 1) / tileHeight;
+
+        for (int ty = 0; ty < nytiles; ++ty) {
+                for (int tx = 0; tx < nxtiles; ++tx) {
+
+                        if (!writeTile(out, pixels, xres, channels, tx, ty, tileWidth, tileHeight,
+                                       channel_stride, x_stride, y_stride)) {
+                                return false;
+                        }
+                }
+        }
+
+        return true;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,67 +85,19 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
 }
 
-bool writeTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty,
-               int tileWidth, int tileHeight, ptrdiff_t channel_stride, ptrdiff_t x_stride,
-               ptrdiff_t y_stride) {
-
-        int x_begin = tx * tileWidth;
-        int y_begin = ty * tileHeight;
-
-        ptrdiff_t index_offset = (ptrdiff_t)y_begin * xres + x_begin;
-        const float *tile_ptr = pixels + index_offset * channels;
-
-        OIIO::image_span<const float> tile_span(tile_ptr, (ptrdiff_t)channels, (size_t)tileWidth,
-                                                (size_t)tileHeight,
-                                                1,
-                                                channel_stride,
-                                                x_stride,
-                                                y_stride
-        );
-
-        if (!out->write_tile(x_begin, y_begin, 0, tile_span)) {
-                std::cerr << "Error writing tile (" << tx << "," << ty
-                          << "): " << out->geterror() << std::endl;
-                return false;
-        }
-        return true;
-}
-
 void writeImage(const char *filename_c, const float *pixels, const int xres, const int yres,
                        const int tileWidth, const int tileHeight) {
 
         const int channels = 4;
-        std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(filename_c);
-        if (!out)
-                return;
 
-        OIIO::ImageSpec spec(xres, yres, channels, OIIO::TypeDesc::FLOAT);
-        spec.tile_width = tileWidth;
-        spec.tile_height = tileHeight;
+        std::unique_ptr<OIIO::ImageOutput> out =
+            openImageForTiledWriting(filename_c, xres, yres, tileWidth, tileHeight, channels);
 
-        if (!out->open(filename_c, spec)) {
-                std::cerr << "Error opening file: " << out->geterror() << std::endl;
+        if (!out) {
                 return;
         }
 
-        const ptrdiff_t channel_stride = sizeof(float);
-        const ptrdiff_t x_stride = channels * channel_stride;
-        const ptrdiff_t y_stride = (ptrdiff_t)xres * x_stride;
-
-        int nxtiles = (xres + tileWidth - 1) / tileWidth;
-        int nytiles = (yres + tileHeight - 1) / tileHeight;
-
-        for (int ty = 0; ty < nytiles; ++ty) {
-                for (int tx = 0; tx < nxtiles; ++tx) {
-                        if (!writeTile(out.get(), pixels, xres, channels, tx, ty, tileWidth, tileHeight,
-                                       channel_stride, x_stride, y_stride)) {
-                                goto cleanup;
-                        }
-                }
-        }
-
-cleanup:
-        out->close();
+        writeTiledImageBody(out.get(), pixels, xres, yres, tileWidth, tileHeight, channels);
 }
 
 #ifdef __cplusplus
