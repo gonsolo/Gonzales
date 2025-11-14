@@ -1,5 +1,10 @@
 import openImageIOBridge
 
+// Assume bridge functions are imported, e.g., via a bridging header:
+// func openImageForTiledWriting(_: UnsafePointer<Int8>!, _: Int32, _: Int32, _: Int32, _: Int32, _: Int32) -> UnsafeMutableRawPointer!
+// func writeTiledImageBody(_: UnsafeMutableRawPointer!, _: UnsafePointer<Float>!, _: Int32, _: Int32, _: Int32, _: Int32, _: Int32) -> Bool
+// func closeImageOutput(_: UnsafeMutableRawPointer!)
+
 actor OpenImageIOWriter {
 
         func write(fileName: String, crop: Bounds2i, image: Image, tileSize: (Int, Int)) throws {
@@ -25,9 +30,40 @@ actor OpenImageIOWriter {
                                 write(pixel: pixel, at: index)
                         }
                 }
-                writeImage(
-                        fileName, buffer, Int32(resolution.x), Int32(resolution.y), Int32(tileSize.0),
-                        Int32(tileSize.1))
+                
+                // --- HOISTED C++ LOGIC START ---
+                
+                let xres = Int32(resolution.x)
+                let yres = Int32(resolution.y)
+                let tileWidth = Int32(tileSize.0)
+                let tileHeight = Int32(tileSize.1)
+                let channels: Int32 = 4
+
+                // 1. Open the file and get the ImageOutput pointer
+                guard let outputPointer = openImageForTiledWriting(
+                    fileName, xres, yres, tileWidth, tileHeight, channels) else {
+                    // C function prints error on failure
+                    return
+                }
+
+                // 2. Ensure the output pointer is closed and deleted when the function exits
+                defer {
+                    closeImageOutput(outputPointer)
+                }
+
+                // 3. Write the image body using the pointer
+                buffer.withUnsafeBufferPointer { bufferPointer in
+                    let success = writeTiledImageBody(
+                        outputPointer,
+                        bufferPointer.baseAddress,
+                        xres, yres, tileWidth, tileHeight, channels)
+                    
+                    if !success {
+                        // C function prints error on tile write failure
+                    }
+                }
+                
+                // --- HOISTED C++ LOGIC END ---
         }
 
         func write(fileName: String, image: Image, tileSize: (Int, Int)) async throws {

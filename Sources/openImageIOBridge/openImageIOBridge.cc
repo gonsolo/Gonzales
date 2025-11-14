@@ -1,27 +1,14 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
+#include <iostream>
+#include <memory>
+#include <algorithm>
 
 std::shared_ptr<OIIO::TextureSystem> textureSystem;
 
-std::unique_ptr<OIIO::ImageOutput> openImageForTiledWriting(const char *filename_c, int xres, int yres,
-                                                            int tileWidth, int tileHeight, int channels) {
+// --- Helper function definitions (kept outside extern "C") ---
 
-        std::unique_ptr<OIIO::ImageOutput> out = OIIO::ImageOutput::create(filename_c);
-        if (!out)
-                return nullptr;
-
-        OIIO::ImageSpec spec(xres, yres, channels, OIIO::TypeDesc::FLOAT);
-        spec.tile_width = tileWidth;
-        spec.tile_height = tileHeight;
-
-        if (!out->open(filename_c, spec)) {
-                std::cerr << "ERROR: Could not open file: " << out->geterror() << std::endl;
-                return nullptr;
-        }
-
-        return out;
-}
-
+// writeTile implementation is unchanged and does not need C linkage since it's only called internally by writeTiledImageBody
 bool writeTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty,
                int tileWidth, int tileHeight, ptrdiff_t channel_stride, ptrdiff_t x_stride,
                ptrdiff_t y_stride) {
@@ -43,6 +30,34 @@ bool writeTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channe
         return true;
 }
 
+
+// --- Exposed C functions (Must be compiled with C linkage) ---
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// The implementation is now inside extern "C"
+OIIO::ImageOutput *openImageForTiledWriting(const char *filename_c, int xres, int yres,
+                                            int tileWidth, int tileHeight, int channels) {
+
+        std::unique_ptr<OIIO::ImageOutput> out_uptr = OIIO::ImageOutput::create(filename_c);
+        
+        if (!out_uptr)
+                return nullptr;
+
+        OIIO::ImageSpec spec(xres, yres, channels, OIIO::TypeDesc::FLOAT);
+        spec.tile_width = tileWidth;
+        spec.tile_height = tileHeight;
+
+        if (!out_uptr->open(filename_c, spec)) {
+                std::cerr << "ERROR: Could not open file: " << out_uptr->geterror() << std::endl;
+                return nullptr;
+        }
+
+        return out_uptr.release();
+}
+
+// The implementation is now inside extern "C"
 bool writeTiledImageBody(OIIO::ImageOutput *out, const float *pixels, int xres, int yres, int tileWidth,
                          int tileHeight, int channels) {
 
@@ -66,9 +81,12 @@ bool writeTiledImageBody(OIIO::ImageOutput *out, const float *pixels, int xres, 
         return true;
 }
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+void closeImageOutput(OIIO::ImageOutput* out) {
+    if (out) {
+        out->close();
+        delete out;
+    }
+}
 
 void createTextureSystem() { textureSystem = OIIO::TextureSystem::create(); }
 
@@ -83,21 +101,6 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         float dtdy = 0;
         int nchannels = 3;
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
-}
-
-void writeImage(const char *filename_c, const float *pixels, const int xres, const int yres,
-                       const int tileWidth, const int tileHeight) {
-
-        const int channels = 4;
-
-        std::unique_ptr<OIIO::ImageOutput> out =
-            openImageForTiledWriting(filename_c, xres, yres, tileWidth, tileHeight, channels);
-
-        if (!out) {
-                return;
-        }
-
-        writeTiledImageBody(out.get(), pixels, xres, yres, tileWidth, tileHeight, channels);
 }
 
 #ifdef __cplusplus
