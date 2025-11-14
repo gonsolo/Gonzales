@@ -1,9 +1,5 @@
 import openImageIOBridge
-
-// Assume bridge functions are imported, e.g., via a bridging header:
-// func openImageForTiledWriting(_: UnsafePointer<Int8>!, _: Int32, _: Int32, _: Int32, _: Int32, _: Int32) -> UnsafeMutableRawPointer!
-// func writeTiledImageBody(_: UnsafeMutableRawPointer!, _: UnsafePointer<Float>!, _: Int32, _: Int32, _: Int32, _: Int32, _: Int32) -> Bool
-// func closeImageOutput(_: UnsafeMutableRawPointer!)
+import Foundation // Needed for MemoryLayout
 
 actor OpenImageIOWriter {
 
@@ -31,7 +27,7 @@ actor OpenImageIOWriter {
                         }
                 }
                 
-                // --- HOISTED C++ LOGIC START ---
+                // --- HOISTED TILING LOGIC START ---
                 
                 let xres = Int32(resolution.x)
                 let yres = Int32(resolution.y)
@@ -39,10 +35,9 @@ actor OpenImageIOWriter {
                 let tileHeight = Int32(tileSize.1)
                 let channels: Int32 = 4
 
-                // 1. Open the file and get the ImageOutput pointer
+                // 1. Open the file
                 guard let outputPointer = openImageForTiledWriting(
                     fileName, xres, yres, tileWidth, tileHeight, channels) else {
-                    // C function prints error on failure
                     return
                 }
 
@@ -51,19 +46,37 @@ actor OpenImageIOWriter {
                     closeImageOutput(outputPointer)
                 }
 
-                // 3. Write the image body using the pointer
+                // 3. Stride Calculations (Calculated in Swift)
+                let floatSize = Int64(MemoryLayout<Float>.size)
+                let channelStride = floatSize // 4 bytes
+                let xStride = Int64(channels) * channelStride // 16 bytes
+                let yStride = Int64(xres) * xStride // xres * 16 bytes
+
+                let nxtiles = (xres + tileWidth - 1) / tileWidth
+                let nytiles = (yres + tileHeight - 1) / tileHeight
+                
+                // 4. Tiling Loop (Hoisted from C++)
                 buffer.withUnsafeBufferPointer { bufferPointer in
-                    let success = writeTiledImageBody(
-                        outputPointer,
-                        bufferPointer.baseAddress,
-                        xres, yres, tileWidth, tileHeight, channels)
+                    guard let pixels = bufferPointer.baseAddress else { return }
                     
-                    if !success {
-                        // C function prints error on tile write failure
+                    for ty in 0..<nytiles {
+                        for tx in 0..<nxtiles {
+                            let success = writeSingleTile(
+                                outputPointer,
+                                pixels,
+                                xres, channels,
+                                Int32(tx), Int32(ty), tileWidth, tileHeight,
+                                channelStride, xStride, yStride // Stride values as Int64
+                            )
+                            
+                            if !success {
+                                return // Exit on first tile write failure
+                            }
+                        }
                     }
                 }
                 
-                // --- HOISTED C++ LOGIC END ---
+                // --- HOISTED TILING LOGIC END ---
         }
 
         func write(fileName: String, image: Image, tileSize: (Int, Int)) async throws {
