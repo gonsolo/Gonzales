@@ -33,7 +33,7 @@ struct Film {
                 }
         }
 
-        func writeImages(samples: [Sample]) async throws {
+        func writeImages(samples: [Sample], tileSize: (Int, Int)) async throws {
                 let processAndWrite:
                         @Sendable (_ name: String, _ fileName: String, _ isAlbedoOrNormal: Bool) async throws
                                 -> Void =
@@ -55,8 +55,9 @@ struct Film {
 
                                         try image.normalize()
                                         let imageWriter = try self.chooseWriter(name: fileName)
-                                        try imageWriter.write(
-                                                fileName: fileName, crop: self.crop, image: image)
+                                        try await imageWriter.write(
+                                                fileName: fileName, crop: self.crop, image: image,
+                                                tileSize: tileSize)
                                 }
 
                 try await withThrowingTaskGroup(of: Void.self) { group in

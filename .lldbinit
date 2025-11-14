@@ -1,0 +1,2 @@
+settings set target.load-cwd-lldb-module true
+settings set target.load-system-runtime-lldb-modules false

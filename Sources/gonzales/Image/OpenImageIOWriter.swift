@@ -1,8 +1,8 @@
 import openImageIOBridge
 
-struct OpenImageIOWriter {
+actor OpenImageIOWriter {
 
-        func write(fileName: String, crop: Bounds2i, image: Image) throws {
+        func write(fileName: String, crop: Bounds2i, image: Image, tileSize: (Int, Int)) throws {
 
                 var buffer = [Float]()
 
@@ -25,14 +25,16 @@ struct OpenImageIOWriter {
                                 write(pixel: pixel, at: index)
                         }
                 }
-                writeImage(fileName, buffer, Int32(resolution.x), Int32(resolution.y))
+                writeImage(
+                        fileName, buffer, Int32(resolution.x), Int32(resolution.y), Int32(tileSize.0),
+                        Int32(tileSize.1))
         }
 
-        func write(fileName: String, image: Image) async throws {
+        func write(fileName: String, image: Image, tileSize: (Int, Int)) async throws {
                 let crop = Bounds2i(
                         pMin: Point2i(x: 0, y: 0),
                         pMax: image.getResolution())
-                try write(fileName: fileName, crop: crop, image: image)
+                try write(fileName: fileName, crop: crop, image: image, tileSize: tileSize)
         }
 
 }
