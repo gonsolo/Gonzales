@@ -161,7 +161,7 @@ extension VolumePathIntegrator {
                 sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
-                //print(#function)
+
                 let lightSample = try sampleLightSource(
                         light: light,
                         interaction: interaction,
@@ -191,7 +191,7 @@ extension VolumePathIntegrator {
                 let b =
                         brdfSample.probabilityDensity == 0
                         ? black : brdfSample.estimate * brdfWeight / brdfSample.probabilityDensity
-                //print(lightSample.estimate, brdfSample.estimate)
+
                 return a + b
         }
 
@@ -202,7 +202,6 @@ extension VolumePathIntegrator {
                 sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
-                //print(#function, light)
                 if light.isDelta {
                         return try sampleLight(
                                 light: light,
@@ -255,7 +254,6 @@ extension VolumePathIntegrator {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
                         let roulette = FloatX.random(in: 0..<1, using: &xoshiro)
-                        //print(#function, roulette, probability)
                         if roulette < probability {
                                 return true
                         }
@@ -479,7 +477,7 @@ extension VolumePathIntegrator {
         ) throws {
                 var interaction = SurfaceInteraction()
                 for bounce in bounce...maxDepth {
-                        let goOn = try oneBounce(
+                        _ = try oneBounce(
                                 interaction: &interaction,
                                 tHit: &tHit,
                                 ray: &ray,
@@ -493,12 +491,42 @@ extension VolumePathIntegrator {
                                 state: state,
                                 scene: scene
                         )
-                        if !goOn {
+                }
+        }
+
+        private mutating func bounces(
+                ray: inout Ray,
+                interaction: inout SurfaceInteraction,
+                tHit: inout Float,
+                bounce: Int,
+                estimate: inout RgbSpectrum,
+                sampler: inout RandomSampler,
+                pathThroughputWeight: inout RgbSpectrum,
+                lightSampler: inout LightSampler,
+                albedo: inout RgbSpectrum,
+                firstNormal: inout Normal,
+                state: ImmutableState,
+                scene: Scene
+        ) throws {
+                for bounce in bounce...maxDepth {
+                        let result = try oneBounce(
+                                interaction: &interaction,
+                                tHit: &tHit,
+                                ray: &ray,
+                                bounce: bounce,
+                                estimate: &estimate,
+                                sampler: &sampler,
+                                pathThroughputWeight: &pathThroughputWeight,
+                                lightSampler: &lightSampler,
+                                albedo: &albedo,
+                                firstNormal: &firstNormal,
+                                state: state,
+                                scene: scene)
+                        if !result {
                                 break
                         }
                 }
         }
-
 }
 
 struct RayTraceSample {
@@ -518,7 +546,7 @@ extension VolumePathIntegrator {
         ) throws
                 -> RayTraceSample
         {
-                //print(#function)
+
                 // Path throughput weight
                 // The product of all GlobalBsdfs and cosines divided by the pdf
                 // Π f |cosθ| / pdf
@@ -541,7 +569,6 @@ extension VolumePathIntegrator {
                         state: state,
                         scene: scene)
 
-                //print(estimate)
                 return RayTraceSample(
                         estimate: estimate,
                         albedo: albedo,

@@ -1,14 +1,11 @@
 all: debug
 
-#SINGLERAY = --single 63 63
+#SINGLERAY = --single 68 2
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick
 #PARSE = --parse
 PTEXMEM = --ptexmem 1 # GB
-
-SCENE_NAME = cornell-box
-SCENE = Scenes/$(SCENE_NAME).pbrt
 
 # 32 of 32 Bitterli scenes from benedikt-bitterli.me/resources rendered successfully:
 # bathroom living-room bedroom kitchen staircase2 staircase bathroom2 living-room-2 living-room-3
@@ -16,9 +13,10 @@ SCENE = Scenes/$(SCENE_NAME).pbrt
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
-#SCENE_NAME = bathroom
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-
+#SCENE_NAME = cornell-box
+SCENE_NAME = bathroom
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#SCENE = Scenes/$(SCENE_NAME).pbrt
 IMAGE =  $(SCENE_NAME).exr
 IMAGE_PBRT = $(IMAGE)
 

@@ -82,9 +82,9 @@ enum Light: Sendable {
         var isDelta: Bool {
                 switch self {
                 case .area:
-                        return false
-                case .infinite:
                         return true
+                case .infinite:
+                        return false
                 case .distant:
                         return true
                 case .point:
