@@ -78,6 +78,17 @@ enum Sampler {
                 )
 
         }
+
+        mutating func startPixelSample(pixel: Point2i, index: Int, dim: Int = 0) {
+                switch self {
+                case .random:
+                        break
+                case .sobol(var zSobolSampler):
+                        zSobolSampler.startPixelSample(pixel: pixel, index: index, dim: dim)
+                        self = .sobol(zSobolSampler)
+                }
+        }
+
 }
 
 typealias RandomVariable = FloatX

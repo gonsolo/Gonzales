@@ -125,17 +125,14 @@ struct ZSobolSampler {
     }
 
 
-    mutating func startPixelSample(pixel: (Int, Int), index: Int, dim: Int) {
+    mutating func startPixelSample(pixel: Point2i, index: Int, dim: Int) {
         self.dimension = dim
-        let pX = UInt32(pixel.0)
-        let pY = UInt32(pixel.1)
-
+        let pX = UInt32(pixel.x)
+        let pY = UInt32(pixel.y)
         let pixelMortonIndex = encodeMorton2(pX, pY)
         self.mortonIndex = (pixelMortonIndex << log2SamplesPerPixel) | UInt64(index)
     }
 
-    // Equivalent to PBRT's GetSampleIndex()
-    // This function inherently implements the Owen-based Z-order permutation logic.
     @inlinable
     func getSampleIndex() -> UInt64 {
         var sampleIndex: UInt64 = 0

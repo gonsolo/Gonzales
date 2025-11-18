@@ -8,8 +8,8 @@ struct Tile: Sendable {
         ) throws -> [Sample] {
                 var samples = [Sample]()
                 for pixel in bounds {
-                        for _ in 0..<sampler.samplesPerPixel {
-
+                        for sampleIndex in 0..<sampler.samplesPerPixel {
+                                sampler.startPixelSample(pixel: pixel, index: sampleIndex)
                                 let cameraSample = sampler.getCameraSample(
                                         pixel: pixel, filter: camera.film.filter)
                                 let ray = camera.generateRay(cameraSample: cameraSample)
