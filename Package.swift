@@ -14,6 +14,12 @@ let package = Package(
                                 "openImageIOBridge",
                                 "ptexBridge",
                         ],
+                        //swiftSettings: [
+                        //    .unsafeFlags([
+                        //        "-Xcc", "Samplers/SobolMatrices.swift",
+                        //        "-Xcc", "-Onone"
+                        //    ])
+                        //]
                 ),
                 .target(
                         name: "openImageIOBridge",
