@@ -47,7 +47,7 @@ struct TileRenderer: Renderer {
         }
 
         private func renderTile(tile: Tile, state: ImmutableState) throws -> [Sample] {
-                var tileSampler = self.sampler.clone()
+                var tileSampler = self.sampler
                 var lightSampler = self.lightSampler
                 var tile = tile
                 let samples = try tile.render(

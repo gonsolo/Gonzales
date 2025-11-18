@@ -1,8 +1,8 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
+#include <algorithm>
 #include <iostream>
 #include <memory>
-#include <algorithm>
 
 std::shared_ptr<OIIO::TextureSystem> textureSystem;
 
@@ -12,11 +12,11 @@ extern "C" {
 #endif
 
 // Returns an OIIO::ImageOutput* (void* in Swift)
-OIIO::ImageOutput *openImageForTiledWriting(const char *filename_c, int xres, int yres,
-                                            int tileWidth, int tileHeight, int channels) {
+OIIO::ImageOutput *openImageForTiledWriting(const char *filename_c, int xres, int yres, int tileWidth,
+                                            int tileHeight, int channels) {
 
         std::unique_ptr<OIIO::ImageOutput> out_uptr = OIIO::ImageOutput::create(filename_c);
-        
+
         if (!out_uptr)
                 return nullptr;
 
@@ -33,9 +33,9 @@ OIIO::ImageOutput *openImageForTiledWriting(const char *filename_c, int xres, in
 }
 
 // Function to write a single tile (called inside the Swift loop)
-bool writeSingleTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, 
-                     int tx, int ty, int tileWidth, int tileHeight, 
-                     ptrdiff_t channel_stride, ptrdiff_t x_stride, ptrdiff_t y_stride) {
+bool writeSingleTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty,
+                     int tileWidth, int tileHeight, ptrdiff_t channel_stride, ptrdiff_t x_stride,
+                     ptrdiff_t y_stride) {
 
         int x_begin = tx * tileWidth;
         int y_begin = ty * tileHeight;
@@ -54,11 +54,11 @@ bool writeSingleTile(OIIO::ImageOutput *out, const float *pixels, int xres, int 
         return true;
 }
 
-void closeImageOutput(OIIO::ImageOutput* out) {
-    if (out) {
-        out->close();
-        delete out;
-    }
+void closeImageOutput(OIIO::ImageOutput *out) {
+        if (out) {
+                out->close();
+                delete out;
+        }
 }
 
 // Existing texture system functions (kept for completeness)

@@ -151,12 +151,19 @@ class Options {
         }
 
         @MainActor
-        func makeSampler(film _: Film) throws -> Sampler {
-                if samplerName != "random" {
+        func makeSampler(film: Film) throws -> Sampler {
+                switch samplerName {
+                case "sobol":
+                        return try .sobol(
+                                createZSobolSampler(
+                                        parameters: samplerParameters, fullResolution: film.resolution,
+                                        quick: quick))
+                case "random":
+                        return try .random(createRandomSampler(parameters: samplerParameters, quick: quick))
+                default:
                         warning("Unknown sampler, using random sampler.")
+                        return try .random(createRandomSampler(parameters: samplerParameters, quick: quick))
                 }
-                let sampler: Sampler = try .random(createRandomSampler(parameters: samplerParameters, quick: quick))
-                return sampler
         }
 
         private func cleanUp() {
@@ -183,7 +190,6 @@ class Options {
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
                 let powerLightSampler = await PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
-                // let lightSampler = LightSampler.power(powerLightSampler)
                 let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
                 let tileSize = (32, 32)
 

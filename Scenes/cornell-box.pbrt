@@ -1,7 +1,6 @@
 Integrator "path" "integer maxdepth" [ 4 ] # gonsolo 65
 Transform [ 1 -0 -0 -0 -0 1 -0 -0 -0 -0 -1 -0 -0 -1 6.8 1  ]
 Sampler "sobol" "integer pixelsamples" [ 8 ] # gonsolo 512
-#Sampler "sobol" "integer pixelsamples" [ 1 ] # gonsolo 512
 
 #PixelFilter "triangle" "float xradius" [ 10 ] "float yradius" [ 10 ]
 #PixelFilter "box" "float xradius" [ 10 ] "float yradius" [ 10 ]
