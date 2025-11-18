@@ -5,7 +5,7 @@ struct TileRenderer: Renderer {
         init(
                 camera: PerspectiveCamera,
                 integrator: VolumePathIntegrator,
-                sampler: RandomSampler,
+                sampler: Sampler,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int)
         ) async {
@@ -46,7 +46,6 @@ struct TileRenderer: Renderer {
                 return tiles
         }
 
-        //private func renderTile(tile: Tile, state: ImmutableState) async throws -> [Sample] {
         private func renderTile(tile: Tile, state: ImmutableState) throws -> [Sample] {
                 var tileSampler = self.sampler.clone()
                 var lightSampler = self.lightSampler
@@ -181,7 +180,7 @@ struct TileRenderer: Renderer {
         let camera: PerspectiveCamera
         let integrator: VolumePathIntegrator
         let lightSampler: LightSampler
-        let sampler: RandomSampler
+        let sampler: Sampler
         let bounds: Bounds2i
         let tileSize: (Int, Int)
 }

@@ -49,7 +49,7 @@ extension GlobalBsdf {
                 return scatter
         }
 
-        func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout RandomSampler)
+        func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout Sampler)
                 -> BsdfSample
         {
                 var (bsdfSample, _) = sampleWorld(wo: wo, u: sampler.get3D())

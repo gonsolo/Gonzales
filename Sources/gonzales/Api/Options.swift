@@ -132,7 +132,7 @@ class Options {
         }
 
         @MainActor
-        func makeIntegrator(sampler _: RandomSampler, accelerator: Accelerator, scene: Scene) throws
+        func makeIntegrator(sampler _: Sampler, accelerator: Accelerator, scene: Scene) throws
                 -> VolumePathIntegrator
         {
                 switch options.integratorName {
@@ -151,11 +151,11 @@ class Options {
         }
 
         @MainActor
-        func makeSampler(film _: Film) throws -> RandomSampler {
+        func makeSampler(film _: Film) throws -> Sampler {
                 if samplerName != "random" {
                         warning("Unknown sampler, using random sampler.")
                 }
-                let sampler = try createRandomSampler(parameters: samplerParameters, quick: quick)
+                let sampler: Sampler = try .random(createRandomSampler(parameters: samplerParameters, quick: quick))
                 return sampler
         }
 

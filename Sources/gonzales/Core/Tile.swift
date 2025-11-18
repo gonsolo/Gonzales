@@ -1,7 +1,7 @@
 struct Tile: Sendable {
 
         mutating func render(
-                sampler: inout RandomSampler,
+                sampler: inout Sampler,
                 camera: any Camera,
                 lightSampler: inout LightSampler,
                 state: ImmutableState
@@ -9,6 +9,7 @@ struct Tile: Sendable {
                 var samples = [Sample]()
                 for pixel in bounds {
                         for _ in 0..<sampler.samplesPerPixel {
+
                                 let cameraSample = sampler.getCameraSample(
                                         pixel: pixel, filter: camera.film.filter)
                                 let ray = camera.generateRay(cameraSample: cameraSample)

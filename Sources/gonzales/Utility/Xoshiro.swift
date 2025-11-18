@@ -2,7 +2,14 @@
 
 struct Xoshiro: RandomNumberGenerator {
 
-        private var state: [4 of UInt64] = [666, 1_234_567, 565_000_565, 939_393_939_393]
+        init() {
+                state = [
+                        UInt64.random(in: UInt64.min...UInt64.max),
+                        UInt64.random(in: UInt64.min...UInt64.max),
+                        UInt64.random(in: UInt64.min...UInt64.max),
+                        UInt64.random(in: UInt64.min...UInt64.max),
+                ]
+        }
 
         public mutating func next() -> UInt64 {
                 // Derived from public domain implementation of xoshiro256** here:
@@ -19,4 +26,6 @@ struct Xoshiro: RandomNumberGenerator {
                 state[3] = (state[3] &<< 45) | (state[3] &>> 19)
                 return result
         }
+
+        private var state: [4 of UInt64]
 }

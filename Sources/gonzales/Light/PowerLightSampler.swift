@@ -34,7 +34,7 @@ extension Sequence {
 struct PowerLightSampler {
 
         @MainActor
-        init(sampler: RandomSampler, lights: [Light], scene: Scene) async {
+        init(sampler: Sampler, lights: [Light], scene: Scene) async {
                 self.sampler = sampler
                 self.lights = lights
 
@@ -62,7 +62,7 @@ struct PowerLightSampler {
                 return (light, probabilityDensity)
         }
 
-        var sampler: RandomSampler
+        var sampler: Sampler
         let lights: [Light]
         let cumulativePowers: [FloatX]
         let totalPower: FloatX

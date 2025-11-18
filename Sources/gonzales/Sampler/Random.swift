@@ -22,10 +22,12 @@ struct RandomSampler {
 
         init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples
+                xoshiro = Xoshiro()
         }
 
         init(instance: RandomSampler) {
                 samplesPerPixel = instance.samplesPerPixel
+                xoshiro = Xoshiro()
         }
 
         mutating func get1D() -> RandomVariable {
@@ -45,7 +47,7 @@ struct RandomSampler {
         }
 
         let samplesPerPixel: Int
-        var xoshiro = Xoshiro()
+        var xoshiro: Xoshiro
 }
 
 func createRandomSampler(parameters: ParameterDictionary, quick: Bool) throws -> RandomSampler {
