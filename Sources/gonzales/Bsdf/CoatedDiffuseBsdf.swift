@@ -38,7 +38,7 @@ extension CoatedDiffuseBsdf {
         private func evaluateNextEvent(
                 depth: Int,
                 pathThroughputWeight: inout RgbSpectrum,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 z: inout FloatX,
                 w: inout Vector,
                 exitZ: FloatX,
@@ -119,7 +119,7 @@ extension CoatedDiffuseBsdf {
         }
 
         private func evaluateOneSample(
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 wo: Vector,
                 wi: Vector,
                 exitZ: FloatX,
@@ -171,7 +171,7 @@ extension CoatedDiffuseBsdf {
                 let numberOfSamples = 1
 
                 var estimate = FloatX(numberOfSamples) * topBxdf.evaluateLocal(wo: wo, wi: wi)
-                var sampler: Sampler = .random(RandomSampler())
+                var sampler = RandomSampler()
                 for _ in 0..<numberOfSamples {
                         evaluateOneSample(
                                 sampler: &sampler,

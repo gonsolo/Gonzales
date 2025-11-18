@@ -28,7 +28,7 @@ extension VolumePathIntegrator {
         }
 
         private func chooseLight(
-                sampler _: Sampler,
+                sampler _: RandomSampler,
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws
@@ -61,7 +61,7 @@ extension VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> BsdfSample {
                 let lightSample = light.sample(
@@ -83,7 +83,7 @@ extension VolumePathIntegrator {
                 light _: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: inout Sampler
+                sampler: inout RandomSampler
         ) throws -> BsdfSample {
 
                 let zero = BsdfSample()
@@ -120,7 +120,7 @@ extension VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
                 let lightSample = try sampleLightSource(
@@ -140,7 +140,7 @@ extension VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: inout Sampler
+                sampler: inout RandomSampler
         ) throws -> RgbSpectrum {
                 let bsdfSample = try sampleDistributionFunction(
                         light: light,
@@ -158,7 +158,7 @@ extension VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
 
@@ -199,7 +199,7 @@ extension VolumePathIntegrator {
                 light: Light,
                 interaction: I,
                 distributionModel: D,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
                 if light.isDelta {
@@ -231,7 +231,7 @@ extension VolumePathIntegrator {
         private func sampleOneLight<I: Interaction, D: DistributionModel>(
                 at interaction: I,
                 distributionModel: D,
-                with sampler: inout Sampler,
+                with sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
@@ -266,7 +266,7 @@ extension VolumePathIntegrator {
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 ray: Ray,
                 scene: Scene
@@ -291,7 +291,7 @@ extension VolumePathIntegrator {
                 pathThroughputWeight: RgbSpectrum,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
@@ -314,7 +314,7 @@ extension VolumePathIntegrator {
                 pathThroughputWeight: inout RgbSpectrum,
                 estimate: inout RgbSpectrum,
                 tHit _: inout Float,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 albedo: inout RgbSpectrum,
                 firstNormal: inout Normal,
@@ -394,7 +394,7 @@ extension VolumePathIntegrator {
                 ray: inout Ray,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: inout LightSampler,
                 albedo: inout RgbSpectrum,
@@ -467,7 +467,7 @@ extension VolumePathIntegrator {
                 tHit: inout Float,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: inout LightSampler,
                 albedo: inout RgbSpectrum,
@@ -500,7 +500,7 @@ extension VolumePathIntegrator {
                 tHit: inout Float,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 pathThroughputWeight: inout RgbSpectrum,
                 lightSampler: inout LightSampler,
                 albedo: inout RgbSpectrum,
@@ -540,7 +540,7 @@ extension VolumePathIntegrator {
         mutating func evaluateRayPath(
                 from ray: Ray,
                 tHit: inout FloatX,
-                with sampler: inout Sampler,
+                with sampler: inout RandomSampler,
                 lightSampler: inout LightSampler,
                 state: ImmutableState
         ) throws

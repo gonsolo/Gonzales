@@ -1,7 +1,7 @@
 struct Tile: Sendable {
 
         mutating func render(
-                sampler: inout Sampler,
+                sampler: inout RandomSampler,
                 camera: any Camera,
                 lightSampler: inout LightSampler,
                 state: ImmutableState

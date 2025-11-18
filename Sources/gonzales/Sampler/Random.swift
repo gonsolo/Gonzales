@@ -1,5 +1,25 @@
 struct RandomSampler {
 
+        mutating func getCameraSample(pixel: Point2i, filter: Filter) -> CameraSample {
+                let ux = get1D()
+                let uy = get1D()
+
+                let filterSample: FilterSample = filter.sample(u: (ux, uy))
+
+                let dx = filterSample.location.x
+                let dy = filterSample.location.y
+
+                return CameraSample(
+                        film: (
+                                FloatX(pixel.x) + 0.5 + dx,
+                                FloatX(pixel.y) + 0.5 + dy
+                        ),
+                        lens: get2D(),
+                        filterWeight: filterSample.probabilityDensity
+                )
+
+        }
+
         init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples
         }
@@ -34,12 +54,4 @@ func createRandomSampler(parameters: ParameterDictionary, quick: Bool) throws ->
                 samples = 1
         }
         return RandomSampler(numberOfSamples: samples)
-}
-
-func createZSobolSampler(parameters: ParameterDictionary, fullResolution: Point2i, quick: Bool) throws -> ZSobolSampler {
-        var samples = try parameters.findOneInt(called: "pixelsamples", else: 1)
-        if quick {
-                samples = 1
-        }
-        return ZSobolSampler(samplesPerPixel: samples, fullResolution: fullResolution, seed: 1234)
 }
