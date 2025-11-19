@@ -2,7 +2,7 @@ enum Sampler {
         case random(RandomSampler)
         case sobol(ZSobolSampler)
 
-        mutating func get1D() -> RandomVariable  {
+        mutating func get1D() -> RandomVariable {
                 switch self {
                 case .random(var randomSampler):
                         let value = randomSampler.get1D()
@@ -50,7 +50,7 @@ enum Sampler {
                 }
         }
 
-        func clone() -> Sampler  {
+        func clone() -> Sampler {
                 switch self {
                 case .random(let randomSampler):
                         return .random(randomSampler.clone())
@@ -58,7 +58,6 @@ enum Sampler {
                         return .sobol(zSobolSampler.clone())
                 }
         }
-
 
         mutating func getCameraSample(pixel: Point2i, filter: Filter) -> CameraSample {
                 let (ux, uy) = get2D()

@@ -16,6 +16,52 @@ struct VolumePathIntegrator {
         }
 }
 
+struct RayTraceSample {
+        let estimate: RgbSpectrum
+        let albedo: RgbSpectrum
+        let normal: Normal
+}
+
+extension VolumePathIntegrator {
+
+        mutating func evaluateRayPath(
+                from ray: Ray,
+                tHit: inout FloatX,
+                with sampler: inout Sampler,
+                lightSampler: inout LightSampler,
+                state: ImmutableState
+        ) throws -> RayTraceSample {
+
+                // Path throughput weight
+                // The product of all GlobalBsdfs and cosines divided by the pdf
+                // Π f |cosθ| / pdf
+                var pathThroughputWeight = white
+
+                var estimate = black
+                var varRay = ray
+                var albedo = black
+                var firstNormal = zeroNormal
+                try bounces(
+                        ray: &varRay,
+                        tHit: &tHit,
+                        bounce: 0,
+                        estimate: &estimate,
+                        sampler: &sampler,
+                        pathThroughputWeight: &pathThroughputWeight,
+                        lightSampler: &lightSampler,
+                        albedo: &albedo,
+                        firstNormal: &firstNormal,
+                        state: state,
+                        scene: scene)
+
+                return RayTraceSample(
+                        estimate: estimate,
+                        albedo: albedo,
+                        normal: firstNormal
+                )
+        }
+}
+
 extension VolumePathIntegrator {
 
         private func brdfDensity<D: DistributionModel>(
@@ -529,53 +575,7 @@ extension VolumePathIntegrator {
         }
 }
 
-struct RayTraceSample {
-        let estimate: RgbSpectrum
-        let albedo: RgbSpectrum
-        let normal: Normal
-}
-
 extension VolumePathIntegrator {
-
-        mutating func evaluateRayPath(
-                from ray: Ray,
-                tHit: inout FloatX,
-                with sampler: inout Sampler,
-                lightSampler: inout LightSampler,
-                state: ImmutableState
-        ) throws
-                -> RayTraceSample
-        {
-
-                // Path throughput weight
-                // The product of all GlobalBsdfs and cosines divided by the pdf
-                // Π f |cosθ| / pdf
-                var pathThroughputWeight = white
-
-                var estimate = black
-                var varRay = ray
-                var albedo = black
-                var firstNormal = zeroNormal
-                try bounces(
-                        ray: &varRay,
-                        tHit: &tHit,
-                        bounce: 0,
-                        estimate: &estimate,
-                        sampler: &sampler,
-                        pathThroughputWeight: &pathThroughputWeight,
-                        lightSampler: &lightSampler,
-                        albedo: &albedo,
-                        firstNormal: &firstNormal,
-                        state: state,
-                        scene: scene)
-
-                return RayTraceSample(
-                        estimate: estimate,
-                        albedo: albedo,
-                        normal: firstNormal
-                )
-        }
-
         // HACK: Imagemagick's converts grayscale images to one channel which Intel
         // denoiser can't read. Make white a little colorful
         private func intelHack(_ albedo: inout RgbSpectrum) {

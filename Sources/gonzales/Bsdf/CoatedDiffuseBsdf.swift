@@ -1,14 +1,416 @@
-import Foundation  // exp
+import Foundation
+
+struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: GlobalBsdf {
+
+        let top: Top
+        let bottom: Bottom
+        let thickness: FloatX
+
+        private let _albedo: RgbSpectrum
+
+        let maxDepth: Int
+        let nSamples: Int
+        let twoSided: Bool
+
+        let bsdfFrame: BsdfFrame
+
+        let phaseFunction: HenyeyGreenstein
+
+        private let topIsSpecular: Bool
+        private let bottomIsSpecular: Bool
+
+        init(
+                top: Top,
+                bottom: Bottom,
+                topIsSpecular: Bool,
+                bottomIsSpecular: Bool,
+                thickness: FloatX,
+                albedo: RgbSpectrum,
+                g: FloatX,
+                maxDepth: Int,
+                nSamples: Int,
+                bsdfFrame: BsdfFrame,
+                twoSided: Bool = true
+        ) {
+                self.top = top
+                self.bottom = bottom
+                self.topIsSpecular = topIsSpecular
+                self.bottomIsSpecular = bottomIsSpecular
+                self.thickness = max(thickness, FloatX.leastNormalMagnitude)
+                self._albedo = albedo
+                self.phaseFunction = HenyeyGreenstein(g: g)
+                self.maxDepth = maxDepth
+                self.nSamples = nSamples
+                self.bsdfFrame = bsdfFrame
+                self.twoSided = twoSided
+        }
+
+        func albedo() -> RgbSpectrum {
+                return self._albedo
+        }
+
+        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
+                var f = RgbSpectrum(intensity: 0.0)
+
+                var localWo = wo
+                var localWi = wi
+
+                if twoSided && localWo.z < 0 {
+                        localWo = -localWo
+                        localWi = -localWi
+                }
+
+                let enteredTop = twoSided || localWo.z > 0
+                let isSameHemisphere = sameHemisphere(localWo, localWi)
+
+                let exitZ: FloatX = (isSameHemisphere != enteredTop) ? 0 : thickness
+
+                if isSameHemisphere {
+                        let entranceEval: RgbSpectrum
+                        if enteredTop {
+                                entranceEval = top.evaluateLocal(wo: localWo, wi: localWi)
+                        } else {
+                                entranceEval = bottom.evaluateLocal(wo: localWo, wi: localWi)
+                        }
+                        f += FloatX(nSamples) * entranceEval
+                }
+
+                var sampler: Sampler = .random(RandomSampler())
+
+                for _ in 0..<nSamples {
+                        let u = sampler.get3D()
+
+                        let wos: BsdfSample
+                        if enteredTop {
+                                wos = top.sampleLocal(wo: localWo, u: u)
+                        } else {
+                                wos = bottom.sampleLocal(wo: localWo, u: u)
+                        }
+
+                        if !wos.isValid || wos.isReflection(wo: localWo) || wos.incoming.z == 0 {
+                                continue
+                        }
+
+                        let u_exit = sampler.get3D()
+                        let wis: BsdfSample
+
+                        if isSameHemisphere != enteredTop {
+                                wis = bottom.sampleLocal(wo: localWi, u: u_exit)
+                        } else {
+                                wis = top.sampleLocal(wo: localWi, u: u_exit)
+                        }
+
+                        if !wis.isValid || wis.isReflection(wo: localWi) || wis.incoming.z == 0 {
+                                continue
+                        }
+
+                        var beta = wos.estimate * absCosTheta(wos.incoming) / wos.probabilityDensity
+                        var z = enteredTop ? thickness : 0
+                        var w = wos.incoming
+
+                        for depth in 0..<maxDepth {
+                                if depth > 3 && beta.maxValue < 0.25 {
+                                        let q = max(0, 1 - beta.maxValue)
+                                        if sampler.get1D() < q { break }
+                                        beta /= 1 - q
+                                }
+
+                                if _albedo.isBlack {
+                                        z = (z == thickness) ? 0 : thickness
+                                        beta *= transmittance(dz: thickness, w: w)
+                                } else {
+                                        let sigma_t: FloatX = 1.0
+                                        let dz = -log(1 - sampler.get1D()) / (sigma_t / abs(w.z))
+                                        let zp = w.z > 0 ? (z + dz) : (z - dz)
+
+                                        if z == zp { continue }
+
+                                        if zp > 0 && zp < thickness {
+
+                                                let wt: FloatX = 1
+
+                                                let phaseVal = phaseFunction.evaluate(
+                                                        wo: -w, wi: -wis.incoming)
+
+                                                let tr = transmittance(dz: zp - exitZ, w: wis.incoming)
+                                                let term1 = beta * _albedo * phaseVal * wt
+                                                let term2 = tr * wis.estimate / wis.probabilityDensity
+                                                f += term1 * term2
+
+                                                let (phasePdf, nextWi) = phaseFunction.samplePhase(
+                                                        wo: -w, sampler: &sampler)
+
+                                                if phasePdf == 0 || nextWi.z == 0 { continue }
+
+                                                beta *= _albedo
+                                                w = nextWi
+                                                z = zp
+                                                continue
+                                        }
+                                        z = clamp(value: zp, low: 0, high: thickness)
+                                }
+
+                                if z == exitZ {
+                                        let bsExit: BsdfSample
+                                        if z == 0 {
+                                                bsExit = bottom.sampleLocal(wo: -w, u: sampler.get3D())
+                                        } else {
+                                                bsExit = top.sampleLocal(wo: -w, u: sampler.get3D())
+                                        }
+
+                                        if !bsExit.isValid || bsExit.probabilityDensity == 0
+                                                || bsExit.incoming.z == 0
+                                        {
+                                                break
+                                        }
+                                        if bsExit.isTransmission(wo: -w) { break }
+
+                                        beta *=
+                                                bsExit.estimate * absCosTheta(bsExit.incoming)
+                                                / bsExit.probabilityDensity
+                                        w = bsExit.incoming
+
+                                } else {
+                                        let isBottom = (z == 0)
+                                        let nonExitIsSpecular = isBottom ? bottomIsSpecular : topIsSpecular
+
+                                        if !nonExitIsSpecular {
+                                                let neVal: RgbSpectrum
+                                                if isBottom {
+                                                        neVal = bottom.evaluateLocal(
+                                                                wo: -w, wi: -wis.incoming)
+                                                } else {
+                                                        neVal = top.evaluateLocal(wo: -w, wi: -wis.incoming)
+                                                }
+
+                                                if !neVal.isBlack {
+                                                        let tr = transmittance(dz: thickness, w: wis.incoming)
+                                                        let term1 = beta * neVal * absCosTheta(wis.incoming)
+                                                        let term2 = tr * wis.estimate / wis.probabilityDensity
+                                                        f += term1 * term2
+                                                }
+                                        }
+
+                                        let bs: BsdfSample
+                                        if isBottom {
+                                                bs = bottom.sampleLocal(wo: -w, u: sampler.get3D())
+                                        } else {
+                                                bs = top.sampleLocal(wo: -w, u: sampler.get3D())
+                                        }
+
+                                        if !bs.isValid || bs.probabilityDensity == 0 || bs.incoming.z == 0 {
+                                                break
+                                        }
+                                        if bs.isTransmission(wo: -w) { break }
+
+                                        beta *= bs.estimate * absCosTheta(bs.incoming) / bs.probabilityDensity
+                                        w = bs.incoming
+                                }
+                        }
+                }
+
+                return f / FloatX(nSamples)
+        }
+
+        func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
+                var localWo = wo
+                var flipWi = false
+
+                if twoSided && localWo.z < 0 {
+                        localWo = -localWo
+                        flipWi = true
+                }
+
+                let enteredTop = twoSided || localWo.z > 0
+
+                let bsStart: BsdfSample
+                if enteredTop {
+                        bsStart = top.sampleLocal(wo: localWo, u: u)
+                } else {
+                        bsStart = bottom.sampleLocal(wo: localWo, u: u)
+                }
+
+                if !bsStart.isValid || bsStart.probabilityDensity == 0 || bsStart.incoming.z == 0 {
+                        return invalidBsdfSample
+                }
+
+                if bsStart.isReflection(wo: localWo) {
+                        var resultWi = bsStart.incoming
+                        if flipWi { resultWi = -resultWi }
+                        return BsdfSample(bsStart.estimate, resultWi, bsStart.probabilityDensity)
+                }
+
+                var w = bsStart.incoming
+
+                var sampler = Sampler.random(RandomSampler())
+
+                var f = bsStart.estimate * absCosTheta(bsStart.incoming)
+                var pdf = bsStart.probabilityDensity
+                var z = enteredTop ? thickness : 0
+
+                for depth in 0..<maxDepth {
+                        let rrBeta = f.maxValue / pdf
+                        if depth > 3 && rrBeta < 0.25 {
+                                let q = max(0, 1 - rrBeta)
+                                if sampler.get1D() < q { return invalidBsdfSample }
+                                pdf *= 1 - q
+                        }
+
+                        if w.z == 0 { return invalidBsdfSample }
+
+                        if !_albedo.isBlack {
+                                let sigma_t: FloatX = 1.0
+                                let dz = -log(1 - sampler.get1D()) / (sigma_t / absCosTheta(w))
+                                let zp = w.z > 0 ? (z + dz) : (z - dz)
+
+                                if zp == z { return invalidBsdfSample }
+
+                                if zp > 0 && zp < thickness {
+                                        let (phaseVal, nextWi) = phaseFunction.samplePhase(
+                                                wo: -w, sampler: &sampler)
+
+                                        if phaseVal == 0 || nextWi.z == 0 { return invalidBsdfSample }
+
+                                        f *= _albedo * phaseVal
+                                        pdf *= phaseVal
+                                        w = nextWi
+                                        z = zp
+                                        continue
+                                }
+                                z = clamp(value: zp, low: 0, high: thickness)
+                        } else {
+                                z = (z == thickness) ? 0 : thickness
+                                f *= transmittance(dz: thickness, w: w)
+                        }
+
+                        let bs: BsdfSample
+                        if z == 0 {
+                                bs = bottom.sampleLocal(wo: -w, u: sampler.get3D())
+                        } else {
+                                bs = top.sampleLocal(wo: -w, u: sampler.get3D())
+                        }
+
+                        if !bs.isValid || bs.probabilityDensity == 0 || bs.incoming.z == 0 {
+                                return invalidBsdfSample
+                        }
+
+                        f *= bs.estimate
+                        pdf *= bs.probabilityDensity
+                        w = bs.incoming
+
+                        if bs.isTransmission(wo: -w) {
+                                if flipWi { w = -w }
+                                return BsdfSample(f, w, pdf)
+                        }
+
+                        f *= absCosTheta(bs.incoming)
+                }
+
+                return invalidBsdfSample
+        }
+
+        func probabilityDensityLocal(wo: Vector, wi: Vector) async -> FloatX {
+                var localWo = wo
+                var localWi = wi
+                if twoSided && localWo.z < 0 {
+                        localWo = -localWo
+                        localWi = -localWi
+                }
+
+                var sampler = RandomSampler()
+                let enteredTop = twoSided || localWo.z > 0
+                var pdfSum: FloatX = 0
+
+                if sameHemisphere(localWo, localWi) {
+                        let rPdf: FloatX
+                        if enteredTop {
+                                rPdf = top.probabilityDensityLocal(wo: localWo, wi: localWi)
+                        } else {
+                                rPdf = bottom.probabilityDensityLocal(wo: localWo, wi: localWi)
+                        }
+                        pdfSum += FloatX(nSamples) * rPdf
+                }
+
+                for _ in 0..<nSamples {
+                        if sameHemisphere(localWo, localWi) {
+                                let wos: BsdfSample
+                                let wis: BsdfSample
+                                let rInterfacePdf: FloatX
+
+                                if enteredTop {
+                                        wos = top.sampleLocal(wo: localWo, u: sampler.get3D())
+                                        wis = top.sampleLocal(wo: localWi, u: sampler.get3D())
+
+                                        if wos.isValid && wos.isTransmission(wo: localWo) && wis.isValid
+                                                && wis.isTransmission(wo: localWi)
+                                        {
+                                                rInterfacePdf = bottom.probabilityDensityLocal(
+                                                        wo: -wos.incoming, wi: -wis.incoming)
+                                                pdfSum += rInterfacePdf
+                                        }
+                                } else {
+                                        wos = bottom.sampleLocal(wo: localWo, u: sampler.get3D())
+                                        wis = bottom.sampleLocal(wo: localWi, u: sampler.get3D())
+
+                                        if wos.isValid && wos.isTransmission(wo: localWo) && wis.isValid
+                                                && wis.isTransmission(wo: localWi)
+                                        {
+                                                rInterfacePdf = top.probabilityDensityLocal(
+                                                        wo: -wos.incoming, wi: -wis.incoming)
+                                                pdfSum += rInterfacePdf
+                                        }
+                                }
+                        } else {
+                                if enteredTop {
+                                        let wos = top.sampleLocal(wo: localWo, u: sampler.get3D())
+                                        let wis = bottom.sampleLocal(wo: localWi, u: sampler.get3D())
+
+                                        if wos.isValid && !wos.isReflection(wo: localWo) && wis.isValid
+                                                && !wis.isReflection(wo: localWi)
+                                        {
+                                                let p1 = top.probabilityDensityLocal(
+                                                        wo: localWo, wi: -wis.incoming)
+                                                let p2 = bottom.probabilityDensityLocal(
+                                                        wo: -wos.incoming, wi: localWi)
+                                                pdfSum += (p1 + p2) / 2
+                                        }
+                                } else {
+                                        let wos = bottom.sampleLocal(wo: localWo, u: sampler.get3D())
+                                        let wis = top.sampleLocal(wo: localWi, u: sampler.get3D())
+
+                                        if wos.isValid && !wos.isReflection(wo: localWo) && wis.isValid
+                                                && !wis.isReflection(wo: localWi)
+                                        {
+                                                let p1 = bottom.probabilityDensityLocal(
+                                                        wo: localWo, wi: -wis.incoming)
+                                                let p2 = top.probabilityDensityLocal(
+                                                        wo: -wos.incoming, wi: localWi)
+                                                pdfSum += (p1 + p2) / 2
+                                        }
+                                }
+                        }
+                }
+
+                return lerp(
+                        with: 0.9,
+                        between: 1 / (4 * FloatX.pi),
+                        and: pdfSum / FloatX(nSamples))
+        }
+
+        private func transmittance(dz: FloatX, w: Vector) -> RgbSpectrum {
+                if abs(dz) < FloatX.leastNormalMagnitude {
+                        return RgbSpectrum(intensity: 1.0)
+                }
+                let val = abs(dz / w.z)
+                let tr = FloatX(exp(Float(-val)))
+                return RgbSpectrum(intensity: tr)
+        }
+}
 
 struct CoatedDiffuseBsdf: GlobalBsdf {
 
-        let thickness: FloatX = 0.1
-        let maxDepth = 10
-        let asymmetry: FloatX = 0
-        let reflectance: RgbSpectrum
-        let roughness: (FloatX, FloatX)
-        let topBxdf: DielectricBsdf
-        let bottomBxdf: DiffuseBsdf
+        private let layered: LayeredBsdf<DielectricBsdf, DiffuseBsdf>
+        private let _albedo: RgbSpectrum
         let bsdfFrame: BsdfFrame
 
         init(
@@ -18,296 +420,62 @@ struct CoatedDiffuseBsdf: GlobalBsdf {
                 remapRoughness: Bool,
                 bsdfFrame: BsdfFrame
         ) {
-                self.reflectance = reflectance
-                self.roughness = roughness
+                self._albedo = reflectance
+                self.bsdfFrame = bsdfFrame
+
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
-                self.topBxdf = DielectricBsdf(
+                let topBxdf = DielectricBsdf(
                         distribution: distribution,
                         refractiveIndex: refractiveIndex,
-                        bsdfFrame: bsdfFrame)
-                self.bottomBxdf = DiffuseBsdf(
+                        bsdfFrame: bsdfFrame
+                )
+
+                let bottomBxdf = DiffuseBsdf(
                         reflectance: reflectance,
-                        bsdfFrame: bsdfFrame)
-                self.bsdfFrame = bsdfFrame
-        }
-}
+                        bsdfFrame: bsdfFrame
+                )
 
-extension CoatedDiffuseBsdf {
+                let thickness: FloatX = 0.01
+                let g: FloatX = 0.0
+                let maxDepth = 10
+                let nSamples = 1
 
-        private func evaluateNextEvent(
-                depth: Int,
-                pathThroughputWeight: inout RgbSpectrum,
-                sampler: inout Sampler,
-                z: inout FloatX,
-                w: inout Vector,
-                exitZ: FloatX,
-                wis: BsdfSample,
-                wi: Vector
-        ) -> RgbSpectrum? {
-                var estimate = black
-                if depth > 3 && pathThroughputWeight.maxValue < 0.25 {
-                        let q = max(0, 1 - pathThroughputWeight.maxValue)
-                        if sampler.get1D() < q {
-                                return nil
-                        }
-                        pathThroughputWeight /= 1 - q
-                }
-                // medium scattering albedo is assumed to be zero
-                // let mediumScatteringAlbedo = 0
-                // if mediumScatteringAlbedo == 0 {
-                if z == thickness {
-                        z = 0
-                } else {
-                        z = thickness
-                }
-                pathThroughputWeight *= transmittance(dz: thickness, w: w)
-                // } else {
-                //        unimplemented()
-                // }
-                if z == exitZ {
-                        let bsdfSample = topBxdf.sampleLocal(wo: -w, u: sampler.get3D())
-                        if !bsdfSample.isValid {
-                                return nil
-                        }
-                        pathThroughputWeight *= bsdfSample.throughputWeight()
-                        w = bsdfSample.incoming
-                } else {
-                        // non-exit interface is diffuse
-                        var wt: FloatX = 1
-                        if !topBxdf.isSpecular {
-                                wt = powerHeuristic(
-                                        f: wis.probabilityDensity,
-                                        g: bottomBxdf.probabilityDensityLocal(
-                                                wo: -w,
-                                                wi: -wis.incoming))
-                        }
-                        let floatWeight =
-                                pathThroughputWeight
-                                * absCosTheta(wis.incoming)
-                                * wt
-                                * transmittance(dz: thickness, w: wis.incoming)
-                                * wis.estimate
-                                / wis.probabilityDensity
-                        let eval = bottomBxdf.evaluateLocal(wo: -w, wi: -wis.incoming)
-                        estimate += floatWeight * eval
-                        let bs = bottomBxdf.sampleLocal(wo: -w, u: sampler.get3D())
-                        if !bs.isValid {
-                                return nil
-                        }
-                        pathThroughputWeight *= bs.throughputWeight()
-                        w = bs.incoming
-                        if !topBxdf.isSpecular {
-                                let fExit = topBxdf.evaluateLocal(wo: -w, wi: wi)
-                                if !fExit.isBlack {
-                                        var wt: FloatX = 1
-                                        // bottom is always black
-                                        let exitPDF = topBxdf.probabilityDensityLocal(
-                                                wo: -w,
-                                                wi: wi)
-                                        wt = powerHeuristic(
-                                                f: bs.probabilityDensity,
-                                                g: exitPDF)
-                                        estimate +=
-                                                pathThroughputWeight
-                                                * transmittance(dz: thickness, w: bs.incoming)
-                                                * fExit * wt
-                                }
-                        }
-                }
-                return estimate
-        }
+                let mediumAlbedo = RgbSpectrum(intensity: 0.0)
 
-        private func evaluateOneSample(
-                sampler: inout Sampler,
-                wo: Vector,
-                wi: Vector,
-                exitZ: FloatX,
-                estimate: inout RgbSpectrum
-        ) {
-                let wos = topBxdf.sampleLocal(wo: wo, u: sampler.get3D())
-                if !wos.isValid {
-                        return
-                }
-                let u2 = (sampler.get1D(), sampler.get1D(), sampler.get1D())
-                let wis = topBxdf.sampleLocal(wo: wi, u: u2)
-                if !wis.isValid {
-                        return
-                }
-                var pathThroughputWeight = wos.throughputWeight()
-                var z = thickness
-                var w = wos.incoming
-                for depth in 0..<maxDepth {
-                        guard
-                                let nextEstimate = evaluateNextEvent(
-                                        depth: depth,
-                                        pathThroughputWeight: &pathThroughputWeight,
-                                        sampler: &sampler,
-                                        z: &z,
-                                        w: &w,
-                                        exitZ: exitZ,
-                                        wis: wis,
-                                        wi: wi
-                                )
-                        else {
-                                break
-                        }
-                        estimate += nextEstimate
-                }
-
+                self.layered = LayeredBsdf(
+                        top: topBxdf,
+                        bottom: bottomBxdf,
+                        topIsSpecular: true,
+                        bottomIsSpecular: false,
+                        thickness: thickness,
+                        albedo: mediumAlbedo,
+                        g: g,
+                        maxDepth: maxDepth,
+                        nSamples: nSamples,
+                        bsdfFrame: bsdfFrame,
+                        twoSided: true
+                )
         }
 
         func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
-                assert(wo.z > 0)
-                assert(sameHemisphere(wi, wo))
-
-                // twoSided always true
-                // enteredTop always true
-                // enterInterface always top
-                // exitInterface always top
-                // nonExitInterface always bottom
-                // sameHemisphere always true
-                let exitZ = thickness
-                let numberOfSamples = 1
-
-                var estimate = FloatX(numberOfSamples) * topBxdf.evaluateLocal(wo: wo, wi: wi)
-                var sampler: Sampler = .random(RandomSampler())
-                for _ in 0..<numberOfSamples {
-                        evaluateOneSample(
-                                sampler: &sampler,
-                                wo: wo,
-                                wi: wi,
-                                exitZ: exitZ,
-                                estimate: &estimate)
-                }
-                estimate /= FloatX(numberOfSamples)
-                return estimate
+                let value = layered.evaluateLocal(wo: wo, wi: wi)
+                return value
         }
 
         func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
-                let bs = topBxdf.sampleLocal(wo: wo, u: u)
-                if !bs.isValid {
-                        return invalidBsdfSample
-                }
-                if bs.isReflection(wo: wo) {
-                        return bs
-                }
-                var w = bs.incoming
-                var estimate = bs.estimate * absCosTheta(bs.incoming)
-                var probabilityDensity = bs.probabilityDensity
-                var z = thickness
-
-                for depth in 0..<maxDepth {
-                        let rrBeta = estimate.maxValue / probabilityDensity
-                        if depth > 3 && rrBeta < 0.25 {
-                                let q = max(0, 1 - rrBeta)
-                                if u.0 < q {
-                                        return invalidBsdfSample
-                                }
-                                probabilityDensity *= 1 - q
-                        }
-                        if w.z == 0 {
-                                return invalidBsdfSample
-                        }
-                        // albedo is zero
-                        z = (z == thickness) ? 0 : thickness
-                        estimate *= transmittance(dz: thickness, w: w)
-                        let interface: any LocalBsdf = (z == 0) ? bottomBxdf : topBxdf
-                        let bs = interface.sampleLocal(wo: -w, u: u)
-                        if !bs.isValid {
-                                return invalidBsdfSample
-                        }
-                        estimate *= bs.estimate
-                        probabilityDensity *= bs.probabilityDensity
-                        w = bs.incoming
-                        if bs.isTransmission(wo: -w) {
-                                return BsdfSample(estimate, w, probabilityDensity)
-                        }
-                        estimate *= absCosTheta(bs.incoming)
-                }
-                return invalidBsdfSample
-        }
-
-        private func evaluateTRT(wo: Vector, wi: Vector) async -> FloatX {
-                var pdfSum: FloatX = 0
-                let rInterface = bottomBxdf
-                let tInterface = topBxdf
-                var sampler: Sampler = .random(RandomSampler())
-                let wos = tInterface.sampleLocal(wo: wo, u: sampler.get3D())
-                let wis = tInterface.sampleLocal(wo: wi, u: sampler.get3D())
-                if wos.isValid && wis.isValid {
-                        if tInterface.isSpecular {
-                                pdfSum += rInterface.probabilityDensityLocal(
-                                        wo: -wos.incoming,
-                                        wi: -wis.incoming)
-                        } else {
-                                let rs = rInterface.sampleLocal(wo: -wos.incoming, u: sampler.get3D())
-                                if rs.isValid {
-                                        let rPdf = rInterface.probabilityDensityLocal(
-                                                wo: -wos.incoming, wi: -wis.incoming)
-                                        let rwt = powerHeuristic(f: wis.probabilityDensity, g: rPdf)
-                                        pdfSum += rwt * rPdf
-                                        let tPdf = tInterface.probabilityDensityLocal(
-                                                wo: -rs.incoming,
-                                                wi: wi)
-                                        let twt = powerHeuristic(f: rs.probabilityDensity, g: tPdf)
-                                        pdfSum += twt * tPdf
-                                }
-                        }
-                }
-                return pdfSum
-        }
-
-        private func evaluateTT(wo: Vector, wi: Vector) async -> FloatX {
-                let toInterface = topBxdf
-                let tiInterface = bottomBxdf
-                var sampler = RandomSampler()
-                var pdfSum: FloatX = 0
-                let wos = toInterface.sampleLocal(wo: wo, u: sampler.get3D())
-                guard wos.isValid else {
-                        return pdfSum
-                }
-                let wis = tiInterface.sampleLocal(wo: wi, u: sampler.get3D())
-                guard wis.isValid else {
-                        return pdfSum
-                }
-                if toInterface.isSpecular {
-                        pdfSum += tiInterface.probabilityDensityLocal(wo: -wos.incoming, wi: wi)
-                } else {  // tiInterface/bottomBxdf/DiffuseBxdf is never specular
-                        let toPdf = toInterface.probabilityDensityLocal(wo: wo, wi: -wis.incoming)
-                        let tiPdf = tiInterface.probabilityDensityLocal(wo: -wos.incoming, wi: wi)
-                        pdfSum += (toPdf + tiPdf) / 2
-                }
-                return pdfSum
+                return await layered.sampleLocal(wo: wo, u: u)
         }
 
         func probabilityDensityLocal(wo: Vector, wi: Vector) async -> FloatX {
-                let numberOfSamples = 1
-                var pdfSum: FloatX = 0
-                if sameHemisphere(wo, wi) {
-                        pdfSum += FloatX(numberOfSamples) * topBxdf.probabilityDensityLocal(wo: wo, wi: wi)
-                }
-                for _ in 0..<numberOfSamples {
-                        if sameHemisphere(wo, wi) {
-                                pdfSum += await evaluateTRT(wo: wo, wi: wi)
-                        } else {
-                                pdfSum += await evaluateTT(wo: wo, wi: wi)
-                        }
-                }
-                let density = lerp(
-                        with: 0.9,
-                        between: 1 / (4 * FloatX.pi),
-                        and: pdfSum / FloatX(numberOfSamples))
-                return density
+                return await layered.probabilityDensityLocal(wo: wo, wi: wi)
         }
 
-        private func transmittance(dz: FloatX, w: Vector) -> FloatX {
-                if abs(dz) < FloatX.leastNormalMagnitude {
-                        return 1
-                } else {
-                        return exp(-abs(dz / w.z))
-                }
+        func albedo() -> RgbSpectrum {
+                return _albedo
         }
 
-        func albedo() -> RgbSpectrum { return reflectance }
+        var isSpecular: Bool {
+                return true
+        }
 }

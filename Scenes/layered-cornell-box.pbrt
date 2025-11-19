@@ -1,0 +1,179 @@
+Integrator "path" "integer maxdepth" [ 1 ] # gonsolo 65
+Transform [ 1 -0 -0 -0 -0 1 -0 -0 -0 -0 -1 -0 -0 -1 6.8 1  ]
+#Sampler "random" "integer pixelsamples" [ 1 ] # gonsolo 512
+Sampler "sobol" "integer pixelsamples" [ 8 ] # gonsolo 512
+
+#PixelFilter "triangle" "float xradius" [ 10 ] "float yradius" [ 10 ]
+#PixelFilter "box" "float xradius" [ 10 ] "float yradius" [ 10 ]
+#PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ]
+PixelFilter "gaussian" "float xradius" [ 3 ] "float yradius" [ 5 ] "float sigma" [1.5]
+
+# gonsolo
+Accelerator "bvh"
+#Accelerator "embree"
+#Accelerator "optix"
+
+Film "rgb"
+    "string filename" [ "layered-cornell-box.exr" ]
+    #"integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+    "integer xresolution" [ 512 ] "integer yresolution" [ 512 ]
+    #"integer xresolution" [ 1920 ] "integer yresolution" [ 1080 ]
+ 
+Camera "perspective" "float fov" [ 19.5 ]
+
+WorldBegin
+
+MakeNamedMaterial "LeftWall"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.63 0.065 0.05 ]
+MakeNamedMaterial "RightWall"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.14 0.45 0.091 ]
+MakeNamedMaterial "Floor"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+MakeNamedMaterial "Ceiling"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+MakeNamedMaterial "BackWall"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+MakeNamedMaterial "ShortBox"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+MakeNamedMaterial "TallBox"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+
+Texture "Texture03" "spectrum" "imagemap"
+    "string filter" "trilinear"
+    "string filename" [ "wood.tga" ]
+
+MakeNamedMaterial "Wood"
+    "string type" [ "coateddiffuse" ]
+    "bool remaproughness" [ false ]
+    "float vroughness" [ 0.15 ]
+    "float uroughness" [ 0.15 ]
+    "texture reflectance" [ "Texture03" ]
+
+MakeNamedMaterial "Light"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0 0 0 ]
+NamedMaterial "Floor"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ 4.37114e-8 1 1.91069e-15 4.37114e-8 1 1.91069e-15 4.37114e-8 1 1.91069e-15 
+                 4.37114e-8 1 1.91069e-15 ]
+    "point3 P" [ -1 1.74846e-7 -1 -1 1.74846e-7 1 1 -1.74846e-7 1 1 -1.74846e-7 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "Ceiling"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ -8.74228e-8 -1 -4.37114e-8 -8.74228e-8 -1 -4.37114e-8 -8.74228e-8 
+                 -1 -4.37114e-8 -8.74228e-8 -1 -4.37114e-8 ]
+    "point3 P" [ 1 2 1 -1 2 1 -1 2 -1 1 2 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "BackWall"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ 8.74228e-8 -4.37114e-8 -1 8.74228e-8 -4.37114e-8 -1 8.74228e-8 -4.37114e-8 
+                 -1 8.74228e-8 -4.37114e-8 -1 ]
+    "point3 P" [ -1 0 -1 -1 2 -1 1 2 -1 1 0 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "RightWall"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ 1 -4.37114e-8 1.31134e-7 1 -4.37114e-8 1.31134e-7 1 -4.37114e-8 
+                 1.31134e-7 1 -4.37114e-8 1.31134e-7 ]
+    "point3 P" [ 1 0 -1 1 2 -1 1 2 1 1 0 1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "LeftWall"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ -1 -4.37114e-8 -4.37114e-8 -1 -4.37114e-8 -4.37114e-8 -1 -4.37114e-8 
+                 -4.37114e-8 -1 -4.37114e-8 -4.37114e-8 ]
+    "point3 P" [ -1 0 1 -1 2 1 -1 2 -1 -1 0 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+
+#NamedMaterial "ShortBox"
+NamedMaterial "Wood"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ -0.958123 -4.18809e-8 -0.286357 -0.958123 -4.18809e-8 -0.286357 
+                 -0.958123 -4.18809e-8 -0.286357 -0.958123 -4.18809e-8 -0.286357 
+                 0.958123 4.18809e-8 0.286357 0.958123 4.18809e-8 0.286357 0.958123 
+                 4.18809e-8 0.286357 0.958123 4.18809e-8 0.286357 -4.37114e-8 1 -1.91069e-15 
+                 -4.37114e-8 1 -1.91069e-15 -4.37114e-8 1 -1.91069e-15 -4.37114e-8 
+                 1 -1.91069e-15 4.37114e-8 -1 1.91069e-15 4.37114e-8 -1 1.91069e-15 
+                 4.37114e-8 -1 1.91069e-15 4.37114e-8 -1 1.91069e-15 -0.286357 -1.25171e-8 
+                 0.958123 -0.286357 -1.25171e-8 0.958123 -0.286357 -1.25171e-8 0.958123 
+                 -0.286357 -1.25171e-8 0.958123 0.286357 1.25171e-8 -0.958123 0.286357 
+                 1.25171e-8 -0.958123 0.286357 1.25171e-8 -0.958123 0.286357 1.25171e-8 
+                 -0.958123 ]
+    "point3 P" [ -0.0460751 0.6 0.573007 -0.0460751 -2.98023e-8 0.573007 0.124253 
+                 0 0.00310463 0.124253 0.6 0.00310463 0.533009 0 0.746079 0.533009 
+                 0.6 0.746079 0.703337 0.6 0.176177 0.703337 2.98023e-8 0.176177 
+                 0.533009 0.6 0.746079 -0.0460751 0.6 0.573007 0.124253 0.6 0.00310463 
+                 0.703337 0.6 0.176177 0.703337 2.98023e-8 0.176177 0.124253 0 0.00310463 
+                 -0.0460751 -2.98023e-8 0.573007 0.533009 0 0.746079 0.533009 0 0.746079 
+                 -0.0460751 -2.98023e-8 0.573007 -0.0460751 0.6 0.573007 0.533009 
+                 0.6 0.746079 0.703337 0.6 0.176177 0.124253 0.6 0.00310463 0.124253 
+                 0 0.00310463 0.703337 2.98023e-8 0.176177 ]
+    "integer indices" [ 0 2 1 0 3 2 4 6 5 4 7 6 8 10 9 8 11 10 12 14 13 12 15 14 
+                        16 18 17 16 19 18 20 22 21 20 23 22 ]
+#NamedMaterial "TallBox"
+NamedMaterial "Wood"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        0 0 1 0 1 1 0 1 
+        ]
+    "normal N" [ -0.328669 -4.1283e-8 -0.944445 -0.328669 -4.1283e-8 -0.944445 -0.328669 
+                 -4.1283e-8 -0.944445 -0.328669 -4.1283e-8 -0.944445 0.328669 4.1283e-8 
+                 0.944445 0.328669 4.1283e-8 0.944445 0.328669 4.1283e-8 0.944445 
+                 0.328669 4.1283e-8 0.944445 3.82137e-15 1 -4.37114e-8 3.82137e-15 
+                 1 -4.37114e-8 3.82137e-15 1 -4.37114e-8 3.82137e-15 1 -4.37114e-8 
+                 -3.82137e-15 -1 4.37114e-8 -3.82137e-15 -1 4.37114e-8 -3.82137e-15 
+                 -1 4.37114e-8 -3.82137e-15 -1 4.37114e-8 -0.944445 1.43666e-8 0.328669 
+                 -0.944445 1.43666e-8 0.328669 -0.944445 1.43666e-8 0.328669 -0.944445 
+                 1.43666e-8 0.328669 0.944445 -1.43666e-8 -0.328669 0.944445 -1.43666e-8 
+                 -0.328669 0.944445 -1.43666e-8 -0.328669 0.944445 -1.43666e-8 -0.328669 ]
+    "point3 P" [ -0.720444 1.2 -0.473882 -0.720444 0 -0.473882 -0.146892 0 -0.673479 
+                 -0.146892 1.2 -0.673479 -0.523986 0 0.0906493 -0.523986 1.2 0.0906492 
+                 0.0495656 1.2 -0.108948 0.0495656 0 -0.108948 -0.523986 1.2 0.0906492 
+                 -0.720444 1.2 -0.473882 -0.146892 1.2 -0.673479 0.0495656 1.2 -0.108948 
+                 0.0495656 0 -0.108948 -0.146892 0 -0.673479 -0.720444 0 -0.473882 
+                 -0.523986 0 0.0906493 -0.523986 0 0.0906493 -0.720444 0 -0.473882 
+                 -0.720444 1.2 -0.473882 -0.523986 1.2 0.0906492 0.0495656 1.2 -0.108948 
+                 -0.146892 1.2 -0.673479 -0.146892 0 -0.673479 0.0495656 0 -0.108948 ]
+    "integer indices" [ 0 2 1 0 3 2 4 6 5 4 7 6 8 10 9 8 11 10 12 14 13 12 15 14 
+                        16 18 17 16 19 18 20 22 21 20 23 22 ]
+
+AttributeBegin
+    Translate 0 0 1
+    Rotate 45 1 0 0
+    AreaLightSource "diffuse"
+        "rgb L" [ 100 100 100 ]
+    NamedMaterial "Light"
+    Shape "trianglemesh"
+        "point2 uv" [ 0 0 1 0 1 1 0 1 
+            ]
+        "normal N" [ -8.74228e-8 -1 1.86006e-7 -8.74228e-8 -1 1.86006e-7 -8.74228e-8 
+                     -1 1.86006e-7 -8.74228e-8 -1 1.86006e-7 ]
+        "point3 P" [ -0.24 1.98 -0.22 0.23 1.98 -0.22 0.23 1.98 0.16 -0.24 1.98 0.16 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd

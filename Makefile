@@ -1,6 +1,6 @@
-all: debug
+all: td
 
-#SINGLERAY = --single 68 2
+#SINGLERAY = --single 22 32
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick
@@ -13,7 +13,8 @@ PTEXMEM = --ptexmem 1 # GB
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
-SCENE_NAME = cornell-box
+#SCENE_NAME = cornell-box
+SCENE_NAME = layered-cornell-box
 #SCENE_NAME = bathroom
 #SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 SCENE = Scenes/$(SCENE_NAME).pbrt
@@ -105,8 +106,8 @@ ifeq ($(OS), Darwin)
 else
 	VIEWER 			= loupe
 	PBRT 			= ~/src/pbrt-v4/gonsolo/pbrt
-	#LLDB 			= /usr/libexec/swift/bin/lldb
-	LLDB 			= lldb
+	LLDB 			= /usr/lib/swift/bin/lldb
+	#LLDB 			= lldb
 	ifeq ($(HOSTNAME), Limone)
 		SWIFT		= ~/bin/swift
 	else
@@ -210,11 +211,12 @@ DENOISE = oidnDenoise
 vn: view_denoised
 view_denoised:
 	$(CONVERT) -type truecolor -endian LSB $(IMAGE) $(PFM)
-	$(CONVERT) -type truecolor -endian LSB albedo.exr albedo.pfm
-	$(CONVERT) -type truecolor -endian LSB normal.exr normal.pfm
-	$(DENOISE) -hdr $(PFM) -alb albedo.pfm -nrm normal.pfm -o denoised.albnrm.pfm
-	#$(DENOISE) -hdr $(PFM) -o denoised.albnrm.pfm
-	gimp denoised.albnrm.pfm
+	#$(CONVERT) -type truecolor -endian LSB albedo.exr albedo.pfm
+	#$(CONVERT) -type truecolor -endian LSB normal.exr normal.pfm
+	#$(DENOISE) -hdr $(PFM) -alb albedo.pfm -nrm normal.pfm -o denoised.albnrm.pfm
+	$(DENOISE) -hdr $(PFM) -o denoised.pfm
+	#gimp denoised.albnrm.pfm
+	gimp denoised.pfm
 
 v: view
 vr: view_release
@@ -277,7 +279,8 @@ format_suggest:
 	@swift-format lint -r Sources/gonzales/
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
-	@swift-format -i -r Sources/gonzales/
+#	@swift-format -i -r Sources/gonzales/
+	@swift-format -i -p $(shell find Sources/gonzales/ -name \*.swift -not -name SobolMatrices.swift)
 lint:
 	swiftlint Sources/gonzales
 codespell:

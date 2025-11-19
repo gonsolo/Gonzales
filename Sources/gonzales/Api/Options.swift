@@ -153,7 +153,7 @@ class Options {
         @MainActor
         func makeSampler(film: Film) throws -> Sampler {
                 switch samplerName {
-                case "sobol":
+                case "sobol", "zsobol":
                         return try .sobol(
                                 createZSobolSampler(
                                         parameters: samplerParameters, fullResolution: film.resolution,

@@ -1,5 +1,5 @@
+import Foundation  // Needed for MemoryLayout
 import openImageIOBridge
-import Foundation // Needed for MemoryLayout
 
 actor OpenImageIOWriter {
 
@@ -8,10 +8,10 @@ actor OpenImageIOWriter {
                 // 1. Determine the final crop bounds
                 let finalCrop: Bounds2i
                 if let explicitCrop = crop {
-                    finalCrop = explicitCrop
+                        finalCrop = explicitCrop
                 } else {
-                    // Default to full image resolution if no crop is provided
-                    finalCrop = Bounds2i(pMin: Point2i(x: 0, y: 0), pMax: image.getResolution())
+                        // Default to full image resolution if no crop is provided
+                        finalCrop = Bounds2i(pMin: Point2i(x: 0, y: 0), pMax: image.getResolution())
                 }
 
                 // 2. Prepare the pixel buffer
@@ -36,9 +36,9 @@ actor OpenImageIOWriter {
                                 write(pixel: pixel, at: index)
                         }
                 }
-                
+
                 // 3. OpenImageIO Tiling and Writing Logic
-                
+
                 let xres = Int32(resolution.x)
                 let yres = Int32(resolution.y)
                 let tileWidth = Int32(tileSize.0)
@@ -46,14 +46,16 @@ actor OpenImageIOWriter {
                 let channels: Int32 = 4
 
                 // Open the file
-                guard let outputPointer = openImageForTiledWriting(
-                    fileName, xres, yres, tileWidth, tileHeight, channels) else {
-                    return
+                guard
+                        let outputPointer = openImageForTiledWriting(
+                                fileName, xres, yres, tileWidth, tileHeight, channels)
+                else {
+                        return
                 }
 
                 // Ensure the output pointer is closed and deleted when the function exits
                 defer {
-                    closeImageOutput(outputPointer)
+                        closeImageOutput(outputPointer)
                 }
 
                 // Stride Calculations
@@ -64,26 +66,26 @@ actor OpenImageIOWriter {
 
                 let nxtiles = (xres + tileWidth - 1) / tileWidth
                 let nytiles = (yres + tileHeight - 1) / tileHeight
-                
+
                 // Tiling Loop
                 buffer.withUnsafeBufferPointer { bufferPointer in
-                    guard let pixels = bufferPointer.baseAddress else { return }
-                    
-                    for ty in 0..<nytiles {
-                        for tx in 0..<nxtiles {
-                            let success = writeSingleTile(
-                                outputPointer,
-                                pixels,
-                                xres, channels,
-                                Int32(tx), Int32(ty), tileWidth, tileHeight,
-                                channelStride, xStride, yStride
-                            )
-                            
-                            if !success {
-                                return
-                            }
+                        guard let pixels = bufferPointer.baseAddress else { return }
+
+                        for ty in 0..<nytiles {
+                                for tx in 0..<nxtiles {
+                                        let success = writeSingleTile(
+                                                outputPointer,
+                                                pixels,
+                                                xres, channels,
+                                                Int32(tx), Int32(ty), tileWidth, tileHeight,
+                                                channelStride, xStride, yStride
+                                        )
+
+                                        if !success {
+                                                return
+                                        }
+                                }
                         }
-                    }
                 }
         }
 }

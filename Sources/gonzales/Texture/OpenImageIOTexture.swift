@@ -38,7 +38,9 @@ struct OpenImageIOTexture {
 
         func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
                 let (s, t) = getTextureCoordinates(at: interaction)
-                return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
+                let value: RgbSpectrum = OpenImageIOTextureSystem.shared.evaluate(
+                        filename: filename, s: s, t: t)
+                return value
         }
 
         @MainActor
