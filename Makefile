@@ -83,7 +83,7 @@ PFM = $(IMAGE:.exr=.pfm)
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
 .PHONY: all c clean e edit es editScene em editMakefile lint lldb p perf tags t test \
-	test_unchecked test_debug test_release v view wc
+	test_debug test_release v view wc
 
 PBRT_OPTIONS = --quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -115,12 +115,13 @@ else
 endif
 	#SWIFT_VERBOSE		= -v
 	#SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
+	SWIFT_OPTIMIZE_FLAG     = -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
+	SWIFT_LTO 		= --experimental-lto-mode full
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
-	SWIFT_OPTIMIZE_FLAG	= -Xswiftc -Ounchecked  #-Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
-	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
+	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA) $(SWIFT_LTO)
 
 	# Should not be needed since there is only one module
 	# CROSS 			= -Xswiftc -cross-module-optimization
@@ -194,9 +195,6 @@ test_debug: debug
 tr: test_release
 test_release: release
 	@$(RUN_RELEASE)
-tu: test_unchecked
-test_unchecked:
-	@$(SWIFT) run -c release  $(SWIFT_OPTIONS)-Xswiftc -Ounchecked gonzales $(SCENE)
 tags:
 	ctags -R Sources
 c: clean

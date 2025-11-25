@@ -409,7 +409,7 @@ struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: Glo
         }
 }
 
-struct CoatedDiffuseBsdf: GlobalBsdf {
+public struct CoatedDiffuseBsdf: GlobalBsdf {
 
         private let layered: LayeredBsdf<DielectricBsdf, DiffuseBsdf>
         private let _albedo: RgbSpectrum

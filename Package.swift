@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
         name: "gonzales",
         platforms: [
-            .macOS(.v26)
+                .macOS(.v26)
         ],
         targets: [
                 .executableTarget(
@@ -14,18 +14,25 @@ let package = Package(
                                 "openImageIOBridge",
                                 "ptexBridge",
                         ],
-                        //swiftSettings: [
-                        //    .unsafeFlags([
-                        //        "-Xcc", "Samplers/SobolMatrices.swift",
-                        //        "-Xcc", "-Onone"
-                        //    ])
-                        //]
+                        swiftSettings: [
+                                // 1. Swift-specific: Disables all runtime safety checks (bounds, overflow, preconditions)
+                                .unsafeFlags(["-Ounchecked"]),
+
+                                // 2. Clang Backend: High standard optimization
+                                .unsafeFlags(["-Xcc", "-O3"]),
+
+                                // 3. Clang Backend: Aggressive floating-point math optimizations (faster, less precise)
+                                .unsafeFlags(["-Xcc", "-ffast-math"]),
+                        ],
+                ),
+                .executableTarget(
+                        name: "testCoated",
                 ),
                 .target(
                         name: "openImageIOBridge",
                         dependencies: ["openimageio"],
                         cxxSettings: [
-                            .unsafeFlags(["-I/usr/local/include/"])
+                                .unsafeFlags(["-I/usr/local/include/"])
                         ],
                         swiftSettings: [.interoperabilityMode(.Cxx)]
                 ),
@@ -36,6 +43,6 @@ let package = Package(
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
-        swiftLanguageModes: [ .v6 ],
+        swiftLanguageModes: [.v6],
         cxxLanguageStandard: .cxx20
 )
