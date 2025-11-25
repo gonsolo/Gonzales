@@ -427,8 +427,7 @@ extension VolumePathIntegrator {
                 else {
                         return false
                 }
-                pathThroughputWeight *= bsdfSample.throughputWeight(
-                        normal: surfaceInteraction.normal)
+                pathThroughputWeight *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
                 let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
                 ray = spawnedRay
                 return true

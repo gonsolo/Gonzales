@@ -1,6 +1,6 @@
-all: td
+all: debug
 
-#SINGLERAY = --single 22 32
+#SINGLERAY = --single 32 58
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick
@@ -13,8 +13,8 @@ PTEXMEM = --ptexmem 1 # GB
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
-#SCENE_NAME = cornell-box
-SCENE_NAME = layered-cornell-box
+SCENE_NAME = cornell-box
+#SCENE_NAME = layered-cornell-box
 #SCENE_NAME = bathroom
 #SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 SCENE = Scenes/$(SCENE_NAME).pbrt
@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 .PHONY: all c clean e edit es editScene em editMakefile lint lldb p perf tags t test \
 	test_unchecked test_debug test_release v view wc
 
-PBRT_OPTIONS = --stats #--gpu #--nthreads 1 #--quiet --v 2
+PBRT_OPTIONS = --quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
 OS = $(shell uname)
 HOSTNAME = $(shell hostname)
@@ -236,7 +236,7 @@ xcode:
 	$(SWIFT) package generate-xcodeproj --xcconfig-overrides Config.xcconfig
 
 FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| grep -Ev \.build | wc -l)
-LINES=$(shell wc -l $$(find Sources -name \*.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
+LINES=$(shell wc -l $$(find Sources -name \*.swift -not -name SobolMatrices.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
 	@echo $(LINES) "lines"
@@ -279,7 +279,6 @@ format_suggest:
 	@swift-format lint -r Sources/gonzales/
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
-#	@swift-format -i -r Sources/gonzales/
 	@swift-format -i -p $(shell find Sources/gonzales/ -name \*.swift -not -name SobolMatrices.swift)
 lint:
 	swiftlint Sources/gonzales

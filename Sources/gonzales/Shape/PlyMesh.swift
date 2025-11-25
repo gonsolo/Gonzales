@@ -380,7 +380,6 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) th
         }
         let uncompressedData = file.readDataToEndOfFile()
         var data: Data
-        print(absoluteFileName)
         if absoluteFileName.hasSuffix(".gz") {
                 data = try Compression.get(data: uncompressedData)
         } else {

@@ -15,6 +15,7 @@ struct CoatedDiffuse {
         func getBsdf(interaction: any Interaction) -> CoatedDiffuseBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
+
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let coatedDiffuseBsdf = CoatedDiffuseBsdf(
                         reflectance: reflectanceAtInteraction,

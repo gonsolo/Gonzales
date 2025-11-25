@@ -50,6 +50,7 @@ struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: Glo
         }
 
         func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
+
                 var f = RgbSpectrum(intensity: 0.0)
 
                 var localWo = wo
@@ -117,7 +118,7 @@ struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: Glo
 
                                 if _albedo.isBlack {
                                         z = (z == thickness) ? 0 : thickness
-                                        beta *= transmittance(dz: thickness, w: w)
+                                        beta *= white
                                 } else {
                                         let sigma_t: FloatX = 1.0
                                         let dz = -log(1 - sampler.get1D()) / (sigma_t / abs(w.z))
@@ -209,7 +210,8 @@ struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: Glo
                         }
                 }
 
-                return f / FloatX(nSamples)
+                let result = f / FloatX(nSamples)
+                return result
         }
 
         func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
@@ -280,7 +282,7 @@ struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: Glo
                                 z = clamp(value: zp, low: 0, high: thickness)
                         } else {
                                 z = (z == thickness) ? 0 : thickness
-                                f *= transmittance(dz: thickness, w: w)
+                                f *= white
                         }
 
                         let bs: BsdfSample
