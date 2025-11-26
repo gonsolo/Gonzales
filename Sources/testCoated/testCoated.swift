@@ -40,5 +40,5 @@ let shadingFrame2 = ShadingFrame(
         bitangent: Vector(x: 0, y: 1, z: 0))
 test(shadingFrame: shadingFrame2)
 let shadingFrame3 = ShadingFrame(
-        normal: Normal(x: 0, y: 0, z: 1))
+        normal: normalized(Normal(x: 1, y: 10, z: 1)))
 test(shadingFrame: shadingFrame3)
