@@ -1,12 +1,12 @@
 import Foundation  // sin, cos
 
-final class TrowbridgeReitzDistribution: MicrofacetDistribution {
+public final class TrowbridgeReitzDistribution: MicrofacetDistribution {
 
-        init(alpha: (FloatX, FloatX)) {
+        public init(alpha: (FloatX, FloatX)) {
                 self.alpha = alpha
         }
 
-        func differentialArea(withNormal half: Vector) -> FloatX {
+        public func differentialArea(withNormal half: Vector) -> FloatX {
                 let tan2 = tan2Theta(half)
                 if tan2.isInfinite { return 0 }
                 let cos4 = cos2Theta(half) * cos2Theta(half)
@@ -15,7 +15,7 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return area
         }
 
-        func lambda(_ vector: Vector) -> FloatX {
+        public func lambda(_ vector: Vector) -> FloatX {
                 let absTanTheta = abs(tanTheta(vector))
                 if absTanTheta.isInfinite { return 0 }
                 let a = (cos2Phi(vector) * alpha.0 * alpha.0 + sin2Phi(vector) * alpha.1 * alpha.1)
@@ -25,7 +25,7 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return result
         }
 
-        func sampleHalfVector(wo: Vector, u: TwoRandomVariables) -> Vector {
+        public func sampleHalfVector(wo: Vector, u: TwoRandomVariables) -> Vector {
                 var localWo = wo
                 let flip = wo.z < 0
                 if flip { localWo = -localWo }
@@ -100,7 +100,7 @@ final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return roughness.squareRoot()
         }
 
-        var isSmooth: Bool {
+        public var isSmooth: Bool {
                 return max(alpha.0, alpha.1) < 0.001
         }
 

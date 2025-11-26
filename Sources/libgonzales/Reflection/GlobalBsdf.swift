@@ -7,9 +7,9 @@ public protocol GlobalBsdf: BsdfFrameProtocol, DistributionModel, LocalBsdf, Sen
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
-public extension GlobalBsdf {
+extension GlobalBsdf {
 
-        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
+        public func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
                 var totalLightScattered = black
                 let woLocal = worldToLocal(world: woWorld)
                 let wiLocal = worldToLocal(world: wiWorld)
@@ -23,14 +23,14 @@ public extension GlobalBsdf {
                 return totalLightScattered
         }
 
-        func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
+        public func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
                 let wiLocal = worldToLocal(world: wiWorld)
                 let woLocal = worldToLocal(world: woWorld)
                 if woLocal.z == 0 { return 0 }
                 return probabilityDensityLocal(wo: woLocal, wi: wiLocal)
         }
 
-        func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
+        public func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 let woLocal = worldToLocal(world: woWorld)
@@ -42,14 +42,14 @@ public extension GlobalBsdf {
                 )
         }
 
-        func evaluateDistributionFunction(wo: Vector, wi: Vector, normal: Normal) -> RgbSpectrum {
+        public func evaluateDistributionFunction(wo: Vector, wi: Vector, normal: Normal) -> RgbSpectrum {
                 let reflected = evaluateWorld(wo: wo, wi: wi)
                 let dot = absDot(wi, Vector(normal: normal))
                 let scatter = reflected * dot
                 return scatter
         }
 
-        func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout Sampler)
+        public func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout Sampler)
                 -> BsdfSample
         {
                 var (bsdfSample, _) = sampleWorld(wo: wo, u: sampler.get3D())
@@ -57,7 +57,7 @@ public extension GlobalBsdf {
                 return bsdfSample
         }
 
-        func evaluateProbabilityDensity(wo: Vector, wi: Vector) -> FloatX {
+        public func evaluateProbabilityDensity(wo: Vector, wi: Vector) -> FloatX {
                 return probabilityDensityWorld(wo: wo, wi: wi)
         }
 }

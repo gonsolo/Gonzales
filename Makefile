@@ -293,5 +293,5 @@ open_trace_in_ui:
 perfetto: gonzales.perfscript open_trace_in_ui
 	python open_trace_in_ui -i $<
 
-test_coated:
+coated:
 	.build/debug/testCoated

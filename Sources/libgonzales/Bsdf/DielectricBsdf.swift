@@ -1,10 +1,28 @@
-struct DielectricBsdf: GlobalBsdf {
+public struct DielectricBsdf: GlobalBsdf {
+
+        public let distribution: any MicrofacetDistribution
+        public let refractiveIndexVacuum: FloatX = 1
+        // eta in PBRT
+        // Vacuum: 1
+        // Water: 1.3
+        // Glass: 1.52
+        public let refractiveIndex: FloatX
+        public let bsdfFrame: BsdfFrame
+
+        public init(distribution: any MicrofacetDistribution, refractiveIndex: FloatX, bsdfFrame: BsdfFrame) {
+                self.distribution = distribution
+                self.refractiveIndex = refractiveIndex
+                self.bsdfFrame = bsdfFrame
+        }
+}
+
+extension DielectricBsdf {
 
         private func backfacing(wi: Vector, wo: Vector, half: Vector) -> Bool {
                 return dot(half, wi) * cosTheta(wi) < 0 || dot(half, wo) * cosTheta(wo) < 0
         }
 
-        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
+        public func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return black
                 }
@@ -165,7 +183,7 @@ struct DielectricBsdf: GlobalBsdf {
                 }
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
+        public func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return sampleSpecular(wo: wo, u: u)
                 } else {
@@ -173,7 +191,7 @@ struct DielectricBsdf: GlobalBsdf {
                 }
         }
 
-        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
+        public func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 if refractiveIndex == refractiveIndexVacuum || isSpecular {
                         return 0
                 }
@@ -212,21 +230,10 @@ struct DielectricBsdf: GlobalBsdf {
                 return pdf
         }
 
-        func albedo() -> RgbSpectrum { return white }
+        public func albedo() -> RgbSpectrum { return white }
 
         var isSpecular: Bool {
                 return distribution.isSmooth
         }
 
-        let distribution: any MicrofacetDistribution
-
-        let refractiveIndexVacuum: FloatX = 1
-
-        // eta in PBRT
-        // Vacuum: 1
-        // Water: 1.3
-        // Glass: 1.52
-        let refractiveIndex: FloatX
-
-        let bsdfFrame: BsdfFrame
 }

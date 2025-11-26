@@ -12,9 +12,9 @@ public protocol LocalBsdf {
         var isTransmissive: Bool { get }
 }
 
-public extension LocalBsdf {
+extension LocalBsdf {
 
-        func sampleLocal(
+        public func sampleLocal(
                 wo: Vector,
                 u: ThreeRandomVariables,
                 evaluate: (Vector, Vector) -> RgbSpectrum
@@ -26,21 +26,21 @@ public extension LocalBsdf {
                 return BsdfSample(radiance, wi, density)
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
+        public func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
                 return sampleLocal(wo: wo, u: u, evaluate: self.evaluateLocal)
         }
 
-        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
+        public func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
                 guard sameHemisphere(wo, wi) else { return 0 }
                 let result = absCosTheta(wi) / FloatX.pi
                 return result
         }
 
-        var isReflective: Bool {
+        public var isReflective: Bool {
                 return true
         }
 
-        var isTransmissive: Bool {
+        public var isTransmissive: Bool {
                 return false
         }
 }
