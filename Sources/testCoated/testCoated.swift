@@ -9,7 +9,7 @@ func test(shadingFrame: ShadingFrame) {
         print(localVector)
         print(shadingFrame.localToWorld(local: localVector))
         
-        let bsdfFrame = BsdfFrame(geometricNormal: normal, shadingFrame: shadingFrame)
+        let bsdfFrame = BsdfFrame(geometricNormal: upNormal, shadingFrame: shadingFrame)
         
         let alpha: (FloatX, FloatX) = (0.001, 0.001)
         let distribution = TrowbridgeReitzDistribution(alpha: alpha)
@@ -29,16 +29,15 @@ func test(shadingFrame: ShadingFrame) {
         print("worldSpectrum: ", worldSpectrum)
 }
 
-let normal = Normal(x: 0, y: 0, z: 1)
 let shadingFrame1 = ShadingFrame(
-        tangent: Vector(x: 1, y: 0, z: 0),
-        bitangent: Vector(x: 0, y: 1, z: 0),
-        normal: normal)
+        x: Vector(x: 1, y: 0, z: 0),
+        y: Vector(x: 0, y: 1, z: 0),
+        z: Vector(x: 0, y: 0, z: 1))
 test(shadingFrame: shadingFrame1)
 let shadingFrame2 = ShadingFrame(
-        tangent: Vector(x: 1, y: 0, z: 0),
-        bitangent: Vector(x: 0, y: 1, z: 0))
+        x: Vector(x: 1, y: 0, z: 0),
+        y: Vector(x: 0, y: 1, z: 0))
 test(shadingFrame: shadingFrame2)
 let shadingFrame3 = ShadingFrame(
-        normal: normalized(Normal(x: 1, y: 10, z: 1)))
+        z: normalized(Vector(x: 1, y: 10, z: 1)))
 test(shadingFrame: shadingFrame3)
