@@ -295,3 +295,5 @@ perfetto: gonzales.perfscript open_trace_in_ui
 
 coated: debug
 	.build/debug/testCoated
+lldb_coated: debug
+	LD_LIBRARY_PATH=. $(LLDB) .build/debug/testCoated

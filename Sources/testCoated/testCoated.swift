@@ -2,8 +2,12 @@ import libgonzales
 
 print("test")
 
-let shadingFrame = ShadingFrame(normal: upNormal)
-let bsdfFrame = BsdfFrame(geometricNormal: upNormal, shadingFrame: shadingFrame)
+let normal = Normal(x: 0, y: 0, z: 1)
+let shadingFrame = ShadingFrame(
+        tangent: Vector(x: 1, y: 0, z: 0),
+        bitangent: Vector(x: 0, y: 1, z: 0),
+        normal: normal)
+let bsdfFrame = BsdfFrame(geometricNormal: normal, shadingFrame: shadingFrame)
 
 let alpha: (FloatX, FloatX) = (0.001, 0.001)
 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
@@ -15,9 +19,7 @@ let coated = CoatedDiffuseBsdf(
         diffuse: diffuse,
         bsdfFrame: bsdfFrame)
 
-//CoatedDiffuseBxDF coated(DielectricBxDF(sampledEta, distrib), DiffuseBxDF(r), thick, a, gg, maxDepth, nSamples);
-
-let wo = Vector(x: 0.0, y: 0.1, z: 1.0)
-let wi = Vector(x: 0.0, y: 0.0, z: 1.0)
-let spectrum = coated.evaluateWorld(wo: wo, wi: wi)
+let wo = Vector(x: 0.0, y: 0.0, z: 1.0)
+let wi = Vector(x: 0.0, y: 0.1, z: 1.0)
+let spectrum = coated.evaluateLocal(wo: wo, wi: wi)
 print(spectrum)
