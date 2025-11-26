@@ -15,13 +15,17 @@ struct CoatedDiffuse {
         func getBsdf(interaction: any Interaction) -> CoatedDiffuseBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
-
                 let bsdfFrame = BsdfFrame(interaction: interaction)
+
+                let alpha: (FloatX, FloatX) = (0.001, 0.001)
+                let distribution = TrowbridgeReitzDistribution(alpha: alpha)
+                let dielectric = DielectricBsdf(
+                        distribution: distribution, refractiveIndex: refractiveIndex, bsdfFrame: bsdfFrame)
+                let diffuse = DiffuseBsdf(reflectance: reflectanceAtInteraction, bsdfFrame: bsdfFrame)
+
                 let coatedDiffuseBsdf = CoatedDiffuseBsdf(
-                        reflectance: reflectanceAtInteraction,
-                        refractiveIndex: refractiveIndex,
-                        roughness: roughness,
-                        remapRoughness: remapRoughness,
+                        dielectric: dielectric,
+                        diffuse: diffuse,
                         bsdfFrame: bsdfFrame)
                 return coatedDiffuseBsdf
         }

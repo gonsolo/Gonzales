@@ -1,12 +1,20 @@
-struct DiffuseBsdf: GlobalBsdf {
+public struct DiffuseBsdf: GlobalBsdf {
 
-        func evaluateLocal(wo _: Vector, wi _: Vector) -> RgbSpectrum {
+        var reflectance: RgbSpectrum = white
+        public let bsdfFrame: BsdfFrame
+
+        public init(reflectance: RgbSpectrum, bsdfFrame: BsdfFrame) {
+                self.reflectance = reflectance
+                self.bsdfFrame = bsdfFrame
+        }
+}
+
+extension DiffuseBsdf {
+
+        public func evaluateLocal(wo _: Vector, wi _: Vector) -> RgbSpectrum {
                 return reflectance / FloatX.pi
         }
 
-        func albedo() -> RgbSpectrum { return reflectance }
+        public func albedo() -> RgbSpectrum { return reflectance }
 
-        var reflectance: RgbSpectrum = white
-
-        let bsdfFrame: BsdfFrame
 }

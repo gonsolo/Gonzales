@@ -3,42 +3,22 @@ import Foundation
 public struct CoatedDiffuseBsdf: GlobalBsdf {
 
         private let layered: LayeredBsdf<DielectricBsdf, DiffuseBsdf>
-        private let _albedo: RgbSpectrum
         public let bsdfFrame: BsdfFrame
 
         public init(
-                reflectance: RgbSpectrum,
-                refractiveIndex: FloatX,
-                roughness: (FloatX, FloatX),
-                remapRoughness: Bool,
+                dielectric: DielectricBsdf,
+                diffuse: DiffuseBsdf,
                 bsdfFrame: BsdfFrame
         ) {
-                self._albedo = reflectance
-                self.bsdfFrame = bsdfFrame
-
-                let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
-                let distribution = TrowbridgeReitzDistribution(alpha: alpha)
-                let topBxdf = DielectricBsdf(
-                        distribution: distribution,
-                        refractiveIndex: refractiveIndex,
-                        bsdfFrame: bsdfFrame
-                )
-
-                let bottomBxdf = DiffuseBsdf(
-                        reflectance: reflectance,
-                        bsdfFrame: bsdfFrame
-                )
-
                 let thickness: FloatX = 0.01
                 let g: FloatX = 0.0
                 let maxDepth = 10
                 let nSamples = 1
-
                 let mediumAlbedo = RgbSpectrum(intensity: 0.0)
 
                 self.layered = LayeredBsdf(
-                        top: topBxdf,
-                        bottom: bottomBxdf,
+                        top: dielectric,
+                        bottom: diffuse,
                         topIsSpecular: true,
                         bottomIsSpecular: false,
                         thickness: thickness,
@@ -49,6 +29,7 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                         bsdfFrame: bsdfFrame,
                         twoSided: true
                 )
+                self.bsdfFrame = bsdfFrame
         }
 
         public func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
@@ -65,7 +46,7 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
         }
 
         public func albedo() -> RgbSpectrum {
-                return _albedo
+                return layered.bottom.albedo()
         }
 
         var isSpecular: Bool {

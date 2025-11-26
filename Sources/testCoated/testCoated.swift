@@ -8,12 +8,11 @@ let bsdfFrame = BsdfFrame(geometricNormal: upNormal, shadingFrame: shadingFrame)
 let alpha: (FloatX, FloatX) = (0.001, 0.001)
 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
 let dielectric = DielectricBsdf(distribution: distribution, refractiveIndex: 1.0, bsdfFrame: bsdfFrame)
+let diffuse = DiffuseBsdf(reflectance: red, bsdfFrame: bsdfFrame)
 
 let coated = CoatedDiffuseBsdf(
-        reflectance: red,
-        refractiveIndex: 1.0,
-        roughness: (0.0, 0.0),
-        remapRoughness: false,
+        dielectric: dielectric,
+        diffuse: diffuse,
         bsdfFrame: bsdfFrame)
 
 //CoatedDiffuseBxDF coated(DielectricBxDF(sampledEta, distrib), DiffuseBxDF(r), thick, a, gg, maxDepth, nSamples);
