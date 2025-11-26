@@ -13,7 +13,7 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                 let thickness: FloatX = 0.01
                 let g: FloatX = 0.0
                 let maxDepth = 10
-                let nSamples = 1
+                let nSamples = 32
                 let mediumAlbedo = RgbSpectrum(intensity: 0.0)
 
                 self.layered = LayeredBsdf(

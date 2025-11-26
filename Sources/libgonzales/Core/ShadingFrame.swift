@@ -20,7 +20,7 @@ extension ShadingFrame {
                 normal = upNormal
         }
 
-        init(tangent: Vector, bitangent: Vector) {
+        public init(tangent: Vector, bitangent: Vector) {
                 self.init(tangent: tangent, bitangent: bitangent, normal: Normal(cross(tangent, bitangent)))
         }
 
@@ -85,19 +85,19 @@ extension ShadingFrame {
 
 extension ShadingFrame {
 
-        func worldToLocal(world: Vector) -> Vector {
+        public func worldToLocal(world: Vector) -> Vector {
                 return normalized(
                         Vector(
-                                x: dot(world, bitangent),
-                                y: dot(world, normal),
-                                z: dot(world, tangent)))
+                                x: dot(world, tangent),
+                                y: dot(world, bitangent),
+                                z: dot(world, normal)))
         }
 
-        func localToWorld(local: Vector) -> Vector {
-                let vx = bitangent.x * local.x + normal.x * local.y + tangent.x * local.z
-                let vy = bitangent.y * local.x + normal.y * local.y + tangent.y * local.z
-                let vz = bitangent.z * local.x + normal.z * local.y + tangent.z * local.z
-                return normalized(Vector(x: vx, y: vy, z: vz))
+        public func localToWorld(local: Vector) -> Vector {
+                let a = local.x * tangent
+                let b = local.y * bitangent 
+                let c = Vector(normal: local.z * normal)
+                return a + b + c
         }
-
 }
+
