@@ -1,11 +1,11 @@
-struct BsdfFrame {
+public struct BsdfFrame: Sendable {
 
         init() {
                 geometricNormal = Normal()
                 shadingFrame = ShadingFrame()
         }
 
-        init(geometricNormal: Normal, shadingFrame: ShadingFrame) {
+        public init(geometricNormal: Normal, shadingFrame: ShadingFrame) {
                 self.geometricNormal = geometricNormal
                 self.shadingFrame = shadingFrame
         }

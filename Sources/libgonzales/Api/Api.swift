@@ -40,7 +40,7 @@ func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
         return transform
 }
 
-enum ApiError: Error {
+public enum ApiError: Error {
         case accelerator
         case areaLight
         case coordSysTransform
@@ -62,22 +62,7 @@ enum ApiError: Error {
         case wrongType(message: String)
 }
 
-extension TimeInterval {
-        public var humanReadable: String {
-                let seconds = self.truncatingRemainder(dividingBy: 60)
-                if self > 60 {
-                        let minutes = self / 60
-                        let m = String(format: "%.0f", minutes)
-                        let s = String(format: "%.0f", seconds)
-                        return "\(m)m\(s)s"
-                } else {
-                        let s = String(format: "%.1f", seconds)
-                        return "\(s)s"
-                }
-        }
-}
-
-struct Api {
+public struct Api {
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
 }
@@ -151,7 +136,7 @@ extension Api {
         }
 
         @MainActor
-        func include(file sceneName: String, render: Bool) async throws {
+        public func include(file sceneName: String, render: Bool) async throws {
                 print(sceneName)
                 do {
                         let fileManager = FileManager.default
@@ -405,7 +390,7 @@ extension Api {
 
         // Not really part of PBRT API
         @MainActor
-        func start() {
+        public func start() {
                 readTimer = Timer("Reading...", newline: false)
                 fflush(stdout)
         }
@@ -668,7 +653,7 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
 }
 
 @MainActor
-var api = Api()
+public var api = Api()
 
 @MainActor
 var options = Options()

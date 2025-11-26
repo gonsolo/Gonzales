@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 .PHONY: all c clean e edit es editScene em editMakefile lint lldb p perf tags t test \
 	test_debug test_release v view wc
 
-PBRT_OPTIONS = --quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
+PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
 OS = $(shell uname)
 HOSTNAME = $(shell hostname)

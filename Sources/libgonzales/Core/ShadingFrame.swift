@@ -1,6 +1,6 @@
-struct ShadingFrame {
+public struct ShadingFrame: Sendable {
 
-        init() {
+        public init() {
                 tangent = nullVector
                 bitangent = nullVector
                 normal = nullVector

@@ -8,25 +8,34 @@ let package = Package(
                 .macOS(.v26)
         ],
         targets: [
-                .executableTarget(
-                        name: "gonzales",
+                .target(
+                        name: "libgonzales",
                         dependencies: [
                                 "openImageIOBridge",
                                 "ptexBridge",
                         ],
                         swiftSettings: [
-                                // 1. Swift-specific: Disables all runtime safety checks (bounds, overflow, preconditions)
                                 .unsafeFlags(["-Ounchecked"]),
-
-                                // 2. Clang Backend: High standard optimization
                                 .unsafeFlags(["-Xcc", "-O3"]),
-
-                                // 3. Clang Backend: Aggressive floating-point math optimizations (faster, less precise)
+                                .unsafeFlags(["-Xcc", "-ffast-math"]),
+                        ]
+                ),
+                .executableTarget(
+                        name: "gonzales",
+                        dependencies: [
+                                "libgonzales",
+                        ],
+                        swiftSettings: [
+                                .unsafeFlags(["-Ounchecked"]),
+                                .unsafeFlags(["-Xcc", "-O3"]),
                                 .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ],
                 ),
                 .executableTarget(
                         name: "testCoated",
+                        dependencies: [
+                                "libgonzales",
+                        ]
                 ),
                 .target(
                         name: "openImageIOBridge",

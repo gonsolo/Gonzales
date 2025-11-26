@@ -6,7 +6,7 @@ public struct Normal3: Sendable, Three {
                 self.z = 0
         }
 
-        init(x: FloatX = 0, y: FloatX = 0, z: FloatX = 1) {
+        public init(x: FloatX = 0, y: FloatX = 0, z: FloatX = 1) {
                 self.x = x
                 self.y = y
                 self.z = z

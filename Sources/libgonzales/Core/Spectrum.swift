@@ -146,11 +146,11 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 self.init(red: 0, green: 0, blue: 0)
         }
 
-        init(x: FloatX, y: FloatX, z: FloatX) {
+        public init(x: FloatX, y: FloatX, z: FloatX) {
                 self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
-        init(red: FloatX, green: FloatX, blue: FloatX) {
+        public init(red: FloatX, green: FloatX, blue: FloatX) {
                 self.init(x: red, y: green, z: blue)
         }
 
@@ -325,7 +325,7 @@ extension BaseRgbSpectrum {
         }
 }
 
-typealias RgbSpectrum = BaseRgbSpectrum
+public typealias RgbSpectrum = BaseRgbSpectrum
 
 extension RgbSpectrum: Spectrum {}
 

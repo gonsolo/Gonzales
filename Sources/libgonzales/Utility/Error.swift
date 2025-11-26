@@ -4,7 +4,7 @@
         import Darwin
 #endif
 
-enum RenderError: Error {
+public enum RenderError: Error {
         case fopen
         case insufficientArguments
         case fileNotExisting(name: String)

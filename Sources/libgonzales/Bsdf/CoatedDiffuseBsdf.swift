@@ -415,7 +415,7 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
         private let _albedo: RgbSpectrum
         let bsdfFrame: BsdfFrame
 
-        init(
+        public init(
                 reflectance: RgbSpectrum,
                 refractiveIndex: FloatX,
                 roughness: (FloatX, FloatX),

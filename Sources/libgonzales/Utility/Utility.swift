@@ -5,22 +5,22 @@ let shadowEpsilon: FloatX = 0.00001
 let oneMinusEpsilon: FloatX = 0.99999999999999989
 
 @MainActor
-var quick = false
+public var singleRayCoordinate = Point2i()
 
 @MainActor
-var singleRay = false
+public var quick = false
 
 @MainActor
-var singleRayCoordinate = Point2i()
+public var singleRay = false
 
 @MainActor
-var justParse = false
+public var justParse = false
 
 @MainActor
-var ptexMemory = 4  // GB
+public var ptexMemory = 4  // GB
 
 @MainActor
-var sceneDirectory = String()
+public var sceneDirectory = String()
 
 func radians(deg: FloatX) -> FloatX {
         return (FloatX.pi / 180) * deg
