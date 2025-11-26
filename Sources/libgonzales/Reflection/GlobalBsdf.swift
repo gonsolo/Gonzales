@@ -12,7 +12,6 @@ extension GlobalBsdf {
         public func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
                 var totalLightScattered = black
                 let woLocal = worldToLocal(world: woWorld)
-                print("woWorld, woLocal: ", woWorld, woLocal)
                 let wiLocal = worldToLocal(world: wiWorld)
                 let reflect = isReflecting(wi: wiWorld, wo: woWorld)
                 if reflect && isReflective {

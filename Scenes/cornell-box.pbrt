@@ -15,8 +15,8 @@ Accelerator "bvh"
 Film "rgb"
     "string filename" [ "cornell-box.exr" ]
     #"integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
-    "integer xresolution" [ 512 ] "integer yresolution" [ 512 ]
-    #"integer xresolution" [ 1920 ] "integer yresolution" [ 1080 ]
+    #"integer xresolution" [ 512 ] "integer yresolution" [ 512 ]
+    "integer xresolution" [ 1920 ] "integer yresolution" [ 1080 ]
  
 Camera "perspective" "float fov" [ 19.5 ]
 

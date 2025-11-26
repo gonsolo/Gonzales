@@ -25,7 +25,6 @@ extension ShadingFrame {
         }
 
         public init(normal: Normal) {
-                print("initializing ShadingFrame from normal: ", normal)
                 let n = Vector(normal: normalized(normal))
 
                 // We use the same variable names (x, y, z) as the pbrt function internally
@@ -58,7 +57,6 @@ extension ShadingFrame {
                 )
 
                 // Set the frame (t=x, b=y, n=z)
-                print("resulting ShadingFrame: ", x, y, z)
                 self.init(tangent: x, bitangent: y, normal: Normal(z))
 
                 // OPTIONAL: Sanity check (n = t x b) for right-handedness.

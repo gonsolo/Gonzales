@@ -62,9 +62,7 @@ struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: Glo
                 }
 
                 let enteredTop = twoSided || localWo.z > 0
-                print("enteredTop: ", enteredTop)
                 let isSameHemisphere = sameHemisphere(localWo, localWi)
-                print("isSameHemisphere: ", isSameHemisphere, localWo, localWi, wo, wi)
                 let exitZ: FloatX = (isSameHemisphere != enteredTop) ? 0 : thickness
 
                 if isSameHemisphere {
