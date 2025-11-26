@@ -5,27 +5,43 @@ import PackageDescription
 let package = Package(
         name: "gonzales",
         platforms: [
-            .macOS(.v26)
+                .macOS(.v26)
         ],
         targets: [
-                .executableTarget(
-                        name: "gonzales",
+                .target(
+                        name: "libgonzales",
                         dependencies: [
                                 "openImageIOBridge",
                                 "ptexBridge",
                         ],
-                        //swiftSettings: [
-                        //    .unsafeFlags([
-                        //        "-Xcc", "Samplers/SobolMatrices.swift",
-                        //        "-Xcc", "-Onone"
-                        //    ])
-                        //]
+                        swiftSettings: [
+                                .unsafeFlags(["-Ounchecked"]),
+                                .unsafeFlags(["-Xcc", "-O3"]),
+                                .unsafeFlags(["-Xcc", "-ffast-math"]),
+                        ]
+                ),
+                .executableTarget(
+                        name: "gonzales",
+                        dependencies: [
+                                "libgonzales",
+                        ],
+                        swiftSettings: [
+                                .unsafeFlags(["-Ounchecked"]),
+                                .unsafeFlags(["-Xcc", "-O3"]),
+                                .unsafeFlags(["-Xcc", "-ffast-math"]),
+                        ],
+                ),
+                .executableTarget(
+                        name: "testCoated",
+                        dependencies: [
+                                "libgonzales",
+                        ]
                 ),
                 .target(
                         name: "openImageIOBridge",
                         dependencies: ["openimageio"],
                         cxxSettings: [
-                            .unsafeFlags(["-I/usr/local/include/"])
+                                .unsafeFlags(["-I/usr/local/include/"])
                         ],
                         swiftSettings: [.interoperabilityMode(.Cxx)]
                 ),
@@ -36,6 +52,6 @@ let package = Package(
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
         ],
-        swiftLanguageModes: [ .v6 ],
+        swiftLanguageModes: [.v6],
         cxxLanguageStandard: .cxx20
 )

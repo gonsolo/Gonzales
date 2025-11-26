@@ -1,6 +1,6 @@
 all: debug
 
-#SINGLERAY = --single 68 2
+#SINGLERAY = --single 32 58
 #SYNC = --sync
 #VERBOSE = --verbose
 #QUICK = --quick
@@ -14,6 +14,7 @@ PTEXMEM = --ptexmem 1 # GB
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
 SCENE_NAME = cornell-box
+#SCENE_NAME = layered-cornell-box
 #SCENE_NAME = bathroom
 #SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
 SCENE = Scenes/$(SCENE_NAME).pbrt
@@ -82,9 +83,9 @@ PFM = $(IMAGE:.exr=.pfm)
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
 .PHONY: all c clean e edit es editScene em editMakefile lint lldb p perf tags t test \
-	test_unchecked test_debug test_release v view wc
+	test_debug test_release v view wc
 
-PBRT_OPTIONS = --stats #--gpu #--nthreads 1 #--quiet --v 2
+PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
 OS = $(shell uname)
 HOSTNAME = $(shell hostname)
@@ -105,8 +106,8 @@ ifeq ($(OS), Darwin)
 else
 	VIEWER 			= loupe
 	PBRT 			= ~/src/pbrt-v4/gonsolo/pbrt
-	#LLDB 			= /usr/libexec/swift/bin/lldb
-	LLDB 			= lldb
+	LLDB 			= /usr/lib/swift/bin/lldb
+	#LLDB 			= lldb
 	ifeq ($(HOSTNAME), Limone)
 		SWIFT		= ~/bin/swift
 	else
@@ -114,12 +115,13 @@ else
 endif
 	#SWIFT_VERBOSE		= -v
 	#SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
+	SWIFT_OPTIMIZE_FLAG     = -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
+	SWIFT_LTO 		= --experimental-lto-mode full
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
-	SWIFT_OPTIMIZE_FLAG	= -Xswiftc -Ounchecked  #-Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
-	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA)
+	SWIFT_OPTIMIZE		= $(SWIFT_OPTIMIZE_FLAG) $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA) $(SWIFT_LTO)
 
 	# Should not be needed since there is only one module
 	# CROSS 			= -Xswiftc -cross-module-optimization
@@ -193,9 +195,6 @@ test_debug: debug
 tr: test_release
 test_release: release
 	@$(RUN_RELEASE)
-tu: test_unchecked
-test_unchecked:
-	@$(SWIFT) run -c release  $(SWIFT_OPTIONS)-Xswiftc -Ounchecked gonzales $(SCENE)
 tags:
 	ctags -R Sources
 c: clean
@@ -210,11 +209,12 @@ DENOISE = oidnDenoise
 vn: view_denoised
 view_denoised:
 	$(CONVERT) -type truecolor -endian LSB $(IMAGE) $(PFM)
-	$(CONVERT) -type truecolor -endian LSB albedo.exr albedo.pfm
-	$(CONVERT) -type truecolor -endian LSB normal.exr normal.pfm
-	$(DENOISE) -hdr $(PFM) -alb albedo.pfm -nrm normal.pfm -o denoised.albnrm.pfm
-	#$(DENOISE) -hdr $(PFM) -o denoised.albnrm.pfm
-	gimp denoised.albnrm.pfm
+	#$(CONVERT) -type truecolor -endian LSB albedo.exr albedo.pfm
+	#$(CONVERT) -type truecolor -endian LSB normal.exr normal.pfm
+	#$(DENOISE) -hdr $(PFM) -alb albedo.pfm -nrm normal.pfm -o denoised.albnrm.pfm
+	$(DENOISE) -hdr $(PFM) -o denoised.pfm
+	#gimp denoised.albnrm.pfm
+	gimp denoised.pfm
 
 v: view
 vr: view_release
@@ -234,7 +234,7 @@ xcode:
 	$(SWIFT) package generate-xcodeproj --xcconfig-overrides Config.xcconfig
 
 FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| grep -Ev \.build | wc -l)
-LINES=$(shell wc -l $$(find Sources -name \*.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
+LINES=$(shell wc -l $$(find Sources -name \*.swift -not -name SobolMatrices.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
 	@echo $(LINES) "lines"
@@ -277,7 +277,7 @@ format_suggest:
 	@swift-format lint -r Sources/gonzales/
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
-	@swift-format -i -r Sources/gonzales/
+	@swift-format -i -p $(shell find Sources/gonzales/ -name \*.swift -not -name SobolMatrices.swift)
 lint:
 	swiftlint Sources/gonzales
 codespell:
