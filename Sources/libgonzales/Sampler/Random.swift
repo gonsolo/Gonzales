@@ -1,4 +1,4 @@
-struct RandomSampler {
+public struct RandomSampler: Sendable {
 
         init(numberOfSamples: Int = 1) {
                 samplesPerPixel = numberOfSamples

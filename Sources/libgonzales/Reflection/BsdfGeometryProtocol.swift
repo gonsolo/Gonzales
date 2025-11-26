@@ -1,4 +1,4 @@
-protocol BsdfFrameProtocol {
+public protocol BsdfFrameProtocol {
 
         var bsdfFrame: BsdfFrame { get }
 }

@@ -186,15 +186,15 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 set { z = newValue }
         }
 
-        var x: FloatX {
+        public var x: FloatX {
                 get { return xyz.x }
                 set { xyz.x = newValue }
         }
-        var y: FloatX {
+        public var y: FloatX {
                 get { return xyz.y }
                 set { xyz.y = newValue }
         }
-        var z: FloatX {
+        public var z: FloatX {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }
@@ -332,7 +332,7 @@ extension RgbSpectrum: Spectrum {}
 let black = RgbSpectrum(intensity: 0)
 let gray = RgbSpectrum(intensity: 0.5)
 let white = RgbSpectrum(intensity: 1)
-let red = RgbSpectrum(red: 1, green: 0, blue: 0)
+public let red = RgbSpectrum(red: 1, green: 0, blue: 0)
 let blue = RgbSpectrum(red: 0, green: 0, blue: 1)
 let green = RgbSpectrum(red: 0, green: 1, blue: 0)
 

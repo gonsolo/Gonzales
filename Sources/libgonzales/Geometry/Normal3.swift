@@ -36,9 +36,9 @@ public struct Normal3: Sendable, Three {
                 self.z = xyz.2
         }
 
-        var x: FloatX
-        var y: FloatX
-        var z: FloatX
+        public var x: FloatX
+        public var y: FloatX
+        public var z: FloatX
 }
 
 extension Normal3: CustomStringConvertible {
@@ -49,5 +49,5 @@ extension Normal3: CustomStringConvertible {
 
 public typealias Normal = Normal3
 
-let upNormal = Normal(x: 0, y: 0, z: 1)
+public let upNormal = Normal(x: 0, y: 0, z: 1)
 let zeroNormal = Normal(x: 0, y: 0, z: 0)

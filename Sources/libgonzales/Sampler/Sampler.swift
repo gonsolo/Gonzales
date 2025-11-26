@@ -1,4 +1,4 @@
-enum Sampler {
+public enum Sampler: Sendable {
         case random(RandomSampler)
         case sobol(ZSobolSampler)
 
@@ -90,8 +90,8 @@ enum Sampler {
 
 }
 
-typealias RandomVariable = FloatX
-typealias TwoRandomVariables = (RandomVariable, RandomVariable)
-typealias ThreeRandomVariables = (RandomVariable, RandomVariable, RandomVariable)
+public typealias RandomVariable = FloatX
+public typealias TwoRandomVariables = (RandomVariable, RandomVariable)
+public typealias ThreeRandomVariables = (RandomVariable, RandomVariable, RandomVariable)
 // swiftlint:disable:next large_tuple
-typealias FourRandomVariables = (RandomVariable, RandomVariable, RandomVariable, RandomVariable)
+public typealias FourRandomVariables = (RandomVariable, RandomVariable, RandomVariable, RandomVariable)

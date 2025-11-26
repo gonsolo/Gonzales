@@ -1,4 +1,4 @@
-protocol DistributionModel {
+public protocol DistributionModel {
         func evaluateDistributionFunction(wo: Vector, wi: Vector, normal: Normal) -> RgbSpectrum
         func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout Sampler)
                 -> BsdfSample

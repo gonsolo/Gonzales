@@ -1,7 +1,7 @@
 ///        A type that is a generalization of BRDFs (Bidirectional Reflection
 ///        Distribution Functions) and BTDFs (Bidirectional Transmission
 ///        Distribution Functions).
-protocol LocalBsdf {
+public protocol LocalBsdf {
 
         func albedo() -> RgbSpectrum
         func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum
@@ -12,7 +12,7 @@ protocol LocalBsdf {
         var isTransmissive: Bool { get }
 }
 
-extension LocalBsdf {
+public extension LocalBsdf {
 
         func sampleLocal(
                 wo: Vector,

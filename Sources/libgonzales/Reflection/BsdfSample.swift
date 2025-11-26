@@ -1,4 +1,4 @@
-struct BsdfSample {
+public struct BsdfSample: Sendable {
 
         init(
                 _ estimate: RgbSpectrum = black,

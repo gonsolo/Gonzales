@@ -31,7 +31,7 @@ extension Sequence {
         }
 }
 
-struct PowerLightSampler {
+struct PowerLightSampler: Sendable {
 
         @MainActor
         init(sampler: Sampler, lights: [Light], scene: Scene) async {

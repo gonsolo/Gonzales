@@ -47,17 +47,17 @@ public struct Vector3: Sendable, Three {
                 return x.isZero && y.isZero && z.isZero
         }
 
-        var x: FloatX {
+        public var x: FloatX {
                 get { return xyz.x }
                 set { xyz.x = newValue }
         }
 
-        var y: FloatX {
+        public var y: FloatX {
                 get { return xyz.y }
                 set { xyz.y = newValue }
         }
 
-        var z: FloatX {
+        public var z: FloatX {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }
@@ -83,12 +83,12 @@ extension Vector3: CustomStringConvertible {
         }
 }
 
-func cross(_ a: Vector, _ b: Vector) -> Vector {
-        return Vector(
-                x: a.y * b.z - a.z * b.y,
-                y: a.z * b.x - a.x * b.z,
-                z: a.x * b.y - a.y * b.x)
-}
+//func cross(_ a: Vector, _ b: Vector) -> Vector {
+//        return Vector(
+//                x: a.y * b.z - a.z * b.y,
+//                y: a.z * b.x - a.x * b.z,
+//                z: a.x * b.y - a.y * b.x)
+//}
 
 public typealias Vector = Vector3
 

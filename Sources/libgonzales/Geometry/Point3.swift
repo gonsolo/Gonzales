@@ -4,7 +4,7 @@ public struct Point3: Sendable, Three {
                 self.init(x: 0, y: 0, z: 0)
         }
 
-        init(x: FloatX, y: FloatX, z: FloatX) {
+        public init(x: FloatX, y: FloatX, z: FloatX) {
                 self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
@@ -43,15 +43,17 @@ public struct Point3: Sendable, Three {
                 }
         }
 
-        var x: FloatX {
+        public var x: FloatX {
                 get { return xyz.x }
                 set { xyz.x = newValue }
         }
-        var y: FloatX {
+
+        public var y: FloatX {
                 get { return xyz.y }
                 set { xyz.y = newValue }
         }
-        var z: FloatX {
+
+        public var z: FloatX {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }

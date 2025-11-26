@@ -1,20 +1,38 @@
 public struct ShadingFrame: Sendable {
 
+        let tangent: Vector
+        let bitangent: Vector
+        let normal: Normal
+}
+
+extension ShadingFrame {
+
         public init() {
                 tangent = nullVector
                 bitangent = nullVector
-                normal = nullVector
-        }
-
-        init(tangent: Vector, bitangent: Vector, normal: Vector) {
-                self.tangent = tangent
-                self.bitangent = bitangent
-                self.normal = normal
+                normal = upNormal
         }
 
         init(tangent: Vector, bitangent: Vector) {
-                self.init(tangent: tangent, bitangent: bitangent, normal: cross(tangent, bitangent))
+                self.init(tangent: tangent, bitangent: bitangent, normal: Normal(cross(tangent, bitangent)))
         }
+
+        public init(normal: Normal) {
+                let n = normalized(normal)
+                var a: Normal
+                if abs(n.x) < abs(n.y) {
+                        a = (abs(n.x) < abs(n.z)) ? Normal(x: 1, y: 0, z: 0) : Normal(x: 0, y: 0, z: 1)
+                } else {
+                        a = (abs(n.y) < abs(n.z)) ? Normal(x: 0, y: 1, z: 0) : Normal(x: 0, y: 0, z: 1)
+                }
+                let c = cross(a, n)
+                let t = Vector(normal: normalized(c))
+                let b = cross(t, Vector(normal: n))
+                self.init(tangent: t, bitangent: b, normal: n)
+        }
+}
+
+extension ShadingFrame {
 
         func worldToLocal(world: Vector) -> Vector {
                 return normalized(
@@ -31,7 +49,4 @@ public struct ShadingFrame: Sendable {
                 return normalized(Vector(x: vx, y: vy, z: vz))
         }
 
-        let tangent: Vector
-        let bitangent: Vector
-        let normal: Vector
 }

@@ -272,12 +272,9 @@ flame:
 	perf script | stackcollapse-perf.pl | swift demangle | flamegraph.pl --width 10000 --height 48 > flame.svg
 	eog -f flame.svg
 
-format_suggest:
-	@clang-format --dry-run $(shell find Sources -name \*.h -o -name \*.cc)
-	@swift-format lint -r Sources/gonzales/
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
-	@swift-format -i -p $(shell find Sources/gonzales/ -name \*.swift -not -name SobolMatrices.swift)
+	@swift-format -i -p $(shell find Sources/ -name \*.swift -not -name SobolMatrices.swift)
 lint:
 	swiftlint Sources/gonzales
 codespell:
@@ -295,3 +292,6 @@ open_trace_in_ui:
 	curl -OL https://github.com/google/perfetto/raw/main/tools/open_trace_in_ui
 perfetto: gonzales.perfscript open_trace_in_ui
 	python open_trace_in_ui -i $<
+
+test_coated:
+	.build/debug/testCoated

@@ -1,7 +1,7 @@
 /// A type that provides the base for all types consisting of three
 /// values like points and normals.
 
-protocol Three {
+public protocol Three {
 
         associatedtype FloatType: FloatingPoint
 
@@ -99,12 +99,12 @@ func != <T: Three>(left: T, right: T) -> Bool {
 }
 
 extension Three {
-        mutating func normalize() {
+        public mutating func normalize() {
                 self = normalized(self)
         }
 }
 
-func normalized<T: Three>(_ v: T) -> T {
+public func normalized<T: Three>(_ v: T) -> T {
         var ret: T
         let l = length(v)
         if l == 0 {
@@ -113,6 +113,18 @@ func normalized<T: Three>(_ v: T) -> T {
                 ret = v / l
         }
         return ret
+}
+
+public func cross<T: Three>(_ a: T, _ b: T) -> T
+where T.FloatType: FloatingPoint {
+
+        // Ensure all arithmetic operations (multiplication, subtraction) use the correct FloatType
+        let x = a.y * b.z - a.z * b.y
+        let y = a.z * b.x - a.x * b.z
+        let z = a.x * b.y - a.y * b.x
+
+        // Create a new instance of the generic type T
+        return T(x: x, y: y, z: z)
 }
 
 func dot<T: Three>(_ a: T, _ b: T) -> T.FloatType {
