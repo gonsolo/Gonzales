@@ -6,7 +6,7 @@ public struct ShadingFrame: Sendable {
 
         public init(x: Vector, y: Vector, z: Vector) {
                 self.x = x
-                self.y = z
+                self.y = y
                 self.z = z
         }
 
