@@ -62,10 +62,11 @@ extension ShadingFrame {
 extension ShadingFrame {
 
         public func worldToLocal(world: Vector) -> Vector {
-                return normalized(Vector(
-                                        x: dot(world, x),
-                                        y: dot(world, y),
-                                        z: dot(world, z)))
+                return normalized(
+                        Vector(
+                                x: dot(world, x),
+                                y: dot(world, y),
+                                z: dot(world, z)))
         }
 
         public func localToWorld(local: Vector) -> Vector {
@@ -75,4 +76,3 @@ extension ShadingFrame {
                 return a + b + c
         }
 }
-

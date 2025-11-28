@@ -20,6 +20,12 @@ let package = Package(
                                 .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ]
                 ),
+                .testTarget(
+                        name: "libgonzalesTests",
+                        dependencies: [
+                                "libgonzales"
+                        ]
+                ),
                 .executableTarget(
                         name: "gonzales",
                         dependencies: [
@@ -30,12 +36,6 @@ let package = Package(
                                 .unsafeFlags(["-Xcc", "-O3"]),
                                 .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ],
-                ),
-                .executableTarget(
-                        name: "testCoated",
-                        dependencies: [
-                                "libgonzales",
-                        ]
                 ),
                 .target(
                         name: "openImageIOBridge",

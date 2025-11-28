@@ -13,11 +13,11 @@ PTEXMEM = --ptexmem 1 # GB
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
 BITTERLI = ~/src/bitterli
-SCENE_NAME = cornell-box
+#SCENE_NAME = cornell-box
 #SCENE_NAME = layered-cornell-box
-#SCENE_NAME = bathroom
-#SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-SCENE = Scenes/$(SCENE_NAME).pbrt
+SCENE_NAME = bathroom
+SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
+#SCENE = Scenes/$(SCENE_NAME).pbrt
 IMAGE =  $(SCENE_NAME).exr
 IMAGE_PBRT = $(IMAGE)
 
@@ -274,7 +274,7 @@ flame:
 
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
-	@swift-format -i -p $(shell find Sources/ -name \*.swift -not -name SobolMatrices.swift)
+	@swift-format -i -p $(shell find Sources Tests -name \*.swift -not -name SobolMatrices.swift)
 lint:
 	swiftlint Sources/gonzales
 codespell:
@@ -297,3 +297,6 @@ coated: debug
 	.build/debug/testCoated
 lldb_coated: debug
 	LD_LIBRARY_PATH=. $(LLDB) .build/debug/testCoated
+
+testsuite:
+	swift test
