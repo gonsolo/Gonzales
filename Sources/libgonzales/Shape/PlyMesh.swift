@@ -370,7 +370,7 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) th
         -> [ShapeType]
 {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
-        let absoluteFileName = sceneDirectory + "/" + relativeFileName
+        let absoluteFileName = renderOptions.sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {
                 warning("Could not find ply file at: \(absoluteFileName)")
                 return []

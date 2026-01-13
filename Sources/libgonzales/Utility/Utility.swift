@@ -4,23 +4,18 @@ let machineEpsilon = FloatX.ulpOfOne
 let shadowEpsilon: FloatX = 0.00001
 let oneMinusEpsilon: FloatX = 0.99999999999999989
 
-@MainActor
-public var singleRayCoordinate = Point2i()
+
+public struct RenderOptions: Sendable {
+        public var singleRayCoordinate = Point2i()
+        public var quick = false
+        public var singleRay = false
+        public var justParse = false
+        public var ptexMemory = 4  // GB
+        public var sceneDirectory = String()
+}
 
 @MainActor
-public var quick = false
-
-@MainActor
-public var singleRay = false
-
-@MainActor
-public var justParse = false
-
-@MainActor
-public var ptexMemory = 4  // GB
-
-@MainActor
-public var sceneDirectory = String()
+public var renderOptions = RenderOptions()
 
 func radians(deg: FloatX) -> FloatX {
         return (FloatX.pi / 180) * deg

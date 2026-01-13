@@ -140,7 +140,7 @@ extension Api {
                 print(sceneName)
                 do {
                         let fileManager = FileManager.default
-                        let absoluteSceneName = sceneDirectory + "/" + sceneName
+                        let absoluteSceneName = renderOptions.sceneDirectory + "/" + sceneName
                         var components = absoluteSceneName.components(separatedBy: ".")
                         components.removeLast()
                         guard fileManager.fileExists(atPath: absoluteSceneName) else {
@@ -534,7 +534,7 @@ extension Api {
         @MainActor
         func worldEnd() async throws {
                 print("Reading: \(readTimer.elapsed)")
-                if justParse { return }
+                if renderOptions.justParse { return }
                 let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
                 try await renderer.render()
@@ -624,7 +624,7 @@ extension Api {
 @MainActor
 func getTextureFrom(name: String, type: String) throws -> Texture {
         let fileManager = FileManager.default
-        let absoluteFileName = sceneDirectory + "/" + name
+        let absoluteFileName = renderOptions.sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
                 warning("Can't find texture file: \(absoluteFileName)")
                 return Texture.rgbSpectrumTexture(

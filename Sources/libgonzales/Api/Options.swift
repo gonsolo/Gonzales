@@ -34,7 +34,7 @@ class Options {
         func makeFilm(filter: any Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
-                if quick {
+                if renderOptions.quick {
                         x /= 4
                         y /= 4
                 }
@@ -157,12 +157,12 @@ class Options {
                         return try .sobol(
                                 createZSobolSampler(
                                         parameters: samplerParameters, fullResolution: film.resolution,
-                                        quick: quick))
+                                        quick: renderOptions.quick))
                 case "random":
-                        return try .random(createRandomSampler(parameters: samplerParameters, quick: quick))
+                        return try .random(createRandomSampler(parameters: samplerParameters, quick: renderOptions.quick))
                 default:
                         warning("Unknown sampler, using random sampler.")
-                        return try .random(createRandomSampler(parameters: samplerParameters, quick: quick))
+                        return try .random(createRandomSampler(parameters: samplerParameters, quick: renderOptions.quick))
                 }
         }
 

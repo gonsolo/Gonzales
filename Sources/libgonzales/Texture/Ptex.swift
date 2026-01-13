@@ -5,7 +5,7 @@ struct PtexCache {
 
         @MainActor
         init() {
-                initPtexCache(ptexMemory)
+                initPtexCache(renderOptions.ptexMemory)
         }
 }
 

@@ -2,6 +2,7 @@
 
 struct TileRenderer: Renderer {
 
+        @MainActor
         init(
                 camera: PerspectiveCamera,
                 integrator: VolumePathIntegrator,
@@ -16,8 +17,8 @@ struct TileRenderer: Renderer {
                 self.tileSize = tileSize
 
                 let sampleBounds = await camera.getSampleBounds()
-                if await singleRay {
-                        let point = await sampleBounds.pMin + singleRayCoordinate
+                if renderOptions.singleRay {
+                        let point = sampleBounds.pMin + renderOptions.singleRayCoordinate
                         bounds = Bounds2i(pMin: point, pMax: point + Point2i(x: 1, y: 1))
                 } else {
                         bounds = Bounds2i(pMin: sampleBounds.pMin, pMax: sampleBounds.pMax)

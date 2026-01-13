@@ -53,20 +53,20 @@ func parseArguments() throws -> String {
         while let argument = iterator.next() {
                 switch argument {
                 case "--quick":
-                        quick = true
+                        renderOptions.quick = true
                 case "--single":
                         guard let sx = iterator.next() else { throw MainError.missingOption }
                         guard let sy = iterator.next() else { throw MainError.missingOption }
                         guard let x = Int(sx) else { throw MainError.format }
                         guard let y = Int(sy) else { throw MainError.format }
-                        singleRay = true
-                        singleRayCoordinate = Point2i(x: x, y: y)
+                        renderOptions.singleRay = true
+                        renderOptions.singleRayCoordinate = Point2i(x: x, y: y)
                 case "--parse":
-                        justParse = true
+                        renderOptions.justParse = true
                 case "--ptexmem":
                         guard let smem = iterator.next() else { throw MainError.missingOption }
                         guard let mem = Int(smem) else { throw MainError.format }
-                        ptexMemory = mem
+                        renderOptions.ptexMemory = mem
                 case "--help":
                         usage()
                         exit(EXIT_SUCCESS)
@@ -97,7 +97,7 @@ func main() async {
                         absoluteSceneName = currentDirectory + "/" + sceneName
                 }
                 let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
-                sceneDirectory = url.path
+                renderOptions.sceneDirectory = url.path
                 api.start()
                 try await api.include(file: sceneNameLast, render: true)
         } catch let error {
