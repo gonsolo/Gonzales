@@ -4,7 +4,7 @@
 
 # Gonzales Renderer
 
-© Andreas Wendleder 2019-2025
+© Andreas Wendleder 2019-2026
 
 Brute-force path tracing written in Swift.
 
