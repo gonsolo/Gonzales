@@ -34,18 +34,18 @@ jobs:
         uses: actions/cache@v3
         with:
           path: |
-            swift-5.9-RELEASE-ubuntu22.04.tar.gz
-          key: ${{ runner.os }}-cache-swift
+            swift-6.2.3-RELEASE-ubuntu22.04.tar.gz
+          key: ${{ runner.os }}-cache-swift-6.2.3
 
       - name: Download swift
         if: steps.cache-swift.outputs.cache-hit != 'true'
         run: |
-          wget https://download.swift.org/swift-5.9-release/ubuntu2204/swift-5.9-RELEASE/swift-5.9-RELEASE-ubuntu22.04.tar.gz
+          wget https://download.swift.org/swift-6.2.3-release/ubuntu2204/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE-ubuntu22.04.tar.gz
 
       - name: Install swift
         run: |
-          tar xzf swift-5.9-RELEASE-ubuntu22.04.tar.gz
-          echo "$PWD/swift-5.9-RELEASE-ubuntu22.04/usr/bin" >> $GITHUB_PATH
+          tar xzf swift-6.2.3-RELEASE-ubuntu22.04.tar.gz
+          echo "$PWD/swift-6.2.3-RELEASE-ubuntu22.04/usr/bin" >> $GITHUB_PATH
 
       - name: Install ptex
         run: |
@@ -60,7 +60,7 @@ jobs:
 
       - name: Lint
         run: |
-             export LD_LIBRARY_PATH=$PWD/swift-5.9-RELEASE-ubuntu22.04/usr/lib:$LD_LIBRARY_PATH
+             export LD_LIBRARY_PATH=$PWD/swift-6.2.3-RELEASE-ubuntu22.04/usr/lib:$LD_LIBRARY_PATH
              swiftlint
 
       - name: Compile debug
