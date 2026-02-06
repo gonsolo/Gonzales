@@ -2,6 +2,9 @@ file_length:
   - 800
 function_body_length:
   - 100
+excluded:
+  - .build
+  - External
 opt_in_rules:
   - unused_parameter
 identifier_name:

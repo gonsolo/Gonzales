@@ -88,8 +88,21 @@ jobs:
         run: |
           sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
 
+
+      - name: Install swiftlint
+        run: |
+          wget https://github.com/realm/SwiftLint/releases/download/0.54.0/swiftlint_linux.zip
+          unzip swiftlint_linux.zip
+          sudo mv swiftlint /usr/bin/
+
+      - name: Lint
+        run: swiftlint
+
       - name: Compile debug
         run: |
           export PATH=$PATH:/usr/local/cuda/bin
           mkdir .build
           make debug
+
+      - name: Run tests
+        run: swift test
