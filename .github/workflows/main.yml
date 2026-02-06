@@ -15,53 +15,40 @@ on:
 jobs:
   # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
     runs-on: ubuntu-latest
+    container: archlinux:latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
- 
-      - uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: cmake debhelper devscripts libembree-dev libopenimageio-dev
-          version: 1.3.0
 
-      - name: Cache swift
-        id: cache-swift
-        uses: actions/cache@v3
-        with:
-          path: |
-            swift-6.2.3-RELEASE-ubuntu22.04.tar.gz
-          key: ${{ runner.os }}-cache-swift-6.2.3
-
-      - name: Download swift
-        if: steps.cache-swift.outputs.cache-hit != 'true'
+      - name: Install System Dependencies
         run: |
-          wget https://download.swift.org/swift-6.2.3-release/ubuntu2204/swift-6.2.3-RELEASE/swift-6.2.3-RELEASE-ubuntu22.04.tar.gz
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git cmake ninja openimageio ptex wget unzip sudo embree
 
-      - name: Install swift
+      - name: Setup AUR Builder
         run: |
-          tar xzf swift-6.2.3-RELEASE-ubuntu22.04.tar.gz
-          echo "$PWD/swift-6.2.3-RELEASE-ubuntu22.04/usr/bin" >> $GITHUB_PATH
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          # Fix directory permissions for builder
+          chown -R builder:builder .
 
-      - name: Install ptex
+      - name: Install Swift (AUR)
         run: |
-          sudo dpkg -i External/Ptex/ptex_2.4.2-1ubuntu6_amd64.deb
+          su - builder -c "git clone https://aur.archlinux.org/swift-bin.git && cd swift-bin && makepkg -si --noconfirm"
 
-
-      - name: Install swiftlint
+      - name: Install SwiftLint (AUR)
         run: |
-          wget https://github.com/realm/SwiftLint/releases/download/0.54.0/swiftlint_linux.zip
-          unzip -o swiftlint_linux.zip
-          sudo mv swiftlint /usr/bin/
+          su - builder -c "git clone https://aur.archlinux.org/swiftlint-bin.git && cd swiftlint-bin && makepkg -si --noconfirm"
+
+      - name: Check Versions
+        run: |
+          swift --version
+          swiftlint --version
 
       - name: Lint
-        run: |
-             export LD_LIBRARY_PATH=$PWD/swift-6.2.3-RELEASE-ubuntu22.04/usr/lib:$LD_LIBRARY_PATH
-             swiftlint
+        run: swiftlint
 
       - name: Compile debug
         run: |
