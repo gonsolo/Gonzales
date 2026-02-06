@@ -40,7 +40,7 @@ jobs:
 
       - name: Install SwiftLint (AUR)
         run: |
-          su - builder -c "git clone https://aur.archlinux.org/swiftlint-bin.git && cd swiftlint-bin && makepkg -si --noconfirm"
+          su - builder -c "git clone https://aur.archlinux.org/swiftlint.git && cd swiftlint && makepkg -si --noconfirm"
 
       - name: Check Versions
         run: |
@@ -48,7 +48,13 @@ jobs:
           swiftlint --version
 
       - name: Lint
-        run: swiftlint
+        run: |
+             # Find where swift-bin installed libraries. usually /usr/lib/swift/lib or /opt/swift/...
+             # searching for libsourcekitdInProc.so
+             SWIFT_LIB_PATH=$(find /usr -name libsourcekitdInProc.so | head -n 1 | xargs dirname)
+             echo "Found Swift lib path: $SWIFT_LIB_PATH"
+             export LD_LIBRARY_PATH=$SWIFT_LIB_PATH:$LD_LIBRARY_PATH
+             swiftlint
 
       - name: Compile debug
         run: |
