@@ -54,7 +54,7 @@ jobs:
       - name: Install swiftlint
         run: |
           wget https://github.com/realm/SwiftLint/releases/download/0.54.0/swiftlint_linux.zip
-          unzip swiftlint_linux.zip
+          unzip -o swiftlint_linux.zip
           sudo mv swiftlint /usr/bin/
 
       - name: Lint
