@@ -83,13 +83,6 @@ extension Vector3: CustomStringConvertible {
         }
 }
 
-//func cross(_ a: Vector, _ b: Vector) -> Vector {
-//        return Vector(
-//                x: a.y * b.z - a.z * b.y,
-//                y: a.z * b.x - a.x * b.z,
-//                z: a.x * b.y - a.y * b.x)
-//}
-
 public typealias Vector = Vector3
 
 let nullVector = Vector(x: 0, y: 0, z: 0)

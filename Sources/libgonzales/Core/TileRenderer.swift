@@ -117,7 +117,8 @@ struct TileRenderer: Renderer {
                 let finalMetrics = await reporter.getProgressMetrics()
                 if finalMetrics.completed == finalMetrics.total {
                         let finalString =
-                                "Progress: \(finalMetrics.total) / \(finalMetrics.total) (100.0%) - Rendering Complete. Total Time: \(formatTime(finalMetrics.timeElapsed))\n"
+                                "Progress: \(finalMetrics.total) / \(finalMetrics.total) (100.0%) - " +
+                                "Rendering Complete. Total Time: \(formatTime(finalMetrics.timeElapsed))\n"
 
                         print(finalString, terminator: "")
                         fflush(stdout)

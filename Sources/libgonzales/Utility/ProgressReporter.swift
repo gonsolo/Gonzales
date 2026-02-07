@@ -1,5 +1,3 @@
-//@preconcurrency import Foundation  // fflush, stdout
-
 import Foundation
 
 actor ProgressReporter {
