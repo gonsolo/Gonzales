@@ -46,14 +46,14 @@ public struct Matrix: Sendable {
                 set { backing[row, column] = newValue }
         }
 
-        public static func * (m1: Matrix, m2: Matrix) -> Matrix {
+        public static func * (matrix1: Matrix, matrix2: Matrix) -> Matrix {
                 var r = Matrix()
                 for i in 0..<4 {
                         for j in 0..<4 {
-                                let a = m1[i, 0] * m2[0, j]
-                                let b = m1[i, 1] * m2[1, j]
-                                let c = m1[i, 2] * m2[2, j]
-                                let d = m1[i, 3] * m2[3, j]
+                                let a = matrix1[i, 0] * matrix2[0, j]
+                                let b = matrix1[i, 1] * matrix2[1, j]
+                                let c = matrix1[i, 2] * matrix2[2, j]
+                                let d = matrix1[i, 3] * matrix2[3, j]
                                 r[i, j] = a + b + c + d
                         }
                 }

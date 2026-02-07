@@ -204,17 +204,17 @@ struct Curve: Shape {
                         let denominator = lengthSquared(segmentDirection)
                         if denominator == 0 { return nothing }
                         let w = dot(-Vector2F(points[0]), segmentDirection) / denominator
-                        let nu = clamp(
+                        let curveU = clamp(
                                 value: lerp(with: w, between: u.0, and: u.1), low: u.0, high: u.1)
-                        let hitWidth = lerp(with: nu, between: common.width.0, and: common.width.1)
-                        let (pc, dpcdw) = evalBezier(
+                        let hitWidth = lerp(with: curveU, between: common.width.0, and: common.width.1)
+                        let (pointOnCurve, dpcdw) = evalBezier(
                                 points: points, u: clamp(value: w, low: 0, high: 1))
-                        let ptCurveDist2 = pc.x * pc.x + pc.y * pc.y
+                        let ptCurveDist2 = pointOnCurve.x * pointOnCurve.x + pointOnCurve.y * pointOnCurve.y
                         if ptCurveDist2 > hitWidth * hitWidth * 0.25 { return nothing }
                         let zMax = rayLength * tHit
-                        if pc.z < 0 || pc.z > zMax { return nothing }
+                        if pointOnCurve.z < 0 || pointOnCurve.z > zMax { return nothing }
                         let ptCurveDist = sqrt(ptCurveDist2)
-                        let edgeFunc = dpcdw.x * -pc.y + pc.x * dpcdw.y
+                        let edgeFunc = dpcdw.x * -pointOnCurve.y + pointOnCurve.x * dpcdw.y
                         var v: FloatX
                         if edgeFunc > 0 {
                                 v = 0.5 + ptCurveDist / hitWidth
@@ -222,15 +222,15 @@ struct Curve: Shape {
                                 v = 0.5 - ptCurveDist / hitWidth
                         }
                         // if tHit != nullptr
-                        let tHit = pc.z / rayLength
+                        let tHit = pointOnCurve.z / rayLength
                         // let pError = Vector(x: 2 * hitWidth, y: 2 * hitWidth, z: 2 * hitWidth)
-                        let (_, dpdu) = evalBezier(points: common.points, u: nu)
+                        let (_, dpdu) = evalBezier(points: common.points, u: curveU)
                         let dpduPlane = rayToObject.inverse * dpdu
                         let dpdvPlane =
                                 normalized(Vector(x: -dpduPlane.y, y: dpduPlane.x, z: 0)) * hitWidth
                         let dpdv = rayToObject * dpdvPlane
                         let normal = Normal(normalized(cross(dpdu, dpdv)))
-                        let uvHit = Point2f(x: nu, y: v)
+                        let uvHit = Point2f(x: curveU, y: v)
                         let pHit = ray.getPointFor(parameter: tHit)
                         let localInteraction = SurfaceInteraction(
                                 position: pHit,
@@ -429,16 +429,16 @@ func createBVHCurveShape(
                 bezierPoints.1 = p223
                 bezierPoints.2 = p233
                 bezierPoints.3 = p333
-                let w0 = lerp(
+                let width0 = lerp(
                         with: FloatX(segment) / FloatX(numberOfSegments), between: widths.0,
                         and: widths.1)
-                let w1 = lerp(
+                let width1 = lerp(
                         with: FloatX(segment + 1) / FloatX(numberOfSegments), between: widths.0,
                         and: widths.1)
                 let curve = createCurve(
                         objectToWorld: objectToWorld,
                         points: bezierPoints,
-                        width: (w0, w1))
+                        width: (width0, width1))
 
                 curves.append(contentsOf: curve)
         }

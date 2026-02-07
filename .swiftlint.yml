@@ -59,6 +59,5 @@ disabled_rules:
   - function_parameter_count
   - opening_brace
   - cyclomatic_complexity
-  - identifier_name
   - large_tuple
   - trailing_comma

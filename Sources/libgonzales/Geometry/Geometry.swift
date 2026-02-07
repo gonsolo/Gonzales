@@ -12,10 +12,10 @@ func sphericalDirection(
         y: Vector,
         z: Vector
 ) -> Vector {
-        let vx = sinTheta * cos(phi) * x
-        let vy = sinTheta * sin(phi) * y
-        let vz = cosTheta * z
-        return vx + vy + vz
+        let vectorX = sinTheta * cos(phi) * x
+        let vectorY = sinTheta * sin(phi) * y
+        let vectorZ = cosTheta * z
+        return vectorX + vectorY + vectorZ
 }
 
 func sphericalCoordinatesFrom(vector: Vector) -> (theta: FloatX, phi: FloatX) {
@@ -70,8 +70,8 @@ func makeCoordinateSystem(from v1: Vector) -> (v2: Vector, v3: Vector) {
         } else {
                 v2 = Vector(x: 0, y: v1.z, z: -v1.y) / (v1.y * v1.y + v1.z * v1.z).squareRoot()
         }
-        let v3 = cross(v1, v2)
-        return (v2, v3)
+        let vector3 = cross(v1, v2)
+        return (v2, vector3)
 }
 
 func faceforward(normal: Normal, comparedTo vector: Vector) -> Normal {

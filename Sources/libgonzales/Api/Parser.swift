@@ -264,7 +264,7 @@ extension Parser {
                 guard let twoFloats = try parseTwoFloatXs() else {
                         return nil
                 }
-                return Point2f(xy: twoFloats)
+                return Point2f(xAndY: twoFloats)
         }
 
         private func parsePoints() throws -> [Point] {

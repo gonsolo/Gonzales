@@ -1,6 +1,6 @@
 import Foundation  // For Point2i, etc.
 
-let FloatOneMinusEpsilon: Float = 1.0 - 1e-6  // Ensure type is Float
+let floatOneMinusEpsilon: Float = 1.0 - 1e-6  // Ensure type is Float
 
 func sobolSample(a: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float {
         guard dimension < NSobolDimensions else {
@@ -10,7 +10,7 @@ func sobolSample(a: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float
         var v: UInt32 = 0
         var index = a
 
-        let matrixAccessor = SobolDataAccessor[dimension]
+        let matrixAccessor = sobolDataAccessor[dimension]
 
         for i in 0..<SobolMatrixSize {
                 if index & 1 != 0 {
@@ -26,7 +26,7 @@ func sobolSample(a: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float
         let randomizedV = randomizer(v)
         let floatValue = Float(randomizedV) * Float(2.32830643653869628906e-10)
 
-        return min(floatValue, FloatOneMinusEpsilon)
+        return min(floatValue, floatOneMinusEpsilon)
 }
 
 func reverseBits32(_ v: UInt32) -> UInt32 {
@@ -125,9 +125,9 @@ public struct ZSobolSampler: Sendable {
 
         mutating func startPixelSample(pixel: Point2i, index: Int, dim: Int) {
                 self.dimension = dim
-                let pX = UInt32(pixel.x)
-                let pY = UInt32(pixel.y)
-                let pixelMortonIndex = encodeMorton2(pX, pY)
+                let pixelX = UInt32(pixel.x)
+                let pixelY = UInt32(pixel.y)
+                let pixelMortonIndex = encodeMorton2(pixelX, pixelY)
                 self.mortonIndex = (pixelMortonIndex << log2SamplesPerPixel) | UInt64(index)
         }
 
@@ -224,19 +224,19 @@ extension ZSobolSampler {
                 }
                 dimension += 2
 
-                let u0 = sobolSample(
+                let sample0 = sobolSample(
                         a: sampleIndex,
                         dimension: dimension - 2,  // Dimension 'd'
                         randomizer: FastOwenScrambler(seed: sampleHash0)
                 )
 
-                let u1 = sobolSample(
+                let sample1 = sobolSample(
                         a: sampleIndex,
                         dimension: dimension - 1,  // Dimension 'd + 1'
                         randomizer: FastOwenScrambler(seed: sampleHash1)
                 )
 
-                return (u0, u1)
+                return (sample0, sample1)
         }
 }
 
@@ -254,25 +254,25 @@ extension ZSobolSampler {
                 }
                 dimension += 3
 
-                let u0 = sobolSample(
+                let sample0 = sobolSample(
                         a: sampleIndex,
                         dimension: dimension - 3,
                         randomizer: FastOwenScrambler(seed: sampleHash0)
                 )
 
-                let u1 = sobolSample(
+                let sample1 = sobolSample(
                         a: sampleIndex,
                         dimension: dimension - 2,
                         randomizer: FastOwenScrambler(seed: sampleHash1)
                 )
 
-                let u2 = sobolSample(
+                let sample2 = sobolSample(
                         a: sampleIndex,
                         dimension: dimension - 1,
                         randomizer: FastOwenScrambler(seed: sampleHash2)
                 )
 
-                return (u0, u1, u2)
+                return (sample0, sample1, sample2)
         }
 }
 

@@ -49,24 +49,24 @@ extension Bounds2i: Sequence {
                 init(_ bounds: Bounds2i) {
                         self.bounds = bounds
                         self.times = 0
-                        self.dx = bounds.pMax.x - bounds.pMin.x
-                        self.dy = bounds.pMax.y - bounds.pMin.y
+                        self.deltaX = bounds.pMax.x - bounds.pMin.x
+                        self.deltaY = bounds.pMax.y - bounds.pMin.y
                 }
 
                 public mutating func next() -> Point2i? {
-                        guard times < dx * dy else {
+                        guard times < deltaX * deltaY else {
                                 return nil
                         }
                         times += 1
                         return Point2i(
-                                x: bounds.pMin.x + times % dx,
-                                y: bounds.pMin.y + times / dx)
+                                x: bounds.pMin.x + times % deltaX,
+                                y: bounds.pMin.y + times / deltaX)
                 }
 
                 let bounds: Bounds2i
                 var times: Int
-                var dx: Int
-                var dy: Int
+                var deltaX: Int
+                var deltaY: Int
         }
 
         public func makeIterator() -> Iterator {

@@ -21,9 +21,9 @@ struct Tile: Sendable {
                                         lightSampler: &lightSampler,
                                         state: state)
 
-                                let dx = cameraSample.film.0 - (FloatX(pixel.x) + 0.5)
-                                let dy = cameraSample.film.1 - (FloatX(pixel.y) + 0.5)
-                                let filterLocation = Point2f(x: dx, y: dy)
+                                let deltaX = cameraSample.film.0 - (FloatX(pixel.x) + 0.5)
+                                let deltaY = cameraSample.film.1 - (FloatX(pixel.y) + 0.5)
+                                let filterLocation = Point2f(x: deltaX, y: deltaY)
                                 let filterValue = camera.film.filter.evaluate(atLocation: filterLocation)
                                 let rayWeight = filterValue / cameraSample.filterWeight
 

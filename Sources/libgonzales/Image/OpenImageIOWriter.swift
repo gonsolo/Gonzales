@@ -30,9 +30,9 @@ actor OpenImageIOWriter {
                         for x in finalCrop.pMin.x..<finalCrop.pMax.x {
                                 let location = Point2i(x: x, y: y)
                                 let pixel = image.getPixel(atLocation: location)
-                                let px = x - finalCrop.pMin.x
-                                let py = y - finalCrop.pMin.y
-                                let index = py * resolution.x * 4 + px * 4
+                                let pixelX = x - finalCrop.pMin.x
+                                let pixelY = y - finalCrop.pMin.y
+                                let index = pixelY * resolution.x * 4 + pixelX * 4
                                 write(pixel: pixel, at: index)
                         }
                 }
@@ -71,13 +71,13 @@ actor OpenImageIOWriter {
                 buffer.withUnsafeBufferPointer { bufferPointer in
                         guard let pixels = bufferPointer.baseAddress else { return }
 
-                        for ty in 0..<nytiles {
-                                for tx in 0..<nxtiles {
+                        for tileY in 0..<nytiles {
+                                for tileX in 0..<nxtiles {
                                         let success = writeSingleTile(
                                                 outputPointer,
                                                 pixels,
                                                 xres, channels,
-                                                Int32(tx), Int32(ty), tileWidth, tileHeight,
+                                                Int32(tileX), Int32(tileY), tileWidth, tileHeight,
                                                 channelStride, xStride, yStride
                                         )
 

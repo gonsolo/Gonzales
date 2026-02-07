@@ -60,17 +60,17 @@ public enum Sampler: Sendable {
         }
 
         mutating func getCameraSample(pixel: Point2i, filter: Filter) -> CameraSample {
-                let (ux, uy) = get2D()
+                let (sampleX, sampleY) = get2D()
 
-                let filterSample: FilterSample = filter.sample(u: (ux, uy))
+                let filterSample: FilterSample = filter.sample(u: (sampleX, sampleY))
 
-                let dx = filterSample.location.x
-                let dy = filterSample.location.y
+                let deltaX = filterSample.location.x
+                let deltaY = filterSample.location.y
 
                 return CameraSample(
                         film: (
-                                FloatX(pixel.x) + 0.5 + dx,
-                                FloatX(pixel.y) + 0.5 + dy
+                                FloatX(pixel.x) + 0.5 + deltaX,
+                                FloatX(pixel.y) + 0.5 + deltaY
                         ),
                         lens: get2D(),
                         filterWeight: filterSample.probabilityDensity

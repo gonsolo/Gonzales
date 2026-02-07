@@ -17,10 +17,10 @@ struct Sphere: Shape {
 
         func objectBound(scene _: Scene) -> Bounds3f {
 
-                let p0 = Point(x: -radius, y: -radius, z: -radius)
-                let p1 = Point(x: +radius, y: +radius, z: +radius)
+                let point0 = Point(x: -radius, y: -radius, z: -radius)
+                let point1 = Point(x: +radius, y: +radius, z: +radius)
 
-                return Bounds3f(first: p0, second: p1)
+                return Bounds3f(first: point0, second: point1)
         }
 
         func uniformSampleSphere(samples: TwoRandomVariables) -> Point {
@@ -61,10 +61,10 @@ struct Sphere: Shape {
                         if pdf.isInfinite { pdf = 0 }
                         return (interaction, pdf)
                 }
-                let dc = distance(ref.position, center)
-                let invDc = 1 / dc
-                let wc = Vector(vector: center - ref.position) * invDc
-                let (wcX, wcY) = makeCoordinateSystem(from: wc)
+                let distanceCenter = distance(ref.position, center)
+                let invDc = 1 / distanceCenter
+                let vectorCenter = Vector(vector: center - ref.position) * invDc
+                let (wcX, wcY) = makeCoordinateSystem(from: vectorCenter)
                 let sinThetaMax = radius * invDc
                 let sinThetaMax2 = sinThetaMax * sinThetaMax
                 let invSinThetaMax = 1 / sinThetaMax
@@ -87,7 +87,7 @@ struct Sphere: Shape {
                                 phi: phi,
                                 x: -wcX,
                                 y: -wcY,
-                                z: -wc))
+                                z: -vectorCenter))
                 let worldPoint = center + radius * Point(worldNormal)
                 let interaction = SurfaceInteraction(position: worldPoint, normal: worldNormal)
                 let pdf: FloatX = 1.0 / (2 * FloatX.pi * (1 - cosThetaMax))
@@ -110,8 +110,8 @@ struct Sphere: Shape {
                 } else {
                         q = -FloatX(0.5) * (b + rootDiscriminant)
                 }
-                let ta = [q / a, c / q].sorted()
-                return (ta[0], ta[1])
+                let roots = [q / a, c / q].sorted()
+                return (roots[0], roots[1])
         }
 
         func intersect(
@@ -133,15 +133,15 @@ struct Sphere: Shape {
                 }
 
                 let ray = getWorldToObject(scene: scene) * worldRay
-                let ox = ray.origin.x
-                let oy = ray.origin.y
-                let oz = ray.origin.z
-                let dx = ray.direction.x
-                let dy = ray.direction.y
-                let dz = ray.direction.z
-                let a = dx * dx + dy * dy + dz * dz
-                let b = 2 * (dx * ox + dy * oy + dz * oz)
-                let c = ox * ox + oy * oy + oz * oz - radius * radius
+                let originX = ray.origin.x
+                let originY = ray.origin.y
+                let originZ = ray.origin.z
+                let directionX = ray.direction.x
+                let directionY = ray.direction.y
+                let directionZ = ray.direction.z
+                let a = directionX * directionX + directionY * directionY + directionZ * directionZ
+                let b = 2 * (directionX * originX + directionY * originY + directionZ * originZ)
+                let c = originX * originX + originY * originY + originZ * originZ - radius * radius
 
                 guard let t = quadratic(a: a, b: b, c: c) else {
                         return empty(#line)

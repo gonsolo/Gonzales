@@ -22,9 +22,9 @@ struct AsciiWriter {
                         for x in crop.pMin.x..<crop.pMax.x {
                                 let location = Point2i(x: x, y: y)
                                 let pixel = image.getPixel(atLocation: location)
-                                let px = x - crop.pMin.x
-                                let py = y - crop.pMin.y
-                                let index = py * resolution.x * 4 + px * 4
+                                let pixelX = x - crop.pMin.x
+                                let pixelY = y - crop.pMin.y
+                                let index = pixelY * resolution.x * 4 + pixelX * 4
                                 write(pixel: pixel, at: index)
                         }
                 }

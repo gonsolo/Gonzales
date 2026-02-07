@@ -31,8 +31,8 @@ final class PerspectiveCamera: Camera, Transformable {
                         return ray
                 }
                 let lens = lensRadius * concentricSampleDisk(u: cameraSample.lens)
-                let ft = focalDistance / ray.direction.z
-                let pFocus = ray.getPointFor(parameter: ft)
+                let focalT = focalDistance / ray.direction.z
+                let pFocus = ray.getPointFor(parameter: focalT)
                 let origin = Point(x: lens.x, y: lens.y, z: 0)
                 let direction: Vector = normalized(pFocus - ray.origin)
                 return Ray(origin: origin, direction: direction, cameraSample: cameraSample)

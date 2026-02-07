@@ -113,19 +113,19 @@ extension DielectricBsdf {
 
         private func sampleRoughReflection(
                 wo: Vector,
-                wm: Vector,
+                halfVector: Vector,
                 reflected: FloatX,
                 probabilityReflected: FloatX
         ) -> BsdfSample {
-                let wi = reflect(vector: wo, by: wm)
+                let wi = reflect(vector: wo, by: halfVector)
                 guard sameHemisphere(wo, wi) else {
                         return BsdfSample()
                 }
                 let probabilityDensity =
-                        distribution.probabilityDensity(wo: wo, half: wm)
-                        / (4 * absDot(wo, wm)) * probabilityReflected
+                        distribution.probabilityDensity(wo: wo, half: halfVector)
+                        / (4 * absDot(wo, halfVector)) * probabilityReflected
 
-                let differentialArea = distribution.differentialArea(withNormal: wm)
+                let differentialArea = distribution.differentialArea(withNormal: halfVector)
                 let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
                 let enumerator = differentialArea * visibleFraction * reflected
                 let denominator = 4 * cosTheta(wi) * cosTheta(wo)
@@ -135,35 +135,35 @@ extension DielectricBsdf {
 
         private func sampleRoughTransmission(
                 wo: Vector,
-                wm: Vector,
+                halfVector: Vector,
                 transmitted: FloatX,
                 probabilityTransmitted: FloatX
         ) -> BsdfSample {
-                guard let (wi, etap) = refract(wi: wo, normal: Normal(wm), eta: refractiveIndex) else {
+                guard let (wi, etap) = refract(wi: wo, normal: Normal(halfVector), eta: refractiveIndex) else {
                         return BsdfSample()
                 }
                 if sameHemisphere(wo, wi) || wi.z == 0 {
                         return BsdfSample()
                 }
-                let denom = square(dot(wi, wm) + dot(wo, wm) / etap)
-                let dwmDwi = absDot(wi, wm) / denom
+                let denom = square(dot(wi, halfVector) + dot(wo, halfVector) / etap)
+                let dwmDwi = absDot(wi, halfVector) / denom
                 let probabilityDensity =
-                        distribution.probabilityDensity(wo: wo, half: wm) * dwmDwi * probabilityTransmitted
-                let differentialArea = distribution.differentialArea(withNormal: wm)
+                        distribution.probabilityDensity(wo: wo, half: halfVector) * dwmDwi * probabilityTransmitted
+                let differentialArea = distribution.differentialArea(withNormal: halfVector)
                 let visibleFraction = distribution.visibleFraction(from: wo, and: wi)
                 var estimate = RgbSpectrum(
                         intensity:
                                 transmitted * differentialArea * visibleFraction
-                                * abs(dot(wi, wm) * dot(wo, wm) / cosTheta(wi) * cosTheta(wo) * denom))
+                                * abs(dot(wi, halfVector) * dot(wo, halfVector) / cosTheta(wi) * cosTheta(wo) * denom))
                 // transport mode radiance
                 estimate /= square(etap)
                 return BsdfSample(estimate, wi, probabilityDensity)
         }
 
         private func sampleRough(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
-                let wm = distribution.sampleHalfVector(wo: wo, u: (u.0, u.1))
+                let halfVector = distribution.sampleHalfVector(wo: wo, u: (u.0, u.1))
                 let reflected = FresnelDielectric.reflected(
-                        cosThetaI: dot(wo, wm),
+                        cosThetaI: dot(wo, halfVector),
                         refractiveIndex: refractiveIndex)
                 let transmitted = 1 - reflected
                 let probabilityReflected = reflected / (reflected + transmitted)
@@ -171,13 +171,13 @@ extension DielectricBsdf {
                 if u.2 < probabilityReflected {
                         return sampleRoughReflection(
                                 wo: wo,
-                                wm: wm,
+                                halfVector: halfVector,
                                 reflected: reflected,
                                 probabilityReflected: probabilityReflected)
                 } else {
                         return sampleRoughTransmission(
                                 wo: wo,
-                                wm: wm,
+                                halfVector: halfVector,
                                 transmitted: transmitted,
                                 probabilityTransmitted: probabilityTransmitted)
                 }
@@ -202,30 +202,31 @@ extension DielectricBsdf {
                 if !reflect {
                         etap = cosThetaO > 0 ? refractiveIndex : 1 / refractiveIndex
                 }
-                var wm = wi * etap + wo
-                if cosThetaO.isZero || cosThetaI.isZero || lengthSquared(wm).isZero {
+                var halfVector = wi * etap + wo
+                if cosThetaO.isZero || cosThetaI.isZero || lengthSquared(halfVector).isZero {
                         return 0
                 }
-                wm = faceforward(vector: normalized(wm), comparedTo: Normal(x: 0, y: 0, z: 1))
-                if dot(wm, wi) * cosThetaI < 0 || dot(wm, wo) * cosThetaO < 0 {
+                halfVector = faceforward(vector: normalized(halfVector), comparedTo: Normal(x: 0, y: 0, z: 1))
+                if dot(halfVector, wi) * cosThetaI < 0 || dot(halfVector, wo) * cosThetaO < 0 {
                         return 0
                 }
                 let fresnelR = FresnelDielectric.reflected(
-                        cosThetaI: dot(wo, wm),
+                        cosThetaI: dot(wo, halfVector),
                         refractiveIndex: refractiveIndex)
                 let fresnelT = 1 - fresnelR
-                let pr = fresnelR
-                let pt = fresnelT
+                let probabilityReflected = fresnelR
+                let probabilityTransmitted = fresnelT
                 var pdf: FloatX = 0
                 if reflect {
-                        let dPdf: FloatX = distribution.probabilityDensity(wo: wo, half: wm)
-                        let four: FloatX = 4 * absDot(wo, wm)
-                        let p: FloatX = pr / (pr + pt)
+                        let dPdf: FloatX = distribution.probabilityDensity(wo: wo, half: halfVector)
+                        let four: FloatX = 4 * absDot(wo, halfVector)
+                        let p: FloatX = probabilityReflected / (probabilityReflected + probabilityTransmitted)
                         pdf = dPdf / four * p
                 } else {
-                        let denom = square(dot(wi, wm) + dot(wo, wm) / etap)
-                        let dwmDwi = absDot(wi, wm) / denom
-                        pdf = distribution.probabilityDensity(wo: wo, half: wm) * dwmDwi * pt / (pr + pt)
+                        let denom = square(dot(wi, halfVector) + dot(wo, halfVector) / etap)
+                        let dwmDwi = absDot(wi, halfVector) / denom
+                        pdf = distribution.probabilityDensity(wo: wo, half: halfVector) * dwmDwi
+                                * probabilityTransmitted / (probabilityReflected + probabilityTransmitted)
                 }
                 return pdf
         }

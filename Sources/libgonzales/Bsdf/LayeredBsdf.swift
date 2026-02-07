@@ -141,13 +141,13 @@ extension LayeredBsdf {
                         if w.z == 0 { return invalidBsdfSample }
 
                         if !_albedo.isBlack {
-                                let sigma_t: FloatX = 1.0
-                                let dz = -log(1 - sampler.get1D()) / (sigma_t / absCosTheta(w))
-                                let zp = w.z > 0 ? (z + dz) : (z - dz)
+                                let sigmaTotal: FloatX = 1.0
+                                let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(w))
+                                let proposedZ = w.z > 0 ? (z + deltaZ) : (z - deltaZ)
 
-                                if zp == z { return invalidBsdfSample }
+                                if proposedZ == z { return invalidBsdfSample }
 
-                                if zp > 0 && zp < thickness {
+                                if proposedZ > 0 && proposedZ < thickness {
                                         let (phaseVal, nextWi) = phaseFunction.samplePhase(
                                                 wo: -w, sampler: &sampler)
 
@@ -156,36 +156,36 @@ extension LayeredBsdf {
                                         f *= _albedo * phaseVal
                                         pdf *= phaseVal
                                         w = nextWi
-                                        z = zp
+                                        z = proposedZ
                                         continue
                                 }
-                                z = clamp(value: zp, low: 0, high: thickness)
+                                z = clamp(value: proposedZ, low: 0, high: thickness)
                         } else {
                                 z = (z == thickness) ? 0 : thickness
                                 f *= white
                         }
 
-                        let bs: BsdfSample
+                        var bsdfSample: BsdfSample
                         if z == 0 {
-                                bs = bottom.sampleLocal(wo: -w, u: sampler.get3D())
+                                bsdfSample = bottom.sampleLocal(wo: -w, u: sampler.get3D())
                         } else {
-                                bs = top.sampleLocal(wo: -w, u: sampler.get3D())
+                                bsdfSample = top.sampleLocal(wo: -w, u: sampler.get3D())
                         }
 
-                        if !bs.isValid || bs.probabilityDensity == 0 || bs.incoming.z == 0 {
+                        if !bsdfSample.isValid || bsdfSample.probabilityDensity == 0 || bsdfSample.incoming.z == 0 {
                                 return invalidBsdfSample
                         }
 
-                        f *= bs.estimate
-                        pdf *= bs.probabilityDensity
-                        w = bs.incoming
+                        f *= bsdfSample.estimate
+                        pdf *= bsdfSample.probabilityDensity
+                        w = bsdfSample.incoming
 
-                        if bs.isTransmission(wo: -w) {
+                        if bsdfSample.isTransmission(wo: -w) {
                                 if flipWi { w = -w }
                                 return BsdfSample(f, w, pdf)
                         }
 
-                        f *= absCosTheta(bs.incoming)
+                        f *= absCosTheta(bsdfSample.incoming)
                 }
 
                 return invalidBsdfSample
@@ -250,11 +250,11 @@ extension LayeredBsdf {
                                         if wos.isValid && !wos.isReflection(wo: localWo) && wis.isValid
                                                 && !wis.isReflection(wo: localWi)
                                         {
-                                                let p1 = top.probabilityDensityLocal(
+                                                let probability1 = top.probabilityDensityLocal(
                                                         wo: localWo, wi: -wis.incoming)
-                                                let p2 = bottom.probabilityDensityLocal(
+                                                let probability2 = bottom.probabilityDensityLocal(
                                                         wo: -wos.incoming, wi: localWi)
-                                                pdfSum += (p1 + p2) / 2
+                                                pdfSum += (probability1 + probability2) / 2
                                         }
                                 } else {
                                         let wos = bottom.sampleLocal(wo: localWo, u: sampler.get3D())
@@ -263,11 +263,11 @@ extension LayeredBsdf {
                                         if wos.isValid && !wos.isReflection(wo: localWo) && wis.isValid
                                                 && !wis.isReflection(wo: localWi)
                                         {
-                                                let p1 = bottom.probabilityDensityLocal(
+                                                let probability1 = bottom.probabilityDensityLocal(
                                                         wo: localWo, wi: -wis.incoming)
-                                                let p2 = top.probabilityDensityLocal(
+                                                let probability2 = top.probabilityDensityLocal(
                                                         wo: -wos.incoming, wi: localWi)
-                                                pdfSum += (p1 + p2) / 2
+                                                pdfSum += (probability1 + probability2) / 2
                                         }
                                 }
                         }
@@ -304,13 +304,13 @@ extension LayeredBsdf {
                         return RgbSpectrum(intensity: 0)
                 }
 
-                let u_exit = sampler.get3D()
+                let exitSample = sampler.get3D()
                 let wis: BsdfSample
 
                 if isSameHemisphere != enteredTop {
-                        wis = bottom.sampleLocal(wo: localWi, u: u_exit)
+                        wis = bottom.sampleLocal(wo: localWi, u: exitSample)
                 } else {
-                        wis = top.sampleLocal(wo: localWi, u: u_exit)
+                        wis = top.sampleLocal(wo: localWi, u: exitSample)
                 }
 
                 if !wis.isValid || wis.isReflection(wo: localWi) || wis.incoming.z == 0 {
@@ -348,22 +348,24 @@ extension LayeredBsdf {
                                 z = (z == thickness) ? 0 : thickness
                                 beta *= white
                         } else {
-                                let sigma_t: FloatX = 1.0
-                                let dz = -log(1 - sampler.get1D()) / (sigma_t / abs(w.z))
-                                let zp = w.z > 0 ? (z + dz) : (z - dz)
+                                let sigmaTotal: FloatX = 1.0
+                                let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(w))
+                                let proposedZ = w.z > 0 ? (z + deltaZ) : (z - deltaZ)
 
-                                if z == zp { continue }
+                                if z == proposedZ { continue }
 
-                                if zp > 0 && zp < thickness {
+                                if proposedZ > 0 && proposedZ < thickness {
 
                                         let wt: FloatX = 1
 
                                         let phaseVal = phaseFunction.evaluate(
                                                 wo: -w, wi: -wis.incoming)
 
-                                        let tr = transmittance(dz: zp - exitZ, w: wis.incoming)
+                                        let transmittanceValue = transmittance(
+                                                deltaZ: proposedZ - exitZ,
+                                                w: wis.incoming)
                                         let term1 = beta * _albedo * phaseVal * wt
-                                        let term2 = tr * wis.estimate / wis.probabilityDensity
+                                        let term2 = transmittanceValue * wis.estimate / wis.probabilityDensity
                                         sampleF += term1 * term2
 
                                         let (phasePdf, nextWi) = phaseFunction.samplePhase(
@@ -373,10 +375,10 @@ extension LayeredBsdf {
 
                                         beta *= _albedo
                                         w = nextWi
-                                        z = zp
+                                        z = proposedZ
                                         continue
                                 }
-                                z = clamp(value: zp, low: 0, high: thickness)
+                                z = clamp(value: proposedZ, low: 0, high: thickness)
                         }
 
                         if z == exitZ {
@@ -413,38 +415,44 @@ extension LayeredBsdf {
                                         }
 
                                         if !neVal.isBlack {
-                                                let tr = transmittance(dz: thickness, w: wis.incoming)
+                                                let transmittanceValue = transmittance(
+                                                        deltaZ: thickness,
+                                                        w: wis.incoming)
                                                 let term1 = beta * neVal * absCosTheta(wis.incoming)
-                                                let term2 = tr * wis.estimate / wis.probabilityDensity
+                                                let term2 = transmittanceValue * wis.estimate / wis.probabilityDensity
                                                 sampleF += term1 * term2
                                         }
                                 }
 
-                                let bs: BsdfSample
+                                let bsdfSample: BsdfSample
                                 if isBottom {
-                                        bs = bottom.sampleLocal(wo: -w, u: sampler.get3D())
+                                        bsdfSample = bottom.sampleLocal(wo: -w, u: sampler.get3D())
                                 } else {
-                                        bs = top.sampleLocal(wo: -w, u: sampler.get3D())
+                                        bsdfSample = top.sampleLocal(wo: -w, u: sampler.get3D())
                                 }
 
-                                if !bs.isValid || bs.probabilityDensity == 0 || bs.incoming.z == 0 {
+                                if !bsdfSample.isValid || bsdfSample.probabilityDensity == 0
+                                        || bsdfSample.incoming.z == 0
+                                {
                                         break
                                 }
-                                if bs.isTransmission(wo: -w) { break }
+                                if bsdfSample.isTransmission(wo: -w) { break }
 
-                                beta *= bs.estimate * absCosTheta(bs.incoming) / bs.probabilityDensity
-                                w = bs.incoming
+                                beta *=
+                                        bsdfSample.estimate * absCosTheta(bsdfSample.incoming)
+                                        / bsdfSample.probabilityDensity
+                                w = bsdfSample.incoming
                         }
                 }
                 return sampleF
         }
 
-        private func transmittance(dz: FloatX, w: Vector) -> RgbSpectrum {
-                if abs(dz) < FloatX.leastNormalMagnitude {
+        private func transmittance(deltaZ: FloatX, w: Vector) -> RgbSpectrum {
+                if abs(deltaZ) < FloatX.leastNormalMagnitude {
                         return RgbSpectrum(intensity: 1.0)
                 }
-                let val = abs(dz / w.z)
-                let tr = FloatX(exp(Float(-val)))
-                return RgbSpectrum(intensity: tr)
+                let val = abs(deltaZ / w.z)
+                let transmittanceValue = FloatX(exp(Float(-val)))
+                return RgbSpectrum(intensity: transmittanceValue)
         }
 }

@@ -15,9 +15,9 @@ public struct Point2<T: Sendable>: Sendable {
                 self.y = y
         }
 
-        public init(xy: (T, T)) {
-                self.x = xy.0
-                self.y = xy.1
+        public init(xAndY: (T, T)) {
+                self.x = xAndY.0
+                self.y = xAndY.1
         }
 
         subscript(index: Int) -> T {

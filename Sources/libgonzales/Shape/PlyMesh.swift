@@ -51,7 +51,7 @@ struct PlyMesh {
 extension PlyMesh {
 
         enum PropertyType { case float, int }
-        enum PropertyName { case x, y, z, nx, ny, nz, s, t, u, v }
+        enum PropertyName { case x, y, z, normalX, normalY, normalZ, s, t, u, v }
         struct Property {
                 let type: PropertyType
                 let name: PropertyName
@@ -177,13 +177,13 @@ extension PlyMesh {
                                                         Property(type: .float, name: .z))
                                         case "nx":
                                                 plyHeader.vertexProperties.append(
-                                                        Property(type: .float, name: .nx))
+                                                        Property(type: .float, name: .normalX))
                                         case "ny":
                                                 plyHeader.vertexProperties.append(
-                                                        Property(type: .float, name: .ny))
+                                                        Property(type: .float, name: .normalY))
                                         case "nz":
                                                 plyHeader.vertexProperties.append(
-                                                        Property(type: .float, name: .nz))
+                                                        Property(type: .float, name: .normalZ))
                                         case "s":
                                                 plyHeader.vertexProperties.append(
                                                         Property(type: .float, name: .s))
@@ -241,10 +241,10 @@ extension PlyMesh {
         }
 
         mutating func appendNormal(from data: Data) {
-                let nx: FloatX = readValue(in: data, at: &dataIndex)
-                let ny: FloatX = readValue(in: data, at: &dataIndex)
-                let nz: FloatX = readValue(in: data, at: &dataIndex)
-                normals.append(Normal(x: FloatX(nx), y: FloatX(ny), z: FloatX(nz)))
+                let normalX: FloatX = readValue(in: data, at: &dataIndex)
+                let normalY: FloatX = readValue(in: data, at: &dataIndex)
+                let normalZ: FloatX = readValue(in: data, at: &dataIndex)
+                normals.append(Normal(x: FloatX(normalX), y: FloatX(normalY), z: FloatX(normalZ)))
         }
 
         mutating func appendUV(from data: Data) {
@@ -279,9 +279,9 @@ extension PlyMesh {
                                         properties[0].name == PropertyName.x
                                                 && properties[1].name == PropertyName.y
                                                 && properties[2].name == PropertyName.z
-                                                && properties[3].name == PropertyName.nx
-                                                && properties[4].name == PropertyName.ny
-                                                && properties[5].name == PropertyName.nz
+                                                && properties[3].name == PropertyName.normalX
+                                                && properties[4].name == PropertyName.normalY
+                                                && properties[5].name == PropertyName.normalZ
                                 else { throw PlyError.unsupported }
                                 appendPoint(from: data)
                                 appendNormal(from: data)
@@ -289,9 +289,9 @@ extension PlyMesh {
                                 if properties[0].name == PropertyName.x
                                         && properties[1].name == PropertyName.y
                                         && properties[2].name == PropertyName.z
-                                        && properties[3].name == PropertyName.nx
-                                        && properties[4].name == PropertyName.ny
-                                        && properties[5].name == PropertyName.nz
+                                        && properties[3].name == PropertyName.normalX
+                                        && properties[4].name == PropertyName.normalY
+                                        && properties[5].name == PropertyName.normalZ
                                         && (properties[6].name == PropertyName.u
                                                 || properties[6].name == PropertyName.s)
                                         && (properties[7].name == PropertyName.v
@@ -305,9 +305,9 @@ extension PlyMesh {
                                         && properties[2].name == PropertyName.z
                                         && properties[3].name == PropertyName.u
                                         && properties[4].name == PropertyName.v
-                                        && properties[5].name == PropertyName.nx
-                                        && properties[6].name == PropertyName.ny
-                                        && properties[7].name == PropertyName.nz
+                                        && properties[5].name == PropertyName.normalX
+                                        && properties[6].name == PropertyName.normalY
+                                        && properties[7].name == PropertyName.normalZ
                                 {
                                         appendPoint(from: data)
                                         appendUV(from: data)

@@ -57,8 +57,8 @@ extension Transform {
                         x: m[0, 0] * p.x + m[0, 1] * p.y + m[0, 2] * p.z + m[0, 3],
                         y: m[1, 0] * p.x + m[1, 1] * p.y + m[1, 2] * p.z + m[1, 3],
                         z: m[2, 0] * p.x + m[2, 1] * p.y + m[2, 2] * p.z + m[2, 3])
-                let wp = m[3, 0] * p.x + m[3, 1] * p.y + m[3, 2] * p.z + m[3, 3]
-                return point / wp
+                let weightP = m[3, 0] * p.x + m[3, 1] * p.y + m[3, 2] * p.z + m[3, 3]
+                return point / weightP
         }
 
         public static func *= (left: inout Transform, right: Transform) {

@@ -310,10 +310,10 @@ extension BaseRgbSpectrum {
         }
 
         var luminance: FloatType {
-                let rw: FloatType = 0.212671 * red
-                let gw: FloatType = 0.715160 * green
-                let bw: FloatType = 0.072169 * blue
-                return rw + gw + bw
+                let redWeight: FloatType = 0.212671 * red
+                let greenWeight: FloatType = 0.715160 * green
+                let blueWeight: FloatType = 0.072169 * blue
+                return redWeight + greenWeight + blueWeight
         }
 }
 

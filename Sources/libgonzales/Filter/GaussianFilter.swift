@@ -13,9 +13,9 @@ struct GaussianFilter: Filter {
                 exponent.1 = gaussian(x: support.y, sigma: sigma)
         }
 
-        func gaussian(x: FloatX, mu: FloatX = 0, sigma: FloatX) -> FloatX {
+        func gaussian(x: FloatX, mean: FloatX = 0, sigma: FloatX) -> FloatX {
                 return 1 / (2 * FloatX.pi * sigma * sigma).squareRoot()
-                        * exp(-square(x - mu) / (2 * sigma * sigma))
+                        * exp(-square(x - mean) / (2 * sigma * sigma))
         }
 
         func evaluate(atLocation point: Point2f) -> FloatX {
@@ -48,8 +48,8 @@ struct GaussianFilter: Filter {
 
                         var x = y * num / den
 
-                        let pi = FloatX.pi
-                        let twoOverSqrtPi = 2.0 / sqrt(pi)
+                        let piValue = FloatX.pi
+                        let twoOverSqrtPi = 2.0 / sqrt(piValue)
 
                         let updateTerm: (FloatX) -> FloatX = { currentX in
                                 (erf(currentX) - y) / (twoOverSqrtPi * exp(-(currentX * currentX)))
@@ -75,8 +75,8 @@ struct GaussianFilter: Filter {
 
                         var x = signY * num / den
 
-                        let pi = FloatX.pi
-                        let twoOverSqrtPi = 2.0 / sqrt(pi)
+                        let piValue = FloatX.pi
+                        let twoOverSqrtPi = 2.0 / sqrt(piValue)
 
                         let updateTerm: (FloatX) -> FloatX = { currentX in
                                 (erf(currentX) - y) / (twoOverSqrtPi * exp(-(currentX * currentX)))

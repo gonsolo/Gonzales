@@ -12,9 +12,9 @@ struct MatrixBacking {
         }
 
         subscript(row: Int, column: Int) -> FloatX {
-                get { return m2[index(row, column)] }
-                set { m2[index(row, column)] = newValue }
+                get { return matrixValues[index(row, column)] }
+                set { matrixValues[index(row, column)] = newValue }
         }
 
-        var m2: [16 of FloatX] = .init(repeating: 0)
+        var matrixValues: [16 of FloatX] = .init(repeating: 0)
 }

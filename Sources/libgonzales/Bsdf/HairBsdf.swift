@@ -125,14 +125,14 @@ extension HairBsdf {
                 var val: FloatX = 0
                 var x2i: FloatX = 1
                 var ifact: FloatX = 1
-                var i4: FloatX = 1
+                var powerOfFour: FloatX = 1
                 for i in 0..<10 {
                         if i > 1 {
                                 ifact *= FloatX(i)
                         }
-                        val += x2i / (i4 * square(ifact))
+                        val += x2i / (powerOfFour * square(ifact))
                         x2i *= x * x
-                        i4 *= 4
+                        powerOfFour *= 4
                 }
                 return val
         }

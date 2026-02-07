@@ -17,4 +17,4 @@ public struct SobolMatrices: Sendable {
         }
 }
 
-let SobolDataAccessor = SobolMatrices()
+let sobolDataAccessor = SobolMatrices()
