@@ -24,7 +24,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git cmake ninja openimageio ptex wget unzip sudo embree
+          pacman -S --noconfirm base-devel git cmake ninja openimageio ptex wget unzip sudo embree fmt
 
       - name: Setup AUR Builder
         run: |
