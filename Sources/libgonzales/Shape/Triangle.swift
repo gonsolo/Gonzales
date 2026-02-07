@@ -659,38 +659,45 @@ func createTriangleMeshShape(
         }
         let faceIndices = try parameters.findInts(name: "faceIndices")
 
-        return try createTriangleMesh(
-                objectToWorld: objectToWorld,
+        let meshData = MeshData(
                 indices: indices,
                 points: points,
                 normals: normals,
                 uvs: uvs,
                 faceIndices: faceIndices)
+
+        return try createTriangleMesh(
+                objectToWorld: objectToWorld,
+                meshData: meshData)
+}
+
+struct MeshData {
+        let indices: [Int]
+        let points: [Point]
+        let normals: [Normal]
+        let uvs: [Vector2F]
+        let faceIndices: [Int]
 }
 
 @MainActor
 func createTriangleMesh(
         objectToWorld: Transform,
-        indices: [Int],
-        points: [Point],
-        normals: [Normal],
-        uvs: [Vector2F],
-        faceIndices: [Int]
+        meshData: MeshData
 ) throws -> [ShapeType] {
-        let numberTriangles = indices.count / 3
-        let trianglePoints = points
-        let triangleNormals = normals
-        let triangleUvs = uvs
+        let numberTriangles = meshData.indices.count / 3
+        let trianglePoints = meshData.points
+        let triangleNormals = meshData.normals
+        let triangleUvs = meshData.uvs
         var triangles = [ShapeType]()
 
         let mesh = TriangleMesh(
                 objectToWorld: objectToWorld,
                 numberTriangles: numberTriangles,
-                vertexIndices: indices,
+                vertexIndices: meshData.indices,
                 points: trianglePoints,
                 normals: triangleNormals,
                 uvs: triangleUvs,
-                faceIndices: faceIndices)
+                faceIndices: meshData.faceIndices)
 
         let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
         let triangleMeshes = triangleMeshBuilder.getMeshes()

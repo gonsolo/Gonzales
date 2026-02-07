@@ -35,34 +35,52 @@ extension VolumePathIntegrator {
                 // Path throughput weight
                 // The product of all GlobalBsdfs and cosines divided by the pdf
                 // Π f |cosθ| / pdf
-                var pathThroughputWeight = white
-
-                var estimate = black
-                var varRay = ray
-                var albedo = black
-                var firstNormal = zeroNormal
-                try bounces(
-                        ray: &varRay,
-                        tHit: &tHit,
+                var bounceState = BounceState(
+                        ray: ray,
+                        tHit: tHit,
                         bounce: 0,
-                        estimate: &estimate,
-                        sampler: &sampler,
-                        pathThroughputWeight: &pathThroughputWeight,
-                        lightSampler: &lightSampler,
-                        albedo: &albedo,
-                        firstNormal: &firstNormal,
+                        estimate: black,
+                        throughput: white,
+                        albedo: black,
+                        firstNormal: zeroNormal)
+                var context = IntegratorContext(
+                        sampler: sampler,
+                        lightSampler: lightSampler,
                         state: state,
                         scene: scene)
 
+                try bounces(state: &bounceState, context: &context)
+
+                tHit = bounceState.tHit
+                sampler = context.sampler
+                lightSampler = context.lightSampler
+
                 return RayTraceSample(
-                        estimate: estimate,
-                        albedo: albedo,
-                        normal: firstNormal
+                        estimate: bounceState.estimate,
+                        albedo: bounceState.albedo,
+                        normal: bounceState.firstNormal
                 )
         }
 }
 
 extension VolumePathIntegrator {
+        private struct BounceState {
+                var ray: Ray
+                var tHit: FloatX
+                var bounce: Int
+                var estimate: RgbSpectrum
+                var throughput: RgbSpectrum
+                var albedo: RgbSpectrum
+                var firstNormal: Normal
+                var interaction: SurfaceInteraction = SurfaceInteraction()
+        }
+
+        private struct IntegratorContext {
+                var sampler: Sampler
+                var lightSampler: LightSampler
+                let state: ImmutableState
+                let scene: Scene
+        }
 
         private func brdfDensity<D: DistributionModel>(
                 light _: Light,
@@ -311,69 +329,50 @@ extension VolumePathIntegrator {
         }
 
         private func sampleMedium<D: DistributionModel>(
-                pathThroughputWeight: RgbSpectrum,
+                state: BounceState,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                sampler: inout Sampler,
-                lightSampler: inout LightSampler,
-                ray: Ray,
-                scene: Scene
+                context: inout IntegratorContext
         ) throws -> (RgbSpectrum, Ray) {
                 let estimate =
-                        try pathThroughputWeight
+                        try state.throughput
                         * sampleOneLight(
                                 at: mediumInteraction,
                                 distributionModel: distributionModel,
-                                with: &sampler,
-                                lightSampler: &lightSampler,
-                                scene: scene)
+                                with: &context.sampler,
+                                lightSampler: &context.lightSampler,
+                                scene: context.scene)
                 let (_, incident) = mediumInteraction.phase.samplePhase(
-                        outgoing: -ray.direction,
-                        sampler: &sampler)
+                        outgoing: -state.ray.direction,
+                        sampler: &context.sampler)
                 let spawnedRay = mediumInteraction.spawnRay(inDirection: incident)
                 return (estimate, spawnedRay)
         }
 
         private func mediumEstimate<D: DistributionModel>(
-                ray: inout Ray,
-                pathThroughputWeight: RgbSpectrum,
+                state: inout BounceState,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                sampler: inout Sampler,
-                lightSampler: inout LightSampler,
-                scene: Scene
+                context: inout IntegratorContext
         ) throws -> RgbSpectrum {
                 var mediumRadiance = black
-                (mediumRadiance, ray) = try sampleMedium(
-                        pathThroughputWeight: pathThroughputWeight,
+                (mediumRadiance, state.ray) = try sampleMedium(
+                        state: state,
                         mediumInteraction: mediumInteraction,
                         distributionModel: distributionModel,
-                        sampler: &sampler,
-                        lightSampler: &lightSampler,
-                        ray: ray,
-                        scene: scene)
+                        context: &context)
                 return mediumRadiance
         }
 
         private func surfaceEstimate(
-                interaction: inout SurfaceInteraction,
-                ray: inout Ray,
-                bounce: Int,
-                pathThroughputWeight: inout RgbSpectrum,
-                estimate: inout RgbSpectrum,
-                tHit _: inout Float,
-                sampler: inout Sampler,
-                lightSampler: inout LightSampler,
-                albedo: inout RgbSpectrum,
-                firstNormal: inout Normal,
-                state _: ImmutableState,
-                scene: Scene
+                state: inout BounceState,
+                context: inout IntegratorContext
         ) throws -> Bool {
-                let surfaceInteraction = interaction
-                if bounce == 0 {
+                let surfaceInteraction = state.interaction
+                if state.bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
-                                estimate +=
-                                        pathThroughputWeight
+                                state.estimate +=
+                                        state.throughput
                                         * areaLight.emittedRadiance(
                                                 from: surfaceInteraction,
                                                 inDirection: surfaceInteraction.outgoing)
@@ -408,101 +407,78 @@ extension VolumePathIntegrator {
                 //                firstNormal: &firstNormal,
                 //                state: state)
                 // }
-                if bounce == 0 {
-                        albedo = bsdf.albedo()
-                        firstNormal = surfaceInteraction.normal
+                if state.bounce == 0 {
+                        state.albedo = bsdf.albedo()
+                        state.firstNormal = surfaceInteraction.normal
                 }
                 let lightEstimate =
-                        try pathThroughputWeight
+                        try state.throughput
                         * sampleOneLight(
                                 at: surfaceInteraction,
                                 distributionModel: bsdf,
-                                with: &sampler,
-                                lightSampler: &lightSampler,
-                                scene: scene)
-                estimate += lightEstimate
+                                with: &context.sampler,
+                                lightSampler: &context.lightSampler,
+                                scene: context.scene)
+                state.estimate += lightEstimate
                 let (bsdfSample, _) = bsdf.sampleWorld(
-                        outgoing: surfaceInteraction.outgoing, uSample: sampler.get3D())
+                        outgoing: surfaceInteraction.outgoing, uSample: context.sampler.get3D())
                 guard
                         bsdfSample.probabilityDensity != 0
                                 && !bsdfSample.probabilityDensity.isNaN
                 else {
                         return false
                 }
-                pathThroughputWeight *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
+                state.throughput *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
                 let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
-                ray = spawnedRay
+                state.ray = spawnedRay
                 return true
         }
 
         private mutating func oneBounce(
-                interaction: inout SurfaceInteraction,
-                tHit: inout Float,
-                ray: inout Ray,
-                bounce: Int,
-                estimate: inout RgbSpectrum,
-                sampler: inout Sampler,
-                pathThroughputWeight: inout RgbSpectrum,
-                lightSampler: inout LightSampler,
-                albedo: inout RgbSpectrum,
-                firstNormal: inout Normal,
-                state: ImmutableState,
-                scene: Scene
+                state: inout BounceState,
+                context: inout IntegratorContext
         ) throws -> Bool {
 
                 try intersectOrInfiniteLights(
-                        ray: ray,
-                        tHit: &tHit,
-                        bounce: bounce,
-                        estimate: &estimate,
-                        interaction: &interaction)
-                if !interaction.valid {
+                        ray: state.ray,
+                        tHit: &state.tHit,
+                        bounce: state.bounce,
+                        estimate: &state.estimate,
+                        interaction: &state.interaction)
+                if !state.interaction.valid {
                         return false  // No surface hit, so stop this bounce
                 }
                 // let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
                 let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)
-                pathThroughputWeight *= transmittance
+                state.throughput *= transmittance
 
-                if pathThroughputWeight.isBlack {
+                if state.throughput.isBlack {
                         return false
                 }
-                guard bounce < maxDepth else {
+                guard state.bounce < maxDepth else {
                         return false
                 }
                 if let mediumInteraction {
                         let distributionModel = mediumInteraction.getDistributionModel()
-                        estimate += try mediumEstimate(
-                                ray: &ray,
-                                pathThroughputWeight: pathThroughputWeight,
+                        state.estimate += try mediumEstimate(
+                                state: &state,
                                 mediumInteraction: mediumInteraction,
                                 distributionModel: distributionModel,
-                                sampler: &sampler,
-                                lightSampler: &lightSampler,
-                                scene: scene)
+                                context: &context)
                 } else {
                         // Surface hit: Perform lighting and generate new ray
                         let result = try surfaceEstimate(
-                                interaction: &interaction,
-                                ray: &ray,
-                                bounce: bounce,
-                                pathThroughputWeight: &pathThroughputWeight,
-                                estimate: &estimate,
-                                tHit: &tHit,
-                                sampler: &sampler,
-                                lightSampler: &lightSampler,
-                                albedo: &albedo,
-                                firstNormal: &firstNormal,
-                                state: state,
-                                scene: scene)
+                                state: &state,
+                                context: &context)
                         guard result else {
                                 return false
                         }
                 }
 
-                tHit = FloatX.infinity
+                state.tHit = FloatX.infinity
                 if stopWithRussianRoulette(
-                        bounce: bounce,
-                        pathThroughputWeight: &pathThroughputWeight)
+                        bounce: state.bounce,
+                        pathThroughputWeight: &state.throughput)
                 {
                         return false
                 }
@@ -510,65 +486,29 @@ extension VolumePathIntegrator {
         }
 
         private mutating func bounces(
-                ray: inout Ray,
-                tHit: inout Float,
-                bounce: Int,
-                estimate: inout RgbSpectrum,
-                sampler: inout Sampler,
-                pathThroughputWeight: inout RgbSpectrum,
-                lightSampler: inout LightSampler,
-                albedo: inout RgbSpectrum,
-                firstNormal: inout Normal,
-                state: ImmutableState,
-                scene: Scene
+                state: inout BounceState,
+                context: inout IntegratorContext
         ) throws {
-                var interaction = SurfaceInteraction()
-                for bounce in bounce...maxDepth {
-                        _ = try oneBounce(
-                                interaction: &interaction,
-                                tHit: &tHit,
-                                ray: &ray,
-                                bounce: bounce,
-                                estimate: &estimate,
-                                sampler: &sampler,
-                                pathThroughputWeight: &pathThroughputWeight,
-                                lightSampler: &lightSampler,
-                                albedo: &albedo,
-                                firstNormal: &firstNormal,
-                                state: state,
-                                scene: scene
-                        )
+                for bounce in state.bounce...maxDepth {
+                        state.bounce = bounce
+                        let result = try oneBounce(state: &state, context: &context)
+                        if !result {
+                                break
+                        }
                 }
         }
 
+        // Deprecated: used by commented out code in surfaceEstimate
         private mutating func bounces(
-                ray: inout Ray,
-                interaction: inout SurfaceInteraction,
-                tHit: inout Float,
-                bounce: Int,
-                estimate: inout RgbSpectrum,
-                sampler: inout Sampler,
-                pathThroughputWeight: inout RgbSpectrum,
-                lightSampler: inout LightSampler,
-                albedo: inout RgbSpectrum,
-                firstNormal: inout Normal,
-                state: ImmutableState,
-                scene: Scene
+                state: inout BounceState,
+                context: inout IntegratorContext,
+                interaction: inout SurfaceInteraction
         ) throws {
-                for bounce in bounce...maxDepth {
-                        let result = try oneBounce(
-                                interaction: &interaction,
-                                tHit: &tHit,
-                                ray: &ray,
-                                bounce: bounce,
-                                estimate: &estimate,
-                                sampler: &sampler,
-                                pathThroughputWeight: &pathThroughputWeight,
-                                lightSampler: &lightSampler,
-                                albedo: &albedo,
-                                firstNormal: &firstNormal,
-                                state: state,
-                                scene: scene)
+                for bounce in state.bounce...maxDepth {
+                        state.bounce = bounce
+                        state.interaction = interaction
+                        let result = try oneBounce(state: &state, context: &context)
+                        interaction = state.interaction
                         if !result {
                                 break
                         }

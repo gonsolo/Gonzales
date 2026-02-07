@@ -386,12 +386,14 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) th
                 data = uncompressedData
         }
         let plyMesh = try PlyMesh(from: data)
-        return try createTriangleMesh(
-                objectToWorld: objectToWorld,
+        let meshData = MeshData(
                 indices: plyMesh.indices,
                 points: plyMesh.points,
                 normals: plyMesh.normals,
                 uvs: plyMesh.uvs,
                 faceIndices: plyMesh.faceIndices)
+        return try createTriangleMesh(
+                objectToWorld: objectToWorld,
+                meshData: meshData)
 
 }

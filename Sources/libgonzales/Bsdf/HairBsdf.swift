@@ -165,15 +165,26 @@ extension HairBsdf {
                 return (sinThetaOp, cosThetaOp)
         }
 
+        private struct ScatteringContext {
+                let pIndex: Int
+                let sinThetaI: FloatX
+                let cosThetaI: FloatX
+                let sinThetaO: FloatX
+                let cosThetaO: FloatX
+                let phi: FloatX
+                let gammaT: FloatX
+        }
+
         private func computeScattering(
-                pIndex: Int,
-                sinThetaI: FloatX,
-                cosThetaI: FloatX,
-                sinThetaO: FloatX,
-                cosThetaO: FloatX,
-                phi: FloatX,
-                gammaT: FloatX
+                context: ScatteringContext
         ) -> (FloatX, FloatX) {
+                let pIndex = context.pIndex
+                let sinThetaI = context.sinThetaI
+                let cosThetaI = context.cosThetaI
+                let sinThetaO = context.sinThetaO
+                let cosThetaO = context.cosThetaO
+                let phi = context.phi
+                let gammaT = context.gammaT
                 var (sinThetaOp, cosThetaOp) = computeThetaOp(
                         pIndex: pIndex,
                         sinThetaO: sinThetaO,
@@ -219,7 +230,7 @@ extension HairBsdf {
                 var fsum = black
 
                 for pIndex in 0..<pMax {
-                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
+                        let context = ScatteringContext(
                                 pIndex: pIndex,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -227,6 +238,7 @@ extension HairBsdf {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(context: context)
                         fsum += longitudinalScattering * attenuation[pIndex] * azimuthalScattering
                 }
                 let longitudinalScattering = computeLongitudinalScattering(
@@ -278,7 +290,7 @@ extension HairBsdf {
                 let phi = phiI - phiO
                 var pdfValue: FloatX = 0
                 for pIndex in 0..<pMax {
-                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
+                        let context = ScatteringContext(
                                 pIndex: pIndex,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
@@ -286,6 +298,7 @@ extension HairBsdf {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(context: context)
                         pdfValue += longitudinalScattering * attenuationPdf[pIndex] * azimuthalScattering
                 }
                 let longitudinalScattering = computeLongitudinalScattering(

@@ -25,13 +25,12 @@ final class HenyeyGreenstein: PhaseFunction {
                 let sinTheta = (max(0.0, 1 - cosTheta * cosTheta)).squareRoot()
                 let phi = 2 * FloatX.pi * uSample.1
                 let (vector1, vector2) = makeCoordinateSystem(from: outgoing)
+                let frame = ShadingFrame(x: vector1, y: vector2, z: outgoing)
                 let incident = sphericalDirection(
                         sinTheta: sinTheta,
                         cosTheta: cosTheta,
                         phi: phi,
-                        x: vector1,
-                        y: vector2,
-                        z: outgoing)
+                        frame: frame)
 
                 let value = phase(cosTheta: cosTheta, geometricTerm: geometricTerm)
                 return (value, incident)

@@ -80,14 +80,13 @@ struct Sphere: Shape {
                         * (max(0, 1 - sinTheta2 * invSinThetaMax * invSinThetaMax)).squareRoot()
                 let sinAlpha = max(0, 1 - cosAlpha * cosAlpha).squareRoot()
                 let phi = samples.1 * 2 * FloatX.pi
+                let frame = ShadingFrame(x: -wcX, y: -wcY, z: -vectorCenter)
                 let worldNormal = Normal(
                         sphericalDirection(
                                 sinTheta: sinAlpha,
                                 cosTheta: cosAlpha,
                                 phi: phi,
-                                x: -wcX,
-                                y: -wcY,
-                                z: -vectorCenter))
+                                frame: frame))
                 let worldPoint = center + radius * Point(worldNormal)
                 let interaction = SurfaceInteraction(position: worldPoint, normal: worldNormal)
                 let pdf: FloatX = 1.0 / (2 * FloatX.pi * (1 - cosThetaMax))

@@ -58,6 +58,13 @@ extension Vector2 where T == FloatX {
         }
 }
 
+private struct CurveIntersectionState {
+        let points: [Point]
+        let uRange: TwoFloats
+        let depth: Int
+        let index: Int
+}
+
 struct Curve: Shape {
 
         @MainActor
@@ -120,15 +127,16 @@ struct Curve: Shape {
         }
 
         // swiftlint:disable:next function_body_length
-        func recursiveIntersect(
+        private func recursiveIntersect(
                 ray: Ray,
                 tHit: inout FloatX,
-                points: [Point],
-                index _: Int = 0,
                 rayToObject: Transform,
-                uRange: TwoFloats,
-                depth: Int
+                state: CurveIntersectionState
         ) throws -> (SurfaceInteraction, FloatX) {
+                let points = state.points
+                let uRange = state.uRange
+                let depth = state.depth
+                // let index = state.index
 
                 let nothing: (SurfaceInteraction, FloatX) = (SurfaceInteraction(), FloatX.infinity)
 
@@ -163,14 +171,16 @@ struct Curve: Shape {
                                 {
                                         continue
                                 }
+                                let nextState = CurveIntersectionState(
+                                        points: splitPoints,
+                                        uRange: (uSamples[segment], uSamples[segment + 1]),
+                                        depth: depth - 1,
+                                        index: cps)
                                 hits[segment] = try recursiveIntersect(
                                         ray: ray,
                                         tHit: &tHit,
-                                        points: splitPoints,
-                                        index: cps,
                                         rayToObject: rayToObject,
-                                        uRange: (uSamples[segment], uSamples[segment + 1]),
-                                        depth: depth - 1)
+                                        state: nextState)
                                 // if hit && !tHit: shadowRays not applicable here
                         }
                         if hits[0].0.valid && hits[1].0.valid {

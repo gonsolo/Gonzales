@@ -81,12 +81,14 @@ extension LayeredBsdf {
                 var sampler: Sampler = .random(RandomSampler())
 
                 for _ in 0..<nSamples {
-                        scatteredRadiance += evaluateSample(
+                        let params = SampleParams(
                                 localOutgoing: localOutgoing,
                                 localIncident: localIncident,
                                 enteredTop: enteredTop,
                                 isSameHemisphere: isSameHemisphere,
-                                exitZ: exitZ,
+                                exitZ: exitZ)
+                        scatteredRadiance += evaluateSample(
+                                params: params,
                                 sampler: &sampler)
                 }
 
@@ -301,14 +303,23 @@ extension LayeredBsdf {
 
 extension LayeredBsdf {
 
+        private struct SampleParams {
+                let localOutgoing: Vector
+                let localIncident: Vector
+                let enteredTop: Bool
+                let isSameHemisphere: Bool
+                let exitZ: FloatX
+        }
+
         private func evaluateSample(
-                localOutgoing: Vector,
-                localIncident: Vector,
-                enteredTop: Bool,
-                isSameHemisphere: Bool,
-                exitZ: FloatX,
+                params: SampleParams,
                 sampler: inout Sampler
         ) -> RgbSpectrum {
+                let localOutgoing = params.localOutgoing
+                let localIncident = params.localIncident
+                let enteredTop = params.enteredTop
+                let isSameHemisphere = params.isSameHemisphere
+                let exitZ = params.exitZ
                 let uSample = sampler.get3D()
 
                 let outgoingSample: BsdfSample
@@ -415,11 +426,11 @@ extension LayeredBsdf {
                                         if result { break } else { continue }
                                 }
                         } else {
+                                let params = NonExitParams(zCurrent: zCurrent, incidentSample: incidentSample)
                                 if let result = handleNonExit(
-                                        zCurrent: zCurrent,
+                                        params: params,
                                         sampledDirection: &sampledDirection,
                                         throughput: &throughput,
-                                        incidentSample: incidentSample,
                                         sampleF: &sampleF,
                                         sampler: &sampler)
                                 {
@@ -459,14 +470,20 @@ extension LayeredBsdf {
                 return nil
         }
 
+        private struct NonExitParams {
+                let zCurrent: FloatX
+                let incidentSample: BsdfSample
+        }
+
         private func handleNonExit(
-                zCurrent: FloatX,
+                params: NonExitParams,
                 sampledDirection: inout Vector,
                 throughput: inout RgbSpectrum,
-                incidentSample: BsdfSample,
                 sampleF: inout RgbSpectrum,
                 sampler: inout Sampler
         ) -> Bool? {
+                let zCurrent = params.zCurrent
+                let incidentSample = params.incidentSample
                 let isBottom = (zCurrent == 0)
                 let nonExitIsSpecular = isBottom ? bottomIsSpecular : topIsSpecular
 

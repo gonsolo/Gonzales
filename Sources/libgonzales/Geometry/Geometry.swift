@@ -8,13 +8,11 @@ func sphericalDirection(
         sinTheta: FloatX,
         cosTheta: FloatX,
         phi: FloatX,
-        x: Vector,
-        y: Vector,
-        z: Vector
+        frame: ShadingFrame
 ) -> Vector {
-        let vectorX = sinTheta * cos(phi) * x
-        let vectorY = sinTheta * sin(phi) * y
-        let vectorZ = cosTheta * z
+        let vectorX = sinTheta * cos(phi) * frame.x
+        let vectorY = sinTheta * sin(phi) * frame.y
+        let vectorZ = cosTheta * frame.z
         return vectorX + vectorY + vectorZ
 }
 
