@@ -218,9 +218,9 @@ extension Api {
                 case "homogeneous":
                         let scale = try parameters.findOneFloatX(called: "scale", else: 1)
                         let absorption =
-                                try parameters.findSpectrum(name: "sigma_a", else: white) as! RgbSpectrum
+                                try parameters.findSpectrum(name: "sigma_a", else: white)?.asRgb() ?? white
                         let scattering =
-                                try parameters.findSpectrum(name: "sigma_s", else: white) as! RgbSpectrum
+                                try parameters.findSpectrum(name: "sigma_s", else: white)?.asRgb() ?? white
                         state.namedMedia[name] = Homogeneous(
                                 scale: scale,
                                 absorption: absorption,

@@ -9,7 +9,6 @@ excluded:
 opt_in_rules:
   - unused_parameter
 disabled_rules:
-  - force_cast
   - function_parameter_count
   - opening_brace
   - cyclomatic_complexity
