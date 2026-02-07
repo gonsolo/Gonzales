@@ -65,8 +65,8 @@ final class PbrtScanner {
         }
 
         func scanUpToString(_ input: String) -> String? {
-                let s = scanUpToCharactersList(from: [input])
-                return s
+                let scannedString = scanUpToCharactersList(from: [input])
+                return scannedString
 
         }
 

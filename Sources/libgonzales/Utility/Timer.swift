@@ -6,11 +6,11 @@ extension TimeInterval {
                 if self > 60 {
                         let minutes = self / 60
                         let minutesString = String(format: "%.0f", minutes)
-                        let s = String(format: "%.0f", seconds)
-                        return "\(minutesString)m\(s)s"
+                        let secondsString = String(format: "%.0f", seconds)
+                        return "\(minutesString)m\(secondsString)s"
                 } else {
-                        let s = String(format: "%.1f", seconds)
-                        return "\(s)s"
+                        let secondsString = String(format: "%.1f", seconds)
+                        return "\(secondsString)s"
                 }
         }
 }

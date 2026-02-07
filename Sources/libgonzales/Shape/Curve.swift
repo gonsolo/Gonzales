@@ -20,8 +20,8 @@ typealias SevenPoints = (Point, Point, Point, Point, Point, Point, Point)
 typealias TwoFloats = (FloatX, FloatX)
 typealias ThreeFloats = (FloatX, FloatX, FloatX)
 
-private func lerp(with t: FloatX, between first: Point, and second: Point) -> Point {
-        return (1.0 - t) * first + t * second
+private func lerp(with factor: FloatX, between first: Point, and second: Point) -> Point {
+        return (1.0 - factor) * first + factor * second
 }
 
 func blossomBezier(points: FourPoints, uSamples: ThreeFloats) -> Point {

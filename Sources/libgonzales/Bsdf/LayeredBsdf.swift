@@ -259,7 +259,9 @@ extension LayeredBsdf {
                                         let incidentSample = bottom.sampleLocal(
                                                 outgoing: localIncident, uSample: sampler.get3D())
 
-                                        if outgoingSample.isValid && !outgoingSample.isReflection(outgoing: localOutgoing) && incidentSample.isValid
+                                        if outgoingSample.isValid
+                                                && !outgoingSample.isReflection(outgoing: localOutgoing)
+                                                && incidentSample.isValid
                                                 && !incidentSample.isReflection(outgoing: localIncident)
                                         {
                                                 let probability1 = top.probabilityDensityLocal(
@@ -274,7 +276,9 @@ extension LayeredBsdf {
                                         let incidentSample = top.sampleLocal(
                                                 outgoing: localIncident, uSample: sampler.get3D())
 
-                                        if outgoingSample.isValid && !outgoingSample.isReflection(outgoing: localOutgoing) && incidentSample.isValid
+                                        if outgoingSample.isValid
+                                                && !outgoingSample.isReflection(outgoing: localOutgoing)
+                                                && incidentSample.isValid
                                                 && !incidentSample.isReflection(outgoing: localIncident)
                                         {
                                                 let probability1 = bottom.probabilityDensityLocal(
@@ -402,75 +406,112 @@ extension LayeredBsdf {
                         }
 
                         if zCurrent == exitZ {
-                                let exitSample: BsdfSample
-                                if zCurrent == 0 {
-                                        exitSample = bottom.sampleLocal(
-                                                outgoing: -sampledDirection, uSample: sampler.get3D())
-                                } else {
-                                        exitSample = top.sampleLocal(
-                                                outgoing: -sampledDirection, uSample: sampler.get3D())
-                                }
-
-                                if !exitSample.isValid || exitSample.probabilityDensity == 0
-                                        || exitSample.incoming.z == 0
+                                if let result = handleExit(
+                                        zCurrent: zCurrent,
+                                        sampledDirection: &sampledDirection,
+                                        throughput: &throughput,
+                                        sampler: &sampler)
                                 {
-                                        break
+                                        if result { break } else { continue }
                                 }
-                                if exitSample.isTransmission(outgoing: -sampledDirection) { break }
-
-                                throughput *=
-                                        exitSample.estimate * absCosTheta(exitSample.incoming)
-                                                / exitSample.probabilityDensity
-                                sampledDirection = exitSample.incoming
-
                         } else {
-                                let isBottom = (zCurrent == 0)
-                                let nonExitIsSpecular = isBottom ? bottomIsSpecular : topIsSpecular
-
-                                if !nonExitIsSpecular {
-                                        let neVal: RgbSpectrum
-                                        if isBottom {
-                                                neVal = bottom.evaluateLocal(
-                                                        outgoing: -sampledDirection, incident: -incidentSample.incoming)
-                                        } else {
-                                                neVal = top.evaluateLocal(
-                                                        outgoing: -sampledDirection, incident: -incidentSample.incoming)
-                                        }
-
-                                        if !neVal.isBlack {
-                                                let transmittanceValue = transmittance(
-                                                        deltaZ: thickness,
-                                                        direction: incidentSample.incoming)
-                                                let term1 = throughput * neVal * absCosTheta(incidentSample.incoming)
-                                                let term2 = transmittanceValue * incidentSample.estimate
-                                                 / incidentSample.probabilityDensity
-                                                sampleF += term1 * term2
-                                        }
-                                }
-
-                                let sample: BsdfSample
-                                if isBottom {
-                                        sample = bottom.sampleLocal(
-                                                outgoing: -sampledDirection, uSample: sampler.get3D())
-                                } else {
-                                        sample = top.sampleLocal(
-                                                outgoing: -sampledDirection, uSample: sampler.get3D())
-                                }
-
-                                if !sample.isValid || sample.probabilityDensity == 0
-                                        || sample.incoming.z == 0
+                                if let result = handleNonExit(
+                                        zCurrent: zCurrent,
+                                        sampledDirection: &sampledDirection,
+                                        throughput: &throughput,
+                                        incidentSample: incidentSample,
+                                        sampleF: &sampleF,
+                                        sampler: &sampler)
                                 {
-                                        break
+                                        if result { break } else { continue }
                                 }
-                                if sample.isTransmission(outgoing: -sampledDirection) { break }
-
-                                throughput *=
-                                        sample.estimate * absCosTheta(sample.incoming)
-                                        / sample.probabilityDensity
-                                sampledDirection = sample.incoming
                         }
                 }
                 return sampleF
+        }
+
+        private func handleExit(
+                zCurrent: FloatX,
+                sampledDirection: inout Vector,
+                throughput: inout RgbSpectrum,
+                sampler: inout Sampler
+        ) -> Bool? {
+                let exitSample: BsdfSample
+                if zCurrent == 0 {
+                        exitSample = bottom.sampleLocal(
+                                outgoing: -sampledDirection, uSample: sampler.get3D())
+                } else {
+                        exitSample = top.sampleLocal(
+                                outgoing: -sampledDirection, uSample: sampler.get3D())
+                }
+
+                if !exitSample.isValid || exitSample.probabilityDensity == 0
+                        || exitSample.incoming.z == 0
+                {
+                        return true
+                }
+                if exitSample.isTransmission(outgoing: -sampledDirection) { return true }
+
+                throughput *=
+                        exitSample.estimate * absCosTheta(exitSample.incoming)
+                                / exitSample.probabilityDensity
+                sampledDirection = exitSample.incoming
+                return nil
+        }
+
+        private func handleNonExit(
+                zCurrent: FloatX,
+                sampledDirection: inout Vector,
+                throughput: inout RgbSpectrum,
+                incidentSample: BsdfSample,
+                sampleF: inout RgbSpectrum,
+                sampler: inout Sampler
+        ) -> Bool? {
+                let isBottom = (zCurrent == 0)
+                let nonExitIsSpecular = isBottom ? bottomIsSpecular : topIsSpecular
+
+                if !nonExitIsSpecular {
+                        let neVal: RgbSpectrum
+                        if isBottom {
+                                neVal = bottom.evaluateLocal(
+                                        outgoing: -sampledDirection, incident: -incidentSample.incoming)
+                        } else {
+                                neVal = top.evaluateLocal(
+                                        outgoing: -sampledDirection, incident: -incidentSample.incoming)
+                        }
+
+                        if !neVal.isBlack {
+                                let transmittanceValue = transmittance(
+                                        deltaZ: thickness,
+                                        direction: incidentSample.incoming)
+                                let term1 = throughput * neVal * absCosTheta(incidentSample.incoming)
+                                let term2 = transmittanceValue * incidentSample.estimate
+                                        / incidentSample.probabilityDensity
+                                sampleF += term1 * term2
+                        }
+                }
+
+                let sample: BsdfSample
+                if isBottom {
+                        sample = bottom.sampleLocal(
+                                outgoing: -sampledDirection, uSample: sampler.get3D())
+                } else {
+                        sample = top.sampleLocal(
+                                outgoing: -sampledDirection, uSample: sampler.get3D())
+                }
+
+                if !sample.isValid || sample.probabilityDensity == 0
+                        || sample.incoming.z == 0
+                {
+                        return true
+                }
+                if sample.isTransmission(outgoing: -sampledDirection) { return true }
+
+                throughput *=
+                        sample.estimate * absCosTheta(sample.incoming)
+                                / sample.probabilityDensity
+                sampledDirection = sample.incoming
+                return nil
         }
 
         private func transmittance(deltaZ: FloatX, direction: Vector) -> RgbSpectrum {

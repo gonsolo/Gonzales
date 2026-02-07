@@ -8,13 +8,6 @@ excluded:
   - Sources/libgonzales/Sampler/SobolMatrices.swift
 opt_in_rules:
   - unused_parameter
-identifier_name:
-  excluded:
-    - x
-    - y
-    - z
-    - s
-    - t
 disabled_rules:
   - force_cast
   - function_parameter_count
@@ -22,3 +15,12 @@ disabled_rules:
   - cyclomatic_complexity
   - large_tuple
   - trailing_comma
+identifier_name:
+  excluded:
+    - x
+    - y
+    - z
+    - s
+    - t
+  min_length: 3
+  max_length: 40
