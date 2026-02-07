@@ -5,9 +5,9 @@ extension TimeInterval {
                 let seconds = self.truncatingRemainder(dividingBy: 60)
                 if self > 60 {
                         let minutes = self / 60
-                        let m = String(format: "%.0f", minutes)
+                        let minutesString = String(format: "%.0f", minutes)
                         let s = String(format: "%.0f", seconds)
-                        return "\(m)m\(s)s"
+                        return "\(minutesString)m\(s)s"
                 } else {
                         let s = String(format: "%.1f", seconds)
                         return "\(s)s"

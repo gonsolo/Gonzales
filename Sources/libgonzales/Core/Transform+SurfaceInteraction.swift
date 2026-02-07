@@ -8,7 +8,7 @@ extension Transform {
                         shadingNormal: normalized(left * right.shadingNormal),
                         outgoing: normalized(left * right.outgoing),
                         dpdu: left * right.dpdu,
-                        uv: right.uv,
+                        uvCoordinates: right.uvCoordinates,
                         faceIndex: right.faceIndex,
                         materialIndex: right.materialIndex)
         }

@@ -27,23 +27,23 @@ struct GaussianFilter: Filter {
         func erfinv(y: FloatX) -> FloatX {
                 let center: FloatX = 0.7
 
-                let a: [FloatX] = [0.886226899, -1.645349621, 0.914624893, -0.140543331]
-                let b: [FloatX] = [-2.118377725, 1.442710462, -0.329097515, 0.012229801]
-                let c: [FloatX] = [-1.970840454, -1.624906493, 3.429567803, 1.641345311]
-                let d: [FloatX] = [3.543889200, 1.637067800]
+                let coeffA: [FloatX] = [0.886226899, -1.645349621, 0.914624893, -0.140543331]
+                let coeffB: [FloatX] = [-2.118377725, 1.442710462, -0.329097515, 0.012229801]
+                let coeffC: [FloatX] = [-1.970840454, -1.624906493, 3.429567803, 1.641345311]
+                let coeffD: [FloatX] = [3.543889200, 1.637067800]
 
                 let absY = abs(y)
 
                 if absY <= center {
                         let z = y * y
 
-                        var numPoly = a[3] * z + a[2]
-                        numPoly = numPoly * z + a[1]
-                        let num = numPoly * z + a[0]
+                        var numPoly = coeffA[3] * z + coeffA[2]
+                        numPoly = numPoly * z + coeffA[1]
+                        let num = numPoly * z + coeffA[0]
 
-                        var denPoly = b[3] * z + b[2]
-                        denPoly = denPoly * z + b[1]
-                        denPoly = denPoly * z + b[0]
+                        var denPoly = coeffB[3] * z + coeffB[2]
+                        denPoly = denPoly * z + coeffB[1]
+                        denPoly = denPoly * z + coeffB[0]
                         let den = denPoly * z + 1.0
 
                         var x = y * num / den
@@ -64,11 +64,11 @@ struct GaussianFilter: Filter {
                         let zBase: FloatX = (1.0 - absY) / 2.0
                         let z: FloatX = sqrt(-log(zBase))
 
-                        var numPoly = c[3] * z + c[2]
-                        numPoly = numPoly * z + c[1]
-                        let num = numPoly * z + c[0]
+                        var numPoly = coeffC[3] * z + coeffC[2]
+                        numPoly = numPoly * z + coeffC[1]
+                        let num = numPoly * z + coeffC[0]
 
-                        let denPoly = d[1] * z + d[0]
+                        let denPoly = coeffD[1] * z + coeffD[0]
                         let den = denPoly * z + 1.0
 
                         let signY: FloatX = y.sign == .plus ? 1.0 : -1.0
@@ -93,12 +93,12 @@ struct GaussianFilter: Filter {
                 }
         }
 
-        func sample(u: (FloatX, FloatX)) -> FilterSample {
+        func sample(uSample: (FloatX, FloatX)) -> FilterSample {
 
-                func sample1D(u: FloatX, radius: FloatX, sigma: FloatX) -> (sample: FloatX, density: FloatX) {
+                func sample1D(uSample: FloatX, radius: FloatX, sigma: FloatX) -> (sample: FloatX, density: FloatX) {
                         let norm = 0.5 * (1 + erf(radius / (sigma * sqrt(2))))
 
-                        let uScaled = (1 - norm) + u * (2 * norm - 1)
+                        let uScaled = (1 - norm) + uSample * (2 * norm - 1)
 
                         let x = sigma * sqrt(2) * erfinv(y: 2 * uScaled - 1)
 
@@ -112,8 +112,8 @@ struct GaussianFilter: Filter {
                         return (sample: clampedX, density: density)
                 }
 
-                let resultX = sample1D(u: u.0, radius: support.x, sigma: sigma)
-                let resultY = sample1D(u: u.1, radius: support.y, sigma: sigma)
+                let resultX = sample1D(uSample: uSample.0, radius: support.x, sigma: sigma)
+                let resultY = sample1D(uSample: uSample.1, radius: support.y, sigma: sigma)
                 let location = Point2f(x: resultX.sample, y: resultY.sample)
                 let probabilityDensity = resultX.density * resultY.density
 

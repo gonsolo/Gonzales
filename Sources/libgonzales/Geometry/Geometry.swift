@@ -25,24 +25,24 @@ func sphericalCoordinatesFrom(vector: Vector) -> (theta: FloatX, phi: FloatX) {
         return (theta, phi)
 }
 
-func dot(_ a: Vector, _ b: Normal) -> FloatX {
-        return a.x * b.x + a.y * b.y + a.z * b.z
+func dot(_ vector: Vector, _ normal: Normal) -> FloatX {
+        return vector.x * normal.x + vector.y * normal.y + vector.z * normal.z
 }
 
-func dot(_ a: Normal, _ b: Vector) -> FloatX {
-        return a.x * b.x + a.y * b.y + a.z * b.z
+func dot(_ normal: Normal, _ vector: Vector) -> FloatX {
+        return normal.x * vector.x + normal.y * vector.y + normal.z * vector.z
 }
 
-func dot(_ a: Vector2F, _ b: Vector2F) -> FloatX {
-        return a.x * b.x + a.y * b.y
+func dot(_ vector1: Vector2F, _ vector2: Vector2F) -> FloatX {
+        return vector1.x * vector2.x + vector1.y * vector2.y
 }
 
-func absDot(_ a: Vector, _ b: Normal) -> FloatX {
-        return abs(dot(a, b))
+func absDot(_ vector: Vector, _ normal: Normal) -> FloatX {
+        return abs(dot(vector, normal))
 }
 
-func absDot(_ a: Normal, _ b: Vector) -> FloatX {
-        return abs(dot(Vector(normal: a), b))
+func absDot(_ normal: Normal, _ vector: Vector) -> FloatX {
+        return abs(dot(Vector(normal: normal), vector))
 }
 
 func maxDimension(_ vector: Vector3) -> Int {
@@ -66,9 +66,11 @@ func union(bound: Bounds3f, point: Point) -> Bounds3f {
 func makeCoordinateSystem(from vector1: Vector) -> (vector2: Vector, vector3: Vector) {
         var vector2 = upVector
         if abs(vector1.x) > abs(vector1.y) {
-                vector2 = Vector(x: -vector1.z, y: 0, z: vector1.x) / (vector1.x * vector1.x + vector1.z * vector1.z).squareRoot()
+                vector2 = Vector(x: -vector1.z, y: 0, z: vector1.x)
+                        / (vector1.x * vector1.x + vector1.z * vector1.z).squareRoot()
         } else {
-                vector2 = Vector(x: 0, y: vector1.z, z: -vector1.y) / (vector1.y * vector1.y + vector1.z * vector1.z).squareRoot()
+                vector2 = Vector(x: 0, y: vector1.z, z: -vector1.y)
+                        / (vector1.y * vector1.y + vector1.z * vector1.z).squareRoot()
         }
         let vector3 = cross(vector1, vector2)
         return (vector2, vector3)

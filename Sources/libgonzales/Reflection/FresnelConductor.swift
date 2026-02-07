@@ -5,11 +5,11 @@ struct FresnelConductor: Fresnel {
                 cosTheta: FloatX,
                 etaI: RgbSpectrum,
                 etaT: RgbSpectrum,
-                k: RgbSpectrum
+                extinction: RgbSpectrum
         ) -> RgbSpectrum {
                 let cosThetaClamped = clamp(value: cosTheta, low: -1, high: 1)
                 let eta = etaT / etaI
-                let etak = k / etaI
+                let etak = extinction / etaI
                 let cosTheta2 = cosThetaClamped * cosThetaClamped
                 let sinThetaI2 = 1 - cosTheta2
                 let eta2 = eta * eta
@@ -17,8 +17,8 @@ struct FresnelConductor: Fresnel {
                 let term0 = eta2 - etak2 - sinThetaI2
                 let a2plusb2 = (term0 * term0 + 4 * eta2 * etak2).squareRoot()
                 let term1 = a2plusb2 + cosTheta2
-                let a = (0.5 * (a2plusb2 + term0)).squareRoot()
-                let term2 = 2 * cosThetaClamped * a
+                let termA = (0.5 * (a2plusb2 + term0)).squareRoot()
+                let term2 = 2 * cosThetaClamped * termA
                 let reflectanceS = (term1 - term2) / (term1 + term2)
                 let term3 = cosTheta2 * a2plusb2 + sinThetaI2 * sinThetaI2
                 let term4 = term2 * sinThetaI2
@@ -27,10 +27,10 @@ struct FresnelConductor: Fresnel {
         }
 
         func evaluate(cosTheta: FloatX) -> RgbSpectrum {
-                return fresnelConductor(cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, k: k)
+                return fresnelConductor(cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, extinction: extinction)
         }
 
         let etaI: RgbSpectrum
         let etaT: RgbSpectrum
-        let k: RgbSpectrum
+        let extinction: RgbSpectrum
 }

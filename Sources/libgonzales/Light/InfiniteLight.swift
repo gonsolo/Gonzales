@@ -24,9 +24,9 @@ struct InfiniteLight {
                 let direction = lightToWorld * lightDirection
                 let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
                 let distantPoint = point + direction * sceneDiameter
-                let visibility = Visibility(from: point, to: distantPoint)
-                let uv = directionToUV(direction: -direction)
-                let interaction = SurfaceInteraction(uv: uv)
+                let visibility = Visibility(from: point, target: distantPoint)
+                let uvCoordinates = directionToUV(direction: -direction)
+                let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
                 guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         print("Unsupported texture type!")
                         return LightSample(
@@ -49,56 +49,56 @@ struct InfiniteLight {
 
         let inv2Pi: FloatX = 1.0 / (2.0 * FloatX.pi)
 
-        private func sphericalPhi(_ v: Vector) -> FloatX {
-                let p = atan2(v.y, v.x)
-                if p < 0.0 {
-                        return p + 2.0 * FloatX.pi
+        private func sphericalPhi(_ vector: Vector) -> FloatX {
+                let phi = atan2(vector.y, vector.x)
+                if phi < 0.0 {
+                        return phi + 2.0 * FloatX.pi
                 } else {
-                        return p
+                        return phi
                 }
         }
 
-        private func sphericalTheta(_ v: Vector) -> FloatX {
-                return acos(clamp(value: v.z, low: -1, high: 1))
+        private func sphericalTheta(_ vector: Vector) -> FloatX {
+                return acos(clamp(value: vector.z, low: -1, high: 1))
         }
 
         private func directionToUV(direction: Vector) -> Point2f {
                 let directionLight = normalized(worldToLight * direction)
-                let uv = equalAreaSphereToSquare(direction: directionLight)
-                return uv
+                let uvCoordinates = equalAreaSphereToSquare(direction: directionLight)
+                return uvCoordinates
         }
 
         private func equalAreaSphereToSquare(direction: Vector) -> Point2f {
                 let x = abs(direction.x)
                 let y = abs(direction.y)
                 let z = abs(direction.z)
-                let r = sqrt(1 - z)
-                let a = max(x, y)
-                var b = min(x, y)
-                if a == 0 {
-                        b = 0
+                let radius = sqrt(1 - z)
+                let coeffA = max(x, y)
+                var coeffB = min(x, y)
+                if coeffA == 0 {
+                        coeffB = 0
                 } else {
-                        b /= a
+                        coeffB /= coeffA
                 }
-                var phi = atan(b) * 2 / FloatX.pi
+                var phi = atan(coeffB) * 2 / FloatX.pi
                 if x < y {
                         phi = 1 - phi
                 }
-                var v: FloatX = phi * r
-                var u: FloatX = r - v
+                var vCoord: FloatX = phi * radius
+                var uCoord: FloatX = radius - vCoord
                 if direction.z < 0 {
-                        swap(&u, &v)
-                        u = 1 - u
-                        v = 1 - v
+                        swap(&uCoord, &vCoord)
+                        uCoord = 1 - uCoord
+                        vCoord = 1 - vCoord
                 }
-                u = copysign(u, direction.x)
-                v = copysign(v, direction.y)
-                return Point2f(x: 0.5 * (u + 1), y: 0.5 * (v + 1))
+                uCoord = copysign(uCoord, direction.x)
+                vCoord = copysign(vCoord, direction.y)
+                return Point2f(x: 0.5 * (uCoord + 1), y: 0.5 * (vCoord + 1))
         }
 
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
-                let uv = directionToUV(direction: ray.direction)
-                let interaction = SurfaceInteraction(uv: uv)
+                let uvCoordinates = directionToUV(direction: ray.direction)
+                let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
                 guard let radiance = texture.evaluate(at: interaction) as? RgbSpectrum else {
                         print("Unsupported texture type!")
                         return black

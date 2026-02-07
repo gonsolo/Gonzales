@@ -107,12 +107,12 @@ extension Point2 where T: FloatingPoint {
         }
 }
 
-func * (i: Point2i, f: Point2f) -> Point2f {
-        return Point2f(from: i) * f
+func * (iPoint: Point2i, fPoint: Point2f) -> Point2f {
+        return Point2f(from: iPoint) * fPoint
 }
 
-func * (a: Point2f, b: Point2f) -> Point2f {
-        return Point2f(x: a.x * b.x, y: a.y * b.y)
+func * (valA: Point2f, valB: Point2f) -> Point2f {
+        return Point2f(x: valA.x * valB.x, y: valA.y * valB.y)
 }
 
 extension Point2 where T: FloatingPoint {

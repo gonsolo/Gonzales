@@ -21,7 +21,7 @@ struct AreaLight: Boundable, Intersectable {
                 let (shapeInteraction, pdf) = shape.sample(point: point, samples: samples, scene: scene)
                 let direction: Vector = normalized(shapeInteraction.position - point)
                 assert(!direction.isNaN)
-                let visibility = Visibility(from: point, to: shapeInteraction.position)
+                let visibility = Visibility(from: point, target: shapeInteraction.position)
                 let radiance = emittedRadiance(from: shapeInteraction, inDirection: -direction)
                 return LightSample(radiance: radiance, direction: direction, pdf: pdf, visibility: visibility)
         }

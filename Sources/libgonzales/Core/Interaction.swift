@@ -1,6 +1,6 @@
 protocol Interaction: Sendable {
 
-        func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX)
+        func spawnRay(target: Point) -> (ray: Ray, tHit: FloatX)
         func spawnRay(inDirection direction: Vector) -> Ray
 
         var dpdu: Vector { get }
@@ -8,7 +8,7 @@ protocol Interaction: Sendable {
         var normal: Normal { get }
         var position: Point { get }
         var shadingNormal: Normal { get }
-        var uv: Point2f { get }
+        var uvCoordinates: Point2f { get }
         var outgoing: Vector { get }
 }
 
@@ -17,9 +17,9 @@ func offsetRayOrigin(point: Point, direction: Vector) -> Point {
         return Point(point + epsilon * direction)
 }
 
-func spawnRay(from: Point, to: Point) -> (ray: Ray, tHit: FloatX) {
-        let origin = offsetRayOrigin(point: from, direction: to - from)
-        let direction: Vector = to - origin
+func spawnRay(from: Point, target: Point) -> (ray: Ray, tHit: FloatX) {
+        let origin = offsetRayOrigin(point: from, direction: target - from)
+        let direction: Vector = target - origin
         return (Ray(origin: origin, direction: direction), FloatX(1.0) - shadowEpsilon)
 }
 
@@ -30,9 +30,9 @@ extension Interaction {
                 return Ray(origin: origin, direction: direction)
         }
 
-        func spawnRay(to: Point) -> (ray: Ray, tHit: FloatX) {
-                let origin = offsetRayOrigin(point: position, direction: to - position)
-                let direction: Vector = to - origin
+        func spawnRay(target: Point) -> (ray: Ray, tHit: FloatX) {
+                let origin = offsetRayOrigin(point: position, direction: target - position)
+                let direction: Vector = target - origin
                 return (Ray(origin: origin, direction: direction), FloatX(1.0) - shadowEpsilon)
         }
 

@@ -28,19 +28,19 @@ func clamp<T: Comparable>(value: T, low: T, high: T) -> T {
         if value < low { return low } else if value > high { return high } else { return value }
 }
 
-func roundUpPower2(v: Int) -> Int {
-        var v = v - 1
-        v |= v >> 1
-        v |= v >> 2
-        v |= v >> 4
-        v |= v >> 8
-        v |= v >> 16
-        v |= v >> 32
-        return v + 1
+func roundUpPower2(value: Int) -> Int {
+        var value = value - 1
+        value |= value >> 1
+        value |= value >> 2
+        value |= value >> 4
+        value |= value >> 8
+        value |= value >> 16
+        value |= value >> 32
+        return value + 1
 }
 
-func log2Int(v: Int) -> UInt {
-        return UInt(log2(FloatX(v)))
+func log2Int(value: Int) -> UInt {
+        return UInt(log2(FloatX(value)))
 }
 
 func gammaLinearToSrgb(value: FloatX) -> FloatX {

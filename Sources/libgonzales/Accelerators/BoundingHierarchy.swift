@@ -13,7 +13,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                 self.primIds.append(primId)
                         case .triangle(let triangle):
                                 let primId = PrimId(
-                                        id1: triangle.meshIndex, id2: triangle.idx, type: .triangle)
+                                        id1: triangle.meshIndex, id2: triangle.triangleIndex, type: .triangle)
                                 self.primIds.append(primId)
                         case .transformedPrimitive(let transformedPrimitive):
                                 let primId = PrimId(
@@ -102,11 +102,11 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
                 ) throws {
-                        for i in 0..<node.count {
+                        for index in 0..<node.count {
                                 intersected =
                                         try intersected
                                         || scene.intersect(
-                                                primId: hierarchy.primIds[node.offset + i],
+                                                primId: hierarchy.primIds[node.offset + index],
                                                 ray: ray,
                                                 tHit: &tHit)
                         }
@@ -135,16 +135,16 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
                 ) throws {
                         var currentData = TriangleIntersection()
-                        for i in 0..<node.count {
+                        for index in 0..<node.count {
                                 let intersectionFound = try scene.getIntersectionData(
                                         scene: scene,
-                                        primId: hierarchy.primIds[node.offset + i],
+                                        primId: hierarchy.primIds[node.offset + index],
                                         ray: ray,
                                         tHit: &tHit,
                                         data: &currentData)
 
                                 if intersectionFound {
-                                        index = node.offset + i
+                                        self.index = node.offset + index
                                         gdata = currentData
                                 }
                         }

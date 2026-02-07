@@ -7,17 +7,17 @@ struct MicrofacetReflection: GlobalBsdf {
                 if cosThetaO == 0 || cosThetaI == 0 { return RgbSpectrum() }
                 guard !half.isZero else { return black }
                 half.normalize()
-                let f = fresnel.evaluate(cosTheta: dot(incident, half))
+                let fresnelValue = fresnel.evaluate(cosTheta: dot(incident, half))
                 let area = distribution.differentialArea(withNormal: half)
                 let visible = distribution.visibleFraction(from: outgoing, and: incident)
-                return reflectance * area * visible * f / (4 * cosThetaI * cosThetaO)
+                return reflectance * area * visible * fresnelValue / (4 * cosThetaI * cosThetaO)
         }
 
-        func sampleLocal(outgoing: Vector, u: ThreeRandomVariables) async -> BsdfSample {
+        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) async -> BsdfSample {
                 guard !outgoing.z.isZero else {
                         return BsdfSample()
                 }
-                let half = distribution.sampleHalfVector(outgoing: outgoing, u: (u.0, u.1))
+                let half = distribution.sampleHalfVector(outgoing: outgoing, uSample: (uSample.0, uSample.1))
                 let incident = reflect(vector: outgoing, by: half)
                 let radiance = evaluateLocal(outgoing: outgoing, incident: incident)
                 let density = probabilityDensityLocal(outgoing: outgoing, incident: incident)

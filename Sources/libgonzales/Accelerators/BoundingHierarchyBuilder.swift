@@ -117,9 +117,9 @@ extension BoundingHierarchyBuilder {
         }
 
         private func printNodes() {
-                var i = 0
+                var nodeIndex = 0
                 for node in nodes {
-                        print(i)
+                        print(nodeIndex)
                         if node.count == 0 {
                                 print("  interior")
                                 print("  offset: ", node.offset)
@@ -128,7 +128,7 @@ extension BoundingHierarchyBuilder {
                                 print(" count: ", node.count)
                                 print(" offset: ", node.offset)
                         }
-                        i += 1
+                        nodeIndex += 1
                 }
         }
 
@@ -168,14 +168,25 @@ extension BoundingHierarchyBuilder {
                 BoundingHierarchyBuilder.totalPrimitives += range.count
         }
 
-        private func isSmaller(_ a: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
-                return a.center[dimension] < pivot
+        private func isSmaller(_ primitive: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
+                return primitive.center[dimension] < pivot
         }
 
-        private func isSmaller(_ a: CachedPrimitive, _ b: CachedPrimitive, in dimension: Int)
-                -> Bool
+        private func isSmaller(
+                _ first: CachedPrimitive, _ second: CachedPrimitive, in dimension: Int
+        ) -> Bool {
+                return isSmaller(first, second.center[dimension], in: dimension)
+        }
+
+        private func splitEqual(bounds _: Bounds3f, dimension: Int, range: Range<Int>)
+                -> (start: Int, middle: Int, end: Int)
         {
-                return isSmaller(a, b.center[dimension], in: dimension)
+                // There is no nth_element so let's sort for now
+                cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
+                let start = range.first!
+                let mid = start + range.count / 2
+                let end = range.last! + 1
+                return (start, mid, end)
         }
 
         private func splitMiddle(bounds: Bounds3f, dimension: Int, range: Range<Int>)
@@ -190,17 +201,6 @@ extension BoundingHierarchyBuilder {
                 guard mid != start && mid != end else {
                         return splitEqual(bounds: bounds, dimension: dimension, range: range)
                 }
-                return (start, mid, end)
-        }
-
-        private func splitEqual(bounds _: Bounds3f, dimension: Int, range: Range<Int>)
-                -> (start: Int, middle: Int, end: Int)
-        {
-                // There is no nth_element so let's sort for now
-                cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
-                let start = range.first!
-                let mid = start + range.count / 2
-                let end = range.last! + 1
                 return (start, mid, end)
         }
 
@@ -232,38 +232,38 @@ extension BoundingHierarchyBuilder {
                         var buckets = Array(repeating: BVHSplitBucket(), count: nBuckets)
                         for prim in cachedPrimitives[range] {
                                 let offset: Vector = centroidBounds.offset(point: prim.centroid())
-                                var b = Int(Float(nBuckets) * offset[dimension])
-                                if b == nBuckets {
-                                        b = nBuckets - 1
+                                var bucketIndex = Int(Float(nBuckets) * offset[dimension])
+                                if bucketIndex == nBuckets {
+                                        bucketIndex = nBuckets - 1
                                 }
-                                assert(b >= 0)
-                                assert(b < nBuckets)
-                                buckets[b].count += 1
-                                buckets[b].bounds = union(
-                                        first: buckets[b].bounds,
+                                assert(bucketIndex >= 0)
+                                assert(bucketIndex < nBuckets)
+                                buckets[bucketIndex].count += 1
+                                buckets[bucketIndex].bounds = union(
+                                        first: buckets[bucketIndex].bounds,
                                         second: prim.bound)
                         }
                         let nSplits = nBuckets - 1
                         var costs = Array(repeating: FloatX(0.0), count: nSplits)
                         var countBelow = 0
                         var boundBelow = Bounds3f()
-                        for i in 0..<nSplits {
-                                boundBelow = union(first: boundBelow, second: buckets[i].bounds)
-                                countBelow += buckets[i].count
-                                costs[i] += FloatX(countBelow) * boundBelow.surfaceArea()
+                        for index in 0..<nSplits {
+                                boundBelow = union(first: boundBelow, second: buckets[index].bounds)
+                                countBelow += buckets[index].count
+                                costs[index] += FloatX(countBelow) * boundBelow.surfaceArea()
                         }
                         var countAbove = 0
                         var boundAbove = Bounds3f()
-                        for i in (1...nSplits).reversed() {
-                                boundAbove = union(first: boundAbove, second: buckets[i].bounds)
-                                countAbove += buckets[i].count
-                                costs[i - 1] += FloatX(countAbove) * boundAbove.surfaceArea()
+                        for index in (1...nSplits).reversed() {
+                                boundAbove = union(first: boundAbove, second: buckets[index].bounds)
+                                countAbove += buckets[index].count
+                                costs[index - 1] += FloatX(countAbove) * boundAbove.surfaceArea()
                         }
                         var minCostSplitBucket = -1
                         var minCost = FloatX.infinity
-                        for i in 0..<nSplits where costs[i] < minCost {
-                                minCost = costs[i]
-                                minCostSplitBucket = i
+                        for index in 0..<nSplits where costs[index] < minCost {
+                                minCost = costs[index]
+                                minCostSplitBucket = index
                         }
                         let leafCost = FloatX(range.count)
 
@@ -275,11 +275,11 @@ extension BoundingHierarchyBuilder {
                                         let offsetPoint = centroidBounds.offset(
                                                 point: $0.centroid())
                                         let offset = offsetPoint[dimension]
-                                        var b = Int(FloatX(nBuckets) * offset)
-                                        if b == nBuckets {
-                                                b = nBuckets - 1
+                                        var bucketIndex = Int(FloatX(nBuckets) * offset)
+                                        if bucketIndex == nBuckets {
+                                                bucketIndex = nBuckets - 1
                                         }
-                                        return b > minCostSplitBucket
+                                        return bucketIndex > minCostSplitBucket
                                 })
                         } else {
                                 addLeafNode(

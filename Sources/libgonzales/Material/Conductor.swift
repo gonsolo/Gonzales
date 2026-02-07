@@ -6,7 +6,7 @@ struct Conductor {
                 let fresnel = FresnelConductor(
                         etaI: white,
                         etaT: eta,
-                        k: k)
+                        extinction: extinction)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
                 let microfaceReflectionBsdf = MicrofacetReflection(
                         reflectance: white,
@@ -17,14 +17,14 @@ struct Conductor {
         }
 
         var eta: RgbSpectrum
-        var k: RgbSpectrum
+        var extinction: RgbSpectrum
         var roughness: (FloatX, FloatX)
 }
 
 @MainActor
 func createConductor(parameters: ParameterDictionary) throws -> Conductor {
         let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
-        let k = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
+        let extinctionParameter = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
         // let remapRoughness = try findOneBool(called: "remaproughness", else: false)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
         let uRoughness =
@@ -34,6 +34,6 @@ func createConductor(parameters: ParameterDictionary) throws -> Conductor {
         let roughness = (uRoughness, vRoughness)
 
         let etaRgb = eta.asRgb()
-        let kRgb = k.asRgb()
-        return Conductor(eta: etaRgb, k: kRgb, roughness: roughness)
+        let extinctionRgb = extinctionParameter.asRgb()
+        return Conductor(eta: etaRgb, extinction: extinctionRgb, roughness: roughness)
 }

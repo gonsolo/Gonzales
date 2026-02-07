@@ -3,7 +3,7 @@
 public protocol GlobalBsdf: BsdfFrameProtocol, DistributionModel, LocalBsdf, Sendable {
         func evaluateWorld(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
         func probabilityDensityWorld(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> FloatX
-        func sampleWorld(outgoing outgoingWorld: Vector, u: ThreeRandomVariables)
+        func sampleWorld(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
@@ -30,11 +30,11 @@ extension GlobalBsdf {
                 return probabilityDensityLocal(outgoing: outgoingLocal, incident: incidentLocal)
         }
 
-        public func sampleWorld(outgoing outgoingWorld: Vector, u: ThreeRandomVariables)
+        public func sampleWorld(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
-                let bsdfSample = sampleLocal(outgoing: outgoingLocal, u: u)
+                let bsdfSample = sampleLocal(outgoing: outgoingLocal, uSample: uSample)
                 let incidentWorld = localToWorld(local: bsdfSample.incoming)
                 return (
                         BsdfSample(bsdfSample.estimate, incidentWorld, bsdfSample.probabilityDensity),
@@ -52,7 +52,7 @@ extension GlobalBsdf {
         public func sampleDistributionFunction(outgoing: Vector, normal: Normal, sampler: inout Sampler)
                 -> BsdfSample
         {
-                var (bsdfSample, _) = sampleWorld(outgoing: outgoing, u: sampler.get3D())
+                var (bsdfSample, _) = sampleWorld(outgoing: outgoing, uSample: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, normal)
                 return bsdfSample
         }

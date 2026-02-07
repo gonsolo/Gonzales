@@ -12,7 +12,7 @@ struct DistantLight {
         {  // radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
                 let outside = point + direction * 2 * worldRadius
                 let visibility = Visibility(
-                        from: point, to: outside)
+                        from: point, target: outside)
                 return LightSample(radiance: brightness, direction: direction, pdf: 1, visibility: visibility)
         }
 
@@ -40,11 +40,11 @@ func createDistantLight(lightToWorld: Transform, parameters: ParameterDictionary
         -> DistantLight
 {
         let from = try parameters.findOnePoint(name: "from", else: origin)
-        let to = try parameters.findOnePoint(name: "to", else: origin)
+        let target = try parameters.findOnePoint(name: "to", else: origin)
         guard let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum else {
                 throw ParameterError.missing(parameter: "L", function: #function)
         }
-        let direction: Vector = from - to
+        let direction: Vector = from - target
         return DistantLight(
                 lightToWorld: lightToWorld, brightness: brightness, direction: direction)
 }

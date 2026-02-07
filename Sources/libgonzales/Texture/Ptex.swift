@@ -19,8 +19,8 @@ struct Ptex {
         func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
                 let pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluatePtex(
-                        path, interaction.faceIndex, Float(interaction.uv[0]),
-                        Float(interaction.uv[1]), pointer)
+                        path, interaction.faceIndex, Float(interaction.uvCoordinates[0]),
+                        Float(interaction.uvCoordinates[1]), pointer)
                 let spectrum = RgbSpectrum(
                         red: FloatX(pointer[0]), green: FloatX(pointer[1]), blue: FloatX(pointer[2]))
                 return gammaSrgbToLinear(light: spectrum)

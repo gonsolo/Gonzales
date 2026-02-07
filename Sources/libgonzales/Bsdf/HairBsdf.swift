@@ -6,38 +6,38 @@ struct HairBsdf: GlobalBsdf {
         var absorption: RgbSpectrum
         let indexRefraction: FloatX = 1.55
         let gammaO: FloatX
-        let h: FloatX
-        let s: FloatX
-        var v: [FloatX]
+        let hOffset: FloatX
+        let sParameter: FloatX
+        var vParameter: [FloatX]
         var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
         var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
         let bsdfFrame: BsdfFrame
 
-        init(alpha: FloatX, h: FloatX, absorption: RgbSpectrum, bsdfFrame: BsdfFrame) {
-                self.h = h
+        init(alpha: FloatX, hOffset: FloatX, absorption: RgbSpectrum, bsdfFrame: BsdfFrame) {
+                self.hOffset = hOffset
                 self.absorption = absorption
                 let sqrtPiOver8: FloatX = 0.626657069
-                gammaO = asin(h)
+                gammaO = asin(hOffset)
                 let azimuthalRoughness: FloatX = 0.3
-                s =
+                sParameter =
                         sqrtPiOver8
                         * (0.265 * azimuthalRoughness + 1.194 * square(azimuthalRoughness) + 5.372
                                 * pow(azimuthalRoughness, 2))
-                v = Array(repeating: 0, count: pMax + 1)
+                vParameter = Array(repeating: 0, count: pMax + 1)
                 let longitudinalRoughness: FloatX = 0.3
-                v[0] = square(
+                vParameter[0] = square(
                         0.726 * longitudinalRoughness + 0.812 * square(longitudinalRoughness) + 3.7
                                 * pow(longitudinalRoughness, 20))
-                v[1] = 0.25 * v[0]
-                v[2] = 4 * v[0]
-                for p in 3...pMax {
-                        v[p] = v[2]
+                vParameter[1] = 0.25 * vParameter[0]
+                vParameter[2] = 4 * vParameter[0]
+                for pIndex in 3...pMax {
+                        vParameter[pIndex] = vParameter[2]
                 }
                 sin2kAlpha[0] = sin(radians(deg: alpha))
                 cos2kAlpha[0] = (1 - square(sin2kAlpha[0])).squareRoot()
-                for i in 1..<3 {
-                        sin2kAlpha[i] = 2 * cos2kAlpha[i - 1] * sin2kAlpha[i - 1]
-                        cos2kAlpha[i] = square(cos2kAlpha[i - 1]) - square(sin2kAlpha[i - 1])
+                for index in 1..<3 {
+                        sin2kAlpha[index] = 2 * cos2kAlpha[index - 1] * sin2kAlpha[index - 1]
+                        cos2kAlpha[index] = square(cos2kAlpha[index - 1]) - square(sin2kAlpha[index - 1])
                 }
                 self.bsdfFrame = bsdfFrame
         }
@@ -48,11 +48,11 @@ extension HairBsdf {
         private func computeAttenutation(
                 cosThetaO: FloatX,
                 indexRefraction: FloatX,
-                h: FloatX,
+                hOffset: FloatX,
                 transmittance: RgbSpectrum
         ) -> [RgbSpectrum] {
                 var attenuation = Array(repeating: black, count: pMax + 1)
-                let cosGammaO = (1 - h * h).squareRoot()
+                let cosGammaO = (1 - hOffset * hOffset).squareRoot()
                 let cosTheta = cosThetaO * cosGammaO
                 let fresnelReflected = FresnelDielectric.reflected(
                         cosThetaI: cosTheta,
@@ -60,8 +60,8 @@ extension HairBsdf {
                 let fresnelTransmitted = 1 - fresnelReflected
                 attenuation[0] = RgbSpectrum(intensity: fresnelReflected)
                 attenuation[1] = square(fresnelTransmitted) * transmittance
-                for p in 2..<pMax {
-                        attenuation[p] = attenuation[p - 1] * transmittance * fresnelReflected
+                for pIndex in 2..<pMax {
+                        attenuation[pIndex] = attenuation[pIndex - 1] * transmittance * fresnelReflected
                 }
                 let enumerator: RgbSpectrum = attenuation[pMax - 1] * fresnelReflected * transmittance
                 let denominator: RgbSpectrum = white - transmittance * fresnelReflected
@@ -74,87 +74,88 @@ extension HairBsdf {
                 _ cosThetaO: FloatX,
                 _ sinThetaI: FloatX,
                 _ sinThetaO: FloatX,
-                _ v: FloatX
+                _ vParameter: FloatX
         ) -> FloatX {
-                let a = cosThetaI * cosThetaO / v
-                let b = sinThetaI * sinThetaO / v
+                let termA = cosThetaI * cosThetaO / vParameter
+                let termB = sinThetaI * sinThetaO / vParameter
                 var longitudinalScattering: FloatX
-                if v <= 0.1 {
-                        longitudinalScattering = exp(logI0(a) - b - 1 / v + 0.6931 + log(1 / (2 * v)))
+                if vParameter <= 0.1 {
+                        longitudinalScattering = exp(
+                                logI0(termA) - termB - 1 / vParameter + 0.6931 + log(1 / (2 * vParameter)))
                 } else {
-                        longitudinalScattering = (exp(-b) * i0(a)) / (sinh(1 / v) * 2 * v)
+                        longitudinalScattering = (exp(-termB) * i0(termA)) / (sinh(1 / vParameter) * 2 * vParameter)
                 }
                 return longitudinalScattering
         }
 
-        private func computePhi(p: Int, gammaO: FloatX, gammaT: FloatX) -> FloatX {
-                return 2 * FloatX(p) * gammaT - 2 * gammaO + FloatX(p) * FloatX.pi
+        private func computePhi(pIndex: Int, gammaO: FloatX, gammaT: FloatX) -> FloatX {
+                return 2 * FloatX(pIndex) * gammaT - 2 * gammaO + FloatX(pIndex) * FloatX.pi
         }
 
-        private func logistic(_ x: FloatX, _ s: FloatX) -> FloatX {
-                let x = abs(x)
-                return exp(-x / s) / (s * square(1 + exp(-x / s)))
+        private func logistic(_ xVal: FloatX, _ sVal: FloatX) -> FloatX {
+                let xVal = abs(xVal)
+                return exp(-xVal / sVal) / (sVal * square(1 + exp(-xVal / sVal)))
         }
 
-        private func logisticCDF(_ x: FloatX, _ s: FloatX) -> FloatX {
-                return 1 / (1 + exp(-x / s))
+        private func logisticCDF(_ xVal: FloatX, _ sVal: FloatX) -> FloatX {
+                return 1 / (1 + exp(-xVal / sVal))
         }
 
-        private func trimmedLogistic(_ x: FloatX, _ s: FloatX, _ a: FloatX, _ b: FloatX) -> FloatX {
-                return logistic(x, s) / (logisticCDF(b, s) - logisticCDF(a, s))
+        private func trimmedLogistic(_ xVal: FloatX, _ sVal: FloatX, _ lower: FloatX, _ upper: FloatX) -> FloatX {
+                return logistic(xVal, sVal) / (logisticCDF(upper, sVal) - logisticCDF(lower, sVal))
         }
 
         private func computeAzimuthalScattering(
                 _ phi: FloatX,
-                _ p: Int,
-                _ s: FloatX,
+                _ pIndex: Int,
+                _ sVal: FloatX,
                 _ gammaO: FloatX,
                 _ gammaT: FloatX
         ) -> FloatX {
-                var dphi = phi - computePhi(p: p, gammaO: gammaO, gammaT: gammaT)
+                var dphi = phi - computePhi(pIndex: pIndex, gammaO: gammaO, gammaT: gammaT)
                 while dphi > FloatX.pi {
                         dphi -= 2 * FloatX.pi
                 }
                 while dphi < -FloatX.pi {
                         dphi += 2 * FloatX.pi
                 }
-                return trimmedLogistic(dphi, s, -FloatX.pi, FloatX.pi)
+                return trimmedLogistic(dphi, sVal, -FloatX.pi, FloatX.pi)
         }
 
-        private func i0(_ x: FloatX) -> FloatX {
+        private func i0(_ xVal: FloatX) -> FloatX {
                 var val: FloatX = 0
                 var x2i: FloatX = 1
                 var ifact: FloatX = 1
                 var powerOfFour: FloatX = 1
-                for i in 0..<10 {
-                        if i > 1 {
-                                ifact *= FloatX(i)
+                for index in 0..<10 {
+                        if index > 1 {
+                                ifact *= FloatX(index)
                         }
                         val += x2i / (powerOfFour * square(ifact))
-                        x2i *= x * x
+                        x2i *= xVal * xVal
                         powerOfFour *= 4
                 }
                 return val
         }
 
-        private func logI0(_ x: FloatX) -> FloatX {
-                if x > 12 {
-                        return x + 0.5 * (-log(2 * FloatX.pi) + log(1 / x) + 1 / (8 * x))
+        private func logI0(_ xVal: FloatX) -> FloatX {
+                if xVal > 12 {
+                        return xVal + 0.5 * (-log(2 * FloatX.pi) + log(1 / xVal) + 1 / (8 * xVal))
                 } else {
-                        return log(i0(x))
+                        return log(i0(xVal))
                 }
         }
 
-        private func computeThetaOp(p: Int, sinThetaO: FloatX, cosThetaO: FloatX) -> (FloatX, FloatX) {
+        private func computeThetaOp(pIndex: Int, sinThetaO: FloatX, cosThetaO: FloatX) -> (FloatX, FloatX) {
                 var sinThetaOp: FloatX
                 var cosThetaOp: FloatX
-                if p == 0 {
+                if pIndex == 0 {
                         sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
                         cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
-                } else if p == 1 {
+                } else if pIndex == 1 {
                         sinThetaOp = sinThetaO * cos2kAlpha[0] + cosThetaO * sin2kAlpha[0]
                         cosThetaOp = cosThetaO * cos2kAlpha[0] - sinThetaO * sin2kAlpha[0]
-                } else if p == 2 {
+                } else if pIndex == 2 {
                         sinThetaOp = sinThetaO * cos2kAlpha[2] + cosThetaO * sin2kAlpha[2]
                         cosThetaOp = cosThetaO * cos2kAlpha[2] - sinThetaO * sin2kAlpha[2]
                 } else {
@@ -165,7 +166,7 @@ extension HairBsdf {
         }
 
         private func computeScattering(
-                p: Int,
+                pIndex: Int,
                 sinThetaI: FloatX,
                 cosThetaI: FloatX,
                 sinThetaO: FloatX,
@@ -174,7 +175,7 @@ extension HairBsdf {
                 gammaT: FloatX
         ) -> (FloatX, FloatX) {
                 var (sinThetaOp, cosThetaOp) = computeThetaOp(
-                        p: p,
+                        pIndex: pIndex,
                         sinThetaO: sinThetaO,
                         cosThetaO: cosThetaO)
                 cosThetaOp = abs(cosThetaOp)
@@ -182,8 +183,8 @@ extension HairBsdf {
                         cosThetaI,
                         cosThetaOp,
                         sinThetaI,
-                        sinThetaOp, v[p])
-                let azimuthalScattering = computeAzimuthalScattering(phi, p, s, gammaO, gammaT)
+                        sinThetaOp, vParameter[pIndex])
+                let azimuthalScattering = computeAzimuthalScattering(phi, pIndex, sParameter, gammaO, gammaT)
                 return (longitudinalScattering, azimuthalScattering)
         }
 
@@ -201,7 +202,7 @@ extension HairBsdf {
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
 
                 let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
-                let sinGammaT = h / etap
+                let sinGammaT = hOffset / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let gammaT = asin(sinGammaT)
 
@@ -213,27 +214,27 @@ extension HairBsdf {
                 let attenuation = computeAttenutation(
                         cosThetaO: cosThetaO,
                         indexRefraction: indexRefraction,
-                        h: h,
+                        hOffset: hOffset,
                         transmittance: transmittance)
                 var fsum = black
 
-                for p in 0..<pMax {
+                for pIndex in 0..<pMax {
                         let (longitudinalScattering, azimuthalScattering) = computeScattering(
-                                p: p,
+                                pIndex: pIndex,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
                                 sinThetaO: sinThetaO,
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        fsum += longitudinalScattering * attenuation[p] * azimuthalScattering
+                        fsum += longitudinalScattering * attenuation[pIndex] * azimuthalScattering
                 }
                 let longitudinalScattering = computeLongitudinalScattering(
                         cosThetaI,
                         cosThetaO,
                         sinThetaI,
                         sinThetaO,
-                        v[pMax])
+                        vParameter[pMax])
                 fsum += longitudinalScattering * attenuation[pMax] / (2 * FloatX.pi)
                 if absCosTheta(incident) > 0 {
                         fsum /= absCosTheta(incident)
@@ -246,13 +247,13 @@ extension HairBsdf {
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
                 let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
-                let sinGammaT = h / etap
+                let sinGammaT = hOffset / etap
                 let cosGammaT = (1 - square(sinGammaT)).squareRoot()
                 let transmittance = exp(-absorption * (2 * cosGammaT / cosThetaT))
                 let attenuation = computeAttenutation(
                         cosThetaO: cosThetaO,
                         indexRefraction: indexRefraction,
-                        h: h,
+                        hOffset: hOffset,
                         transmittance: transmittance)
                 let sumY = attenuation.reduce(
                         0,
@@ -270,31 +271,31 @@ extension HairBsdf {
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
                 let phiI = atan2(incident.z, incident.y)
                 let etap = sqrt(square(indexRefraction) - square(sinThetaO)) / cosThetaO
-                let sinGammaT = h / etap
+                let sinGammaT = hOffset / etap
                 let gammaT = asin(sinGammaT)
                 let attenuationPdf = computeAttenuationPdf(cosThetaO: cosThetaO)
 
                 let phi = phiI - phiO
-                var pdf: FloatX = 0
-                for p in 0..<pMax {
+                var pdfValue: FloatX = 0
+                for pIndex in 0..<pMax {
                         let (longitudinalScattering, azimuthalScattering) = computeScattering(
-                                p: p,
+                                pIndex: pIndex,
                                 sinThetaI: sinThetaI,
                                 cosThetaI: cosThetaI,
                                 sinThetaO: sinThetaO,
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        pdf += longitudinalScattering * attenuationPdf[p] * azimuthalScattering
+                        pdfValue += longitudinalScattering * attenuationPdf[pIndex] * azimuthalScattering
                 }
                 let longitudinalScattering = computeLongitudinalScattering(
                         cosThetaI,
                         cosThetaO,
                         sinThetaI,
                         sinThetaO,
-                        v[pMax])
-                pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
-                return pdf
+                        vParameter[pMax])
+                pdfValue += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
+                return pdfValue
         }
 
         private func compact1by1(_ x: UInt32) -> UInt32 {
@@ -307,16 +308,16 @@ extension HairBsdf {
                 return x
         }
 
-        private func demux(_ f: FloatX) -> (FloatX, FloatX) {
-                let v = UInt(f * FloatX((UInt(1) << 32)))
-                let bits: (UInt32, UInt32) = (compact1by1(UInt32(v)), compact1by1(UInt32(v >> 1)))
+        private func demux(_ fValue: FloatX) -> (FloatX, FloatX) {
+                let bitsValue = UInt(fValue * FloatX((UInt(1) << 32)))
+                let bits: (UInt32, UInt32) = (compact1by1(UInt32(bitsValue)), compact1by1(UInt32(bitsValue >> 1)))
                 return (FloatX(bits.0) / FloatX(1 << 16), FloatX(bits.1) / FloatX(1 << 16))
         }
 
-        private func sampleTrimmedLogistic(u: FloatX, s: FloatX, a: FloatX, b: FloatX) -> FloatX {
-                let k = logisticCDF(b, s) - logisticCDF(a, s)
-                let x = -s * log(1 / (u * k + logisticCDF(a, s)) - 1)
-                return clamp(value: x, low: a, high: b)
+        private func sampleTrimmedLogistic(uSample: FloatX, sVal: FloatX, lower: FloatX, upper: FloatX) -> FloatX {
+                let kValue = logisticCDF(upper, sVal) - logisticCDF(lower, sVal)
+                let xValue = -sVal * log(1 / (uSample * kValue + logisticCDF(lower, sVal)) - 1)
+                return clamp(value: xValue, low: lower, high: upper)
         }
 
         // func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector)

@@ -4,8 +4,8 @@ public struct Vector3: Sendable, Three {
                 self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
         }
 
-        init(v: FloatX) {
-                self.xyz = SIMD4<FloatX>(v, v, v, 1.0)
+        init(value: FloatX) {
+                self.xyz = SIMD4<FloatX>(value, value, value, 1.0)
         }
 
         init() {

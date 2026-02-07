@@ -25,10 +25,10 @@ struct Sphere: Shape {
 
         func uniformSampleSphere(samples: TwoRandomVariables) -> Point {
 
-                let z = 1 - 2 * samples.0
-                let r = max(0, 1 - z * z).squareRoot()
+                let zComponent = 1 - 2 * samples.0
+                let radiusValue = max(0, 1 - zComponent * zComponent).squareRoot()
                 let phi = 2 * FloatX.pi * samples.1
-                return Point(x: r * cos(phi), y: r * sin(phi), z: z)
+                return Point(x: radiusValue * cos(phi), y: radiusValue * sin(phi), z: zComponent)
         }
 
         func sample(samples: TwoRandomVariables, scene _: Scene) -> (
@@ -98,19 +98,19 @@ struct Sphere: Shape {
                 return 4 * FloatX.pi * radius * radius
         }
 
-        func quadratic(a: FloatX, b: FloatX, c: FloatX) -> (FloatX, FloatX)? {
-                let discriminant = b * b - 4 * a * c
+        func quadratic(coeffA: FloatX, coeffB: FloatX, coeffC: FloatX) -> (FloatX, FloatX)? {
+                let discriminant = coeffB * coeffB - 4 * coeffA * coeffC
                 guard discriminant > 0 else {
                         return nil
                 }
                 let rootDiscriminant = discriminant.squareRoot()
-                var q: FloatX = 0.0
-                if b < 0 {
-                        q = -FloatX(0.5) * (b - rootDiscriminant)
+                var qValue: FloatX = 0.0
+                if coeffB < 0 {
+                        qValue = -FloatX(0.5) * (coeffB - rootDiscriminant)
                 } else {
-                        q = -FloatX(0.5) * (b + rootDiscriminant)
+                        qValue = -FloatX(0.5) * (coeffB + rootDiscriminant)
                 }
-                let roots = [q / a, c / q].sorted()
+                let roots = [qValue / coeffA, coeffC / qValue].sorted()
                 return (roots[0], roots[1])
         }
 
@@ -139,19 +139,19 @@ struct Sphere: Shape {
                 let directionX = ray.direction.x
                 let directionY = ray.direction.y
                 let directionZ = ray.direction.z
-                let a = directionX * directionX + directionY * directionY + directionZ * directionZ
-                let b = 2 * (directionX * originX + directionY * originY + directionZ * originZ)
-                let c = originX * originX + originY * originY + originZ * originZ - radius * radius
+                let coeffA = directionX * directionX + directionY * directionY + directionZ * directionZ
+                let coeffB = 2 * (directionX * originX + directionY * originY + directionZ * originZ)
+                let coeffC = originX * originX + originY * originY + originZ * originZ - radius * radius
 
-                guard let t = quadratic(a: a, b: b, c: c) else {
+                guard let tValues = quadratic(coeffA: coeffA, coeffB: coeffB, coeffC: coeffC) else {
                         return empty(#line)
                 }
-                guard t.0 < tHit && t.1 > 0 else {
+                guard tValues.0 < tHit && tValues.1 > 0 else {
                         return empty(#line)
                 }
-                var shapeHit = t.0
+                var shapeHit = tValues.0
                 if shapeHit <= 0 {
-                        shapeHit = t.1
+                        shapeHit = tValues.1
                         if shapeHit > tHit {
                                 return empty(#line)
                         }
@@ -164,7 +164,7 @@ struct Sphere: Shape {
                 let phiMax = 2 * FloatX.pi
                 let dpdu = Vector(x: -phiMax * pHit.y, y: phiMax * pHit.x, z: 0)
 
-                let uv = Point2f()
+                let uvCoordinates = Point2f()
                 let localInteraction = SurfaceInteraction(
                         valid: true,
                         position: pHit,
@@ -172,7 +172,7 @@ struct Sphere: Shape {
                         shadingNormal: normal,
                         outgoing: -ray.direction,
                         dpdu: dpdu,
-                        uv: uv)
+                        uvCoordinates: uvCoordinates)
                 interaction = objectToWorld * localInteraction
                 tHit = shapeHit
         }

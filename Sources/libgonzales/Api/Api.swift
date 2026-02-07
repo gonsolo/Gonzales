@@ -397,19 +397,19 @@ extension Api {
 
         @MainActor
         func rotate(by angle: FloatX, around axis: Vector) throws {
-                let a = normalized(axis)
+                let normalizedAxis = normalized(axis)
                 let theta = radians(deg: angle)
                 let sinTheta = sin(theta)
                 let cosTheta = cos(theta)
-                let t00 = a.x * a.x + (1 - a.x * a.x) * cosTheta
-                let t01 = a.x * a.y * (1 - cosTheta) - a.z * sinTheta
-                let t02 = a.x * a.z * (1 - cosTheta) + a.y * sinTheta
-                let t10 = a.x * a.y * (1 - cosTheta) + a.z * sinTheta
-                let t11 = a.y * a.y + (1 - a.y * a.y) * cosTheta
-                let t12 = a.y * a.z * (1 - cosTheta) - a.x * sinTheta
-                let t20 = a.x * a.z * (1 - cosTheta) - a.y * sinTheta
-                let t21 = a.y * a.z * (1 - cosTheta) + a.x * sinTheta
-                let t22 = a.z * a.z + (1 - a.z * a.z) * cosTheta
+                let t00 = normalizedAxis.x * normalizedAxis.x + (1 - normalizedAxis.x * normalizedAxis.x) * cosTheta
+                let t01 = normalizedAxis.x * normalizedAxis.y * (1 - cosTheta) - normalizedAxis.z * sinTheta
+                let t02 = normalizedAxis.x * normalizedAxis.z * (1 - cosTheta) + normalizedAxis.y * sinTheta
+                let t10 = normalizedAxis.x * normalizedAxis.y * (1 - cosTheta) + normalizedAxis.z * sinTheta
+                let t11 = normalizedAxis.y * normalizedAxis.y + (1 - normalizedAxis.y * normalizedAxis.y) * cosTheta
+                let t12 = normalizedAxis.y * normalizedAxis.z * (1 - cosTheta) - normalizedAxis.x * sinTheta
+                let t20 = normalizedAxis.x * normalizedAxis.z * (1 - cosTheta) - normalizedAxis.y * sinTheta
+                let t21 = normalizedAxis.y * normalizedAxis.z * (1 - cosTheta) + normalizedAxis.x * sinTheta
+                let t22 = normalizedAxis.z * normalizedAxis.z + (1 - normalizedAxis.z * normalizedAxis.z) * cosTheta
                 let matrix = Matrix(
                         t00: t00, t01: t01, t02: t02, t03: 0,
                         t10: t10, t11: t11, t12: t12, t13: 0,

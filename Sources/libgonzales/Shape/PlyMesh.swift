@@ -51,7 +51,7 @@ struct PlyMesh {
 extension PlyMesh {
 
         enum PropertyType { case float, int }
-        enum PropertyName { case x, y, z, normalX, normalY, normalZ, s, t, u, v }
+        enum PropertyName { case x, y, z, normalX, normalY, normalZ, s, t, uProperty, vProperty }
         struct Property {
                 let type: PropertyType
                 let name: PropertyName
@@ -107,9 +107,9 @@ extension PlyMesh {
         }
 
         private func readCharacter(in data: Data, at index: inout Data.Index) -> Character {
-                let c = Character(UnicodeScalar(data[index]))
+                let char = Character(UnicodeScalar(data[index]))
                 index += 1
-                return c
+                return char
         }
 
         private func peekCharacter(in data: Data, at index: inout Data.Index) -> Character {
@@ -192,10 +192,10 @@ extension PlyMesh {
                                                         Property(type: .float, name: .t))
                                         case "u":
                                                 plyHeader.vertexProperties.append(
-                                                        Property(type: .float, name: .u))
+                                                        Property(type: .float, name: .uProperty))
                                         case "v":
                                                 plyHeader.vertexProperties.append(
-                                                        Property(type: .float, name: .v))
+                                                        Property(type: .float, name: .vProperty))
                                         default:
                                                 throw ApiError.ply(
                                                         message:
@@ -248,9 +248,9 @@ extension PlyMesh {
         }
 
         mutating func appendUV(from data: Data) {
-                let u: FloatX = readValue(in: data, at: &dataIndex)
-                let v: FloatX = readValue(in: data, at: &dataIndex)
-                uvs.append(Vector2F(x: FloatX(u), y: FloatX(v)))
+                let uCoord: FloatX = readValue(in: data, at: &dataIndex)
+                let vCoord: FloatX = readValue(in: data, at: &dataIndex)
+                uvs.append(Vector2F(x: FloatX(uCoord), y: FloatX(vCoord)))
         }
 
         mutating func readVertices(from data: Data) throws {
@@ -269,8 +269,8 @@ extension PlyMesh {
                                         properties[0].name == PropertyName.x
                                                 && properties[1].name == PropertyName.y
                                                 && properties[2].name == PropertyName.z
-                                                && properties[3].name == PropertyName.u
-                                                && properties[4].name == PropertyName.v
+                                                && properties[3].name == PropertyName.uProperty
+                                                && properties[4].name == PropertyName.vProperty
                                 else { throw PlyError.unsupported }
                                 appendPoint(from: data)
                                 appendUV(from: data)
@@ -292,9 +292,9 @@ extension PlyMesh {
                                         && properties[3].name == PropertyName.normalX
                                         && properties[4].name == PropertyName.normalY
                                         && properties[5].name == PropertyName.normalZ
-                                        && (properties[6].name == PropertyName.u
+                                        && (properties[6].name == PropertyName.uProperty
                                                 || properties[6].name == PropertyName.s)
-                                        && (properties[7].name == PropertyName.v
+                                        && (properties[7].name == PropertyName.vProperty
                                                 || properties[7].name == PropertyName.t)
                                 {
                                         appendPoint(from: data)
@@ -303,8 +303,8 @@ extension PlyMesh {
                                 } else if properties[0].name == PropertyName.x
                                         && properties[1].name == PropertyName.y
                                         && properties[2].name == PropertyName.z
-                                        && properties[3].name == PropertyName.u
-                                        && properties[4].name == PropertyName.v
+                                        && properties[3].name == PropertyName.uProperty
+                                        && properties[4].name == PropertyName.vProperty
                                         && properties[5].name == PropertyName.normalX
                                         && properties[6].name == PropertyName.normalY
                                         && properties[7].name == PropertyName.normalZ
@@ -356,10 +356,10 @@ extension PlyMesh {
 
         mutating func readLine(in data: Data) -> String {
                 var line = ""
-                var c = readCharacter(in: data, at: &dataIndex)
-                while !c.isNewline {
-                        line.append(c)
-                        c = readCharacter(in: data, at: &dataIndex)
+                var char = readCharacter(in: data, at: &dataIndex)
+                while !char.isNewline {
+                        line.append(char)
+                        char = readCharacter(in: data, at: &dataIndex)
                 }
                 return line
         }

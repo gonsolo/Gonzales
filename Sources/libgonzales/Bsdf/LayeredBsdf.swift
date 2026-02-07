@@ -29,7 +29,7 @@ extension LayeredBsdf {
                 bottomIsSpecular: Bool,
                 thickness: FloatX,
                 albedo: RgbSpectrum,
-                g: FloatX,
+                geometricTerm: FloatX,
                 maxDepth: Int,
                 nSamples: Int,
                 bsdfFrame: BsdfFrame,
@@ -41,7 +41,7 @@ extension LayeredBsdf {
                 self.bottomIsSpecular = bottomIsSpecular
                 self.thickness = max(thickness, FloatX.leastNormalMagnitude)
                 self._albedo = albedo
-                self.phaseFunction = HenyeyGreenstein(g: g)
+                self.phaseFunction = HenyeyGreenstein(geometricTerm: geometricTerm)
                 self.maxDepth = maxDepth
                 self.nSamples = nSamples
                 self.bsdfFrame = bsdfFrame
@@ -54,7 +54,7 @@ extension LayeredBsdf {
 
         func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
 
-                var f = RgbSpectrum(intensity: 0.0)
+                var scatteredRadiance = RgbSpectrum(intensity: 0.0)
 
                 var localOutgoing = outgoing
                 var localIncident = incident
@@ -75,13 +75,13 @@ extension LayeredBsdf {
                         } else {
                                 entranceEval = bottom.evaluateLocal(outgoing: localOutgoing, incident: localIncident)
                         }
-                        f += FloatX(nSamples) * entranceEval
+                        scatteredRadiance += FloatX(nSamples) * entranceEval
                 }
 
                 var sampler: Sampler = .random(RandomSampler())
 
                 for _ in 0..<nSamples {
-                        f += evaluateSample(
+                        scatteredRadiance += evaluateSample(
                                 localOutgoing: localOutgoing,
                                 localIncident: localIncident,
                                 enteredTop: enteredTop,
@@ -90,11 +90,11 @@ extension LayeredBsdf {
                                 sampler: &sampler)
                 }
 
-                let result = f / FloatX(nSamples)
+                let result = scatteredRadiance / FloatX(nSamples)
                 return result
         }
 
-        func sampleLocal(outgoing: Vector, u: ThreeRandomVariables) async -> BsdfSample {
+        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) async -> BsdfSample {
                 var localOutgoing = outgoing
                 var flipIncident = false
 
@@ -107,9 +107,9 @@ extension LayeredBsdf {
 
                 let bsStart: BsdfSample
                 if enteredTop {
-                        bsStart = top.sampleLocal(outgoing: localOutgoing, u: u)
+                        bsStart = top.sampleLocal(outgoing: localOutgoing, uSample: uSample)
                 } else {
-                        bsStart = bottom.sampleLocal(outgoing: localOutgoing, u: u)
+                        bsStart = bottom.sampleLocal(outgoing: localOutgoing, uSample: uSample)
                 }
 
                 if !bsStart.isValid || bsStart.probabilityDensity == 0 || bsStart.incoming.z == 0 {
@@ -122,70 +122,70 @@ extension LayeredBsdf {
                         return BsdfSample(bsStart.estimate, resultIncident, bsStart.probabilityDensity)
                 }
 
-                var w = bsStart.incoming
+                var sampledDirection = bsStart.incoming
 
                 var sampler = Sampler.random(RandomSampler())
 
-                var f = bsStart.estimate * absCosTheta(bsStart.incoming)
+                var throughput = bsStart.estimate * absCosTheta(bsStart.incoming)
                 var pdf = bsStart.probabilityDensity
-                var z = enteredTop ? thickness : 0
+                var zCurrent = enteredTop ? thickness : 0
 
                 for depth in 0..<maxDepth {
-                        let rrBeta = f.maxValue / pdf
+                        let rrBeta = throughput.maxValue / pdf
                         if depth > 3 && rrBeta < 0.25 {
-                                let q = max(0, 1 - rrBeta)
-                                if sampler.get1D() < q { return invalidBsdfSample }
-                                pdf *= 1 - q
+                                let rrProbability = max(0, 1 - rrBeta)
+                                if sampler.get1D() < rrProbability { return invalidBsdfSample }
+                                pdf *= 1 - rrProbability
                         }
 
-                        if w.z == 0 { return invalidBsdfSample }
+                        if sampledDirection.z == 0 { return invalidBsdfSample }
 
                         if !_albedo.isBlack {
                                 let sigmaTotal: FloatX = 1.0
-                                let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(w))
-                                let proposedZ = w.z > 0 ? (z + deltaZ) : (z - deltaZ)
+                                let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(sampledDirection))
+                                let proposedZ = sampledDirection.z > 0 ? (zCurrent + deltaZ) : (zCurrent - deltaZ)
 
-                                if proposedZ == z { return invalidBsdfSample }
+                                if proposedZ == zCurrent { return invalidBsdfSample }
 
                                 if proposedZ > 0 && proposedZ < thickness {
                                         let (phaseVal, nextWi) = phaseFunction.samplePhase(
-                                                outgoing: -w, sampler: &sampler)
+                                                outgoing: -sampledDirection, sampler: &sampler)
 
                                         if phaseVal == 0 || nextWi.z == 0 { return invalidBsdfSample }
 
-                                        f *= _albedo * phaseVal
+                                        throughput *= _albedo * phaseVal
                                         pdf *= phaseVal
-                                        w = nextWi
-                                        z = proposedZ
+                                        sampledDirection = nextWi
+                                        zCurrent = proposedZ
                                         continue
                                 }
-                                z = clamp(value: proposedZ, low: 0, high: thickness)
+                                zCurrent = clamp(value: proposedZ, low: 0, high: thickness)
                         } else {
-                                z = (z == thickness) ? 0 : thickness
-                                f *= white
+                                zCurrent = (zCurrent == thickness) ? 0 : thickness
+                                throughput *= white
                         }
 
                         var bsdfSample: BsdfSample
-                        if z == 0 {
-                                bsdfSample = bottom.sampleLocal(outgoing: -w, u: sampler.get3D())
+                        if zCurrent == 0 {
+                                bsdfSample = bottom.sampleLocal(outgoing: -sampledDirection, uSample: sampler.get3D())
                         } else {
-                                bsdfSample = top.sampleLocal(outgoing: -w, u: sampler.get3D())
+                                bsdfSample = top.sampleLocal(outgoing: -sampledDirection, uSample: sampler.get3D())
                         }
 
                         if !bsdfSample.isValid || bsdfSample.probabilityDensity == 0 || bsdfSample.incoming.z == 0 {
                                 return invalidBsdfSample
                         }
 
-                        f *= bsdfSample.estimate
+                        throughput *= bsdfSample.estimate
                         pdf *= bsdfSample.probabilityDensity
-                        w = bsdfSample.incoming
+                        sampledDirection = bsdfSample.incoming
 
-                        if bsdfSample.isTransmission(outgoing: -w) {
-                                if flipIncident { w = -w }
-                                return BsdfSample(f, w, pdf)
+                        if bsdfSample.isTransmission(outgoing: -sampledDirection) {
+                                if flipIncident { sampledDirection = -sampledDirection }
+                                return BsdfSample(throughput, sampledDirection, pdf)
                         }
 
-                        f *= absCosTheta(bsdfSample.incoming)
+                        throughput *= absCosTheta(bsdfSample.incoming)
                 }
 
                 return invalidBsdfSample
@@ -220,32 +220,44 @@ extension LayeredBsdf {
                                 let rInterfacePdf: FloatX
 
                                 if enteredTop {
-                                        outgoingSample = top.sampleLocal(outgoing: localOutgoing, u: sampler.get3D())
-                                        incidentSample = top.sampleLocal(outgoing: localIncident, u: sampler.get3D())
+                                        outgoingSample = top.sampleLocal(
+                                                outgoing: localOutgoing, uSample: sampler.get3D())
+                                        incidentSample = top.sampleLocal(
+                                                outgoing: localIncident, uSample: sampler.get3D())
 
-                                        if outgoingSample.isValid && outgoingSample.isTransmission(outgoing: localOutgoing) && incidentSample.isValid
+                                        if outgoingSample.isValid
+                                                && outgoingSample.isTransmission(outgoing: localOutgoing)
+                                                && incidentSample.isValid
                                                 && incidentSample.isTransmission(outgoing: localIncident)
                                         {
                                                 rInterfacePdf = bottom.probabilityDensityLocal(
-                                                        outgoing: -outgoingSample.incoming, incident: -incidentSample.incoming)
+                                                        outgoing: -outgoingSample.incoming,
+                                                        incident: -incidentSample.incoming)
                                                 pdfSum += rInterfacePdf
                                         }
                                 } else {
-                                        outgoingSample = bottom.sampleLocal(outgoing: localOutgoing, u: sampler.get3D())
-                                        incidentSample = bottom.sampleLocal(outgoing: localIncident, u: sampler.get3D())
+                                        outgoingSample = bottom.sampleLocal(
+                                                outgoing: localOutgoing, uSample: sampler.get3D())
+                                        incidentSample = bottom.sampleLocal(
+                                                outgoing: localIncident, uSample: sampler.get3D())
 
-                                        if outgoingSample.isValid && outgoingSample.isTransmission(outgoing: localOutgoing) && incidentSample.isValid
+                                        if outgoingSample.isValid
+                                                && outgoingSample.isTransmission(outgoing: localOutgoing)
+                                                && incidentSample.isValid
                                                 && incidentSample.isTransmission(outgoing: localIncident)
                                         {
                                                 rInterfacePdf = top.probabilityDensityLocal(
-                                                        outgoing: -outgoingSample.incoming, incident: -incidentSample.incoming)
+                                                        outgoing: -outgoingSample.incoming,
+                                                        incident: -incidentSample.incoming)
                                                 pdfSum += rInterfacePdf
                                         }
                                 }
                         } else {
                                 if enteredTop {
-                                        let outgoingSample = top.sampleLocal(outgoing: localOutgoing, u: sampler.get3D())
-                                        let incidentSample = bottom.sampleLocal(outgoing: localIncident, u: sampler.get3D())
+                                        let outgoingSample = top.sampleLocal(
+                                                outgoing: localOutgoing, uSample: sampler.get3D())
+                                        let incidentSample = bottom.sampleLocal(
+                                                outgoing: localIncident, uSample: sampler.get3D())
 
                                         if outgoingSample.isValid && !outgoingSample.isReflection(outgoing: localOutgoing) && incidentSample.isValid
                                                 && !incidentSample.isReflection(outgoing: localIncident)
@@ -257,8 +269,10 @@ extension LayeredBsdf {
                                                 pdfSum += (probability1 + probability2) / 2
                                         }
                                 } else {
-                                        let outgoingSample = bottom.sampleLocal(outgoing: localOutgoing, u: sampler.get3D())
-                                        let incidentSample = top.sampleLocal(outgoing: localIncident, u: sampler.get3D())
+                                        let outgoingSample = bottom.sampleLocal(
+                                                outgoing: localOutgoing, uSample: sampler.get3D())
+                                        let incidentSample = top.sampleLocal(
+                                                outgoing: localIncident, uSample: sampler.get3D())
 
                                         if outgoingSample.isValid && !outgoingSample.isReflection(outgoing: localOutgoing) && incidentSample.isValid
                                                 && !incidentSample.isReflection(outgoing: localIncident)
@@ -291,16 +305,18 @@ extension LayeredBsdf {
                 exitZ: FloatX,
                 sampler: inout Sampler
         ) -> RgbSpectrum {
-                let u = sampler.get3D()
+                let uSample = sampler.get3D()
 
                 let outgoingSample: BsdfSample
                 if enteredTop {
-                        outgoingSample = top.sampleLocal(outgoing: localOutgoing, u: u)
+                        outgoingSample = top.sampleLocal(outgoing: localOutgoing, uSample: uSample)
                 } else {
-                        outgoingSample = bottom.sampleLocal(outgoing: localOutgoing, u: u)
+                        outgoingSample = bottom.sampleLocal(outgoing: localOutgoing, uSample: uSample)
                 }
 
-                if !outgoingSample.isValid || outgoingSample.isReflection(outgoing: localOutgoing) || outgoingSample.incoming.z == 0 {
+                if !outgoingSample.isValid || outgoingSample.isReflection(outgoing: localOutgoing)
+                        || outgoingSample.incoming.z == 0
+                {
                         return RgbSpectrum(intensity: 0)
                 }
 
@@ -308,12 +324,14 @@ extension LayeredBsdf {
                 let incidentSample: BsdfSample
 
                 if isSameHemisphere != enteredTop {
-                        incidentSample = bottom.sampleLocal(outgoing: localIncident, u: exitSample)
+                        incidentSample = bottom.sampleLocal(outgoing: localIncident, uSample: exitSample)
                 } else {
-                        incidentSample = top.sampleLocal(outgoing: localIncident, u: exitSample)
+                        incidentSample = top.sampleLocal(outgoing: localIncident, uSample: exitSample)
                 }
 
-                if !incidentSample.isValid || incidentSample.isReflection(outgoing: localIncident) || incidentSample.incoming.z == 0 {
+                if !incidentSample.isValid || incidentSample.isReflection(outgoing: localIncident)
+                        || incidentSample.incoming.z == 0
+                {
                         return RgbSpectrum(intensity: 0)
                 }
 
@@ -332,61 +350,65 @@ extension LayeredBsdf {
                 exitZ: FloatX,
                 sampler: inout Sampler
         ) -> RgbSpectrum {
-                var beta = outgoingSample.estimate * absCosTheta(outgoingSample.incoming) / outgoingSample.probabilityDensity
-                var z = enteredTop ? thickness : 0
-                var w = outgoingSample.incoming
+                var throughput = outgoingSample.estimate * absCosTheta(outgoingSample.incoming)
+                        / outgoingSample.probabilityDensity
+                var zCurrent = enteredTop ? thickness : 0
+                var sampledDirection = outgoingSample.incoming
                 var sampleF = RgbSpectrum(intensity: 0)
 
                 for depth in 0..<maxDepth {
-                        if depth > 3 && beta.maxValue < 0.25 {
-                                let q = max(0, 1 - beta.maxValue)
-                                if sampler.get1D() < q { break }
-                                beta /= 1 - q
+                        if depth > 3 && throughput.maxValue < 0.25 {
+                                let rrProbability = max(0, 1 - throughput.maxValue)
+                                if sampler.get1D() < rrProbability { break }
+                                throughput /= 1 - rrProbability
                         }
 
                         if _albedo.isBlack {
-                                z = (z == thickness) ? 0 : thickness
-                                beta *= white
+                                zCurrent = (zCurrent == thickness) ? 0 : thickness
+                                throughput *= white
                         } else {
                                 let sigmaTotal: FloatX = 1.0
-                                let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(w))
-                                let proposedZ = w.z > 0 ? (z + deltaZ) : (z - deltaZ)
+                                let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(sampledDirection))
+                                let proposedZ = sampledDirection.z > 0 ? (zCurrent + deltaZ) : (zCurrent - deltaZ)
 
-                                if z == proposedZ { continue }
+                                if zCurrent == proposedZ { continue }
 
                                 if proposedZ > 0 && proposedZ < thickness {
 
                                         let transmitted: FloatX = 1
 
                                         let phaseVal = phaseFunction.evaluate(
-                                                outgoing: -w, incident: -incidentSample.incoming)
+                                                outgoing: -sampledDirection, incident: -incidentSample.incoming)
 
                                         let transmittanceValue = transmittance(
                                                 deltaZ: proposedZ - exitZ,
-                                                w: incidentSample.incoming)
-                                        let term1 = beta * _albedo * phaseVal * transmitted
-                                        let term2 = transmittanceValue * incidentSample.estimate / incidentSample.probabilityDensity
+                                                direction: incidentSample.incoming)
+                                        let term1 = throughput * _albedo * phaseVal * transmitted
+                                        let term2 = transmittanceValue * incidentSample.estimate
+                                                / incidentSample.probabilityDensity
                                         sampleF += term1 * term2
 
                                         let (phasePdf, nextWi) = phaseFunction.samplePhase(
-                                                outgoing: -w, sampler: &sampler)
+                                                outgoing: -sampledDirection, sampler: &sampler)
 
                                         if phasePdf == 0 || nextWi.z == 0 { continue }
 
-                                        beta *= _albedo
-                                        w = nextWi
-                                        z = proposedZ
+                                        throughput *= _albedo
+                                        sampledDirection = nextWi
+                                        zCurrent = proposedZ
                                         continue
                                 }
-                                z = clamp(value: proposedZ, low: 0, high: thickness)
+                                zCurrent = clamp(value: proposedZ, low: 0, high: thickness)
                         }
 
-                        if z == exitZ {
+                        if zCurrent == exitZ {
                                 let exitSample: BsdfSample
-                                if z == 0 {
-                                        exitSample = bottom.sampleLocal(outgoing: -w, u: sampler.get3D())
+                                if zCurrent == 0 {
+                                        exitSample = bottom.sampleLocal(
+                                                outgoing: -sampledDirection, uSample: sampler.get3D())
                                 } else {
-                                        exitSample = top.sampleLocal(outgoing: -w, u: sampler.get3D())
+                                        exitSample = top.sampleLocal(
+                                                outgoing: -sampledDirection, uSample: sampler.get3D())
                                 }
 
                                 if !exitSample.isValid || exitSample.probabilityDensity == 0
@@ -394,41 +416,45 @@ extension LayeredBsdf {
                                 {
                                         break
                                 }
-                                if exitSample.isTransmission(outgoing: -w) { break }
+                                if exitSample.isTransmission(outgoing: -sampledDirection) { break }
 
-                                beta *=
+                                throughput *=
                                         exitSample.estimate * absCosTheta(exitSample.incoming)
-                                        / exitSample.probabilityDensity
-                                w = exitSample.incoming
+                                                / exitSample.probabilityDensity
+                                sampledDirection = exitSample.incoming
 
                         } else {
-                                let isBottom = (z == 0)
+                                let isBottom = (zCurrent == 0)
                                 let nonExitIsSpecular = isBottom ? bottomIsSpecular : topIsSpecular
 
                                 if !nonExitIsSpecular {
                                         let neVal: RgbSpectrum
                                         if isBottom {
                                                 neVal = bottom.evaluateLocal(
-                                                        outgoing: -w, incident: -incidentSample.incoming)
+                                                        outgoing: -sampledDirection, incident: -incidentSample.incoming)
                                         } else {
-                                                neVal = top.evaluateLocal(outgoing: -w, incident: -incidentSample.incoming)
+                                                neVal = top.evaluateLocal(
+                                                        outgoing: -sampledDirection, incident: -incidentSample.incoming)
                                         }
 
                                         if !neVal.isBlack {
                                                 let transmittanceValue = transmittance(
                                                         deltaZ: thickness,
-                                                        w: incidentSample.incoming)
-                                                let term1 = beta * neVal * absCosTheta(incidentSample.incoming)
-                                                let term2 = transmittanceValue * incidentSample.estimate / incidentSample.probabilityDensity
+                                                        direction: incidentSample.incoming)
+                                                let term1 = throughput * neVal * absCosTheta(incidentSample.incoming)
+                                                let term2 = transmittanceValue * incidentSample.estimate
+                                                 / incidentSample.probabilityDensity
                                                 sampleF += term1 * term2
                                         }
                                 }
 
                                 let sample: BsdfSample
                                 if isBottom {
-                                        sample = bottom.sampleLocal(outgoing: -w, u: sampler.get3D())
+                                        sample = bottom.sampleLocal(
+                                                outgoing: -sampledDirection, uSample: sampler.get3D())
                                 } else {
-                                        sample = top.sampleLocal(outgoing: -w, u: sampler.get3D())
+                                        sample = top.sampleLocal(
+                                                outgoing: -sampledDirection, uSample: sampler.get3D())
                                 }
 
                                 if !sample.isValid || sample.probabilityDensity == 0
@@ -436,22 +462,22 @@ extension LayeredBsdf {
                                 {
                                         break
                                 }
-                                if sample.isTransmission(outgoing: -w) { break }
+                                if sample.isTransmission(outgoing: -sampledDirection) { break }
 
-                                beta *=
+                                throughput *=
                                         sample.estimate * absCosTheta(sample.incoming)
                                         / sample.probabilityDensity
-                                w = sample.incoming
+                                sampledDirection = sample.incoming
                         }
                 }
                 return sampleF
         }
 
-        private func transmittance(deltaZ: FloatX, w: Vector) -> RgbSpectrum {
+        private func transmittance(deltaZ: FloatX, direction: Vector) -> RgbSpectrum {
                 if abs(deltaZ) < FloatX.leastNormalMagnitude {
                         return RgbSpectrum(intensity: 1.0)
                 }
-                let val = abs(deltaZ / w.z)
+                let val = abs(deltaZ / direction.z)
                 let transmittanceValue = FloatX(exp(Float(-val)))
                 return RgbSpectrum(intensity: transmittanceValue)
         }

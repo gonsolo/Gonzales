@@ -135,13 +135,13 @@ extension Parser {
         }
 
         private func parseBool() throws -> [Bool] {
-                let f = scanner.peekString("f")
-                if f != nil {
+                let peekF = scanner.peekString("f")
+                if peekF != nil {
                         try parseFalse()
                         return [false]
                 }
-                let t = scanner.peekString("t")
-                if t != nil {
+                let peekT = scanner.peekString("t")
+                if peekT != nil {
                         try parseTrue()
                         return [true]
                 }
@@ -206,8 +206,8 @@ extension Parser {
         private func parseTwoFloatXs() throws -> (FloatX, FloatX)? {
                 guard let x = try parseFloatX() else { return nil }
                 guard let y = try parseFloatX() else { return nil }
-                let f = (x, y)
-                return f
+                let result = (x, y)
+                return result
         }
 
         // swiftlint:disable:next large_tuple
@@ -215,8 +215,8 @@ extension Parser {
                 guard let x = try parseFloatX() else { return nil }
                 guard let y = try parseFloatX() else { return nil }
                 guard let z = try parseFloatX() else { return nil }
-                let f = (x, y, z)
-                return f
+                let result = (x, y, z)
+                return result
         }
 
         @MainActor
@@ -276,16 +276,16 @@ extension Parser {
         }
 
         private func parseVector() throws -> Vector {
-                guard let f = try parseThreeFloatXs() else {
+                guard let floats = try parseThreeFloatXs() else {
                         try bail()
                 }
-                return Vector(xyz: f)
+                return Vector(xyz: floats)
         }
 
         private func parseVectors() throws -> [Vector] {
                 var vectors = [Vector]()
-                while let f = try parseThreeFloatXs() {
-                        let vector = Vector(xyz: f)
+                while let floats = try parseThreeFloatXs() {
+                        let vector = Vector(xyz: floats)
                         vectors.append(vector)
                 }
                 return vectors
@@ -472,8 +472,8 @@ extension Parser {
         @MainActor
         private func parseRotate() throws {
                 guard let angle = try parseFloatX() else { try bail() }
-                guard let f = try parseThreeFloatXs() else { try bail() }
-                let axis = Vector(xyz: f)
+                guard let floats = try parseThreeFloatXs() else { try bail() }
+                let axis = Vector(xyz: floats)
                 try api.rotate(by: FloatX(angle), around: axis)
         }
 
@@ -506,8 +506,8 @@ extension Parser {
 
         @MainActor
         private func parseTranslate() throws {
-                guard let f = try parseThreeFloatXs() else { try bail() }
-                let translation = Vector(xyz: f)
+                guard let floats = try parseThreeFloatXs() else { try bail() }
+                let translation = Vector(xyz: floats)
                 try api.translate(amount: translation)
         }
 
@@ -520,8 +520,8 @@ extension Parser {
 
         @MainActor
         private func parseScale() throws {
-                guard let f = try parseThreeFloatXs() else { try bail() }
-                try api.scale(x: f.0, y: f.1, z: f.2)
+                guard let floats = try parseThreeFloatXs() else { try bail() }
+                try api.scale(x: floats.0, y: floats.1, z: floats.2)
         }
 
         @MainActor

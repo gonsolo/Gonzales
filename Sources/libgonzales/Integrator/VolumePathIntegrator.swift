@@ -120,7 +120,9 @@ extension VolumePathIntegrator {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(
-                        outgoing: interaction.outgoing, incident: lightSample.direction, normal: interaction.shadingNormal)
+                        outgoing: interaction.outgoing,
+                        incident: lightSample.direction,
+                        normal: interaction.shadingNormal)
                 let estimate = scatter * lightSample.radiance
                 return BsdfSample(estimate, lightSample.direction, lightSample.pdf)
         }
@@ -219,8 +221,8 @@ extension VolumePathIntegrator {
                         outgoing: interaction.outgoing,
                         distributionModel: distributionModel,
                         sample: lightSample.incoming)
-                let lightWeight = powerHeuristic(f: lightSample.probabilityDensity, g: brdfDensity)
-                let a =
+                let lightWeight = powerHeuristic(pdfF: lightSample.probabilityDensity, pdfG: brdfDensity)
+                let lightContribution =
                         lightSample.probabilityDensity == 0
                         ? black : lightSample.estimate * lightWeight / lightSample.probabilityDensity
 
@@ -233,12 +235,12 @@ extension VolumePathIntegrator {
                         scene: scene,
                         samplingDirection: brdfSample.incoming,
                         from: interaction)
-                let brdfWeight = powerHeuristic(f: brdfSample.probabilityDensity, g: lightDensity)
-                let b =
+                let brdfWeight = powerHeuristic(pdfF: brdfSample.probabilityDensity, pdfG: lightDensity)
+                let brdfContribution =
                         brdfSample.probabilityDensity == 0
                         ? black : brdfSample.estimate * brdfWeight / brdfSample.probabilityDensity
 
-                return a + b
+                return lightContribution + brdfContribution
         }
 
         private func estimateDirect<I: Interaction, D: DistributionModel>(
@@ -420,7 +422,7 @@ extension VolumePathIntegrator {
                                 scene: scene)
                 estimate += lightEstimate
                 let (bsdfSample, _) = bsdf.sampleWorld(
-                        outgoing: surfaceInteraction.outgoing, u: sampler.get3D())
+                        outgoing: surfaceInteraction.outgoing, uSample: sampler.get3D())
                 guard
                         bsdfSample.probabilityDensity != 0
                                 && !bsdfSample.probabilityDensity.isNaN

@@ -20,8 +20,8 @@ struct OpenImageIOTexture {
         }
 
         private func getTextureCoordinates(at interaction: any Interaction) -> (s: FloatX, t: FloatX) {
-                var (_, s) = modf(interaction.uv.x)
-                var (_, t) = modf(interaction.uv.y)
+                var (_, s) = modf(interaction.uvCoordinates.x)
+                var (_, t) = modf(interaction.uvCoordinates.y)
                 if s < 0 {
                         s = 1 + s
                 }

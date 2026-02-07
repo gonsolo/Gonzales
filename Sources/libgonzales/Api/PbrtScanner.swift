@@ -34,7 +34,7 @@ final class PbrtScanner {
                 buffer.initialize(from: &bytes, count: bufferLength)
                 bufferIndex = 0
                 bytesRead = stream.read(buffer, maxLength: bufferLength)
-                c = 0
+                currentByte = 0
         }
 
         deinit {
@@ -44,23 +44,23 @@ final class PbrtScanner {
         func peekString(_ expected: String) -> String? {
                 skipWhitespace()
                 peekOne()
-                let s = ascii(c)
-                if s != expected {
+                let charString = ascii(currentByte)
+                if charString != expected {
                         return nil
                 } else {
-                        return s
+                        return charString
                 }
         }
 
         func scanString(_ expected: String) -> String? {
                 skipWhitespace()
                 peekOne()
-                let s = ascii(c)
-                if s != expected {
+                let charString = ascii(currentByte)
+                if charString != expected {
                         return nil
                 } else {
                         scanOne()
-                        return s
+                        return charString
                 }
         }
 
@@ -70,57 +70,57 @@ final class PbrtScanner {
 
         }
 
-        func scanInt(_ i: inout Int) -> Bool {
+        func scanInt(_ intValue: inout Int) -> Bool {
                 skipWhitespace()
                 peekOne()
                 var isNegative = false
-                if c == minus {
+                if currentByte == minusChar {
                         isNegative = true
                         scanOne()
                 }
                 peekOne()
-                if !isInteger(c) {
+                if !isInteger(currentByte) {
                         return false
                 }
-                i = 0
-                while isInteger(c) {
+                intValue = 0
+                while isInteger(currentByte) {
                         scanOne()
-                        i = 10 * i + (Int(c) - 48)
+                        intValue = 10 * intValue + (Int(currentByte) - 48)
                         peekOne()
                 }
                 if isNegative {
-                        i = -i
+                        intValue = -intValue
                 }
                 return true
         }
 
         func scanFloat(_ float: inout Float) throws -> Bool {
-                var i = 0
+                var intPart = 0
                 // scanInt scans -0 as 0 so we have to remember whether we are negative
                 skipWhitespace()
                 peekOne()
                 var isNegative = false
-                if c == minus {
+                if currentByte == minusChar {
                         isNegative = true
                 }
 
-                var f = 0.0
+                var doubleValue = 0.0
                 var intSeen = false
-                if scanInt(&i) {
-                        f = Double(i)
+                if scanInt(&intPart) {
+                        doubleValue = Double(intPart)
                         intSeen = true
                 }
                 peekOne()
-                if c == dot {
+                if currentByte == dotChar {
                         scanOne()
                         var tenth = 0.1
                         peekOne()
-                        while isInteger(c) {
+                        while isInteger(currentByte) {
                                 scanOne()
-                                if f < 0 {
-                                        f -= tenth * Double(c - 48)
+                                if doubleValue < 0 {
+                                        doubleValue -= tenth * Double(currentByte - 48)
                                 } else {
-                                        f += tenth * Double(c - 48)
+                                        doubleValue += tenth * Double(currentByte - 48)
                                 }
                                 tenth *= 0.1
                                 peekOne()
@@ -133,17 +133,17 @@ final class PbrtScanner {
                 }
                 peekOne()
                 var exponent = 0
-                if c == e {
+                if currentByte == eChar {
                         scanOne()
                         if !scanInt(&exponent) {
                                 exponent = 0
                         }
-                        f *= pow(Double(10), Double(exponent))
+                        doubleValue *= pow(Double(10), Double(exponent))
                 }
 
-                float = FloatX(f)
+                float = FloatX(doubleValue)
 
-                if isNegative && i == 0 {
+                if isNegative && intPart == 0 {
                         float = -float
                 }
                 return true
@@ -154,34 +154,34 @@ final class PbrtScanner {
                 skipWhitespace()
                 while true {
                         peekOne()
-                        if c == eof {
+                        if currentByte == eofChar {
                                 isAtEnd = true
                                 return nil
                         }
-                        let s = ascii(c)
-                        if list.contains(s) {
+                        let charString = ascii(currentByte)
+                        if list.contains(charString) {
                                 break
                         }
-                        string.append(s)
+                        string.append(charString)
                         scanOne()
                 }
                 return string
         }
 
-        private func ascii(_ x: UInt8) -> String {
-                return ascii(Int32(x))
+        private func ascii(_ byte: UInt8) -> String {
+                return ascii(Int32(byte))
         }
 
-        private func ascii(_ x: Int32) -> String {
-                switch x {
+        private func ascii(_ charCode: Int32) -> String {
+                switch charCode {
                 case EOF: return "EOF"
                 case 0: return "EOF"
                 case 9: return "\t"
                 case 10: return "\n"
                 case 13: return "\r"
                 default:
-                        guard let scalar = UnicodeScalar(Int(x)) else {
-                                print(#function, "Unknown: ", x)
+                        guard let scalar = UnicodeScalar(Int(charCode)) else {
+                                print(#function, "Unknown: ", charCode)
                                 exit(0)
                         }
                         return String(scalar)
@@ -192,15 +192,15 @@ final class PbrtScanner {
                 if bytesRead == 0 {
                         return
                 }
-                c = buffer[bufferIndex]
+                currentByte = buffer[bufferIndex]
         }
 
         private func scanOne() {
                 if bytesRead == 0 {
-                        c = eof
+                        currentByte = eofChar
                         return
                 }
-                c = buffer[bufferIndex]
+                currentByte = buffer[bufferIndex]
                 bufferIndex += 1
                 scanLocation += 1
                 if bufferIndex == bytesRead {
@@ -209,19 +209,19 @@ final class PbrtScanner {
                 }
         }
 
-        private func isInteger(_ c: UInt8) -> Bool {
-                if c >= 48 && c <= 57 {
+        private func isInteger(_ byte: UInt8) -> Bool {
+                if byte >= 48 && byte <= 57 {
                         return true
                 } else {
                         return false
                 }
         }
 
-        private func isWhitespace(_ c: UInt8) -> Bool {
-                switch c {
-                case htab: return true
-                case newline: return true
-                case space: return true
+        private func isWhitespace(_ byte: UInt8) -> Bool {
+                switch byte {
+                case htabChar: return true
+                case newlineChar: return true
+                case spaceChar: return true
                 default: return false
                 }
         }
@@ -229,20 +229,20 @@ final class PbrtScanner {
         private func skipWhitespace() {
                 while true {
                         peekOne()
-                        if !isWhitespace(c) {
+                        if !isWhitespace(currentByte) {
                                 return
                         }
                         scanOne()
                 }
         }
 
-        let eof: UInt8 = 0
-        let htab: UInt8 = 9
-        let newline: UInt8 = 10
-        let space: UInt8 = 32
-        let minus: UInt8 = 45
-        let dot: UInt8 = 46
-        let e: UInt8 = 101
+        let eofChar: UInt8 = 0
+        let htabChar: UInt8 = 9
+        let newlineChar: UInt8 = 10
+        let spaceChar: UInt8 = 32
+        let minusChar: UInt8 = 45
+        let dotChar: UInt8 = 46
+        let eChar: UInt8 = 101
 
         var scanLocation = 0
         var isAtEnd = false
@@ -251,5 +251,5 @@ final class PbrtScanner {
         let bufferLength = 64 * 1024
         var bufferIndex: Int
         var stream: InputStream
-        var c: UInt8
+        var currentByte: UInt8
 }

@@ -11,7 +11,7 @@ public protocol MicrofacetDistribution: Sendable {
 
         func lambda(_ vector: Vector) -> FloatX
 
-        func sampleHalfVector(outgoing: Vector, u: TwoRandomVariables) -> Vector
+        func sampleHalfVector(outgoing: Vector, uSample: TwoRandomVariables) -> Vector
 
         // G1 in PBRT
         func maskingShadowing(_ vector: Vector) -> FloatX

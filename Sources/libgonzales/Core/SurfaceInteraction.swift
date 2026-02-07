@@ -13,7 +13,7 @@ struct SurfaceInteraction: Interaction, Sendable {
         var shadingNormal = Normal()
         var outgoing = Vector()
         var dpdu = Vector()
-        var uv = Point2f()
+        var uvCoordinates = Point2f()
         var faceIndex = 0
         var areaLight: AreaLight?
         var materialIndex: MaterialIndex = 0
@@ -24,8 +24,9 @@ extension SurfaceInteraction: CustomStringConvertible {
         var description: String {
                 return
                         "[" + "valid: \(valid) " + "pos: \(position) " + "n: \(normal) "
-                        + "shadingNormal: \(shadingNormal) " + "outgoing: \(outgoing) " + "dpdu: \(dpdu) " + "uv: \(uv) "
-                        + "faceIndex: \(faceIndex) " + "areaLight: \(areaLight as Optional) "
+                        + "shadingNormal: \(shadingNormal) " + "outgoing: \(outgoing) " + "dpdu: \(dpdu) "
+                        + "uvCoordinates: \(uvCoordinates) " + "faceIndex: \(faceIndex) "
+                        + "areaLight: \(areaLight as Optional) "
                         + "materialIndex: \(materialIndex) "  // + "mediumInterface: \(mediumInterface as Optional) "
                         + "]"
         }
@@ -35,9 +36,9 @@ extension SurfaceInteraction: Equatable {
         static func == (lhs: SurfaceInteraction, rhs: SurfaceInteraction) -> Bool {
                 return
                         lhs.valid == rhs.valid && lhs.position == rhs.position && lhs.normal == rhs.normal
-                        && lhs.shadingNormal == rhs.shadingNormal && lhs.outgoing == rhs.outgoing && lhs.dpdu == rhs.dpdu
-                        && lhs.uv == rhs.uv && lhs.faceIndex == rhs.faceIndex
-                        && lhs.areaLight == rhs.areaLight  // &&
+                        && lhs.shadingNormal == rhs.shadingNormal && lhs.outgoing == rhs.outgoing
+                        && lhs.dpdu == rhs.dpdu && lhs.uvCoordinates == rhs.uvCoordinates
+                        && lhs.faceIndex == rhs.faceIndex && lhs.areaLight == rhs.areaLight
                 // lhs.material == rhs.material &&
                 // lhs.mediumInterface == rhs.mediumInterface &&
                 // lhs.bsdf == rhs.bsdf

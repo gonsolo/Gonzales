@@ -24,24 +24,24 @@ private func lerp(with t: FloatX, between first: Point, and second: Point) -> Po
         return (1.0 - t) * first + t * second
 }
 
-func blossomBezier(points: FourPoints, u: ThreeFloats) -> Point {
-        var a: ThreePoints
-        a.0 = lerp(with: u.0, between: points.0, and: points.1)
-        a.1 = lerp(with: u.0, between: points.1, and: points.2)
-        a.2 = lerp(with: u.0, between: points.2, and: points.3)
-        var b: TwoPoints
-        b.0 = lerp(with: u.1, between: a.0, and: a.1)
-        b.1 = lerp(with: u.1, between: a.1, and: a.2)
-        return lerp(with: u.2, between: b.0, and: b.1)
+func blossomBezier(points: FourPoints, uSamples: ThreeFloats) -> Point {
+        var aPoints: ThreePoints
+        aPoints.0 = lerp(with: uSamples.0, between: points.0, and: points.1)
+        aPoints.1 = lerp(with: uSamples.0, between: points.1, and: points.2)
+        aPoints.2 = lerp(with: uSamples.0, between: points.2, and: points.3)
+        var bPoints: TwoPoints
+        bPoints.0 = lerp(with: uSamples.1, between: aPoints.0, and: aPoints.1)
+        bPoints.1 = lerp(with: uSamples.1, between: aPoints.1, and: aPoints.2)
+        return lerp(with: uSamples.2, between: bPoints.0, and: bPoints.1)
 }
 
-func blossomBezier(points: FourPoints, u: TwoFloats) -> FourPoints {
-        var p: FourPoints
-        p.0 = blossomBezier(points: points, u: (u.0, u.0, u.0))
-        p.1 = blossomBezier(points: points, u: (u.0, u.0, u.1))
-        p.2 = blossomBezier(points: points, u: (u.0, u.1, u.1))
-        p.3 = blossomBezier(points: points, u: (u.1, u.1, u.1))
-        return p
+func blossomBezier(points: FourPoints, uSamples: TwoFloats) -> FourPoints {
+        var pPoints: FourPoints
+        pPoints.0 = blossomBezier(points: points, uSamples: (uSamples.0, uSamples.0, uSamples.0))
+        pPoints.1 = blossomBezier(points: points, uSamples: (uSamples.0, uSamples.0, uSamples.1))
+        pPoints.2 = blossomBezier(points: points, uSamples: (uSamples.0, uSamples.1, uSamples.1))
+        pPoints.3 = blossomBezier(points: points, uSamples: (uSamples.1, uSamples.1, uSamples.1))
+        return pPoints
 }
 
 extension Point2 where T == FloatX {
@@ -61,9 +61,9 @@ extension Vector2 where T == FloatX {
 struct Curve: Shape {
 
         @MainActor
-        init(objectToWorld: Transform, common: CurveCommon, u: TwoFloats) {
+        init(objectToWorld: Transform, common: CurveCommon, uRange: TwoFloats) {
                 self.common = common
-                self.u = u
+                self.uRange = uRange
                 self.objectToWorld = objectToWorld
                 numberOfCurves += 1
         }
@@ -73,11 +73,11 @@ struct Curve: Shape {
         }
 
         func objectBound(scene _: Scene) -> Bounds3f {
-                let points = blossomBezier(points: common.points, u: u)
+                let points = blossomBezier(points: common.points, uSamples: uRange)
                 let bounds = union(
                         first: Bounds3f(first: points.0, second: points.1),
                         second: Bounds3f(first: points.2, second: points.3))
-                let maxWidth = computeMaxWidth(u: u, width: common.width)
+                let maxWidth = computeMaxWidth(uRange: uRange, width: common.width)
                 let expanded = expand(bounds: bounds, by: maxWidth * 0.5)
                 return expanded
         }
@@ -95,27 +95,27 @@ struct Curve: Shape {
                 return splitPoints
         }
 
-        func evalBezier(points: [Point], u: FloatX) -> (Point, Vector) {
-                let p = (points[0], points[1], points[2], points[3])
-                return evalBezier(points: p, u: u)
+        func evalBezier(points: [Point], uSample: FloatX) -> (Point, Vector) {
+                let pPoints = (points[0], points[1], points[2], points[3])
+                return evalBezier(points: pPoints, uSample: uSample)
         }
 
-        func evalBezier(points: FourPoints, u: FloatX) -> (Point, Vector) {
+        func evalBezier(points: FourPoints, uSample: FloatX) -> (Point, Vector) {
                 let cp1 = ThreePoints(
-                        lerp(with: u, between: points.0, and: points.1),
-                        lerp(with: u, between: points.1, and: points.2),
-                        lerp(with: u, between: points.2, and: points.3))
+                        lerp(with: uSample, between: points.0, and: points.1),
+                        lerp(with: uSample, between: points.1, and: points.2),
+                        lerp(with: uSample, between: points.2, and: points.3))
                 let cp2 = TwoPoints(
-                        lerp(with: u, between: cp1.0, and: cp1.1),
-                        lerp(with: u, between: cp1.1, and: cp1.2))
+                        lerp(with: uSample, between: cp1.0, and: cp1.1),
+                        lerp(with: uSample, between: cp1.1, and: cp1.2))
                 var derivative: Vector
-                let d: Vector = cp2.1 - cp2.0
-                if lengthSquared(d) > 0 {
-                        derivative = 3 * d
+                let directionVector: Vector = cp2.1 - cp2.0
+                if lengthSquared(directionVector) > 0 {
+                        derivative = 3 * directionVector
                 } else {
                         derivative = points.3 - points.0
                 }
-                let point = lerp(with: u, between: cp2.0, and: cp2.1)
+                let point = lerp(with: uSample, between: cp2.0, and: cp2.1)
                 return (point, derivative)
         }
 
@@ -126,7 +126,7 @@ struct Curve: Shape {
                 points: [Point],
                 index _: Int = 0,
                 rayToObject: Transform,
-                u: TwoFloats,
+                uRange: TwoFloats,
                 depth: Int
         ) throws -> (SurfaceInteraction, FloatX) {
 
@@ -135,7 +135,7 @@ struct Curve: Shape {
                 let rayLength = length(ray.direction)
                 if depth > 0 {
                         let splitPoints = subdivideBezier(points: points)
-                        let u = [u.0, (u.0 + u.1) / 2, u.1]
+                        let uSamples = [uRange.0, (uRange.0 + uRange.1) / 2, uRange.1]
                         typealias InteractionAndT = (SurfaceInteraction, FloatX)
                         var hits: [InteractionAndT] = [
                                 (SurfaceInteraction(), 0),
@@ -145,7 +145,7 @@ struct Curve: Shape {
                         for segment in 0..<2 {
                                 let cps = segment * 3
                                 let maxWidth = computeMaxWidth(
-                                        u: (u[segment], u[segment + 1]), width: common.width)
+                                        uRange: (uSamples[segment], uSamples[segment + 1]), width: common.width)
                                 if !overlap(
                                         points: splitPoints, index: cps, xyz: 1, width: maxWidth)
                                 {
@@ -169,7 +169,7 @@ struct Curve: Shape {
                                         points: splitPoints,
                                         index: cps,
                                         rayToObject: rayToObject,
-                                        u: (u[segment], u[segment + 1]),
+                                        uRange: (uSamples[segment], uSamples[segment + 1]),
                                         depth: depth - 1)
                                 // if hit && !tHit: shadowRays not applicable here
                         }
@@ -187,10 +187,10 @@ struct Curve: Shape {
                                 return nothing
                         }
                 } else {
-                        func testTangent(_ a: Int, _ b: Int) -> Bool {
+                        func testTangent(_ indexA: Int, _ indexB: Int) -> Bool {
                                 let edge =
-                                        (points[a].y - points[b].y) * -points[b].y + points[b].x
-                                        * (points[b].x - points[a].x)
+                                        (points[indexA].y - points[indexB].y) * -points[indexB].y + points[indexB].x
+                                        * (points[indexB].x - points[indexA].x)
                                 if edge < 0 {
                                         return false
                                 } else {
@@ -203,42 +203,43 @@ struct Curve: Shape {
                         let segmentDirection: Vector2 = Point2f(points[3]) - Point2f(points[0])
                         let denominator = lengthSquared(segmentDirection)
                         if denominator == 0 { return nothing }
-                        let w = dot(-Vector2F(points[0]), segmentDirection) / denominator
+                        let wCoord = dot(-Vector2F(points[0]), segmentDirection) / denominator
                         let curveU = clamp(
-                                value: lerp(with: w, between: u.0, and: u.1), low: u.0, high: u.1)
+                                value: lerp(with: wCoord, between: uRange.0, and: uRange.1),
+                                low: uRange.0, high: uRange.1)
                         let hitWidth = lerp(with: curveU, between: common.width.0, and: common.width.1)
                         let (pointOnCurve, dpcdw) = evalBezier(
-                                points: points, u: clamp(value: w, low: 0, high: 1))
+                                points: points, uSample: clamp(value: wCoord, low: 0, high: 1))
                         let ptCurveDist2 = pointOnCurve.x * pointOnCurve.x + pointOnCurve.y * pointOnCurve.y
                         if ptCurveDist2 > hitWidth * hitWidth * 0.25 { return nothing }
                         let zMax = rayLength * tHit
                         if pointOnCurve.z < 0 || pointOnCurve.z > zMax { return nothing }
                         let ptCurveDist = sqrt(ptCurveDist2)
                         let edgeFunc = dpcdw.x * -pointOnCurve.y + pointOnCurve.x * dpcdw.y
-                        var v: FloatX
+                        var vCoord: FloatX
                         if edgeFunc > 0 {
-                                v = 0.5 + ptCurveDist / hitWidth
+                                vCoord = 0.5 + ptCurveDist / hitWidth
                         } else {
-                                v = 0.5 - ptCurveDist / hitWidth
+                                vCoord = 0.5 - ptCurveDist / hitWidth
                         }
                         // if tHit != nullptr
-                        let tHit = pointOnCurve.z / rayLength
+                        let tHitValue = pointOnCurve.z / rayLength
                         // let pError = Vector(x: 2 * hitWidth, y: 2 * hitWidth, z: 2 * hitWidth)
-                        let (_, dpdu) = evalBezier(points: common.points, u: curveU)
+                        let (_, dpdu) = evalBezier(points: common.points, uSample: curveU)
                         let dpduPlane = rayToObject.inverse * dpdu
                         let dpdvPlane =
                                 normalized(Vector(x: -dpduPlane.y, y: dpduPlane.x, z: 0)) * hitWidth
                         let dpdv = rayToObject * dpdvPlane
                         let normal = Normal(normalized(cross(dpdu, dpdv)))
-                        let uvHit = Point2f(x: curveU, y: v)
-                        let pHit = ray.getPointFor(parameter: tHit)
+                        let uvHit = Point2f(x: curveU, y: vCoord)
+                        let pHit = ray.getPointFor(parameter: tHitValue)
                         let localInteraction = SurfaceInteraction(
                                 position: pHit,
                                 normal: normal,
                                 shadingNormal: normal,
                                 outgoing: -ray.direction,
                                 dpdu: dpdu,
-                                uv: uvHit,
+                                uvCoordinates: uvHit,
                                 faceIndex: 0)
                         let worldInteraction = objectToWorld * localInteraction
                         let validWorldInteraction = SurfaceInteraction(
@@ -248,23 +249,23 @@ struct Curve: Shape {
                                 shadingNormal: worldInteraction.shadingNormal,
                                 outgoing: worldInteraction.outgoing,
                                 dpdu: worldInteraction.dpdu,
-                                uv: worldInteraction.uv,
+                                uvCoordinates: worldInteraction.uvCoordinates,
                                 faceIndex: worldInteraction.faceIndex,
                                 materialIndex: worldInteraction.materialIndex)
                         return (validWorldInteraction, tHit)
                 }
         }
 
-        private func computeMaxWidth(u: TwoFloats, width: TwoFloats) -> FloatX {
-                let width = computeWidth(u: u, width: width)
+        private func computeMaxWidth(uRange: TwoFloats, width: TwoFloats) -> FloatX {
+                let width = computeWidth(uRange: uRange, width: width)
                 let result = max(width.0, width.1)
                 return result
         }
 
-        private func computeWidth(u: TwoFloats, width: TwoFloats) -> (FloatX, FloatX) {
+        private func computeWidth(uRange: TwoFloats, width: TwoFloats) -> (FloatX, FloatX) {
                 let result = (
-                        lerp(with: u.0, between: width.0, and: width.1),
-                        lerp(with: u.1, between: width.0, and: width.1)
+                        lerp(with: uRange.0, between: width.0, and: width.1),
+                        lerp(with: uRange.1, between: width.0, and: width.1)
                 )
                 return result
         }
@@ -376,7 +377,7 @@ struct Curve: Shape {
         }
 
         let common: CurveCommon
-        let u: TwoFloats
+        let uRange: TwoFloats
         let objectToWorld: Transform
 }
 
@@ -393,11 +394,11 @@ func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats)
         // Let's use 4 for the time being to save a little bit of memory.
         let numberOfSegments = 4
         var segments = [ShapeType]()
-        for i in 0..<numberOfSegments {
-                let n = FloatX(numberOfSegments)
-                let uMin = FloatX(i) / n
-                let uMax = (FloatX(i) + 1) / n
-                let curve = Curve(objectToWorld: objectToWorld, common: common, u: (uMin, uMax))
+        for index in 0..<numberOfSegments {
+                let numSegments = FloatX(numberOfSegments)
+                let uMin = FloatX(index) / numSegments
+                let uMax = (FloatX(index) + 1) / numSegments
+                let curve = Curve(objectToWorld: objectToWorld, common: common, uRange: (uMin, uMax))
                 let shape = ShapeType.curve(curve)
                 segments.append(shape)
         }

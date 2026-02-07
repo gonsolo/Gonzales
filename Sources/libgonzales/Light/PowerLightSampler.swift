@@ -41,8 +41,8 @@ struct PowerLightSampler: Sendable {
                 var cumulativePowers = [FloatX]()
                 totalPower = await lights.asyncReduce(
                         0, { total, light in total + light.power(scene: scene) })
-                for (i, light) in lights.enumerated() {
-                        if i == 0 {
+                for (index, light) in lights.enumerated() {
+                        if index == 0 {
                                 cumulativePowers.append(light.power(scene: scene))
                         } else {
                                 cumulativePowers.append(cumulativePowers.last! + light.power(scene: scene))
@@ -54,10 +54,10 @@ struct PowerLightSampler: Sendable {
 
         mutating func chooseLight(scene: Scene) -> (Light, FloatX) {
                 assert(lights.count > 0)
-                let u = sampler.get1D()
-                let powerIndex = u * totalPower
-                let (i, _) = lowerBound(cumulativePowers, key: powerIndex)
-                let light = lights[i]
+                let uSample = sampler.get1D()
+                let powerIndex = uSample * totalPower
+                let (index, _) = lowerBound(cumulativePowers, key: powerIndex)
+                let light = lights[index]
                 let probabilityDensity = light.power(scene: scene) / totalPower
                 return (light, probabilityDensity)
         }

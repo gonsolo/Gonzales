@@ -40,22 +40,22 @@ enum GlobalBsdfType: GlobalBsdf {
                 }
         }
 
-        func sampleWorld(outgoing outgoingWorld: Vector, u: ThreeRandomVariables)
+        func sampleWorld(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 switch self {
                 case .coatedDiffuseBsdf(let bsdf):
-                        return bsdf.sampleWorld(outgoing: outgoingWorld, u: u)
+                        return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)
                 case .dielectricBsdf(let bsdf):
-                        return bsdf.sampleWorld(outgoing: outgoingWorld, u: u)
+                        return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)
                 case .diffuseBsdf(let bsdf):
-                        return bsdf.sampleWorld(outgoing: outgoingWorld, u: u)
+                        return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)
                 case .dummyBsdf(let bsdf):
-                        return bsdf.sampleWorld(outgoing: outgoingWorld, u: u)
+                        return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)
                 case .hairBsdf(let bsdf):
-                        return bsdf.sampleWorld(outgoing: outgoingWorld, u: u)
+                        return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)
                 case .microfacetReflection(let bsdf):
-                        return bsdf.sampleWorld(outgoing: outgoingWorld, u: u)
+                        return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)
                 }
         }
 

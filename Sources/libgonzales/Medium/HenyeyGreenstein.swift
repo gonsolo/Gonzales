@@ -1,27 +1,29 @@
 final class HenyeyGreenstein: PhaseFunction {
 
-        init(g: FloatX = 0) {
-                self.g = g
+        init(geometricTerm: FloatX = 0) {
+                self.geometricTerm = geometricTerm
         }
 
         private let inv4Pi: FloatX = 1.0 / (4.0 * FloatX.pi)
 
-        func phase(cosTheta: FloatX, g: FloatX) -> FloatX {
-                let denom = 1 + g * g + 2 * g * cosTheta
-                return inv4Pi * (1 - g * g) / (denom * (denom).squareRoot())
+        func phase(cosTheta: FloatX, geometricTerm: FloatX) -> FloatX {
+                let denom = 1 + geometricTerm * geometricTerm + 2 * geometricTerm * cosTheta
+                return inv4Pi * (1 - geometricTerm * geometricTerm) / (denom * (denom).squareRoot())
         }
 
         func samplePhase(outgoing: Vector, sampler: inout Sampler) -> (value: FloatX, incident: Vector) {
-                let u = sampler.get2D()
+                let uSample = sampler.get2D()
                 var cosTheta: FloatX
-                if abs(g) < 1e-3 {
-                        cosTheta = 1 - 2 * u.0
+                if abs(geometricTerm) < 1e-3 {
+                        cosTheta = 1 - 2 * uSample.0
                 } else {
-                        let sqrTerm = (1 - g * g) / (1 + g - 2 * g * u.0)
-                        cosTheta = -(1 + g * g - sqrTerm * sqrTerm) / (2 * g)
+                        let sqrTerm = (1 - geometricTerm * geometricTerm)
+                                / (1 + geometricTerm - 2 * geometricTerm * uSample.0)
+                        cosTheta = -(1 + geometricTerm * geometricTerm - sqrTerm * sqrTerm)
+                                / (2 * geometricTerm)
                 }
                 let sinTheta = (max(0.0, 1 - cosTheta * cosTheta)).squareRoot()
-                let phi = 2 * FloatX.pi * u.1
+                let phi = 2 * FloatX.pi * uSample.1
                 let (vector1, vector2) = makeCoordinateSystem(from: outgoing)
                 let incident = sphericalDirection(
                         sinTheta: sinTheta,
@@ -31,13 +33,13 @@ final class HenyeyGreenstein: PhaseFunction {
                         y: vector2,
                         z: outgoing)
 
-                let value = phase(cosTheta: cosTheta, g: g)
+                let value = phase(cosTheta: cosTheta, geometricTerm: geometricTerm)
                 return (value, incident)
         }
 
         func evaluate(outgoing: Vector, incident: Vector) -> FloatX {
-                return phase(cosTheta: dot(outgoing, incident), g: g)
+                return phase(cosTheta: dot(outgoing, incident), geometricTerm: geometricTerm)
         }
 
-        let g: FloatX
+        let geometricTerm: FloatX
 }

@@ -9,9 +9,9 @@ struct Checkerboard {
                 guard let textureOdd = textures.1.evaluate(at: interaction) as? RgbSpectrum else {
                         return black
                 }
-                let u = Int(floor(interaction.uv[0] * scale.0))
-                let v = Int(floor(interaction.uv[1] * scale.1))
-                if (u + v) % 2 == 0 {
+                let uIndex = Int(floor(interaction.uvCoordinates[0] * scale.0))
+                let vIndex = Int(floor(interaction.uvCoordinates[1] * scale.1))
+                if (uIndex + vIndex) % 2 == 0 {
                         return textureEven
                 } else {
                         return textureOdd

@@ -72,8 +72,8 @@ enum TriangleError: Error {
 
 extension Array {
 
-        subscript<Index: BinaryInteger>(i: Index) -> Element {
-                return self[Int(i)]
+        subscript<Index: BinaryInteger>(index: Index) -> Element {
+                return self[Int(index)]
         }
 }
 
@@ -143,19 +143,19 @@ var triangleMeshBuilder = TriangleMeshBuilder()
 struct TriangleIntersection {
         init() {
                 primId = PrimId()
-                t = FloatX.greatestFiniteMagnitude
+                tValue = FloatX.greatestFiniteMagnitude
         }
 
-        init(primId: PrimId, t: FloatX) {
+        init(primId: PrimId, tValue: FloatX) {
                 self.primId = primId
-                self.t = t
+                self.tValue = tValue
         }
         let primId: PrimId
-        let t: FloatX
+        let tValue: FloatX
 }
 
 struct TriangleIntersectionFull {
-        let t: FloatX
+        let tValue: FloatX
         let barycentric0: FloatX
         let barycentric1: FloatX
         let barycentric2: FloatX
@@ -166,7 +166,7 @@ struct TriangleIntersectionFull {
 
 struct Triangle: Shape {
         let meshIndex: Int
-        let idx: Int
+        let triangleIndex: Int
 
         init(
                 meshIndex: Int,
@@ -174,14 +174,14 @@ struct Triangle: Shape {
                 triangleMeshes: TriangleMeshes
         ) throws {
                 self.meshIndex = meshIndex
-                self.idx = 3 * number
+                self.triangleIndex = 3 * number
 
                 let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 guard
-                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 0) < pointCount
-                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
+                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 0) < pointCount
+                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 1)
                                         < pointCount
-                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
+                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 2)
                                         < pointCount
                 else {
                         throw TriangleError.index
@@ -211,15 +211,15 @@ extension Triangle {
         }
 
         func getVertexIndex0(scene: Scene) -> Int {
-                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: idx + 0)
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 0)
         }
 
         func getVertexIndex1(scene: Scene) -> Int {
-                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: idx + 1)
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 1)
         }
 
         func getVertexIndex2(scene: Scene) -> Int {
-                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: idx + 2)
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 2)
         }
 
         func getPoint0(scene: Scene) -> Point {
@@ -248,11 +248,11 @@ extension Triangle {
 
         func computeUVHit(
                 barycentric0: FloatX, barycentric1: FloatX, barycentric2: FloatX,
-                uv: (Vector2F, Vector2F, Vector2F)
+                uvCoordinates: (Vector2F, Vector2F, Vector2F)
         ) -> Point2f {
-                let uvHit0: Point2f = barycentric0 * Point2f(from: uv.0)
-                let uvHit1: Point2f = barycentric1 * Point2f(from: uv.1)
-                let uvHit2: Point2f = barycentric2 * Point2f(from: uv.2)
+                let uvHit0: Point2f = barycentric0 * Point2f(from: uvCoordinates.0)
+                let uvHit1: Point2f = barycentric1 * Point2f(from: uvCoordinates.1)
+                let uvHit2: Point2f = barycentric2 * Point2f(from: uvCoordinates.2)
                 let uvHit: Point2f = uvHit0 + uvHit1 + uvHit2
                 return uvHit
         }
@@ -275,14 +275,14 @@ extension Triangle {
                 let axisZ = maxDimension(abs(ray.direction))
                 let axisX = (axisZ + 1) % 3
                 let axisY = (axisX + 1) % 3
-                let d: Vector = permute(vector: ray.direction, x: axisX, y: axisY, z: axisZ)
+                let directionVector: Vector = permute(vector: ray.direction, x: axisX, y: axisY, z: axisZ)
                 p0t = permute(point: p0t, x: axisX, y: axisY, z: axisZ)
                 p1t = permute(point: p1t, x: axisX, y: axisY, z: axisZ)
                 p2t = permute(point: p2t, x: axisX, y: axisY, z: axisZ)
 
-                let shearX: FloatX = -d.x / d.z
-                let shearY: FloatX = -d.y / d.z
-                let shearZ: FloatX = 1.0 / d.z
+                let shearX: FloatX = -directionVector.x / directionVector.z
+                let shearY: FloatX = -directionVector.y / directionVector.z
+                let shearZ: FloatX = 1.0 / directionVector.z
 
                 // Shearing transformation
                 p0t.x += shearX * p0t.z
@@ -327,16 +327,16 @@ extension Triangle {
                 let barycentric0: FloatX = edge0 * invDet
                 let barycentric1: FloatX = edge1 * invDet
                 let barycentric2: FloatX = edge2 * invDet
-                let t: FloatX = tScaled * invDet
+                let tValue: FloatX = tScaled * invDet
 
-                tHit = t  // Update closest hit distance
+                tHit = tValue  // Update closest hit distance
 
                 // Calculate necessary geometric data
                 let dp02 = Vector(point: getPoint0(scene: scene) - getPoint2(scene: scene))
                 let dp12 = Vector(point: getPoint1(scene: scene) - getPoint2(scene: scene))
 
                 return TriangleIntersectionFull(
-                        t: t,
+                        tValue: tValue,
                         barycentric0: barycentric0,
                         barycentric1: barycentric1,
                         barycentric2: barycentric2,
@@ -365,14 +365,14 @@ extension Triangle {
                 let axisZ = maxDimension(abs(ray.direction))
                 let axisX = (axisZ + 1) % 3
                 let axisY = (axisX + 1) % 3
-                let d: Vector = permute(vector: ray.direction, x: axisX, y: axisY, z: axisZ)
+                let directionVector: Vector = permute(vector: ray.direction, x: axisX, y: axisY, z: axisZ)
                 p0t = permute(point: p0t, x: axisX, y: axisY, z: axisZ)
                 p1t = permute(point: p1t, x: axisX, y: axisY, z: axisZ)
                 p2t = permute(point: p2t, x: axisX, y: axisY, z: axisZ)
 
-                let shearX: FloatX = -d.x / d.z
-                let shearY: FloatX = -d.y / d.z
-                let shearZ: FloatX = 1.0 / d.z
+                let shearX: FloatX = -directionVector.x / directionVector.z
+                let shearY: FloatX = -directionVector.y / directionVector.z
+                let shearZ: FloatX = 1.0 / directionVector.z
 
                 // Shearing transformation
                 p0t.x += shearX * p0t.z
@@ -417,17 +417,17 @@ extension Triangle {
                 // let barycentric0: FloatX = edge0 * invDet
                 // let barycentric1: FloatX = edge1 * invDet
                 // let barycentric2: FloatX = edge2 * invDet
-                let t: FloatX = tScaled * invDet
+                let tValue: FloatX = tScaled * invDet
 
-                tHit = t  // Update closest hit distance
+                tHit = tValue  // Update closest hit distance
 
                 // Calculate necessary geometric data
                 // let dp02 = Vector(point: point0 - point2)
                 // let dp12 = Vector(point: point1 - point2)
 
                 data = TriangleIntersection(
-                        primId: PrimId(id1: meshIndex, id2: idx, type: .triangle),
-                        t: t,
+                        primId: PrimId(id1: meshIndex, id2: triangleIndex, type: .triangle),
+                        tValue: tValue,
                 )
                 return true
         }
@@ -447,39 +447,39 @@ extension Triangle {
                 worldRay: Ray,
                 interaction: inout SurfaceInteraction
         ) {
-                var varT = data.t
-                var data: TriangleIntersectionFull?
+                var varT = data.tValue
+                var dataValue: TriangleIntersectionFull?
                 do {
-                        data = try getIntersectionDataFull(scene: scene, ray: worldRay, tHit: &varT)
+                        dataValue = try getIntersectionDataFull(scene: scene, ray: worldRay, tHit: &varT)
                 } catch {
                         fatalError("getIntersectionDataFull in computeSurfaceInteraction!")
                 }
-                guard let data = data else {
+                guard let dataValue = dataValue else {
                         return
                 }
                 // --- Calculate Hit Point (pHit) ---
-                let hit0: Point = data.barycentric0 * getPoint0(scene: scene)
-                let hit1: Point = data.barycentric1 * getPoint1(scene: scene)
-                let hit2: Point = data.barycentric2 * getPoint2(scene: scene)
-                let pHit: Point = hit0 + hit1 + hit2
+                let hit0: Point = dataValue.barycentric0 * getPoint0(scene: scene)
+                let hit1: Point = dataValue.barycentric1 * getPoint1(scene: scene)
+                let hit2: Point = dataValue.barycentric2 * getPoint2(scene: scene)
+                let pHitValue: Point = hit0 + hit1 + hit2
 
                 // --- Geometric Normal ---
-                let normal = normalized(Normal(cross(data.dp02, data.dp12)))
+                let normal = normalized(Normal(cross(dataValue.dp02, dataValue.dp12)))
 
                 // --- UVs, Tangent Space (dpdu/dpdv), and Shading Normal ---
 
-                let uv = getTriangleMeshes(scene: scene).getUVFor(
+                let uvCoordinates = getTriangleMeshes(scene: scene).getUVFor(
                         meshIndex: meshIndex,
                         indices: (
                                 getVertexIndex0(scene: scene), getVertexIndex1(scene: scene),
                                 getVertexIndex2(scene: scene)
                         ))
                 let uvHit = computeUVHit(
-                        barycentric0: data.barycentric0, barycentric1: data.barycentric1,
-                        barycentric2: data.barycentric2, uv: uv)
+                        barycentric0: dataValue.barycentric0, barycentric1: dataValue.barycentric1,
+                        barycentric2: dataValue.barycentric2, uvCoordinates: uvCoordinates)
 
-                let duv02: Vector2F = uv.0 - uv.2
-                let duv12: Vector2F = uv.1 - uv.2
+                let duv02: Vector2F = uvCoordinates.0 - uvCoordinates.2
+                let duv12: Vector2F = uvCoordinates.1 - uvCoordinates.2
                 let determinantUV: FloatX = duv02[0] * duv12[1] - duv02[1] * duv12[0]
                 let degenerateUV: Bool = abs(determinantUV) < 1e-8
                 var dpdu = upVector  // Assuming 'upVector' is a predefined Vector (e.g., Vector(0,0,0) or local Y axis)
@@ -487,12 +487,12 @@ extension Triangle {
 
                 if !degenerateUV {
                         let invDeterminantUV = 1 / determinantUV
-                        let a: Vector = +duv12[1] * data.dp02
-                        let b: Vector = +duv02[1] * data.dp12
-                        let c: Vector = -duv12[0] * data.dp02
-                        let d: Vector = +duv02[0] * data.dp12
-                        dpdu = (a - b) * invDeterminantUV
-                        dpdv = (c - d) * invDeterminantUV
+                        let termA: Vector = +duv12[1] * dataValue.dp02
+                        let termB: Vector = +duv02[1] * dataValue.dp12
+                        let termC: Vector = -duv12[0] * dataValue.dp02
+                        let termD: Vector = +duv02[0] * dataValue.dp12
+                        dpdu = (termA - termB) * invDeterminantUV
+                        dpdv = (termC - termD) * invDeterminantUV
                 }
 
                 if degenerateUV || lengthSquared(cross(dpdu, dpdv)) == 0 {
@@ -511,13 +511,13 @@ extension Triangle {
                 } else {
                         let normal0 = getTriangleMeshes(scene: scene).getNormal(
                                 meshIndex: meshIndex, vertexIndex: getVertexIndex0(scene: scene))
-                        let sn0 = data.barycentric0 * normal0
+                        let sn0 = dataValue.barycentric0 * normal0
                         let normal1 = getTriangleMeshes(scene: scene).getNormal(
                                 meshIndex: meshIndex, vertexIndex: getVertexIndex1(scene: scene))
-                        let sn1 = data.barycentric1 * normal1
+                        let sn1 = dataValue.barycentric1 * normal1
                         let normal2 = getTriangleMeshes(scene: scene).getNormal(
                                 meshIndex: meshIndex, vertexIndex: getVertexIndex2(scene: scene))
-                        let sn2 = data.barycentric2 * normal2
+                        let sn2 = dataValue.barycentric2 * normal2
                         shadingNormal = sn0 + sn1 + sn2
                         if lengthSquared(shadingNormal) > 0 {
                                 shadingNormal = normalized(shadingNormal)
@@ -542,19 +542,19 @@ extension Triangle {
                 if getTriangleMeshes(scene: scene).hasFaceIndices(meshIndex: meshIndex) {
                         faceIndex = getTriangleMeshes(scene: scene).getFaceIndex(
                                 meshIndex: meshIndex,
-                                index: idx / 3)
+                                index: triangleIndex / 3)
                 }
 
                 // --- Finalize SurfaceInteraction ---
                 let rayObjectSpace = getObjectToWorld(scene: scene) * worldRay
 
                 interaction.valid = true
-                interaction.position = getObjectToWorld(scene: scene) * pHit
+                interaction.position = getObjectToWorld(scene: scene) * pHitValue
                 interaction.normal = normalized(getObjectToWorld(scene: scene) * normal)
                 interaction.shadingNormal = normalized(getObjectToWorld(scene: scene) * shadingNormal)
                 interaction.outgoing = normalized(getObjectToWorld(scene: scene) * -rayObjectSpace.direction)
                 interaction.dpdu = dpdu
-                interaction.uv = uvHit
+                interaction.uvCoordinates = uvHit
                 interaction.faceIndex = faceIndex
         }
 
@@ -613,11 +613,11 @@ extension Triangle {
         func sample(samples: TwoRandomVariables, scene: Scene) -> (
                 interaction: SurfaceInteraction, pdf: FloatX
         ) {
-                let b = uniformSampleTriangle(samples: samples)
+                let barycentric = uniformSampleTriangle(samples: samples)
                 let (point0, point1, point2) = getLocalPoints(scene: scene)
-                let sampled0: Point = b[0] * point0
-                let sampled1: Point = b[1] * point1
-                let sampled2: Point = (1 - b[0] - b[1]) * point2
+                let sampled0: Point = barycentric[0] * point0
+                let sampled1: Point = barycentric[1] * point1
+                let sampled2: Point = (1 - barycentric[0] - barycentric[1]) * point2
                 let localPoint: Point = sampled0 + sampled1 + sampled2
                 let localNormal = normalized(Normal(cross(point1 - point0, point2 - point0)))
                 let worldPoint = getObjectToWorld(scene: scene) * localPoint
@@ -629,11 +629,11 @@ extension Triangle {
 
         @MainActor
         var description: String {
-                var d = "Triangle [ "
+                var descriptionString = "Triangle [ "
                 // let (p0, p1, p2) = getLocalPoints()
-                // d += p0.description + p1.description + p2.description
-                d += " ]"
-                return d
+                // descriptionString += p0.description + p1.description + p2.description
+                descriptionString += " ]"
+                return descriptionString
         }
 
         func getObjectToWorld(scene: Scene) -> Transform {
@@ -654,8 +654,8 @@ func createTriangleMeshShape(
         let normals = try parameters.findNormals(name: "N")
         let uvFloatXs = try parameters.findFloatXs(called: "uv")
         var uvs = [Vector2F]()
-        for i in 0..<uvFloatXs.count / 2 {
-                uvs.append(Vector2F(x: uvFloatXs[2 * i], y: uvFloatXs[2 * i + 1]))
+        for index in 0..<uvFloatXs.count / 2 {
+                uvs.append(Vector2F(x: uvFloatXs[2 * index], y: uvFloatXs[2 * index + 1]))
         }
         let faceIndices = try parameters.findInts(name: "faceIndices")
 
@@ -695,12 +695,12 @@ func createTriangleMesh(
         let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
         let triangleMeshes = triangleMeshBuilder.getMeshes()
 
-        for i in 0..<numberTriangles {
+        for triangleIndexLoop in 0..<numberTriangles {
                 triangles.append(
                         try .triangle(
                                 Triangle(
                                         meshIndex: meshIndex,
-                                        number: i,
+                                        number: triangleIndexLoop,
                                         triangleMeshes: triangleMeshes)))
         }
         return triangles

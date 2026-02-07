@@ -30,7 +30,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 guard lensRadius > 0 else {
                         return ray
                 }
-                let lens = lensRadius * concentricSampleDisk(u: cameraSample.lens)
+                let lens = lensRadius * concentricSampleDisk(uSample: cameraSample.lens)
                 let focalT = focalDistance / ray.direction.z
                 let pFocus = ray.getPointFor(parameter: focalT)
                 let origin = Point(x: lens.x, y: lens.y, z: 0)

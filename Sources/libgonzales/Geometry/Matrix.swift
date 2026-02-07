@@ -33,8 +33,8 @@ public struct Matrix: Sendable {
                 self.backing = backing
         }
 
-        public init(m: Matrix) {
-                self.backing = m.backing
+        public init(matrix: Matrix) {
+                self.backing = matrix.backing
         }
 
         public init() {
@@ -47,17 +47,17 @@ public struct Matrix: Sendable {
         }
 
         public static func * (matrix1: Matrix, matrix2: Matrix) -> Matrix {
-                var r = Matrix()
-                for i in 0..<4 {
-                        for j in 0..<4 {
-                                let a = matrix1[i, 0] * matrix2[0, j]
-                                let b = matrix1[i, 1] * matrix2[1, j]
-                                let c = matrix1[i, 2] * matrix2[2, j]
-                                let d = matrix1[i, 3] * matrix2[3, j]
-                                r[i, j] = a + b + c + d
+                var result = Matrix()
+                for rowIndex in 0..<4 {
+                        for columnIndex in 0..<4 {
+                                let valA = matrix1[rowIndex, 0] * matrix2[0, columnIndex]
+                                let valB = matrix1[rowIndex, 1] * matrix2[1, columnIndex]
+                                let valC = matrix1[rowIndex, 2] * matrix2[2, columnIndex]
+                                let valD = matrix1[rowIndex, 3] * matrix2[3, columnIndex]
+                                result[rowIndex, columnIndex] = valA + valB + valC + valD
                         }
                 }
-                return r
+                return result
         }
 
         public func invert(m _: Matrix) -> Matrix {
@@ -69,15 +69,15 @@ public struct Matrix: Sendable {
 
                 func choosePivot(irow: inout Int, icol: inout Int) throws {
                         var big: FloatX = 0.0
-                        for j in 0..<4 where ipiv[j] != 1 {
-                                for k in 0..<4 {
-                                        if ipiv[k] == 0 {
-                                                if abs(minv[j, k]) >= big {
-                                                        big = abs(minv[j, k])
-                                                        irow = j
-                                                        icol = k
+                        for row in 0..<4 where ipiv[row] != 1 {
+                                for col in 0..<4 {
+                                        if ipiv[col] == 0 {
+                                                if abs(minv[row, col]) >= big {
+                                                        big = abs(minv[row, col])
+                                                        irow = row
+                                                        icol = col
                                                 }
-                                        } else if ipiv[k] > 1 {
+                                        } else if ipiv[col] > 1 {
                                                 throw MatrixError.singularMatrix
                                         }
                                 }
@@ -85,54 +85,54 @@ public struct Matrix: Sendable {
                 }
 
                 func swapColumns() {
-                        for j in (0..<4).reversed() where indxr[j] != indxc[j] {
-                                for k in 0..<4 {
-                                        let r = indxr[j]
-                                        let c = indxc[j]
-                                        let tmp = minv[k, r]
-                                        minv[k, r] = minv[k, c]
-                                        minv[k, c] = tmp
+                        for colIndex in (0..<4).reversed() where indxr[colIndex] != indxc[colIndex] {
+                                for rowIndex in 0..<4 {
+                                        let rowSwap = indxr[colIndex]
+                                        let colSwap = indxc[colIndex]
+                                        let tmp = minv[rowIndex, rowSwap]
+                                        minv[rowIndex, rowSwap] = minv[rowIndex, colSwap]
+                                        minv[rowIndex, colSwap] = tmp
                                 }
                         }
                 }
 
                 func subtractRow(icol: inout Int) {
-                        for j in 0..<4 where j != icol {
-                                let save = minv[j, icol]
-                                minv[j, icol] = 0
-                                for k in 0..<4 {
-                                        minv[j, k] -= minv[icol, k] * save
+                        for rowIndex in 0..<4 where rowIndex != icol {
+                                let save = minv[rowIndex, icol]
+                                minv[rowIndex, icol] = 0
+                                for colIndex in 0..<4 {
+                                        minv[rowIndex, colIndex] -= minv[icol, colIndex] * save
                                 }
                         }
                 }
 
-                func reduce(_ i: Int) throws {
+                func reduce(_ iteration: Int) throws {
                         var irow = 0
                         var icol = 0
                         try choosePivot(irow: &irow, icol: &icol)
                         ipiv[icol] += 1
                         if irow != icol {
-                                for k in 0..<4 {
-                                        let tmp = minv[irow, k]
-                                        minv[irow, k] = minv[icol, k]
-                                        minv[icol, k] = tmp
+                                for colIndex in 0..<4 {
+                                        let tmp = minv[irow, colIndex]
+                                        minv[irow, colIndex] = minv[icol, colIndex]
+                                        minv[icol, colIndex] = tmp
                                 }
                         }
-                        indxr[i] = irow
-                        indxc[i] = icol
+                        indxr[iteration] = irow
+                        indxc[iteration] = icol
                         if minv[icol, icol] == 0 {
                                 throw MatrixError.singularMatrix
                         }
                         let pivinv = 1 / minv[icol, icol]
                         minv[icol, icol] = 1
-                        for j in 0..<4 {
-                                minv[icol, j] *= pivinv
+                        for colIndex in 0..<4 {
+                                minv[icol, colIndex] *= pivinv
                         }
                         subtractRow(icol: &icol)
                 }
 
                 do {
-                        for i in 0..<4 { try reduce(i) }
+                        for iteration in 0..<4 { try reduce(iteration) }
                         swapColumns()
                         // return Matrix(minv)
                         return Matrix(backing: minv)
@@ -146,9 +146,9 @@ public struct Matrix: Sendable {
 
         func transpose() -> Matrix {
                 var transposed = Matrix()
-                for x in 0..<4 {
-                        for y in 0..<4 {
-                                transposed[x, y] = backing[y, x]
+                for rowIndex in 0..<4 {
+                        for columnIndex in 0..<4 {
+                                transposed[rowIndex, columnIndex] = backing[columnIndex, rowIndex]
                         }
                 }
                 return transposed
@@ -163,15 +163,15 @@ public struct Matrix: Sendable {
 
 extension Matrix: CustomStringConvertible {
         public var description: String {
-                var d = ""
-                for i in 0..<4 {
-                        d += "[ "
-                        for j in 0..<4 {
-                                d += "\(backing[i, j])"
-                                if j != 3 { d += " " }
+                var desc = ""
+                for rowIndex in 0..<4 {
+                        desc += "[ "
+                        for columnIndex in 0..<4 {
+                                desc += "\(backing[rowIndex, columnIndex])"
+                                if columnIndex != 3 { desc += " " }
                         }
-                        d += " ]"
+                        desc += " ]"
                 }
-                return d
+                return desc
         }
 }

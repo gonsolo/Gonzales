@@ -12,12 +12,12 @@ public protocol Three {
         var z: FloatType { get set }
 }
 
-func lengthSquared<T: Three>(_ v: T) -> T.FloatType {
-        return v.x * v.x + v.y * v.y + v.z * v.z
+func lengthSquared<T: Three>(_ vector: T) -> T.FloatType {
+        return vector.x * vector.x + vector.y * vector.y + vector.z * vector.z
 }
 
-func length<T: Three>(_ v: T) -> T.FloatType {
-        return lengthSquared(v).squareRoot()
+func length<T: Three>(_ vector: T) -> T.FloatType {
+        return lengthSquared(vector).squareRoot()
 }
 
 func distanceSquared<T: Three>(_ left: T, _ right: T) -> T.FloatType {
@@ -28,16 +28,16 @@ func distance<T: Three>(_ left: T, _ right: T) -> T.FloatType {
         return distanceSquared(left, right).squareRoot()
 }
 
-prefix func - <T: Three>(v: T) -> T {
-        return T.init(x: -v.x, y: -v.y, z: -v.z)
+prefix func - <T: Three>(vector: T) -> T {
+        return T.init(x: -vector.x, y: -vector.y, z: -vector.z)
 }
 
-func / <T: Three>(v: T, d: T.FloatType) -> T {
-        return T.init(x: v.x / d, y: v.y / d, z: v.z / d)
+func / <T: Three>(vector: T, divisor: T.FloatType) -> T {
+        return T.init(x: vector.x / divisor, y: vector.y / divisor, z: vector.z / divisor)
 }
 
-func / <T: Three>(v: T, d: T) -> T {
-        return T.init(x: v.x / d.x, y: v.y / d.y, z: v.z / d.z)
+func / <T: Three>(vector: T, divisorVector: T) -> T {
+        return T.init(x: vector.x / divisorVector.x, y: vector.y / divisorVector.y, z: vector.z / divisorVector.z)
 }
 
 func * <T: Three>(left: T, right: T) -> T {
@@ -104,33 +104,33 @@ extension Three {
         }
 }
 
-public func normalized<T: Three>(_ v: T) -> T {
+public func normalized<T: Three>(_ vector: T) -> T {
         var ret: T
-        let l = length(v)
-        if l == 0 {
-                ret = v
+        let len = length(vector)
+        if len == 0 {
+                ret = vector
         } else {
-                ret = v / l
+                ret = vector / len
         }
         return ret
 }
 
-public func cross<T: Three>(_ a: T, _ b: T) -> T
+public func cross<T: Three>(_ vectorA: T, _ vectorB: T) -> T
 where T.FloatType: FloatingPoint {
 
         // Ensure all arithmetic operations (multiplication, subtraction) use the correct FloatType
-        let x = a.y * b.z - a.z * b.y
-        let y = a.z * b.x - a.x * b.z
-        let z = a.x * b.y - a.y * b.x
+        let x = vectorA.y * vectorB.z - vectorA.z * vectorB.y
+        let y = vectorA.z * vectorB.x - vectorA.x * vectorB.z
+        let z = vectorA.x * vectorB.y - vectorA.y * vectorB.x
 
         // Create a new instance of the generic type T
         return T(x: x, y: y, z: z)
 }
 
-func dot<T: Three>(_ a: T, _ b: T) -> T.FloatType {
-        return a.x * b.x + a.y * b.y + a.z * b.z
+func dot<T: Three>(_ vectorA: T, _ vectorB: T) -> T.FloatType {
+        return vectorA.x * vectorB.x + vectorA.y * vectorB.y + vectorA.z * vectorB.z
 }
 
-func absDot<T: Three>(_ a: T, _ b: T) -> T.FloatType {
-        return abs(dot(a, b))
+func absDot<T: Three>(_ vectorA: T, _ vectorB: T) -> T.FloatType {
+        return abs(dot(vectorA, vectorB))
 }

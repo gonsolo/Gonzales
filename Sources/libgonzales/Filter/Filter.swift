@@ -4,7 +4,7 @@ protocol Filter: Sendable {
 
         func evaluate(atLocation: Point2f) -> FloatX
 
-        func sample(u: (FloatX, FloatX)) -> FilterSample
+        func sample(uSample: (FloatX, FloatX)) -> FilterSample
 
         var support: Vector2F { get }
 }

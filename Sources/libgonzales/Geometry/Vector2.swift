@@ -58,8 +58,8 @@ extension Vector2 where T: FloatingPoint {
                 return Vector2<T>(x: left.x - right.x, y: left.y - right.y)
         }
 
-        public static prefix func - (v: Vector2<T>) -> Vector2<T> {
-                return Vector2.init(x: -v.x, y: -v.y)
+        public static prefix func - (vector: Vector2<T>) -> Vector2<T> {
+                return Vector2.init(x: -vector.x, y: -vector.y)
         }
 
 }

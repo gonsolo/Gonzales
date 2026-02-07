@@ -2,40 +2,40 @@ import Foundation  // For Point2i, etc.
 
 let floatOneMinusEpsilon: Float = 1.0 - 1e-6  // Ensure type is Float
 
-func sobolSample(a: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float {
+func sobolSample(sampleIndex: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float {
         guard dimension < NSobolDimensions else {
                 fatalError("Sobol dimension \(dimension) is out of range (\(NSobolDimensions)).")
         }
 
-        var v: UInt32 = 0
-        var index = a
+        var accumulator: UInt32 = 0
+        var currentIndex = sampleIndex
 
         let matrixAccessor = sobolDataAccessor[dimension]
 
-        for i in 0..<SobolMatrixSize {
-                if index & 1 != 0 {
+        for bitIndex in 0..<SobolMatrixSize {
+                if currentIndex & 1 != 0 {
                         // Direct access: no temporary arrays, just fast index math
-                        v ^= matrixAccessor[i]
+                        accumulator ^= matrixAccessor[bitIndex]
                 }
-                index >>= 1
-                if index == 0 {
+                currentIndex >>= 1
+                if currentIndex == 0 {
                         break
                 }
         }
 
-        let randomizedV = randomizer(v)
+        let randomizedV = randomizer(accumulator)
         let floatValue = Float(randomizedV) * Float(2.32830643653869628906e-10)
 
         return min(floatValue, floatOneMinusEpsilon)
 }
 
-func reverseBits32(_ v: UInt32) -> UInt32 {
-        var v = v
-        v = ((v >> 1) & 0x5555_5555) | ((v & 0x5555_5555) << 1)
-        v = ((v >> 2) & 0x3333_3333) | ((v & 0x3333_3333) << 2)
-        v = ((v >> 4) & 0x0f0f_0f0f) | ((v & 0x0f0f_0f0f) << 4)
-        v = ((v >> 8) & 0x00ff_00ff) | ((v & 0x00ff_00ff) << 8)
-        return (v >> 16) | (v << 16)
+func reverseBits32(_ valueIn: UInt32) -> UInt32 {
+        var value = valueIn
+        value = ((value >> 1) & 0x5555_5555) | ((value & 0x5555_5555) << 1)
+        value = ((value >> 2) & 0x3333_3333) | ((value & 0x3333_3333) << 2)
+        value = ((value >> 4) & 0x0f0f_0f0f) | ((value & 0x0f0f_0f0f) << 4)
+        value = ((value >> 8) & 0x00ff_00ff) | ((value & 0x00ff_00ff) << 8)
+        return (value >> 16) | (value << 16)
 }
 
 struct FastOwenScrambler {
@@ -50,23 +50,23 @@ struct FastOwenScrambler {
         }
 
         @inlinable
-        func callAsFunction(_ vIn: UInt32) -> UInt32 {
-                var v = vIn
-                v = reverseBits32(v)
-                v ^= v &* 0x3d20_adea  // Use &* for checked multiplication
-                v &+= seed  // Use &+ for checked addition
+        func callAsFunction(_ valueIn: UInt32) -> UInt32 {
+                var value = valueIn
+                value = reverseBits32(value)
+                value ^= value &* 0x3d20_adea  // Use &* for checked multiplication
+                value &+= seed  // Use &+ for checked addition
                 let multiplier = (seed >> 16) | 1
-                v &*= multiplier
-                v ^= v &* 0x0552_6c56
-                v ^= v &* 0x53a2_2864
-                return reverseBits32(v)
+                value &*= multiplier
+                value ^= value &* 0x0552_6c56
+                value ^= value &* 0x53a2_2864
+                return reverseBits32(value)
         }
 }
 
 @inlinable
-func encodeMorton2(_ x: UInt32, _ y: UInt32) -> UInt64 {
-        var x64: UInt64 = UInt64(x)
-        var y64: UInt64 = UInt64(y)
+func encodeMorton2(_ coordX: UInt32, _ coordY: UInt32) -> UInt64 {
+        var x64: UInt64 = UInt64(coordX)
+        var y64: UInt64 = UInt64(coordY)
 
         x64 = (x64 | (x64 << 16)) & 0x0000_FFFF_0000_FFFF
         x64 = (x64 | (x64 << 8)) & 0x00FF_00FF_00FF_00FF
@@ -84,16 +84,16 @@ func encodeMorton2(_ x: UInt32, _ y: UInt32) -> UInt64 {
 }
 
 @inlinable
-func mixBits(_ v: UInt64) -> UInt32 {
+func mixBits(_ valueIn: UInt64) -> UInt32 {
         // This is a minimal, quick hash based on PBRT's use of MixBits
-        var v32 = UInt32(v & 0xFFFF_FFFF)
-        v32 ^= UInt32(v >> 32)
-        v32 ^= v32 >> 16
-        v32 &*= 0x85eb_ca77  // Use &* for wraparound multiplication
-        v32 ^= v32 >> 13
-        v32 &*= 0xc2b2_ae35
-        v32 ^= v32 >> 16
-        return v32
+        var value32 = UInt32(valueIn & 0xFFFF_FFFF)
+        value32 ^= UInt32(valueIn >> 32)
+        value32 ^= value32 >> 16
+        value32 &*= 0x85eb_ca77  // Use &* for wraparound multiplication
+        value32 ^= value32 >> 13
+        value32 &*= 0xc2b2_ae35
+        value32 ^= value32 >> 16
+        return value32
 }
 
 public struct ZSobolSampler: Sendable {
@@ -137,16 +137,16 @@ public struct ZSobolSampler: Sendable {
                 let lastDigit = pow2Samples ? 1 : 0
 
                 // Loop over base-4 digits for permutation
-                for i in (lastDigit..<nBase4Digits).reversed() {
-                        let digitShift = 2 * i - (pow2Samples ? 1 : 0)
+                for digitIndex in (lastDigit..<nBase4Digits).reversed() {
+                        let digitShift = 2 * digitIndex - (pow2Samples ? 1 : 0)
                         var digit = Int((mortonIndex >> digitShift) & 3)
                         let higherDigits = mortonIndex >> (digitShift + 2)
 
                         // --- Direct Owen/Permutation Logic (MixBits) ---
                         let hashVal = mixBits(higherDigits ^ (UInt64(0x5555_5555) * UInt64(dimension)))
-                        let p = Int((hashVal >> 24) % 24)
+                        let pIndex = Int((hashVal >> 24) % 24)
 
-                        digit = Int(ZSobolSampler.permutations[p][digit])
+                        digit = Int(ZSobolSampler.permutations[pIndex][digit])
                         sampleIndex |= UInt64(digit) << digitShift
                 }
 
@@ -206,12 +206,12 @@ extension ZSobolSampler {
                 }
                 dimension += 1
 
-                let u = sobolSample(
-                        a: sampleIndex,
+                let uSample = sobolSample(
+                        sampleIndex: sampleIndex,
                         dimension: dimension - 1,  // Pass the correct dimension index
                         randomizer: FastOwenScrambler(seed: sampleHash)
                 )
-                return u
+                return uSample
         }
 
         mutating func get2D() -> (Float, Float) {
@@ -225,13 +225,13 @@ extension ZSobolSampler {
                 dimension += 2
 
                 let sample0 = sobolSample(
-                        a: sampleIndex,
+                        sampleIndex: sampleIndex,
                         dimension: dimension - 2,  // Dimension 'd'
                         randomizer: FastOwenScrambler(seed: sampleHash0)
                 )
 
                 let sample1 = sobolSample(
-                        a: sampleIndex,
+                        sampleIndex: sampleIndex,
                         dimension: dimension - 1,  // Dimension 'd + 1'
                         randomizer: FastOwenScrambler(seed: sampleHash1)
                 )
@@ -255,19 +255,19 @@ extension ZSobolSampler {
                 dimension += 3
 
                 let sample0 = sobolSample(
-                        a: sampleIndex,
+                        sampleIndex: sampleIndex,
                         dimension: dimension - 3,
                         randomizer: FastOwenScrambler(seed: sampleHash0)
                 )
 
                 let sample1 = sobolSample(
-                        a: sampleIndex,
+                        sampleIndex: sampleIndex,
                         dimension: dimension - 2,
                         randomizer: FastOwenScrambler(seed: sampleHash1)
                 )
 
                 let sample2 = sobolSample(
-                        a: sampleIndex,
+                        sampleIndex: sampleIndex,
                         dimension: dimension - 1,
                         randomizer: FastOwenScrambler(seed: sampleHash2)
                 )
@@ -278,14 +278,14 @@ extension ZSobolSampler {
 
 extension Int {
         func nextPowerOfTwo() -> Int {
-                var v = self
-                v -= 1
-                v |= v >> 1
-                v |= v >> 2
-                v |= v >> 4
-                v |= v >> 8
-                v |= v >> 16
-                v += 1
-                return v
+                var value = self
+                value -= 1
+                value |= value >> 1
+                value |= value >> 2
+                value |= value >> 4
+                value |= value >> 8
+                value |= value >> 16
+                value += 1
+                return value
         }
 }

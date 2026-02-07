@@ -62,8 +62,8 @@ extension Bounds3 {
                 var transformedBound = Bounds3(
                         first: transform * bound.points[0],
                         second: transform * bound.points[1])
-                for i in 2..<8 {
-                        transformedBound.add(point: transform * bound.points[i])
+                for pointIndex in 2..<8 {
+                        transformedBound.add(point: transform * bound.points[pointIndex])
                 }
                 return transformedBound
         }
@@ -73,10 +73,10 @@ extension Bounds3 {
         }
 
         func maximumExtent() -> Int {
-                let d = diagonal()
-                if d.x > d.y && d.x > d.z {
+                let diag = diagonal()
+                if diag.x > diag.y && diag.x > diag.z {
                         return 0
-                } else if d.y > d.z {
+                } else if diag.y > diag.z {
                         return 1
                 } else {
                         return 2
@@ -88,16 +88,16 @@ extension Bounds3 {
         }
 
         func offset(point: Point3) -> Vector3 {
-                var o: Vector3 = point - pMin
-                for i in 0..<3 where pMax[i] > pMin[i] {
-                        o[i] /= pMax[i] - pMin[i]
+                var result: Vector3 = point - pMin
+                for dimension in 0..<3 where pMax[dimension] > pMin[dimension] {
+                        result[dimension] /= pMax[dimension] - pMin[dimension]
                 }
-                return o
+                return result
         }
 
         func surfaceArea() -> FloatX {
-                let d = diagonal()
-                return 2 * (d.x * d.y + d.x * d.z + d.y * d.z)
+                let diag = diagonal()
+                return 2 * (diag.x * diag.y + diag.x * diag.z + diag.y * diag.z)
         }
 }
 

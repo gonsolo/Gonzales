@@ -36,18 +36,18 @@ extension ShadingFrame {
 
                 let sign: FloatX = (z.z >= 0) ? 1.0 : -1.0
 
-                let a = -1.0 / (sign + z.z)
-                let b = z.x * z.y * a
+                let valA = -1.0 / (sign + z.z)
+                let valB = z.x * z.y * valA
 
                 x = Vector(
-                        x: 1.0 + sign * z.x * z.x * a,
-                        y: sign * b,
+                        x: 1.0 + sign * z.x * z.x * valA,
+                        y: sign * valB,
                         z: -sign * z.x
                 )
 
                 y = Vector(
-                        x: b,
-                        y: sign + z.y * z.y * a,
+                        x: valB,
+                        y: sign + z.y * z.y * valA,
                         z: -z.y
                 )
 
@@ -70,9 +70,9 @@ extension ShadingFrame {
         }
 
         public func localToWorld(local: Vector) -> Vector {
-                let a = local.x * x
-                let b = local.y * y
-                let c = local.z * z
-                return a + b + c
+                let valA = local.x * x
+                let valB = local.y * y
+                let valC = local.z * z
+                return valA + valB + valC
         }
 }

@@ -11,7 +11,7 @@ struct Ray: Sendable {
         init(origin: Point, direction: Vector, cameraSample: CameraSample = CameraSample()) {
                 self.origin = origin
                 self.direction = direction
-                self.inverseDirection = Vector(v: 1) / direction
+                self.inverseDirection = Vector(value: 1) / direction
                 // self.medium = nil
                 self.cameraSample = cameraSample
         }

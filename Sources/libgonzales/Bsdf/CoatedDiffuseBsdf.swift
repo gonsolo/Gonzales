@@ -11,7 +11,7 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                 bsdfFrame: BsdfFrame
         ) {
                 let thickness: FloatX = 0.01
-                let g: FloatX = 0.0
+                let asymmetryFactor: FloatX = 0.0
                 let maxDepth = 10
                 let nSamples = 32
                 let mediumAlbedo = RgbSpectrum(intensity: 0.0)
@@ -23,7 +23,7 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                         bottomIsSpecular: false,
                         thickness: thickness,
                         albedo: mediumAlbedo,
-                        g: g,
+                        geometricTerm: asymmetryFactor,
                         maxDepth: maxDepth,
                         nSamples: nSamples,
                         bsdfFrame: bsdfFrame,
@@ -37,8 +37,8 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                 return value
         }
 
-        func sampleLocal(outgoing: Vector, u: ThreeRandomVariables) async -> BsdfSample {
-                return await layered.sampleLocal(outgoing: outgoing, u: u)
+        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) async -> BsdfSample {
+                return await layered.sampleLocal(outgoing: outgoing, uSample: uSample)
         }
 
         public func probabilityDensityLocal(outgoing: Vector, incident: Vector) async -> FloatX {
