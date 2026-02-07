@@ -159,12 +159,14 @@ class Options {
                                         parameters: samplerParameters, fullResolution: film.resolution,
                                         quick: renderOptions.quick))
                 case "random":
-                        return try .random(createRandomSampler(
-                                parameters: samplerParameters, quick: renderOptions.quick))
+                        return try .random(
+                                createRandomSampler(
+                                        parameters: samplerParameters, quick: renderOptions.quick))
                 default:
                         warning("Unknown sampler, using random sampler.")
-                        return try .random(createRandomSampler(
-                                parameters: samplerParameters, quick: renderOptions.quick))
+                        return try .random(
+                                createRandomSampler(
+                                        parameters: samplerParameters, quick: renderOptions.quick))
                 }
         }
 
