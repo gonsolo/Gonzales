@@ -11,36 +11,39 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "build"
   build:
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      # We need to pass the token to pull the package if it is private, though public packages are fine.
+      # For now, assuming public or that the image is public.
+      # If the image is private, we'd need credentials.
+      # credentials:
+      #   username: ${{ github.actor }}
+      #   password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install System Dependencies
+      # Fix directory permissions for builder (since we mount the workspace)
+      - name: Fix permissions
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git cmake ninja openimageio ptex wget unzip sudo embree fmt
-
-      - name: Setup AUR Builder
-        run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
-          chmod 0440 /etc/sudoers.d/builder
-          # Fix directory permissions for builder
           chown -R builder:builder .
 
-      - name: Install Swift (AUR)
-        run: |
-          su - builder -c "git clone https://aur.archlinux.org/swift-bin.git && cd swift-bin && makepkg -si --noconfirm"
-
-      - name: Install SwiftLint (AUR)
-        run: |
-          su - builder -c "git clone https://aur.archlinux.org/swiftlint.git && cd swiftlint && makepkg -si --noconfirm"
+      - name: Cache .build
+        uses: actions/cache@v3
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') || hashFiles('Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
 
       - name: Check Versions
         run: |
@@ -58,7 +61,7 @@ jobs:
 
       - name: Compile debug
         run: |
-          mkdir .build
+          mkdir -p .build
           make debug
 
       - name: Run tests
