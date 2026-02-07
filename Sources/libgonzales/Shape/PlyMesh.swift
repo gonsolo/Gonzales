@@ -295,8 +295,7 @@ extension PlyMesh {
                                         && (properties[6].name == PropertyName.uProperty
                                                 || properties[6].name == PropertyName.s)
                                         && (properties[7].name == PropertyName.vProperty
-                                                || properties[7].name == PropertyName.t)
-                                {
+                                                || properties[7].name == PropertyName.t) {
                                         appendPoint(from: data)
                                         appendNormal(from: data)
                                         appendUV(from: data)
@@ -307,8 +306,7 @@ extension PlyMesh {
                                         && properties[4].name == PropertyName.vProperty
                                         && properties[5].name == PropertyName.normalX
                                         && properties[6].name == PropertyName.normalY
-                                        && properties[7].name == PropertyName.normalZ
-                                {
+                                        && properties[7].name == PropertyName.normalZ {
                                         appendPoint(from: data)
                                         appendUV(from: data)
                                         appendNormal(from: data)
@@ -367,8 +365,7 @@ extension PlyMesh {
 
 @MainActor
 func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
-        -> [ShapeType]
-{
+        -> [ShapeType] {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = renderOptions.sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {

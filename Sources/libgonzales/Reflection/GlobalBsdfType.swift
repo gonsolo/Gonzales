@@ -41,8 +41,7 @@ enum GlobalBsdfType: GlobalBsdf {
         }
 
         func sampleWorld(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
-                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
-        {
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool) {
                 switch self {
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.sampleWorld(outgoing: outgoingWorld, uSample: uSample)

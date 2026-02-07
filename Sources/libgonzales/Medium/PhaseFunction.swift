@@ -6,8 +6,7 @@ protocol PhaseFunction: DistributionModel, Sendable {
 extension PhaseFunction {
 
         func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal _: Normal = zeroNormal)
-                -> RgbSpectrum
-        {
+                -> RgbSpectrum {
                 let phase = evaluate(outgoing: outgoing, incident: incident)
                 let scatter = RgbSpectrum(intensity: phase)
                 return scatter
@@ -16,8 +15,7 @@ extension PhaseFunction {
         func sampleDistributionFunction(
                 outgoing: Vector, normal _: Normal = zeroNormal, sampler: inout Sampler
         )
-                -> BsdfSample
-        {
+                -> BsdfSample {
                 let (value, incident) = samplePhase(outgoing: outgoing, sampler: &sampler)
                 return BsdfSample(RgbSpectrum(intensity: value), incident, value)
         }

@@ -9,7 +9,6 @@ excluded:
 opt_in_rules:
   - unused_parameter
 disabled_rules:
-  - opening_brace
   - cyclomatic_complexity
   - large_tuple
   - trailing_comma

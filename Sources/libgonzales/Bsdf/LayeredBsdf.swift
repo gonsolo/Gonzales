@@ -230,8 +230,7 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && incidentSample.isTransmission(outgoing: localIncident)
-                                        {
+                                                && incidentSample.isTransmission(outgoing: localIncident) {
                                                 rInterfacePdf = bottom.probabilityDensityLocal(
                                                         outgoing: -outgoingSample.incoming,
                                                         incident: -incidentSample.incoming)
@@ -246,8 +245,7 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && incidentSample.isTransmission(outgoing: localIncident)
-                                        {
+                                                && incidentSample.isTransmission(outgoing: localIncident) {
                                                 rInterfacePdf = top.probabilityDensityLocal(
                                                         outgoing: -outgoingSample.incoming,
                                                         incident: -incidentSample.incoming)
@@ -264,8 +262,7 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && !outgoingSample.isReflection(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && !incidentSample.isReflection(outgoing: localIncident)
-                                        {
+                                                && !incidentSample.isReflection(outgoing: localIncident) {
                                                 let probability1 = top.probabilityDensityLocal(
                                                         outgoing: localOutgoing, incident: -incidentSample.incoming)
                                                 let probability2 = bottom.probabilityDensityLocal(
@@ -281,8 +278,7 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && !outgoingSample.isReflection(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && !incidentSample.isReflection(outgoing: localIncident)
-                                        {
+                                                && !incidentSample.isReflection(outgoing: localIncident) {
                                                 let probability1 = bottom.probabilityDensityLocal(
                                                         outgoing: localOutgoing, incident: -incidentSample.incoming)
                                                 let probability2 = top.probabilityDensityLocal(
@@ -330,8 +326,7 @@ extension LayeredBsdf {
                 }
 
                 if !outgoingSample.isValid || outgoingSample.isReflection(outgoing: localOutgoing)
-                        || outgoingSample.incoming.z == 0
-                {
+                        || outgoingSample.incoming.z == 0 {
                         return RgbSpectrum(intensity: 0)
                 }
 
@@ -345,8 +340,7 @@ extension LayeredBsdf {
                 }
 
                 if !incidentSample.isValid || incidentSample.isReflection(outgoing: localIncident)
-                        || incidentSample.incoming.z == 0
-                {
+                        || incidentSample.incoming.z == 0 {
                         return RgbSpectrum(intensity: 0)
                 }
 
@@ -421,8 +415,7 @@ extension LayeredBsdf {
                                         zCurrent: zCurrent,
                                         sampledDirection: &sampledDirection,
                                         throughput: &throughput,
-                                        sampler: &sampler)
-                                {
+                                        sampler: &sampler) {
                                         if result { break } else { continue }
                                 }
                         } else {
@@ -432,8 +425,7 @@ extension LayeredBsdf {
                                         sampledDirection: &sampledDirection,
                                         throughput: &throughput,
                                         sampleF: &sampleF,
-                                        sampler: &sampler)
-                                {
+                                        sampler: &sampler) {
                                         if result { break } else { continue }
                                 }
                         }
@@ -457,8 +449,7 @@ extension LayeredBsdf {
                 }
 
                 if !exitSample.isValid || exitSample.probabilityDensity == 0
-                        || exitSample.incoming.z == 0
-                {
+                        || exitSample.incoming.z == 0 {
                         return true
                 }
                 if exitSample.isTransmission(outgoing: -sampledDirection) { return true }
@@ -518,8 +509,7 @@ extension LayeredBsdf {
                 }
 
                 if !sample.isValid || sample.probabilityDensity == 0
-                        || sample.incoming.z == 0
-                {
+                        || sample.incoming.z == 0 {
                         return true
                 }
                 if sample.isTransmission(outgoing: -sampledDirection) { return true }

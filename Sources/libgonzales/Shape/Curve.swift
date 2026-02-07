@@ -155,20 +155,17 @@ struct Curve: Shape {
                                 let maxWidth = computeMaxWidth(
                                         uRange: (uSamples[segment], uSamples[segment + 1]), width: common.width)
                                 if !overlap(
-                                        points: splitPoints, index: cps, xyz: 1, width: maxWidth)
-                                {
+                                        points: splitPoints, index: cps, xyz: 1, width: maxWidth) {
                                         continue
                                 }
                                 if !overlap(
-                                        points: splitPoints, index: cps, xyz: 0, width: maxWidth)
-                                {
+                                        points: splitPoints, index: cps, xyz: 0, width: maxWidth) {
                                         continue
                                 }
                                 let zMax = rayLength * tHit
                                 if !overlap(
                                         points: splitPoints, index: cps, xyz: 2, width: maxWidth,
-                                        limits: (0, zMax))
-                                {
+                                        limits: (0, zMax)) {
                                         continue
                                 }
                                 let nextState = CurveIntersectionState(

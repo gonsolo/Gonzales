@@ -81,8 +81,7 @@ public final class TrowbridgeReitzDistribution: MicrofacetDistribution {
         }
 
         private func trowbridgeReitzSample(incident: Vector, alpha: (FloatX, FloatX), uSample: TwoRandomVariables)
-                -> Vector
-        {
+                -> Vector {
                 let incidentStretched = normalized(
                         Vector(x: alpha.0 * incident.x, y: alpha.1 * incident.y, z: incident.z))
                 var slope = trowbridgeReitzSample11(cosTheta: cosTheta(incidentStretched), uSample: uSample)

@@ -49,8 +49,7 @@ struct Scene {
                 tHit: inout FloatX,
                 data: inout TriangleIntersection
         ) throws
-                -> Bool
-        {
+                -> Bool {
                 switch primId.type {
                 case .triangle:
                         let triangle = try Triangle(

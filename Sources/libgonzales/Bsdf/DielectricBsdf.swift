@@ -70,8 +70,7 @@ extension DielectricBsdf {
         }
 
         private func sampleSpecularReflection(outgoing: Vector, reflected: FloatX, probabilityReflected: FloatX)
-                -> BsdfSample
-        {
+                -> BsdfSample {
                 let incident = mirror(outgoing)
                 let estimate = RgbSpectrum(intensity: reflected / absCosTheta(incident))
                 return BsdfSample(estimate, incident, probabilityReflected)
