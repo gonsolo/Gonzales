@@ -4,9 +4,9 @@
 public protocol LocalBsdf {
 
         func albedo() -> RgbSpectrum
-        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum
-        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample
+        func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum
+        func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX
+        func sampleLocal(outgoing: Vector, u: ThreeRandomVariables) -> BsdfSample
 
         var isReflective: Bool { get }
         var isTransmissive: Bool { get }
@@ -15,24 +15,24 @@ public protocol LocalBsdf {
 extension LocalBsdf {
 
         public func sampleLocal(
-                wo: Vector,
+                outgoing: Vector,
                 u: ThreeRandomVariables,
                 evaluate: (Vector, Vector) -> RgbSpectrum
         ) -> BsdfSample {
-                var wi = cosineSampleHemisphere(u: TwoRandomVariables(u.0, u.1))
-                if wo.z < 0 { wi.z = -wi.z }
-                let density = probabilityDensityLocal(wo: wo, wi: wi)
-                let radiance = evaluate(wo, wi)
-                return BsdfSample(radiance, wi, density)
+                var incident = cosineSampleHemisphere(u: TwoRandomVariables(u.0, u.1))
+                if outgoing.z < 0 { incident.z = -incident.z }
+                let density = probabilityDensityLocal(outgoing: outgoing, incident: incident)
+                let radiance = evaluate(outgoing, incident)
+                return BsdfSample(radiance, incident, density)
         }
 
-        public func sampleLocal(wo: Vector, u: ThreeRandomVariables) -> BsdfSample {
-                return sampleLocal(wo: wo, u: u, evaluate: self.evaluateLocal)
+        public func sampleLocal(outgoing: Vector, u: ThreeRandomVariables) -> BsdfSample {
+                return sampleLocal(outgoing: outgoing, u: u, evaluate: self.evaluateLocal)
         }
 
-        public func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
-                guard sameHemisphere(wo, wi) else { return 0 }
-                let result = absCosTheta(wi) / FloatX.pi
+        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+                guard sameHemisphere(outgoing, incident) else { return 0 }
+                let result = absCosTheta(incident) / FloatX.pi
                 return result
         }
 

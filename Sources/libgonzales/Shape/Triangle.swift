@@ -482,8 +482,8 @@ extension Triangle {
                 let duv12: Vector2F = uv.1 - uv.2
                 let determinantUV: FloatX = duv02[0] * duv12[1] - duv02[1] * duv12[0]
                 let degenerateUV: Bool = abs(determinantUV) < 1e-8
-                var dpdu = up  // Assuming 'up' is a predefined Vector (e.g., Vector(0,0,0) or local Y axis)
-                var dpdv = up
+                var dpdu = upVector  // Assuming 'upVector' is a predefined Vector (e.g., Vector(0,0,0) or local Y axis)
+                var dpdv = upVector
 
                 if !degenerateUV {
                         let invDeterminantUV = 1 / determinantUV
@@ -552,7 +552,7 @@ extension Triangle {
                 interaction.position = getObjectToWorld(scene: scene) * pHit
                 interaction.normal = normalized(getObjectToWorld(scene: scene) * normal)
                 interaction.shadingNormal = normalized(getObjectToWorld(scene: scene) * shadingNormal)
-                interaction.wo = normalized(getObjectToWorld(scene: scene) * -rayObjectSpace.direction)
+                interaction.outgoing = normalized(getObjectToWorld(scene: scene) * -rayObjectSpace.direction)
                 interaction.dpdu = dpdu
                 interaction.uv = uvHit
                 interaction.faceIndex = faceIndex

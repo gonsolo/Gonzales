@@ -1,63 +1,63 @@
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
 public protocol GlobalBsdf: BsdfFrameProtocol, DistributionModel, LocalBsdf, Sendable {
-        func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum
-        func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX
-        func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
+        func evaluateWorld(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
+        func probabilityDensityWorld(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> FloatX
+        func sampleWorld(outgoing outgoingWorld: Vector, u: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
 extension GlobalBsdf {
 
-        public func evaluateWorld(wo woWorld: Vector, wi wiWorld: Vector) -> RgbSpectrum {
+        public func evaluateWorld(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum {
                 var totalLightScattered = black
-                let woLocal = worldToLocal(world: woWorld)
-                let wiLocal = worldToLocal(world: wiWorld)
-                let reflect = isReflecting(wi: wiWorld, wo: woWorld)
+                let outgoingLocal = worldToLocal(world: outgoingWorld)
+                let incidentLocal = worldToLocal(world: incidentWorld)
+                let reflect = isReflecting(incident: incidentWorld, outgoing: outgoingWorld)
                 if reflect && isReflective {
-                        totalLightScattered += evaluateLocal(wo: woLocal, wi: wiLocal)
+                        totalLightScattered += evaluateLocal(outgoing: outgoingLocal, incident: incidentLocal)
                 }
                 if !reflect && isTransmissive {
-                        totalLightScattered += evaluateLocal(wo: woLocal, wi: wiLocal)
+                        totalLightScattered += evaluateLocal(outgoing: outgoingLocal, incident: incidentLocal)
                 }
                 return totalLightScattered
         }
 
-        public func probabilityDensityWorld(wo woWorld: Vector, wi wiWorld: Vector) -> FloatX {
-                let wiLocal = worldToLocal(world: wiWorld)
-                let woLocal = worldToLocal(world: woWorld)
-                if woLocal.z == 0 { return 0 }
-                return probabilityDensityLocal(wo: woLocal, wi: wiLocal)
+        public func probabilityDensityWorld(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> FloatX {
+                let incidentLocal = worldToLocal(world: incidentWorld)
+                let outgoingLocal = worldToLocal(world: outgoingWorld)
+                if outgoingLocal.z == 0 { return 0 }
+                return probabilityDensityLocal(outgoing: outgoingLocal, incident: incidentLocal)
         }
 
-        public func sampleWorld(wo woWorld: Vector, u: ThreeRandomVariables)
+        public func sampleWorld(outgoing outgoingWorld: Vector, u: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
-                let woLocal = worldToLocal(world: woWorld)
-                let bsdfSample = sampleLocal(wo: woLocal, u: u)
-                let wiWorld = localToWorld(local: bsdfSample.incoming)
+                let outgoingLocal = worldToLocal(world: outgoingWorld)
+                let bsdfSample = sampleLocal(outgoing: outgoingLocal, u: u)
+                let incidentWorld = localToWorld(local: bsdfSample.incoming)
                 return (
-                        BsdfSample(bsdfSample.estimate, wiWorld, bsdfSample.probabilityDensity),
+                        BsdfSample(bsdfSample.estimate, incidentWorld, bsdfSample.probabilityDensity),
                         isTransmissive
                 )
         }
 
-        public func evaluateDistributionFunction(wo: Vector, wi: Vector, normal: Normal) -> RgbSpectrum {
-                let reflected = evaluateWorld(wo: wo, wi: wi)
-                let dot = absDot(wi, Vector(normal: normal))
-                let scatter = reflected * dot
+        public func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal: Normal) -> RgbSpectrum {
+                let reflected = evaluateWorld(outgoing: outgoing, incident: incident)
+                let dotVal = absDot(incident, Vector(normal: normal))
+                let scatter = reflected * dotVal
                 return scatter
         }
 
-        public func sampleDistributionFunction(wo: Vector, normal: Normal, sampler: inout Sampler)
+        public func sampleDistributionFunction(outgoing: Vector, normal: Normal, sampler: inout Sampler)
                 -> BsdfSample
         {
-                var (bsdfSample, _) = sampleWorld(wo: wo, u: sampler.get3D())
+                var (bsdfSample, _) = sampleWorld(outgoing: outgoing, u: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, normal)
                 return bsdfSample
         }
 
-        public func evaluateProbabilityDensity(wo: Vector, wi: Vector) -> FloatX {
-                return probabilityDensityWorld(wo: wo, wi: wi)
+        public func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+                return probabilityDensityWorld(outgoing: outgoing, incident: incident)
         }
 }

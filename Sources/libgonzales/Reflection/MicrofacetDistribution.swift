@@ -7,18 +7,18 @@ public protocol MicrofacetDistribution: Sendable {
         func differentialArea(withNormal: Vector) -> FloatX
 
         // G in PBRT
-        func visibleFraction(from wo: Vector, and wi: Vector) -> FloatX
+        func visibleFraction(from outgoing: Vector, and incident: Vector) -> FloatX
 
         func lambda(_ vector: Vector) -> FloatX
 
-        func sampleHalfVector(wo: Vector, u: TwoRandomVariables) -> Vector
+        func sampleHalfVector(outgoing: Vector, u: TwoRandomVariables) -> Vector
 
         // G1 in PBRT
         func maskingShadowing(_ vector: Vector) -> FloatX
 
         var isSmooth: Bool { get }
 
-        func probabilityDensity(wo: Vector, half: Vector) -> FloatX
+        func probabilityDensity(outgoing: Vector, half: Vector) -> FloatX
 }
 
 extension MicrofacetDistribution {
@@ -28,12 +28,12 @@ extension MicrofacetDistribution {
                 return result
         }
 
-        public func visibleFraction(from wo: Vector, and wi: Vector) -> FloatX {
-                return 1 / (1 + lambda(wo) + lambda(wi))
+        public func visibleFraction(from outgoing: Vector, and incident: Vector) -> FloatX {
+                return 1 / (1 + lambda(outgoing) + lambda(incident))
         }
 
-        public func probabilityDensity(wo: Vector, half: Vector) -> FloatX {
-                return differentialArea(withNormal: half) * maskingShadowing(wo) * absDot(wo, half)
-                        / absCosTheta(wo)
+        public func probabilityDensity(outgoing: Vector, half: Vector) -> FloatX {
+                return differentialArea(withNormal: half) * maskingShadowing(outgoing) * absDot(outgoing, half)
+                        / absCosTheta(outgoing)
         }
 }

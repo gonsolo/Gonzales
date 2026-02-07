@@ -26,9 +26,9 @@ extension Sampleable {
 
         func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX) {
                 var (intr, pdf) = sample(samples: samples, scene: scene)
-                let wi: Vector = normalized(intr.position - point)
+                let incident: Vector = normalized(intr.position - point)
                 let squaredDistance = distanceSquared(point, intr.position)
-                let angle = absDot(Vector(normal: intr.normal), -wi)
+                let angle = absDot(Vector(normal: intr.normal), -incident)
                 pdf *= squaredDistance / angle
                 return (intr, pdf)
         }

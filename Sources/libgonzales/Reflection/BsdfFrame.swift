@@ -19,8 +19,8 @@ public struct BsdfFrame: Sendable {
                 self.shadingFrame = shadingFrame
         }
 
-        func isReflecting(wi: Vector, wo: Vector) -> Bool {
-                return dot(wi, geometricNormal) * dot(wo, geometricNormal) > 0
+        func isReflecting(incident: Vector, outgoing: Vector) -> Bool {
+                return dot(incident, geometricNormal) * dot(outgoing, geometricNormal) > 0
         }
 
         let geometricNormal: Normal

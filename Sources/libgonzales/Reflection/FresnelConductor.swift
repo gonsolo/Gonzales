@@ -14,16 +14,16 @@ struct FresnelConductor: Fresnel {
                 let sinThetaI2 = 1 - cosTheta2
                 let eta2 = eta * eta
                 let etak2 = etak * etak
-                let t0 = eta2 - etak2 - sinThetaI2
-                let a2plusb2 = (t0 * t0 + 4 * eta2 * etak2).squareRoot()
-                let t1 = a2plusb2 + cosTheta2
-                let a = (0.5 * (a2plusb2 + t0)).squareRoot()
-                let t2 = 2 * cosThetaClamped * a
-                let rs = (t1 - t2) / (t1 + t2)
-                let t3 = cosTheta2 * a2plusb2 + sinThetaI2 * sinThetaI2
-                let t4 = t2 * sinThetaI2
-                let rp = rs * (t3 - t4) / (t3 + t4)
-                return 0.5 * (rp + rs)
+                let term0 = eta2 - etak2 - sinThetaI2
+                let a2plusb2 = (term0 * term0 + 4 * eta2 * etak2).squareRoot()
+                let term1 = a2plusb2 + cosTheta2
+                let a = (0.5 * (a2plusb2 + term0)).squareRoot()
+                let term2 = 2 * cosThetaClamped * a
+                let reflectanceS = (term1 - term2) / (term1 + term2)
+                let term3 = cosTheta2 * a2plusb2 + sinThetaI2 * sinThetaI2
+                let term4 = term2 * sinThetaI2
+                let reflectanceP = reflectanceS * (term3 - term4) / (term3 + term4)
+                return 0.5 * (reflectanceP + reflectanceS)
         }
 
         func evaluate(cosTheta: FloatX) -> RgbSpectrum {

@@ -10,9 +10,9 @@ struct DummyBsdf: GlobalBsdf {
 
         func albedo() -> RgbSpectrum { return white }
 
-        func isReflecting(wi _: Vector, wo _: Vector) -> Bool { return false }
+        func isReflecting(incident _: Vector, outgoing _: Vector) -> Bool { return false }
 
-        func evaluateLocal(wo _: Vector, wi _: Vector) -> RgbSpectrum { return white }
+        func evaluateLocal(outgoing _: Vector, incident _: Vector) -> RgbSpectrum { return white }
 
         var bsdfFrame: BsdfFrame { return BsdfFrame() }
 }

@@ -6,7 +6,7 @@ extension Transform {
                         position: left * right.position,
                         normal: normalized(left * right.normal),
                         shadingNormal: normalized(left * right.shadingNormal),
-                        wo: normalized(left * right.wo),
+                        outgoing: normalized(left * right.outgoing),
                         dpdu: left * right.dpdu,
                         uv: right.uv,
                         faceIndex: right.faceIndex,

@@ -25,11 +25,11 @@ public final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return result
         }
 
-        public func sampleHalfVector(wo: Vector, u: TwoRandomVariables) -> Vector {
-                var localWo = wo
-                let flip = wo.z < 0
+        public func sampleHalfVector(outgoing: Vector, u: TwoRandomVariables) -> Vector {
+                var localWo = outgoing
+                let flip = outgoing.z < 0
                 if flip { localWo = -localWo }
-                let half = trowbridgeReitzSample(wi: localWo, alpha: alpha, u: u)
+                let half = trowbridgeReitzSample(incident: localWo, alpha: alpha, u: u)
                 if flip {
                         return -half
                 } else {
@@ -47,8 +47,8 @@ public final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 let sinTheta = (max(0, 1 - cosTheta * cosTheta)).squareRoot()
                 let tanTheta = sinTheta / cosTheta
                 let invTanTheta = 1 / tanTheta
-                let g1 = 2 / (1 + (1 + 1 / (invTanTheta * invTanTheta)).squareRoot())
-                let a = 2 * u.0 / g1 - 1
+                let maskingValue = 2 / (1 + (1 + 1 / (invTanTheta * invTanTheta)).squareRoot())
+                let a = 2 * u.0 / maskingValue - 1
                 var tmp = 1 / (a * a - 1)
                 if tmp > 1e10 { tmp = 1e10 }
                 let b = tanTheta
@@ -79,13 +79,13 @@ public final class TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return slope
         }
 
-        private func trowbridgeReitzSample(wi: Vector, alpha: (FloatX, FloatX), u: TwoRandomVariables)
+        private func trowbridgeReitzSample(incident: Vector, alpha: (FloatX, FloatX), u: TwoRandomVariables)
                 -> Vector
         {
-                let wiStretched = normalized(Vector(x: alpha.0 * wi.x, y: alpha.1 * wi.y, z: wi.z))
-                var slope = trowbridgeReitzSample11(cosTheta: cosTheta(wiStretched), u: u)
-                let tmp = cosPhi(wiStretched) * slope.0 - sinPhi(wiStretched) * slope.1
-                slope.1 = sinPhi(wiStretched) * slope.0 + cosPhi(wiStretched) * slope.1
+                let incidentStretched = normalized(Vector(x: alpha.0 * incident.x, y: alpha.1 * incident.y, z: incident.z))
+                var slope = trowbridgeReitzSample11(cosTheta: cosTheta(incidentStretched), u: u)
+                let tmp = cosPhi(incidentStretched) * slope.0 - sinPhi(incidentStretched) * slope.1
+                slope.1 = sinPhi(incidentStretched) * slope.0 + cosPhi(incidentStretched) * slope.1
                 slope.0 = tmp
                 slope.0 = alpha.0 * slope.0
                 slope.1 = alpha.1 * slope.1

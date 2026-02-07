@@ -18,10 +18,10 @@ final class ShadingFrameTests: XCTestCase {
                         diffuse: diffuse,
                         bsdfFrame: bsdfFrame)
 
-                let wo = Vector(x: 0.0, y: 0.0, z: 1.0)
-                let wi = Vector(x: 0.0, y: 0.1, z: 1.0)
+                let outgoing = Vector(x: 0.0, y: 0.0, z: 1.0)
+                let incident = Vector(x: 0.0, y: 0.1, z: 1.0)
 
-                let worldSpectrum = coated.evaluateWorld(wo: wo, wi: wi)
+                let worldSpectrum = coated.evaluateWorld(outgoing: outgoing, incident: incident)
 
                 XCTAssertTrue(
                         worldSpectrum.x > 0.2 && worldSpectrum.x < 0.4,

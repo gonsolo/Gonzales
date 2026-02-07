@@ -63,15 +63,15 @@ func union(bound: Bounds3f, point: Point) -> Bounds3f {
 }
 
 @inline(__always)
-func makeCoordinateSystem(from v1: Vector) -> (v2: Vector, v3: Vector) {
-        var v2 = up
-        if abs(v1.x) > abs(v1.y) {
-                v2 = Vector(x: -v1.z, y: 0, z: v1.x) / (v1.x * v1.x + v1.z * v1.z).squareRoot()
+func makeCoordinateSystem(from vector1: Vector) -> (vector2: Vector, vector3: Vector) {
+        var vector2 = upVector
+        if abs(vector1.x) > abs(vector1.y) {
+                vector2 = Vector(x: -vector1.z, y: 0, z: vector1.x) / (vector1.x * vector1.x + vector1.z * vector1.z).squareRoot()
         } else {
-                v2 = Vector(x: 0, y: v1.z, z: -v1.y) / (v1.y * v1.y + v1.z * v1.z).squareRoot()
+                vector2 = Vector(x: 0, y: vector1.z, z: -vector1.y) / (vector1.y * vector1.y + vector1.z * vector1.z).squareRoot()
         }
-        let vector3 = cross(v1, v2)
-        return (v2, vector3)
+        let vector3 = cross(vector1, vector2)
+        return (vector2, vector3)
 }
 
 func faceforward(normal: Normal, comparedTo vector: Vector) -> Normal {

@@ -11,7 +11,7 @@ final class HenyeyGreenstein: PhaseFunction {
                 return inv4Pi * (1 - g * g) / (denom * (denom).squareRoot())
         }
 
-        func samplePhase(wo: Vector, sampler: inout Sampler) -> (value: FloatX, wi: Vector) {
+        func samplePhase(outgoing: Vector, sampler: inout Sampler) -> (value: FloatX, incident: Vector) {
                 let u = sampler.get2D()
                 var cosTheta: FloatX
                 if abs(g) < 1e-3 {
@@ -22,21 +22,21 @@ final class HenyeyGreenstein: PhaseFunction {
                 }
                 let sinTheta = (max(0.0, 1 - cosTheta * cosTheta)).squareRoot()
                 let phi = 2 * FloatX.pi * u.1
-                let (v1, v2) = makeCoordinateSystem(from: wo)
-                let wi = sphericalDirection(
+                let (vector1, vector2) = makeCoordinateSystem(from: outgoing)
+                let incident = sphericalDirection(
                         sinTheta: sinTheta,
                         cosTheta: cosTheta,
                         phi: phi,
-                        x: v1,
-                        y: v2,
-                        z: wo)
+                        x: vector1,
+                        y: vector2,
+                        z: outgoing)
 
                 let value = phase(cosTheta: cosTheta, g: g)
-                return (value, wi)
+                return (value, incident)
         }
 
-        func evaluate(wo: Vector, wi: Vector) -> FloatX {
-                return phase(cosTheta: dot(wo, wi), g: g)
+        func evaluate(outgoing: Vector, incident: Vector) -> FloatX {
+                return phase(cosTheta: dot(outgoing, incident), g: g)
         }
 
         let g: FloatX

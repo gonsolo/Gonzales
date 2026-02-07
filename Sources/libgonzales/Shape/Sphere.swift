@@ -49,14 +49,14 @@ struct Sphere: Shape {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
                         var (interaction, pdf) = sample(samples: samples, scene: scene)
-                        var wi: Vector = interaction.position - ref.position
-                        if lengthSquared(wi) == 0 {
+                        var incident: Vector = interaction.position - ref.position
+                        if lengthSquared(incident) == 0 {
                                 pdf = 0
                         } else {
-                                wi = normalized(wi)
+                                incident = normalized(incident)
                                 pdf *=
                                         distanceSquared(ref.position, interaction.position)
-                                        / absDot(interaction.normal, Normal(-wi))
+                                        / absDot(interaction.normal, Normal(-incident))
                         }
                         if pdf.isInfinite { pdf = 0 }
                         return (interaction, pdf)
@@ -170,7 +170,7 @@ struct Sphere: Shape {
                         position: pHit,
                         normal: normal,
                         shadingNormal: normal,
-                        wo: -ray.direction,
+                        outgoing: -ray.direction,
                         dpdu: dpdu,
                         uv: uv)
                 interaction = objectToWorld * localInteraction

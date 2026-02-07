@@ -236,7 +236,7 @@ struct Curve: Shape {
                                 position: pHit,
                                 normal: normal,
                                 shadingNormal: normal,
-                                wo: -ray.direction,
+                                outgoing: -ray.direction,
                                 dpdu: dpdu,
                                 uv: uvHit,
                                 faceIndex: 0)
@@ -246,7 +246,7 @@ struct Curve: Shape {
                                 position: worldInteraction.position,
                                 normal: worldInteraction.normal,
                                 shadingNormal: worldInteraction.shadingNormal,
-                                wo: worldInteraction.wo,
+                                outgoing: worldInteraction.outgoing,
                                 dpdu: worldInteraction.dpdu,
                                 uv: worldInteraction.uv,
                                 faceIndex: worldInteraction.faceIndex,

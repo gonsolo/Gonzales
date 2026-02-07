@@ -1,4 +1,4 @@
-func sameHemisphere(_ v1: Vector, _ v2: Vector) -> Bool { v1.z * v2.z > 0 }
+func sameHemisphere(_ vector1: Vector, _ vector2: Vector) -> Bool { vector1.z * vector2.z > 0 }
 
 func absCosTheta(_ v: Vector) -> FloatX { abs(v.z) }
 
@@ -6,9 +6,9 @@ func reflect(vector: Vector, by normal: Vector) -> Vector {
         -vector + 2 * dot(vector, normal) * normal
 }
 
-func refract(wi: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
+func refract(incident: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
         var eta = eta
-        var cosThetaI = dot(normal, wi)
+        var cosThetaI = dot(normal, incident)
         var normal = -normal
         if cosThetaI < 0 {
                 eta = 1 / eta
@@ -21,8 +21,8 @@ func refract(wi: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
                 return nil
         }
         let cosThetaT = (1 - sin2ThetaT).squareRoot()
-        let wt = eta * -wi + (eta * cosThetaI - cosThetaT) * Vector(normal: normal)
-        return (wt, eta)
+        let transmitted = eta * -incident + (eta * cosThetaI - cosThetaT) * Vector(normal: normal)
+        return (transmitted, eta)
 }
 
 func sinTheta(_ w: Vector) -> FloatX { return sin2Theta(w).squareRoot() }

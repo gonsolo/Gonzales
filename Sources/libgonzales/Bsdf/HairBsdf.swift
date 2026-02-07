@@ -187,15 +187,15 @@ extension HairBsdf {
                 return (longitudinalScattering, azimuthalScattering)
         }
 
-        func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
+        func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
 
-                let sinThetaO = wo.x
+                let sinThetaO = outgoing.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
-                let phiO = atan2(wo.z, wo.y)
+                let phiO = atan2(outgoing.z, outgoing.y)
 
-                let sinThetaI = wi.x
+                let sinThetaI = incident.x
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
-                let phiI = atan2(wi.z, wi.y)
+                let phiI = atan2(incident.z, incident.y)
 
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
@@ -235,8 +235,8 @@ extension HairBsdf {
                         sinThetaO,
                         v[pMax])
                 fsum += longitudinalScattering * attenuation[pMax] / (2 * FloatX.pi)
-                if absCosTheta(wi) > 0 {
-                        fsum /= absCosTheta(wi)
+                if absCosTheta(incident) > 0 {
+                        fsum /= absCosTheta(incident)
                 }
                 return fsum
         }
@@ -262,13 +262,13 @@ extension HairBsdf {
                 return attenuation.map { $0.average() / sumY }
         }
 
-        func probabilityDensityLocal(wo: Vector, wi: Vector) -> FloatX {
-                let sinThetaO = wo.x
+        func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+                let sinThetaO = outgoing.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
-                let phiO = atan2(wo.z, wo.y)
-                let sinThetaI = wi.x
+                let phiO = atan2(outgoing.z, outgoing.y)
+                let sinThetaI = incident.x
                 let cosThetaI = (1 - square(sinThetaI)).squareRoot()
-                let phiI = atan2(wi.z, wi.y)
+                let phiI = atan2(incident.z, incident.y)
                 let etap = sqrt(square(indexRefraction) - square(sinThetaO)) / cosThetaO
                 let sinGammaT = h / etap
                 let gammaT = asin(sinGammaT)

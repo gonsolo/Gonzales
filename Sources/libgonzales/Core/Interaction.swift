@@ -9,7 +9,7 @@ protocol Interaction: Sendable {
         var position: Point { get }
         var shadingNormal: Normal { get }
         var uv: Point2f { get }
-        var wo: Vector { get }
+        var outgoing: Vector { get }
 }
 
 func offsetRayOrigin(point: Point, direction: Vector) -> Point {

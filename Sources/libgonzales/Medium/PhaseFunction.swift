@@ -1,28 +1,28 @@
 protocol PhaseFunction: DistributionModel, Sendable {
-        func evaluate(wo: Vector, wi: Vector) -> FloatX
-        func samplePhase(wo: Vector, sampler: inout Sampler) -> (value: FloatX, wi: Vector)
+        func evaluate(outgoing: Vector, incident: Vector) -> FloatX
+        func samplePhase(outgoing: Vector, sampler: inout Sampler) -> (value: FloatX, incident: Vector)
 }
 
 extension PhaseFunction {
 
-        func evaluateDistributionFunction(wo: Vector, wi: Vector, normal _: Normal = zeroNormal)
+        func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal _: Normal = zeroNormal)
                 -> RgbSpectrum
         {
-                let phase = evaluate(wo: wo, wi: wi)
+                let phase = evaluate(outgoing: outgoing, incident: incident)
                 let scatter = RgbSpectrum(intensity: phase)
                 return scatter
         }
 
         func sampleDistributionFunction(
-                wo: Vector, normal _: Normal = zeroNormal, sampler: inout Sampler
+                outgoing: Vector, normal _: Normal = zeroNormal, sampler: inout Sampler
         )
                 -> BsdfSample
         {
-                let (value, wi) = samplePhase(wo: wo, sampler: &sampler)
-                return BsdfSample(RgbSpectrum(intensity: value), wi, value)
+                let (value, incident) = samplePhase(outgoing: outgoing, sampler: &sampler)
+                return BsdfSample(RgbSpectrum(intensity: value), incident, value)
         }
 
-        func evaluateProbabilityDensity(wo: Vector, wi: Vector) -> FloatX {
-                return evaluate(wo: wo, wi: wi)
+        func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+                return evaluate(outgoing: outgoing, incident: incident)
         }
 }

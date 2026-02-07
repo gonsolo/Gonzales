@@ -18,12 +18,12 @@ public struct BsdfSample: Sendable {
                 !estimate.isBlack && incoming.z != 0 && probabilityDensity != 0
         }
 
-        func isReflection(wo: Vector) -> Bool {
-                sameHemisphere(incoming, wo)
+        func isReflection(outgoing: Vector) -> Bool {
+                sameHemisphere(incoming, outgoing)
         }
 
-        func isTransmission(wo: Vector) -> Bool {
-                return !isReflection(wo: wo)
+        func isTransmission(outgoing: Vector) -> Bool {
+                return !isReflection(outgoing: outgoing)
         }
 
         var estimate: RgbSpectrum

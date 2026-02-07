@@ -86,7 +86,7 @@ extension Vector3: CustomStringConvertible {
 public typealias Vector = Vector3
 
 let nullVector = Vector(x: 0, y: 0, z: 0)
-let up = Vector(x: 0, y: 1, z: 0)
+let upVector = Vector(x: 0, y: 1, z: 0)
 
 func mirror(_ vector: Vector3) -> Vector3 {
         return Vector3(x: -vector.x, y: -vector.y, z: vector.z)

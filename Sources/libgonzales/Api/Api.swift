@@ -24,16 +24,16 @@ func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable]) 
 }
 
 @MainActor
-func lookAtTransform(eye: Point, at: Point, up: Vector) throws -> Transform {
-        let dir: Vector = normalized(at - eye)
-        var up = normalized(up)
-        let right = normalized(cross(up, dir))
+func lookAtTransform(eye: Point, target: Point, upVector: Vector) throws -> Transform {
+        let dir: Vector = normalized(target - eye)
+        var upVector = normalized(upVector)
+        let right = normalized(cross(upVector, dir))
         if length(right) == 0 { return Transform() }
-        up = cross(dir, right)
+        upVector = cross(dir, right)
         let matrix = Matrix(
-                t00: right.x, t01: up.x, t02: dir.x, t03: eye.x,
-                t10: right.y, t11: up.y, t12: dir.y, t13: eye.y,
-                t20: right.z, t21: up.z, t22: dir.z, t23: eye.z,
+                t00: right.x, t01: upVector.x, t02: dir.x, t03: eye.x,
+                t10: right.y, t11: upVector.y, t12: dir.y, t13: eye.y,
+                t20: right.z, t21: upVector.z, t22: dir.z, t23: eye.z,
                 t30: 0, t31: 0, t32: 0, t33: 1
         )
         let transform = Transform(matrix: matrix.inverse)
@@ -196,8 +196,8 @@ extension Api {
         }
 
         @MainActor
-        func lookAt(eye: Point, at: Point, up: Vector) throws {
-                let transform = try lookAtTransform(eye: eye, at: at, up: up)
+        func lookAt(eye: Point, target: Point, upVector: Vector) throws {
+                let transform = try lookAtTransform(eye: eye, target: target, upVector: upVector)
                 currentTransform *= transform
         }
 
@@ -510,11 +510,11 @@ extension Api {
         }
 
         @MainActor
-        func translate(by: Vector) throws {
+        func translate(amount: Vector) throws {
                 let matrix = Matrix(
-                        t00: 1, t01: 0, t02: 0, t03: by.x,
-                        t10: 0, t11: 1, t12: 0, t13: by.y,
-                        t20: 0, t21: 0, t22: 1, t23: by.z,
+                        t00: 1, t01: 0, t02: 0, t03: amount.x,
+                        t10: 0, t11: 1, t12: 0, t13: amount.y,
+                        t20: 0, t21: 0, t22: 1, t23: amount.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
                 let translation = Transform(matrix: matrix)
                 currentTransform *= translation

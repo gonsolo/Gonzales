@@ -32,17 +32,17 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                 self.bsdfFrame = bsdfFrame
         }
 
-        public func evaluateLocal(wo: Vector, wi: Vector) -> RgbSpectrum {
-                let value = layered.evaluateLocal(wo: wo, wi: wi)
+        public func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+                let value = layered.evaluateLocal(outgoing: outgoing, incident: incident)
                 return value
         }
 
-        func sampleLocal(wo: Vector, u: ThreeRandomVariables) async -> BsdfSample {
-                return await layered.sampleLocal(wo: wo, u: u)
+        func sampleLocal(outgoing: Vector, u: ThreeRandomVariables) async -> BsdfSample {
+                return await layered.sampleLocal(outgoing: outgoing, u: u)
         }
 
-        public func probabilityDensityLocal(wo: Vector, wi: Vector) async -> FloatX {
-                return await layered.probabilityDensityLocal(wo: wo, wi: wi)
+        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) async -> FloatX {
+                return await layered.probabilityDensityLocal(outgoing: outgoing, incident: incident)
         }
 
         public func albedo() -> RgbSpectrum {

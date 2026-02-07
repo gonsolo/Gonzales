@@ -13,7 +13,7 @@ extension BsdfFrameProtocol {
                 return bsdfFrame.shadingFrame.localToWorld(local: local)
         }
 
-        func isReflecting(wi: Vector, wo: Vector) -> Bool {
-                return bsdfFrame.isReflecting(wi: wi, wo: wo)
+        func isReflecting(incident: Vector, outgoing: Vector) -> Bool {
+                return bsdfFrame.isReflecting(incident: incident, outgoing: outgoing)
         }
 }

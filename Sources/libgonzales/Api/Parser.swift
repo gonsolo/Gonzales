@@ -461,12 +461,12 @@ extension Parser {
                         try bail(message: "LookAt: Point expected!")
                 }
                 parseComments()
-                guard let at = try parsePoint() else {
+                guard let target = try parsePoint() else {
                         try bail(message: "LookAt: Point expected!")
                 }
                 parseComments()
-                let up = try parseVector()
-                try api.lookAt(eye: eye, at: at, up: up)
+                let upVector = try parseVector()
+                try api.lookAt(eye: eye, target: target, upVector: upVector)
         }
 
         @MainActor
@@ -508,7 +508,7 @@ extension Parser {
         private func parseTranslate() throws {
                 guard let f = try parseThreeFloatXs() else { try bail() }
                 let translation = Vector(xyz: f)
-                try api.translate(by: translation)
+                try api.translate(amount: translation)
         }
 
         @MainActor
