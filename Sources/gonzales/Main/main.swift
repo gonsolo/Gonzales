@@ -55,12 +55,12 @@ func parseArguments() throws -> String {
                 case "--quick":
                         renderOptions.quick = true
                 case "--single":
-                        guard let sx = iterator.next() else { throw MainError.missingOption }
-                        guard let sy = iterator.next() else { throw MainError.missingOption }
-                        guard let x = Int(sx) else { throw MainError.format }
-                        guard let y = Int(sy) else { throw MainError.format }
+                        guard let argumentX = iterator.next() else { throw MainError.missingOption }
+                        guard let argumentY = iterator.next() else { throw MainError.missingOption }
+                        guard let singleX = Int(argumentX) else { throw MainError.format }
+                        guard let singleY = Int(argumentY) else { throw MainError.format }
                         renderOptions.singleRay = true
-                        renderOptions.singleRayCoordinate = Point2i(x: x, y: y)
+                        renderOptions.singleRayCoordinate = Point2i(x: singleX, y: singleY)
                 case "--parse":
                         renderOptions.justParse = true
                 case "--ptexmem":
