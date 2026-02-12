@@ -35,7 +35,7 @@ https://aur.archlinux.org/packages/gonzales-git
 
 ### Swift patches for building manually
 
-For Swift 6.1.2 and later the following has to be done on Arch Linux because of incompatibility with GCC 15:
+For Swift 6.1.2 and later the following has to be done on Arch Linux because of an incompatibility with GCC 15:
 
 ```
 + #if 0
