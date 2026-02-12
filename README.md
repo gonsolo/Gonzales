@@ -17,12 +17,11 @@ With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Thread
 
 ![Moana](Images/moana.png)
 
-### Build on Ubuntu
+### Get it from Arch AUR
 
-- Install swift from https://www.swiftlang.xyz.
-- Install libopenimageio-dev and libembree-dev.
-- Install [ptex](https://drive.google.com/file/d/1hQ7ml9Nf7tk6vDtsavbQyVHQQcyPQBS_/view?usp=sharing)
-- Type make
+```yay gonzales-git```
+
+https://aur.archlinux.org/packages/gonzales-git
 
 ### Try it out
 
@@ -34,9 +33,9 @@ With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Thread
 
 [PBRT](https://www.pbr-book.org/) was an inspiration since it was called lrt.
 
-### Swift patches
+### Swift patches for building manually
 
-For Swift 6.1.2 the following has to be done on Arch Linux because of incompatibility with GCC 15:
+For Swift 6.1.2 and later the following has to be done on Arch Linux because of incompatibility with GCC 15:
 
 ```
 + #if 0
