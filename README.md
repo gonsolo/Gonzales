@@ -25,7 +25,6 @@ Featuring a native **Bounding Volume Hierarchy (BVH)** optimized specifically fo
 * **Xoshiro256\*\***: Features a custom implementation of the Xoshiro256** generator for ultra-fast, high-quality local randomness.
 
 ### 🌌 Complex Light Transport
-* **Volume Path Integration:** Full support for participating media, including heterogeneous volumes and volumetric scattering.
 * **Russian Roulette:** Optimized path termination heuristics to maintain computational efficiency in deep-bounce indirect lighting simulations.
 * **Power-Based Light Sampling:** Efficiently handles scenes with high light counts by sampling based on cumulative power distributions.
 
