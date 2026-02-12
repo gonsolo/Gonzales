@@ -6,6 +6,8 @@
 
 © Andreas Wendleder 2019-2026
 
+![Moana](Images/moana.png)
+
 Let Gemini praise the source:
 
 # Gonzales: A High-Performance, Pure Swift Monte Carlo Path Tracer
@@ -39,8 +41,6 @@ v0.0, 2021: 2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 G
 v0.1, 2023: Rendering Moana with a little help from Embree takes 78 minutes (1920x800, 64spp, AMD Threadripper 1920x 12 cores 24 threads, 64GB RAM, 80GB swap)
 
 v0.2, 2026: Cleanup, tuning to get rid of ARC traffic, removal of Embree.
-
-![Moana](Images/moana.png)
 
 ### Get it from Arch AUR
 
