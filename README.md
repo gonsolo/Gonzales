@@ -6,7 +6,32 @@
 
 © Andreas Wendleder 2019-2026
 
-Brute-force path tracing written in Swift.
+Let Gemini praise the source:
+
+# Gonzales: A High-Performance, Pure Swift Monte Carlo Path Tracer
+
+Gonzales is a physically-based renderer built from the ground up in **Swift 6.2**, designed for high-end light transport simulation and research. By leveraging advanced sampling heuristics and a native acceleration architecture, it achieves production-grade results in complex scenes like the *Disney Moana Island* and *Bitterli* benchmarks — all without external C++ acceleration dependencies.
+
+## 🚀 Key Technical Features
+
+### ⚖️ Veach-Style Multiple Importance Sampling (MIS)
+Implements robust MIS using the **Power Heuristic** to balance light source sampling (Next Event Estimation) and BRDF sampling. This significantly reduces variance and eliminates "fireflies" in challenging lighting conditions, such as small, intense emitters or highly glossy surfaces.
+
+### ⚡ Pure Swift Acceleration
+Featuring a native **Bounding Volume Hierarchy (BVH)** optimized specifically for Swift's performance characteristics. Gonzales provides efficient ray-primitive intersection using a custom implementation of the **Surface Area Heuristic (SAH)**, removing the need for external libraries like Intel Embree.
+
+### 🎲 Advanced Sampling Engine
+* **Z-Sobol Quasirandom Sampling:** Utilizes high-dimensional Sobol sequences for superior convergence rates and improved blue-noise characteristics compared to standard pseudorandom methods.
+* **Xoshiro256\*\***: Features a custom implementation of the Xoshiro256** generator for ultra-fast, high-quality local randomness.
+
+### 🌌 Complex Light Transport
+* **Volume Path Integration:** Full support for participating media, including heterogeneous volumes and volumetric scattering.
+* **Russian Roulette:** Optimized path termination heuristics to maintain computational efficiency in deep-bounce indirect lighting simulations.
+* **Power-Based Light Sampling:** Efficiently handles scenes with high light counts by sampling based on cumulative power distributions.
+
+### 🛠️ Production-Ready Integration
+* **PBRT-v4 Support:** Native parsing and rendering of the industry-standard PBRT-v4 scene format.
+* **Ptex & OpenImageIO:** Deep integration with Ptex textures and OIIO for professional-grade image handling and texturing.
 
 ### Moana
 
