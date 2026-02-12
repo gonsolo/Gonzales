@@ -35,10 +35,11 @@ Featuring a native **Bounding Volume Hierarchy (BVH)** optimized specifically fo
 
 ### Moana
 
-~~2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 GB of memory.
-Memory usage was around 50GB.~~ This was 2021.
+v0.0, 2021: 2048x858, 64spp, 26h on a Google Compute Engine with 8 CPUs and 64 GB of memory. Memory usage was around 50GB.
 
-With version 0.1.0 rendering Moana takes 78 minutes (1920x800, 64spp, AMD Threadripper 1920x 12 cores 24 threads, 64GB RAM, 80GB swap)
+v0.1, 2023: Rendering Moana with a little help from Embree takes 78 minutes (1920x800, 64spp, AMD Threadripper 1920x 12 cores 24 threads, 64GB RAM, 80GB swap)
+
+v0.2, 2026: Cleanup, tuning to get rid of ARC traffic, removal of Embree.
 
 ![Moana](Images/moana.png)
 
