@@ -20,16 +20,6 @@ class RenderConfiguration {
         var primitives = [any Boundable & Intersectable]()
         var objects = ["": [any Boundable & Intersectable]()]
 
-        var defaultMaterial: Material = Material.diffuse(
-                Diffuse(
-                        reflectance: Texture.rgbSpectrumTexture(
-                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
-
-        @MainActor
-        init() {
-                materials.append(defaultMaterial)
-        }
-
         @MainActor
         func makeFilm(filter: any Filter) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
@@ -181,7 +171,7 @@ class RenderConfiguration {
                 let sampler = try makeSampler(film: camera.film)
                 let scene = Scene(
                         lights: lights,
-                        materials: materials,
+                        materials: sceneDescription.materials,
                         meshes: triangleMeshBuilder.getMeshes(),
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights)

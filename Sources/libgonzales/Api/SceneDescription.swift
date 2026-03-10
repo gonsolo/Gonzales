@@ -57,6 +57,7 @@ public struct SceneDescription {
         var areaLights = [AreaLight]()
         var acceleratorName = "bvh"
         var currentTransform = Transform()
+        var materials = [Material]()
         var namedCoordinateSystems = [String: Transform]()
         var options: RenderConfiguration
         var readTimer: Timer?
@@ -64,10 +65,16 @@ public struct SceneDescription {
         var states = [State]()
         var transforms = [Transform]()
 
+        static let defaultMaterial = Material.diffuse(
+                Diffuse(
+                        reflectance: Texture.rgbSpectrumTexture(
+                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
+
         @MainActor
         public init() {
                 self.options = RenderConfiguration()
                 self.state = State()
+                self.materials.append(SceneDescription.defaultMaterial)
         }
 }
 
@@ -592,6 +599,3 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
 
 @MainActor
 public var sceneDescription = SceneDescription()
-
-@MainActor
-var materials = [Material]()
