@@ -592,3 +592,6 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
 
 @MainActor
 public var api = Api()
+
+@MainActor
+var materials = [Material]()
