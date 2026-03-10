@@ -59,6 +59,7 @@ public struct Api {
         var currentTransform = Transform()
         var namedCoordinateSystems = [String: Transform]()
         var readTimer: Timer?
+        var states = [State]()
         var transforms = [Transform]()
 }
 
@@ -594,6 +595,3 @@ var options = Options()
 
 @MainActor
 var state = State()
-
-@MainActor
-var states = [State]()
