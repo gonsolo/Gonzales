@@ -23,7 +23,6 @@ struct Ray: Sendable {
         let origin: Point
         let direction: Vector
         let inverseDirection: Vector
-        // var medium: Medium?
         let cameraSample: CameraSample
 }
 

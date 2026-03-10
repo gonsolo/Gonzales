@@ -180,9 +180,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 }
         }
 
-        static func statistics() {
-                // print("    Nodes visited:\t\t\t\t\t\t\t\(boundingHierarchyNodesVisited)")
-        }
+        static func statistics() {}
 
         let nodes: [BoundingHierarchyNode]
         var primIds: [PrimId]

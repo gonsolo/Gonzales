@@ -376,35 +376,10 @@ extension VolumePathIntegrator {
                                                 inDirection: surfaceInteraction.outgoing)
                         }
                 }
-                // if surfaceInteraction.material == noMaterial {
-                //        return false
-                // }
-                // let bsdf = surfaceInteraction.getBsdf()
                 assert(surfaceInteraction.materialIndex >= 0)
                 let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
                         interaction: surfaceInteraction)
 
-                // if surfaceInteraction.material.isInterface {
-                //        //var spawnedRay = surfaceInteraction.spawnRay(
-                //        let spawnedRay = surfaceInteraction.spawnRay(
-                //                inDirection: ray.direction)
-                //        //if let interface = surfaceInteraction.mediumInterface {
-                //        //spawnedRay.medium = state.namedMedia[interface.interior]
-                //        //}
-                //        ray = spawnedRay
-                //        try bounces(
-                //                ray: &ray,
-                //                interaction: &interaction,
-                //                tHit: &tHit,
-                //                bounce: bounce + 1,
-                //                estimate: &estimate,
-                //                sampler: sampler,
-                //                pathThroughputWeight: &pathThroughputWeight,
-                //                lightSampler: lightSampler,
-                //                albedo: &albedo,
-                //                firstNormal: &firstNormal,
-                //                state: state)
-                // }
                 if state.bounce == 0 {
                         state.albedo = bsdf.albedo()
                         state.firstNormal = surfaceInteraction.normal
@@ -446,7 +421,6 @@ extension VolumePathIntegrator {
                 if !state.interaction.valid {
                         return false  // No surface hit, so stop this bounce
                 }
-                // let (transmittance, mediumInteraction) = ray.medium?.sample(...) ?? (white, nil)
                 let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)
                 state.throughput *= transmittance
 
@@ -494,32 +468,4 @@ extension VolumePathIntegrator {
                         }
                 }
         }
-
-        // Deprecated: used by commented out code in surfaceEstimate
-        private mutating func bounces(
-                state: inout BounceState,
-                context: inout IntegratorContext,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                for bounce in state.bounce...maxDepth {
-                        state.bounce = bounce
-                        state.interaction = interaction
-                        let result = try oneBounce(state: &state, context: &context)
-                        interaction = state.interaction
-                        if !result {
-                                break
-                        }
-                }
-        }
-}
-
-extension VolumePathIntegrator {
-        // HACK: Imagemagick's converts grayscale images to one channel which Intel
-        // denoiser can't read. Make white a little colorful
-        private func intelHack(_ albedo: inout RgbSpectrum) {
-                if albedo.red == albedo.green && albedo.red == albedo.blue {
-                        albedo.red += 0.01
-                }
-        }
-
 }
