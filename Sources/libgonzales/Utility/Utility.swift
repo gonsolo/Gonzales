@@ -45,7 +45,7 @@ func log2Int(value: Int) -> UInt {
 
 func gammaLinearToSrgb(value: FloatX) -> FloatX {
         if value <= 0.0031308 {
-                return value / 12.92
+                return value * 12.92
         } else {
                 return 1.055 * pow(value, 1.0 / 2.4) - 0.055
         }
