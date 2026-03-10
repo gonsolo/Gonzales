@@ -56,6 +56,7 @@ public struct Api {
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
         var acceleratorName = "bvh"
+        var namedCoordinateSystems = [String: Transform]()
 }
 
 extension Api {
@@ -76,7 +77,7 @@ extension Api {
         }
 
         @MainActor
-        func camera(name _: String, parameters: ParameterDictionary) throws {
+        mutating func camera(name _: String, parameters: ParameterDictionary) throws {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
                 options.cameraToWorld = currentTransform.inverse
@@ -84,7 +85,7 @@ extension Api {
         }
 
         @MainActor
-        func coordinateSystem(name: String) {
+        mutating func coordinateSystem(name: String) {
                 namedCoordinateSystems[name] = currentTransform
         }
 
@@ -605,5 +606,3 @@ var readTimer = Timer("")
 
 
 
-@MainActor
-var namedCoordinateSystems = [String: Transform]()
