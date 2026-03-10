@@ -58,18 +58,19 @@ public struct Api {
         var acceleratorName = "bvh"
         var namedCoordinateSystems = [String: Transform]()
         var readTimer: Timer?
+        var transforms = [Transform]()
 }
 
 extension Api {
 
         @MainActor
-        func attributeBegin() throws {
+        mutating func attributeBegin() throws {
                 try transformBegin()
                 states.append(state)
         }
 
         @MainActor
-        func attributeEnd() throws {
+        mutating func attributeEnd() throws {
                 try transformEnd()
                 guard let last = states.popLast() else {
                         throw ApiError.parseAttributeEnd
@@ -243,13 +244,13 @@ extension Api {
         }
 
         @MainActor
-        func objectBegin(name: String) throws {
+        mutating func objectBegin(name: String) throws {
                 try attributeBegin()
                 state.objectName = name
         }
 
         @MainActor
-        func objectEnd() throws {
+        mutating func objectEnd() throws {
                 try attributeEnd()
                 state.objectName = nil
         }
@@ -344,12 +345,12 @@ extension Api {
         }
 
         @MainActor
-        func transformBegin() throws {
+        mutating func transformBegin() throws {
                 transforms.append(currentTransform)
         }
 
         @MainActor
-        func transformEnd() throws {
+        mutating func transformEnd() throws {
                 guard let last = transforms.popLast() else {
                         throw ApiError.transformsEmpty
                 }
@@ -599,8 +600,7 @@ var states = [State]()
 @MainActor
 var currentTransform = Transform()
 
-@MainActor
-var transforms = [Transform]()
+
 
 
 
