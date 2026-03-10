@@ -16,14 +16,16 @@ struct DiffuseTransmission {
 }
 
 @MainActor
-func createDiffuseTransmission(parameters: ParameterDictionary) throws -> DiffuseTransmission {
+func createDiffuseTransmission(parameters: ParameterDictionary, textures: [String: Texture]) throws -> DiffuseTransmission {
         let reflectance = try parameters.findRgbSpectrumTexture(
                 name: "reflectance",
+                textures: textures,
                 else: RgbSpectrum(intensity: 1))
         let transmittance = try parameters.findRgbSpectrumTexture(
                 name: "transmittance",
+                textures: textures,
                 else: RgbSpectrum(intensity: 1))
-        let scale = try parameters.findFloatXTexture(name: "scale", else: 1.0)
+        let scale = try parameters.findFloatXTexture(name: "scale", textures: textures, else: 1.0)
         return DiffuseTransmission(
                 reflectance: reflectance,
                 transmittance: transmittance,

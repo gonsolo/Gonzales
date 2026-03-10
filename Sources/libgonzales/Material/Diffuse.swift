@@ -25,11 +25,11 @@ struct Diffuse {
 }
 
 @MainActor
-func createDiffuse(parameters: ParameterDictionary) throws -> Diffuse {
+func createDiffuse(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {
                 let texture: Texture =
-                        sceneDescription.state.textures[reflectanceTextureName]
+                        textures[reflectanceTextureName]
                         ?? Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: black)))
                 return Diffuse(reflectance: texture)

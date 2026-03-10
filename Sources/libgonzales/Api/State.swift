@@ -29,7 +29,7 @@ struct State {
                 print("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
                 parameters["reflectance"] = [gray]
-                let diffuse = try createDiffuse(parameters: parameters)
+                let diffuse = try createDiffuse(parameters: parameters, textures: textures)
                 return Material.diffuse(diffuse)
         }
 
@@ -39,23 +39,23 @@ struct State {
                 var material: Material
                 switch type {
                 case "coateddiffuse":
-                        let coatedDiffuse = try createCoatedDiffuse(parameters: parameters)
+                        let coatedDiffuse = try createCoatedDiffuse(parameters: parameters, textures: textures)
                         material = Material.coatedDiffuse(coatedDiffuse)
                 // coatedconductor missing
                 case "conductor":
                         let conductor = try createConductor(parameters: parameters)
                         material = Material.conductor(conductor)
                 case "dielectric":
-                        let dielectric = try createDielectric(parameters: parameters)
+                        let dielectric = try createDielectric(parameters: parameters, textures: textures)
                         material = Material.dielectric(dielectric)
                 case "diffuse":
-                        let diffuse = try createDiffuse(parameters: parameters)
+                        let diffuse = try createDiffuse(parameters: parameters, textures: textures)
                         material = Material.diffuse(diffuse)
                 case "diffusetransmission":
-                        let diffuseTransmission = try createDiffuseTransmission(parameters: parameters)
+                        let diffuseTransmission = try createDiffuseTransmission(parameters: parameters, textures: textures)
                         material = Material.diffuseTransmission(diffuseTransmission)
                 case "hair":
-                        let hair = try createHair(parameters: parameters)
+                        let hair = try createHair(parameters: parameters, textures: textures)
                         material = Material.hair(hair)
                 case "interface":
                         let interface = try createInterface(parameters: parameters)

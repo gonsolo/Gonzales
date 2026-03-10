@@ -165,18 +165,18 @@ class RenderConfiguration {
         }
 
         @MainActor
-        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight]) async throws
+        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState) async throws
                 -> some Renderer {
                 let camera = try await makeCamera()
                 let sampler = try makeSampler(film: camera.film)
                 let scene = Scene(
                         lights: lights,
-                        materials: sceneDescription.materials,
+                        materials: materials,
                         meshes: triangleMeshBuilder.getMeshes(),
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try await makeAccelerator(scene: scene, primitives: primitives, acceleratorName: sceneDescription.acceleratorName)
+                let accelerator = try await makeAccelerator(scene: scene, primitives: primitives, acceleratorName: acceleratorName)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
@@ -190,7 +190,8 @@ class RenderConfiguration {
                         integrator: integrator,
                         sampler: sampler,
                         lightSampler: lightSampler,
-                        tileSize: tileSize
+                        tileSize: tileSize,
+                        immutableState: immutableState
                 )
         }
 }

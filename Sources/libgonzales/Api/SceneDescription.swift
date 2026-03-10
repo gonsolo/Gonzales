@@ -52,7 +52,7 @@ public enum SceneDescriptionError: Error {
         case wrongType(message: String)
 }
 
-public struct SceneDescription {
+public class SceneDescription {
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
         var acceleratorName = "bvh"
@@ -81,13 +81,13 @@ public struct SceneDescription {
 extension SceneDescription {
 
         @MainActor
-        mutating func attributeBegin() throws {
+        func attributeBegin() throws {
                 try transformBegin()
                 states.append(state)
         }
 
         @MainActor
-        mutating func attributeEnd() throws {
+        func attributeEnd() throws {
                 try transformEnd()
                 guard let last = states.popLast() else {
                         throw SceneDescriptionError.parseAttributeEnd
@@ -96,7 +96,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func camera(name _: String, parameters: ParameterDictionary) throws {
+        func camera(name _: String, parameters: ParameterDictionary) throws {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
                 options.cameraToWorld = currentTransform.inverse
@@ -104,12 +104,12 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func coordinateSystem(name: String) {
+        func coordinateSystem(name: String) {
                 namedCoordinateSystems[name] = currentTransform
         }
 
         @MainActor
-        mutating func coordSysTransform(name: String) throws {
+        func coordSysTransform(name: String) throws {
                 guard let transform = namedCoordinateSystems[name] else {
                         throw SceneDescriptionError.coordSysTransform
                 }
@@ -117,7 +117,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func concatTransform(values: [FloatX]) throws {
+        func concatTransform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
@@ -127,7 +127,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func film(name: String, parameters: ParameterDictionary) throws {
+        func film(name: String, parameters: ParameterDictionary) throws {
                 let fileName = try parameters.findString(called: "filename") ?? "gonzales.exr"
                 guard fileName.hasSuffix("exr") else {
                         abort("Only exr output supported!")
@@ -137,7 +137,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func identity() {
+        func identity() {
                 currentTransform = Transform()
         }
 
@@ -158,7 +158,7 @@ extension SceneDescription {
                                 throw RenderError.fileNotExisting(name: absoluteSceneName)
                         }
                         if #available(OSX 10.15, *) {
-                                let parser = try Parser(fileName: absoluteSceneName, render: render)
+                                let parser = try Parser(fileName: absoluteSceneName, sceneDescription: self, render: render)
                                 try await parser.parse()
                         } else {
                                 // Fallback on earlier versions
@@ -169,7 +169,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func areaLight(name: String, parameters: ParameterDictionary) throws {
+        func areaLight(name: String, parameters: ParameterDictionary) throws {
                 guard name == "diffuse" || name == "area" else {
                         throw SceneDescriptionError.areaLight
                 }
@@ -178,7 +178,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func accelerator(name: String, parameters _: ParameterDictionary) throws {
+        func accelerator(name: String, parameters _: ParameterDictionary) throws {
                 switch name {
                 case "bvh":
                         acceleratorName = "bvh"
@@ -192,13 +192,13 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func integrator(name: String, parameters: ParameterDictionary) throws {
+        func integrator(name: String, parameters: ParameterDictionary) throws {
                 options.integratorName = name
                 options.integratorParameters = parameters
         }
 
         @MainActor
-        mutating func lightSource(name: String, parameters: ParameterDictionary) throws {
+        func lightSource(name: String, parameters: ParameterDictionary) throws {
                 let light = try makeLight(
                         name: name,
                         parameters: parameters,
@@ -207,19 +207,19 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func lookAt(eye: Point, target: Point, upVector: Vector) throws {
+        func lookAt(eye: Point, target: Point, upVector: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, target: target, upVector: upVector)
                 currentTransform *= transform
         }
 
         @MainActor
-        mutating func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
+        func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
                 let type = try parameters.findString(called: "type") ?? "defaultMaterial"
                 state.namedMaterials[name] = UninstancedMaterial(type: type, parameters: parameters)
         }
 
         @MainActor
-        mutating func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
+        func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
                 guard let type = try parameters.findString(called: "type") else {
                         throw SceneDescriptionError.namedMedium
                 }
@@ -246,28 +246,28 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func material(type: String, parameters: ParameterDictionary) throws {
+        func material(type: String, parameters: ParameterDictionary) throws {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }
 
         @MainActor
-        mutating func mediumInterface(interior: String, exterior: String) {
+        func mediumInterface(interior: String, exterior: String) {
                 state.currentMediumInterface = MediumInterface(interior: interior, exterior: exterior)
         }
 
         @MainActor
-        mutating func namedMaterial(name: String) throws {
+        func namedMaterial(name: String) throws {
                 state.currentNamedMaterial = name
         }
 
         @MainActor
-        mutating func objectBegin(name: String) throws {
+        func objectBegin(name: String) throws {
                 try attributeBegin()
                 state.objectName = name
         }
 
         @MainActor
-        mutating func objectEnd() throws {
+        func objectEnd() throws {
                 try attributeEnd()
                 state.objectName = nil
         }
@@ -278,19 +278,19 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func sampler(name: String, parameters: ParameterDictionary) {
+        func sampler(name: String, parameters: ParameterDictionary) {
                 options.samplerName = name
                 options.samplerParameters = parameters
         }
 
         @MainActor
-        mutating func pixelFilter(name: String, parameters: ParameterDictionary) {
+        func pixelFilter(name: String, parameters: ParameterDictionary) {
                 options.filterName = name
                 options.filterParameters = parameters
         }
 
         @MainActor
-        mutating func shape(name: String, parameters: ParameterDictionary) throws {
+        func shape(name: String, parameters: ParameterDictionary) throws {
                 var areaLights = [Light]()
                 var prims = [any Boundable & Intersectable]()
                 let shapes = try makeShapes(
@@ -352,7 +352,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func transform(values: [FloatX]) throws {
+        func transform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
@@ -362,12 +362,12 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func transformBegin() throws {
+        func transformBegin() throws {
                 transforms.append(currentTransform)
         }
 
         @MainActor
-        mutating func transformEnd() throws {
+        func transformEnd() throws {
                 guard let last = transforms.popLast() else {
                         throw SceneDescriptionError.transformsEmpty
                 }
@@ -375,7 +375,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func scale(x: FloatX, y: FloatX, z: FloatX) throws {
+        func scale(x: FloatX, y: FloatX, z: FloatX) throws {
                 let matrix = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: y, t12: 0, t13: 0,
@@ -386,13 +386,13 @@ extension SceneDescription {
 
         // Not really part of PBRT API
         @MainActor
-        public mutating func start() {
+        public func start() {
                 readTimer = Timer("Reading...", newline: false)
                 fflush(stdout)
         }
 
         @MainActor
-        mutating func rotate(by angle: FloatX, around axis: Vector) throws {
+        func rotate(by angle: FloatX, around axis: Vector) throws {
                 let normalizedAxis = normalized(axis)
                 let theta = radians(deg: angle)
                 let sinTheta = sin(theta)
@@ -415,7 +415,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func texture(
+        func texture(
                 name: String,
                 type: String,
                 textureClass: String,
@@ -433,10 +433,10 @@ extension SceneDescription {
                 case "constant":
                         switch type {
                         case "spectrum", "color":
-                                let rgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "value")
+                                let rgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "value", textures: state.textures)
                                 texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
-                                let floatTexture = try parameters.findFloatXTexture(name: "value")
+                                let floatTexture = try parameters.findFloatXTexture(name: "value", textures: state.textures)
                                 texture = Texture.floatTexture(floatTexture)
                         default:
                                 unimplemented()
@@ -466,7 +466,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        mutating func translate(amount: Vector) throws {
+        func translate(amount: Vector) throws {
                 let matrix = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: amount.x,
                         t10: 0, t11: 1, t12: 0, t13: amount.y,
@@ -477,7 +477,7 @@ extension SceneDescription {
         }
 
         @MainActor
-        public mutating func worldBegin() {
+        public func worldBegin() {
                 currentTransform = Transform()
         }
 
@@ -488,9 +488,11 @@ extension SceneDescription {
                 print("Reading: \(readTimer?.elapsed ?? "unknown")")
                 if renderOptions.justParse { return }
                 let renderer = try await options.makeRenderer(
-                        geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
+                        geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
+                        materials: materials, acceleratorName: acceleratorName,
+                        immutableState: state.getImmutable())
                 try await renderer.render()
-                sceneDescription.options = RenderConfiguration()
+                self.options = RenderConfiguration()
         }
 
         @MainActor
@@ -535,7 +537,8 @@ extension SceneDescription {
                 case "curve":
                         return try createCurveShape(
                                 objectToWorld: objectToWorld,
-                                parameters: parameters)
+                                parameters: parameters,
+                                acceleratorName: acceleratorName)
                 case "cylinder":
                         return []  // Ignore for now
                 case "disk":
@@ -597,5 +600,3 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
         }
 }
 
-@MainActor
-public var sceneDescription = SceneDescription()

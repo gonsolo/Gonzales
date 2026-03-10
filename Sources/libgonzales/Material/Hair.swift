@@ -30,7 +30,7 @@ struct Hair {
 }
 
 @MainActor
-func createHair(parameters: ParameterDictionary) throws -> Hair {
-        let eumelanin = try parameters.findFloatXTexture(name: "eumelanin", else: 1.3)
+func createHair(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Hair {
+        let eumelanin = try parameters.findFloatXTexture(name: "eumelanin", textures: textures, else: 1.3)
         return Hair(eumelanin: eumelanin)
 }

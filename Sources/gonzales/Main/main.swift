@@ -98,6 +98,7 @@ func main() async {
                 }
                 let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
                 renderOptions.sceneDirectory = url.path
+                let sceneDescription = SceneDescription()
                 sceneDescription.start()
                 try await sceneDescription.include(file: sceneNameLast, render: true)
         } catch let error {

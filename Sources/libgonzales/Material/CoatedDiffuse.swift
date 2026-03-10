@@ -37,7 +37,7 @@ struct CoatedDiffuse {
 }
 
 @MainActor
-func createCoatedDiffuse(parameters: ParameterDictionary) throws -> CoatedDiffuse {
+func createCoatedDiffuse(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
         let uRoughness =
@@ -45,8 +45,8 @@ func createCoatedDiffuse(parameters: ParameterDictionary) throws -> CoatedDiffus
         let vRoughness =
                 try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
         let roughness = (uRoughness, vRoughness)
-        let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance")
-        let refractiveIndex = try parameters.findFloatXTexture(name: "eta", else: 1.5)
+        let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures)
+        let refractiveIndex = try parameters.findFloatXTexture(name: "eta", textures: textures, else: 1.5)
         return CoatedDiffuse(
                 roughness: roughness,
                 reflectance: reflectance,

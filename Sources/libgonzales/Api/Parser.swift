@@ -7,11 +7,13 @@ final class Parser {
         let fileName: String
         var render = true
         var worldEndSeen = false
+        let sceneDescription: SceneDescription
 
-        init(fileName: String, render: Bool = true, function _: String = #function) throws {
+        init(fileName: String, sceneDescription: SceneDescription, render: Bool = true, function _: String = #function) throws {
                 self.scanner = try PbrtScanner(path: fileName)
                 self.fileName = fileName
                 self.render = render
+                self.sceneDescription = sceneDescription
         }
 }
 

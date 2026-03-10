@@ -41,12 +41,13 @@ extension ParameterDictionary {
         @MainActor
         func findRgbSpectrumTexture(
                 name: String,
+                textures: [String: Texture],
                 else spectrum: RgbSpectrum = RgbSpectrum(intensity: 1)
         )
                 throws -> RgbSpectrumTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = sceneDescription.state.textures[textureName] else {
+                        guard let texture = textures[textureName] else {
                                 fatalError("Could not find texture!")
                         }
                         switch texture {
@@ -71,10 +72,10 @@ extension ParameterDictionary {
         }
 
         @MainActor
-        func findFloatXTexture(name: String, else value: FloatX = 1.0) throws -> FloatTexture {
+        func findFloatXTexture(name: String, textures: [String: Texture], else value: FloatX = 1.0) throws -> FloatTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
-                        guard let texture = sceneDescription.state.textures[textureName] else {
+                        guard let texture = textures[textureName] else {
                                 print("No named texture \"\(textureName)\"")
                                 fatalError()
                         }

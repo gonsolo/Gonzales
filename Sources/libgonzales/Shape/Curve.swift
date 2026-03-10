@@ -454,7 +454,7 @@ func createBVHCurveShape(
 }
 
 @MainActor
-func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [ShapeType] {
+func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary, acceleratorName: String) throws -> [ShapeType] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")
         let width = try parameters.findOneFloatX(called: "width", else: 0.5)
@@ -464,7 +464,7 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary)
                 throw CurveError.numberControlPoints
         }
         var curves = [ShapeType]()
-        switch sceneDescription.acceleratorName {
+        switch acceleratorName {
         case "bvh":
                 curves = createBVHCurveShape(
                         controlPoints: controlPoints,

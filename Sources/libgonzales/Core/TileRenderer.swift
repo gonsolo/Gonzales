@@ -8,13 +8,15 @@ struct TileRenderer: Renderer {
                 integrator: VolumePathIntegrator,
                 sampler: Sampler,
                 lightSampler: LightSampler,
-                tileSize: (Int, Int)
+                tileSize: (Int, Int),
+                immutableState: ImmutableState
         ) async {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
                 self.lightSampler = lightSampler
                 self.tileSize = tileSize
+                self.immutableState = immutableState
 
                 let sampleBounds = await camera.getSampleBounds()
                 if renderOptions.singleRay {
@@ -126,8 +128,7 @@ struct TileRenderer: Renderer {
         }
 
         @MainActor
-        private func renderImage(bounds: Bounds2i) async throws {
-                let immutableState = sceneDescription.state.getImmutable()
+        private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {
                 let tiles = generateTiles(from: bounds)
                 let reporter = ProgressReporter(total: tiles.count)
 
@@ -173,7 +174,7 @@ struct TileRenderer: Renderer {
         @MainActor
         func render() async throws {
                 let timer = Timer("Rendering...")
-                try await renderImage(bounds: bounds)
+                try await renderImage(bounds: bounds, immutableState: immutableState)
                 print("\n")
                 print(timer.elapsed)
                 fflush(stdout)
@@ -181,6 +182,7 @@ struct TileRenderer: Renderer {
 
         let camera: PerspectiveCamera
         let integrator: VolumePathIntegrator
+        let immutableState: ImmutableState
         let lightSampler: LightSampler
         let sampler: Sampler
         let bounds: Bounds2i
