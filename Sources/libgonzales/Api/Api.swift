@@ -59,8 +59,14 @@ public struct Api {
         var currentTransform = Transform()
         var namedCoordinateSystems = [String: Transform]()
         var readTimer: Timer?
+        var state: State
         var states = [State]()
         var transforms = [Transform]()
+
+        @MainActor
+        public init() {
+                self.state = State()
+        }
 }
 
 extension Api {
@@ -154,7 +160,7 @@ extension Api {
         }
 
         @MainActor
-        func areaLight(name: String, parameters: ParameterDictionary) throws {
+        mutating func areaLight(name: String, parameters: ParameterDictionary) throws {
                 guard name == "diffuse" || name == "area" else {
                         throw ApiError.areaLight
                 }
@@ -198,13 +204,13 @@ extension Api {
         }
 
         @MainActor
-        func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
+        mutating func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
                 let type = try parameters.findString(called: "type") ?? "defaultMaterial"
                 state.namedMaterials[name] = UninstancedMaterial(type: type, parameters: parameters)
         }
 
         @MainActor
-        func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
+        mutating func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
                 guard let type = try parameters.findString(called: "type") else {
                         throw ApiError.namedMedium
                 }
@@ -231,17 +237,17 @@ extension Api {
         }
 
         @MainActor
-        func material(type: String, parameters: ParameterDictionary) throws {
+        mutating func material(type: String, parameters: ParameterDictionary) throws {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }
 
         @MainActor
-        func mediumInterface(interior: String, exterior: String) {
+        mutating func mediumInterface(interior: String, exterior: String) {
                 state.currentMediumInterface = MediumInterface(interior: interior, exterior: exterior)
         }
 
         @MainActor
-        func namedMaterial(name: String) throws {
+        mutating func namedMaterial(name: String) throws {
                 state.currentNamedMaterial = name
         }
 
@@ -400,7 +406,7 @@ extension Api {
         }
 
         @MainActor
-        func texture(
+        mutating func texture(
                 name: String,
                 type: String,
                 textureClass: String,
@@ -592,6 +598,3 @@ public var api = Api()
 
 @MainActor
 var options = Options()
-
-@MainActor
-var state = State()
