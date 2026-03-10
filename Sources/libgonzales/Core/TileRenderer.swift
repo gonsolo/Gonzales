@@ -127,7 +127,7 @@ struct TileRenderer: Renderer {
 
         @MainActor
         private func renderImage(bounds: Bounds2i) async throws {
-                let immutableState = api.state.getImmutable()
+                let immutableState = sceneDescription.state.getImmutable()
                 let tiles = generateTiles(from: bounds)
                 let reporter = ProgressReporter(total: tiles.count)
 

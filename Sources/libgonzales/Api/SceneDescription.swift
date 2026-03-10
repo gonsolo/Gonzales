@@ -9,7 +9,7 @@ func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable], 
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
                 return accelerator
         default:
-                throw ApiError.accelerator
+                throw SceneDescriptionError.accelerator
         }
 }
 
@@ -30,7 +30,7 @@ func lookAtTransform(eye: Point, target: Point, upVector: Vector) throws -> Tran
         return transform
 }
 
-public enum ApiError: Error {
+public enum SceneDescriptionError: Error {
         case accelerator
         case areaLight
         case coordSysTransform
@@ -52,13 +52,13 @@ public enum ApiError: Error {
         case wrongType(message: String)
 }
 
-public struct Api {
+public struct SceneDescription {
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
         var acceleratorName = "bvh"
         var currentTransform = Transform()
         var namedCoordinateSystems = [String: Transform]()
-        var options: Options
+        var options: RenderConfiguration
         var readTimer: Timer?
         var state: State
         var states = [State]()
@@ -66,12 +66,12 @@ public struct Api {
 
         @MainActor
         public init() {
-                self.options = Options()
+                self.options = RenderConfiguration()
                 self.state = State()
         }
 }
 
-extension Api {
+extension SceneDescription {
 
         @MainActor
         mutating func attributeBegin() throws {
@@ -83,7 +83,7 @@ extension Api {
         mutating func attributeEnd() throws {
                 try transformEnd()
                 guard let last = states.popLast() else {
-                        throw ApiError.parseAttributeEnd
+                        throw SceneDescriptionError.parseAttributeEnd
                 }
                 state = last
         }
@@ -104,7 +104,7 @@ extension Api {
         @MainActor
         mutating func coordSysTransform(name: String) throws {
                 guard let transform = namedCoordinateSystems[name] else {
-                        throw ApiError.coordSysTransform
+                        throw SceneDescriptionError.coordSysTransform
                 }
                 currentTransform = transform
         }
@@ -156,7 +156,7 @@ extension Api {
                         } else {
                                 // Fallback on earlier versions
                         }
-                } catch ApiError.wrongType(let message) {
+                } catch SceneDescriptionError.wrongType(let message) {
                         print("Error: Wrong type: \(message) in \(sceneName).")
                 }
         }
@@ -164,7 +164,7 @@ extension Api {
         @MainActor
         mutating func areaLight(name: String, parameters: ParameterDictionary) throws {
                 guard name == "diffuse" || name == "area" else {
-                        throw ApiError.areaLight
+                        throw SceneDescriptionError.areaLight
                 }
                 state.areaLight = name
                 state.areaLightParameters = parameters
@@ -180,7 +180,7 @@ extension Api {
                 case "optix":
                         acceleratorName = "optix"
                 default:
-                        throw ApiError.accelerator
+                        throw SceneDescriptionError.accelerator
                 }
         }
 
@@ -214,7 +214,7 @@ extension Api {
         @MainActor
         mutating func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
                 guard let type = try parameters.findString(called: "type") else {
-                        throw ApiError.namedMedium
+                        throw SceneDescriptionError.namedMedium
                 }
                 switch type {
                 case "cloud":
@@ -234,7 +234,7 @@ extension Api {
                 case "uniformgrid":
                         warning("Uniform grid is not implemented!")
                 default:
-                        throw ApiError.namedMedium
+                        throw SceneDescriptionError.namedMedium
                 }
         }
 
@@ -299,7 +299,7 @@ extension Api {
                         for shape in shapes {
                                 guard state.areaLight == "area" || state.areaLight == "diffuse"
                                 else {
-                                        throw ApiError.areaLight
+                                        throw SceneDescriptionError.areaLight
                                 }
                                 guard
                                         let brightness =
@@ -362,7 +362,7 @@ extension Api {
         @MainActor
         mutating func transformEnd() throws {
                 guard let last = transforms.popLast() else {
-                        throw ApiError.transformsEmpty
+                        throw SceneDescriptionError.transformsEmpty
                 }
                 currentTransform = last
         }
@@ -483,7 +483,7 @@ extension Api {
                 let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
                 try await renderer.render()
-                api.options = Options()
+                sceneDescription.options = RenderConfiguration()
         }
 
         @MainActor
@@ -511,7 +511,7 @@ extension Api {
                                 parameters: parameters)
                         return Light.point(pointLight)
                 default:
-                        throw ApiError.makeLight(message: name)
+                        throw SceneDescriptionError.makeLight(message: name)
                 }
         }
 
@@ -554,7 +554,7 @@ extension Api {
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
                 default:
-                        throw ApiError.makeShapes(message: name)
+                        throw SceneDescriptionError.makeShapes(message: name)
                 }
         }
 }
@@ -586,12 +586,12 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
                         unimplemented()
                 }
         default:
-                throw ApiError.unknownTextureFormat(suffix: String(suffix))
+                throw SceneDescriptionError.unknownTextureFormat(suffix: String(suffix))
         }
 }
 
 @MainActor
-public var api = Api()
+public var sceneDescription = SceneDescription()
 
 @MainActor
 var materials = [Material]()

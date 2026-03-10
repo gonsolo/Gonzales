@@ -122,7 +122,7 @@ extension PlyMesh {
                 var headerState = HeaderState.none
 
                 guard readLine(in: data) == "ply" else {
-                        throw ApiError.ply(message: "First line must be ply")
+                        throw SceneDescriptionError.ply(message: "First line must be ply")
                 }
                 while true {
                         let line = readLine(in: data)
@@ -134,36 +134,36 @@ extension PlyMesh {
                                 switch words[1] {
                                 case "binary_little_endian":
                                         endianness = .little
-                                        guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
+                                        guard words[2] == "1.0" else { throw SceneDescriptionError.ply(message: "1.0") }
                                 case "binary_big_endian":
                                         endianness = .big
-                                        guard words[2] == "1.0" else { throw ApiError.ply(message: "1.0") }
+                                        guard words[2] == "1.0" else { throw SceneDescriptionError.ply(message: "1.0") }
                                 default:
                                         let message = "Unknown endian format in ply."
-                                        throw ApiError.ply(message: message)
+                                        throw SceneDescriptionError.ply(message: message)
                                 }
                         case "element":
                                 switch words[1] {
                                 case "vertex":
                                         headerState = .vertex
                                         guard let vertexCount = Int(words[2]) else {
-                                                throw ApiError.ply(message: "vertexCount")
+                                                throw SceneDescriptionError.ply(message: "vertexCount")
                                         }
                                         plyHeader.vertexCount = vertexCount
                                 case "face":
                                         headerState = .face
                                         guard let faceCount = Int(words[2]) else {
-                                                throw ApiError.ply(message: "faceCount")
+                                                throw SceneDescriptionError.ply(message: "faceCount")
                                         }
                                         plyHeader.faceCount = faceCount
                                 default:
-                                        throw ApiError.ply(message: "Unknown element \(words[1])")
+                                        throw SceneDescriptionError.ply(message: "Unknown element \(words[1])")
                                 }
                         case "property":
                                 switch words[1] {
                                 case "float":
                                         guard headerState == .vertex else {
-                                                throw ApiError.ply(message: "headerState vertex")
+                                                throw SceneDescriptionError.ply(message: "headerState vertex")
                                         }
                                         switch words[2] {
                                         case "x":
@@ -197,7 +197,7 @@ extension PlyMesh {
                                                 plyHeader.vertexProperties.append(
                                                         Property(type: .float, name: .vProperty))
                                         default:
-                                                throw ApiError.ply(
+                                                throw SceneDescriptionError.ply(
                                                         message:
                                                                 "Unknown float property \(words[2])"
                                                 )
@@ -209,7 +209,7 @@ extension PlyMesh {
                                         case "uchar", "uint8":
                                                 listBits = 8
                                         default:
-                                                throw ApiError.ply(
+                                                throw SceneDescriptionError.ply(
                                                         message:
                                                                 "Unknown list property \(words[2])"
                                                 )
@@ -219,16 +219,16 @@ extension PlyMesh {
                                         case "face_indices":
                                                 hasFaceIndices = true
                                         default:
-                                                throw ApiError.ply(
+                                                throw SceneDescriptionError.ply(
                                                         message: "Unknown int property \(words[2])")
                                         }
                                 default:
-                                        throw ApiError.ply(message: "Unknown property: \(words[1])")
+                                        throw SceneDescriptionError.ply(message: "Unknown property: \(words[1])")
                                 }
                         case "end_header":
                                 return
                         default:
-                                throw ApiError.ply(message: "Unknown ply word: \"\(words[0])\"")
+                                throw SceneDescriptionError.ply(message: "Unknown ply word: \"\(words[0])\"")
                         }
                 }
         }
@@ -331,11 +331,11 @@ extension PlyMesh {
                                 let value: UInt32 = readValue(in: data, at: &dataIndex)
                                 numberIndices = value
                         default:
-                                throw ApiError.ply(message: "Only 8 and 32 bits supported")
+                                throw SceneDescriptionError.ply(message: "Only 8 and 32 bits supported")
                         }
                         if numberIndices != 3 {
                                 warning("Number of indices is not 3 but \(numberIndices)")
-                                // throw ApiError.ply(
+                                // throw SceneDescriptionError.ply(
                                 //        message:
                                 //                "Number of indices must be 3 but is \(numberIndices)"
                                 // )

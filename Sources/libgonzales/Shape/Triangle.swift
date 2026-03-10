@@ -646,7 +646,7 @@ func createTriangleMeshShape(
 ) throws -> [ShapeType] {
         let indices = try parameters.findInts(name: "indices")
         guard indices.count % 3 == 0 else {
-                throw ApiError.input(message: "Triangle indices must be multiplies of 3")
+                throw SceneDescriptionError.input(message: "Triangle indices must be multiplies of 3")
         }
         let points = try parameters.findPoints(name: "P")
         let normals = try parameters.findNormals(name: "N")

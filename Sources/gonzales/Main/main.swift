@@ -10,14 +10,14 @@ enum MainError: Error {
 
 func handle(_ error: any Error) {
         switch error {
-        case is ApiError:
+        case is SceneDescriptionError:
                 switch error {
-                case ApiError.ply(let message):
+                case SceneDescriptionError.ply(let message):
                         print(message)
-                case ApiError.unknownTextureFormat(let suffix):
+                case SceneDescriptionError.unknownTextureFormat(let suffix):
                         print("Unknown texture format: \(suffix)")
                 default:
-                        print("ApiError: \(error)")
+                        print("SceneDescriptionError: \(error)")
                 }
         case is MainError:
                 print("MainError: \(error)")
@@ -98,8 +98,8 @@ func main() async {
                 }
                 let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
                 renderOptions.sceneDirectory = url.path
-                api.start()
-                try await api.include(file: sceneNameLast, render: true)
+                sceneDescription.start()
+                try await sceneDescription.include(file: sceneNameLast, render: true)
         } catch let error {
                 handle(error)
         }

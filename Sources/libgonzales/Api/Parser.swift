@@ -69,7 +69,7 @@ extension Parser {
                                 if scanner.isAtEnd {
                                         // PBRT v4 does not use WorldEnd
                                         if render && !worldEndSeen {
-                                                try await api.worldEnd()
+                                                try await sceneDescription.worldEnd()
                                         }
                                         return
                                 }
@@ -444,14 +444,14 @@ extension Parser {
         private func parseIntegrator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.integrator(name: name, parameters: parameters)
+                try sceneDescription.integrator(name: name, parameters: parameters)
         }
 
         @MainActor
         private func parseLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.lightSource(name: name, parameters: parameters)
+                try sceneDescription.lightSource(name: name, parameters: parameters)
         }
 
         @MainActor
@@ -466,7 +466,7 @@ extension Parser {
                 }
                 parseComments()
                 let upVector = try parseVector()
-                try api.lookAt(eye: eye, target: target, upVector: upVector)
+                try sceneDescription.lookAt(eye: eye, target: target, upVector: upVector)
         }
 
         @MainActor
@@ -474,7 +474,7 @@ extension Parser {
                 guard let angle = try parseFloatX() else { try bail() }
                 guard let floats = try parseThreeFloatXs() else { try bail() }
                 let axis = Vector(xyz: floats)
-                try api.rotate(by: FloatX(angle), around: axis)
+                try sceneDescription.rotate(by: FloatX(angle), around: axis)
         }
 
         private func scanTransform() throws -> [FloatX] {
@@ -491,44 +491,44 @@ extension Parser {
         @MainActor
         private func parseTransform() throws {
                 let values = try scanTransform()
-                try api.transform(values: values)
+                try sceneDescription.transform(values: values)
         }
 
         @MainActor
         private func parseTransformBegin() throws {
-                try api.transformBegin()
+                try sceneDescription.transformBegin()
         }
 
         @MainActor
         private func parseTransformEnd() throws {
-                try api.transformEnd()
+                try sceneDescription.transformEnd()
         }
 
         @MainActor
         private func parseTranslate() throws {
                 guard let floats = try parseThreeFloatXs() else { try bail() }
                 let translation = Vector(xyz: floats)
-                try api.translate(amount: translation)
+                try sceneDescription.translate(amount: translation)
         }
 
         @MainActor
         private func parseSampler() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                api.sampler(name: name, parameters: parameters)
+                sceneDescription.sampler(name: name, parameters: parameters)
         }
 
         @MainActor
         private func parseScale() throws {
                 guard let floats = try parseThreeFloatXs() else { try bail() }
-                try api.scale(x: floats.0, y: floats.1, z: floats.2)
+                try sceneDescription.scale(x: floats.0, y: floats.1, z: floats.2)
         }
 
         @MainActor
         private func parsePixelFilter() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                api.pixelFilter(name: name, parameters: parameters)
+                sceneDescription.pixelFilter(name: name, parameters: parameters)
         }
 
         @MainActor
@@ -546,24 +546,24 @@ extension Parser {
                         try bail(message: "Unknown film format: \(filmType)")
                 }
                 let parameters = try parseParameters()
-                try api.film(name: filmType, parameters: parameters)
+                try sceneDescription.film(name: filmType, parameters: parameters)
         }
 
         @MainActor
         private func parseIdentity() {
-                api.identity()
+                sceneDescription.identity()
         }
 
         @MainActor
         private func parseImport() async throws {
                 let name = try parseString()
-                try await api.importFile(file: name)
+                try await sceneDescription.importFile(file: name)
         }
 
         @MainActor
         private func parseInclude() async throws {
                 let name = try parseString()
-                try await api.include(file: name, render: false)
+                try await sceneDescription.include(file: name, render: false)
         }
 
         @MainActor
@@ -573,94 +573,94 @@ extension Parser {
                         try bail()
                 }
                 let parameters = try parseParameters()
-                try api.camera(name: name, parameters: parameters)
+                try sceneDescription.camera(name: name, parameters: parameters)
         }
 
         @MainActor
         private func parseCoordinateSystem() throws {
                 let name = try parseString()
-                api.coordinateSystem(name: name)
+                sceneDescription.coordinateSystem(name: name)
         }
 
         @MainActor
         private func parseCoordSysTransform() throws {
                 let name = try parseString()
-                try api.coordSysTransform(name: name)
+                try sceneDescription.coordSysTransform(name: name)
         }
 
         @MainActor
         private func parseConcatTransform() throws {
                 let values = try scanTransform()
-                try api.concatTransform(values: values)
+                try sceneDescription.concatTransform(values: values)
         }
 
         @MainActor
         private func parseWorldBegin() throws {
-                api.worldBegin()
+                sceneDescription.worldBegin()
         }
 
         @MainActor
         private func parseWorldEnd() async throws {
                 worldEndSeen = true
-                try await api.worldEnd()
+                try await sceneDescription.worldEnd()
         }
 
         @MainActor
         private func parseMakeNamedMaterial() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.makeNamedMaterial(name: name, parameters: parameters)
+                try sceneDescription.makeNamedMaterial(name: name, parameters: parameters)
         }
 
         @MainActor
         private func parseMakeNamedMedium() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.makeNamedMedium(name: name, parameters: parameters)
+                try sceneDescription.makeNamedMedium(name: name, parameters: parameters)
         }
 
         @MainActor
         private func parseMaterial() throws {
                 let type = try parseString()
                 let parameters = try parseParameters()
-                try api.material(type: type, parameters: parameters)
+                try sceneDescription.material(type: type, parameters: parameters)
         }
 
         @MainActor
         private func parseMediumInterface() throws {
                 let interior = try parseString()
                 let exterior = try parseString()
-                api.mediumInterface(interior: interior, exterior: exterior)
+                sceneDescription.mediumInterface(interior: interior, exterior: exterior)
         }
 
         @MainActor
         private func parseNamedMaterial() throws {
                 let name = try parseString()
-                try api.namedMaterial(name: name)
+                try sceneDescription.namedMaterial(name: name)
         }
 
         @MainActor
         private func parseObjectBegin() throws {
                 let name = try parseString()
-                try api.objectBegin(name: name)
+                try sceneDescription.objectBegin(name: name)
         }
 
         @MainActor
         private func parseObjectEnd() throws {
-                try api.objectEnd()
+                try sceneDescription.objectEnd()
         }
 
         @MainActor
         private func parseObjectInstance() async throws {
                 let name = try parseString()
-                try await api.objectInstance(name: name)
+                try await sceneDescription.objectInstance(name: name)
         }
 
         @MainActor
         private func parseShape() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.shape(name: name, parameters: parameters)
+                try sceneDescription.shape(name: name, parameters: parameters)
         }
 
         @MainActor
@@ -669,7 +669,7 @@ extension Parser {
                 let textureType = try parseString()
                 let textureClass = try parseString()
                 let parameters = try parseParameters()
-                try api.texture(
+                try sceneDescription.texture(
                         name: textureName,
                         type: textureType,
                         textureClass: textureClass,
@@ -679,26 +679,26 @@ extension Parser {
 
         @MainActor
         private func parseAttributeBegin() throws {
-                try api.attributeBegin()
+                try sceneDescription.attributeBegin()
         }
 
         @MainActor
         private func parseAttributeEnd() throws {
-                try api.attributeEnd()
+                try sceneDescription.attributeEnd()
         }
 
         @MainActor
         private func parseAccelerator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.accelerator(name: name, parameters: parameters)
+                try sceneDescription.accelerator(name: name, parameters: parameters)
         }
 
         @MainActor
         private func parseAreaLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
-                try api.areaLight(name: name, parameters: parameters)
+                try sceneDescription.areaLight(name: name, parameters: parameters)
         }
 
         private func parseComment() -> Bool {

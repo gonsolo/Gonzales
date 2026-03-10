@@ -1,4 +1,4 @@
-class Options {
+class RenderConfiguration {
 
         enum OptionError: Error {
                 case camera, crop
@@ -186,7 +186,7 @@ class Options {
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try await makeAccelerator(scene: scene, primitives: primitives, acceleratorName: api.acceleratorName)
+                let accelerator = try await makeAccelerator(scene: scene, primitives: primitives, acceleratorName: sceneDescription.acceleratorName)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
