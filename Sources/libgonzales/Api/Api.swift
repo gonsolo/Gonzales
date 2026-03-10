@@ -56,6 +56,7 @@ public struct Api {
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
         var acceleratorName = "bvh"
+        var currentTransform = Transform()
         var namedCoordinateSystems = [String: Transform]()
         var readTimer: Timer?
         var transforms = [Transform]()
@@ -92,7 +93,7 @@ extension Api {
         }
 
         @MainActor
-        func coordSysTransform(name: String) throws {
+        mutating func coordSysTransform(name: String) throws {
                 guard let transform = namedCoordinateSystems[name] else {
                         throw ApiError.coordSysTransform
                 }
@@ -100,7 +101,7 @@ extension Api {
         }
 
         @MainActor
-        func concatTransform(values: [FloatX]) throws {
+        mutating func concatTransform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
@@ -120,7 +121,7 @@ extension Api {
         }
 
         @MainActor
-        func identity() {
+        mutating func identity() {
                 currentTransform = Transform()
         }
 
@@ -190,7 +191,7 @@ extension Api {
         }
 
         @MainActor
-        func lookAt(eye: Point, target: Point, upVector: Vector) throws {
+        mutating func lookAt(eye: Point, target: Point, upVector: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, target: target, upVector: upVector)
                 currentTransform *= transform
         }
@@ -335,7 +336,7 @@ extension Api {
         }
 
         @MainActor
-        func transform(values: [FloatX]) throws {
+        mutating func transform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
@@ -358,7 +359,7 @@ extension Api {
         }
 
         @MainActor
-        func scale(x: FloatX, y: FloatX, z: FloatX) throws {
+        mutating func scale(x: FloatX, y: FloatX, z: FloatX) throws {
                 let matrix = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: y, t12: 0, t13: 0,
@@ -375,7 +376,7 @@ extension Api {
         }
 
         @MainActor
-        func rotate(by angle: FloatX, around axis: Vector) throws {
+        mutating func rotate(by angle: FloatX, around axis: Vector) throws {
                 let normalizedAxis = normalized(axis)
                 let theta = radians(deg: angle)
                 let sinTheta = sin(theta)
@@ -449,7 +450,7 @@ extension Api {
         }
 
         @MainActor
-        func translate(amount: Vector) throws {
+        mutating func translate(amount: Vector) throws {
                 let matrix = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: amount.x,
                         t10: 0, t11: 1, t12: 0, t13: amount.y,
@@ -460,7 +461,7 @@ extension Api {
         }
 
         @MainActor
-        public func worldBegin() {
+        public mutating func worldBegin() {
                 currentTransform = Transform()
         }
 
@@ -596,13 +597,3 @@ var state = State()
 
 @MainActor
 var states = [State]()
-
-@MainActor
-var currentTransform = Transform()
-
-
-
-
-
-
-
