@@ -42,13 +42,14 @@ func usage() {
 }
 
 @MainActor
-func parseArguments() throws -> String {
+func parseArguments() throws -> (String, RenderOptions) {
         let arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
         if arguments.isEmpty {
                 usage()
                 exit(EXIT_SUCCESS)
         }
         var sceneName = ""
+        var renderOptions = RenderOptions()
         var iterator = arguments.makeIterator()
         while let argument = iterator.next() {
                 switch argument {
@@ -77,13 +78,14 @@ func parseArguments() throws -> String {
         if sceneName.isEmpty {
                 throw MainError.missingScene
         }
-        return sceneName
+        return (sceneName, renderOptions)
 }
 
 @MainActor
 func main() async {
         do {
-                let sceneName = try parseArguments()
+                let (sceneName, parsedOptions) = try parseArguments()
+                var renderOptions = parsedOptions
                 guard let sceneNameURL = URL(string: sceneName) else {
                         throw RenderError.noSceneSpecified
                 }
@@ -98,7 +100,7 @@ func main() async {
                 }
                 let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
                 renderOptions.sceneDirectory = url.path
-                let sceneDescription = SceneDescription()
+                let sceneDescription = SceneDescription(renderOptions: renderOptions)
                 sceneDescription.start()
                 try await sceneDescription.include(file: sceneNameLast, render: true)
         } catch let error {

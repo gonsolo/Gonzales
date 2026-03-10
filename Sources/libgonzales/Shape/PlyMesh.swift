@@ -364,10 +364,10 @@ extension PlyMesh {
 }
 
 @MainActor
-func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary) throws
+func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
         -> [ShapeType] {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
-        let absoluteFileName = renderOptions.sceneDirectory + "/" + relativeFileName
+        let absoluteFileName = sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {
                 warning("Could not find ply file at: \(absoluteFileName)")
                 return []

@@ -11,10 +11,10 @@ public struct RenderOptions: Sendable {
         public var justParse = false
         public var ptexMemory = 4  // GB
         public var sceneDirectory = String()
+
+        public init() {}
 }
 
-@MainActor
-public var renderOptions = RenderOptions()
 
 func radians(deg: FloatX) -> FloatX {
         return (FloatX.pi / 180) * deg

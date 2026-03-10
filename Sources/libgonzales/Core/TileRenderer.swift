@@ -9,7 +9,8 @@ struct TileRenderer: Renderer {
                 sampler: Sampler,
                 lightSampler: LightSampler,
                 tileSize: (Int, Int),
-                immutableState: ImmutableState
+                immutableState: ImmutableState,
+                renderOptions: RenderOptions
         ) async {
                 self.camera = camera
                 self.integrator = integrator
@@ -17,6 +18,7 @@ struct TileRenderer: Renderer {
                 self.lightSampler = lightSampler
                 self.tileSize = tileSize
                 self.immutableState = immutableState
+                self.renderOptions = renderOptions
 
                 let sampleBounds = await camera.getSampleBounds()
                 if renderOptions.singleRay {
@@ -184,6 +186,7 @@ struct TileRenderer: Renderer {
         let integrator: VolumePathIntegrator
         let immutableState: ImmutableState
         let lightSampler: LightSampler
+        let renderOptions: RenderOptions
         let sampler: Sampler
         let bounds: Bounds2i
         let tileSize: (Int, Int)

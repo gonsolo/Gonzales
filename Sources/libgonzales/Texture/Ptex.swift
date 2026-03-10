@@ -4,8 +4,8 @@ import ptexBridge
 struct PtexCache {
 
         @MainActor
-        init() {
-                initPtexCache(renderOptions.ptexMemory)
+        init(ptexMemory: Int) {
+                initPtexCache(ptexMemory)
         }
 }
 

@@ -21,10 +21,10 @@ class RenderConfiguration {
         var objects = ["": [any Boundable & Intersectable]()]
 
         @MainActor
-        func makeFilm(filter: any Filter) throws -> Film {
+        func makeFilm(filter: any Filter, quick: Bool) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
-                if renderOptions.quick {
+                if quick {
                         x /= 4
                         y /= 4
                 }
@@ -75,10 +75,10 @@ class RenderConfiguration {
         }
 
         @MainActor
-        func makeCamera() async throws -> PerspectiveCamera {
+        func makeCamera(quick: Bool) async throws -> PerspectiveCamera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
-                let film = try makeFilm(filter: filter)
+                let film = try makeFilm(filter: filter, quick: quick)
                 let resolution = film.getResolution()
                 let frame = FloatX(resolution.x) / FloatX(resolution.y)
                 var screen = Bounds2f()
@@ -140,22 +140,22 @@ class RenderConfiguration {
         }
 
         @MainActor
-        func makeSampler(film: Film) throws -> Sampler {
+        func makeSampler(film: Film, quick: Bool) throws -> Sampler {
                 switch samplerName {
                 case "sobol", "zsobol":
                         return try .sobol(
                                 createZSobolSampler(
                                         parameters: samplerParameters, fullResolution: film.resolution,
-                                        quick: renderOptions.quick))
+                                        quick: quick))
                 case "random":
                         return try .random(
                                 createRandomSampler(
-                                        parameters: samplerParameters, quick: renderOptions.quick))
+                                        parameters: samplerParameters, quick: quick))
                 default:
                         warning("Unknown sampler, using random sampler.")
                         return try .random(
                                 createRandomSampler(
-                                        parameters: samplerParameters, quick: renderOptions.quick))
+                                        parameters: samplerParameters, quick: quick))
                 }
         }
 
@@ -165,10 +165,10 @@ class RenderConfiguration {
         }
 
         @MainActor
-        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState) async throws
+        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState, renderOptions: RenderOptions) async throws
                 -> some Renderer {
-                let camera = try await makeCamera()
-                let sampler = try makeSampler(film: camera.film)
+                let camera = try await makeCamera(quick: renderOptions.quick)
+                let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
                 let scene = Scene(
                         lights: lights,
                         materials: materials,
@@ -191,7 +191,8 @@ class RenderConfiguration {
                         sampler: sampler,
                         lightSampler: lightSampler,
                         tileSize: tileSize,
-                        immutableState: immutableState
+                        immutableState: immutableState,
+                        renderOptions: renderOptions
                 )
         }
 }

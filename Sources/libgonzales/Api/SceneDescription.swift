@@ -61,6 +61,7 @@ public class SceneDescription {
         var namedCoordinateSystems = [String: Transform]()
         var options: RenderConfiguration
         var readTimer: Timer?
+        var renderOptions: RenderOptions
         var state: State
         var states = [State]()
         var transforms = [Transform]()
@@ -71,9 +72,10 @@ public class SceneDescription {
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
 
         @MainActor
-        public init() {
+        public init(renderOptions: RenderOptions) {
                 self.options = RenderConfiguration()
-                self.state = State()
+                self.renderOptions = renderOptions
+                self.state = State(ptexMemory: renderOptions.ptexMemory)
                 self.materials.append(SceneDescription.defaultMaterial)
         }
 }
@@ -443,7 +445,7 @@ extension SceneDescription {
                         }
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
-                        texture = try getTextureFrom(name: fileName, type: type)
+                        texture = try getTextureFrom(name: fileName, type: type, sceneDirectory: renderOptions.sceneDirectory)
                 case "mix":
                         switch type {
                         case "color", "spectrum":
@@ -455,7 +457,7 @@ extension SceneDescription {
                         }
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
-                        texture = try getTextureFrom(name: fileName, type: type)
+                        texture = try getTextureFrom(name: fileName, type: type, sceneDirectory: renderOptions.sceneDirectory)
                 case "scale":
                         unimplemented()
                 default:
@@ -490,7 +492,8 @@ extension SceneDescription {
                 let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
                         materials: materials, acceleratorName: acceleratorName,
-                        immutableState: state.getImmutable())
+                        immutableState: state.getImmutable(),
+                        renderOptions: renderOptions)
                 try await renderer.render()
                 self.options = RenderConfiguration()
         }
@@ -511,7 +514,8 @@ extension SceneDescription {
                 case "infinite":
                         let infiniteLight = try createInfiniteLight(
                                 lightToWorld: lightToWorld,
-                                parameters: parameters)
+                                parameters: parameters,
+                                sceneDirectory: renderOptions.sceneDirectory)
                         // immortalize(infiniteLight)
                         return Light.infinite(infiniteLight)
                 case "point":
@@ -552,7 +556,8 @@ extension SceneDescription {
                 case "plymesh":
                         return try createPlyMesh(
                                 objectToWorld: objectToWorld,
-                                parameters: parameters)
+                                parameters: parameters,
+                                sceneDirectory: renderOptions.sceneDirectory)
                 case "sphere":
                         return [
                                 try createSphere(
@@ -570,9 +575,9 @@ extension SceneDescription {
 }
 
 @MainActor
-func getTextureFrom(name: String, type: String) throws -> Texture {
+func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -> Texture {
         let fileManager = FileManager.default
-        let absoluteFileName = renderOptions.sceneDirectory + "/" + name
+        let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
                 warning("Can't find texture file: \(absoluteFileName)")
                 return Texture.rgbSpectrumTexture(

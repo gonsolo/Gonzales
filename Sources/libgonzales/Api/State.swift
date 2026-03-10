@@ -10,7 +10,7 @@ struct ImmutableState {
 struct State {
 
         @MainActor
-        init() {
+        init(ptexMemory: Int) {
                 namedMaterials = [String: UninstancedMaterial]()
                 currentNamedMaterial = "None"
                 var parameters = ParameterDictionary()
@@ -21,7 +21,7 @@ struct State {
                 )
                 namedMedia = [String: any Medium]()
                 textures = [String: Texture]()
-                ptexCache = PtexCache()
+                ptexCache = PtexCache(ptexMemory: ptexMemory)
         }
 
         @MainActor
