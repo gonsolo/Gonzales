@@ -1,7 +1,7 @@
 @preconcurrency import Foundation
 
 @MainActor
-func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable]) async throws -> Accelerator {
+func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable], acceleratorName: String) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
                 let builder = await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
@@ -55,6 +55,7 @@ public enum ApiError: Error {
 public struct Api {
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
+        var acceleratorName = "bvh"
 }
 
 extension Api {
@@ -157,7 +158,7 @@ extension Api {
         }
 
         @MainActor
-        func accelerator(name: String, parameters _: ParameterDictionary) throws {
+        mutating func accelerator(name: String, parameters _: ParameterDictionary) throws {
                 switch name {
                 case "bvh":
                         acceleratorName = "bvh"
@@ -602,8 +603,7 @@ var transforms = [Transform]()
 @MainActor
 var readTimer = Timer("")
 
-@MainActor
-var acceleratorName = "bvh"
+
 
 @MainActor
 var namedCoordinateSystems = [String: Transform]()

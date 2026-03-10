@@ -464,7 +464,7 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary)
                 throw CurveError.numberControlPoints
         }
         var curves = [ShapeType]()
-        switch acceleratorName {
+        switch api.acceleratorName {
         case "bvh":
                 curves = createBVHCurveShape(
                         controlPoints: controlPoints,
