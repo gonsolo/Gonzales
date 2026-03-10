@@ -57,6 +57,7 @@ public struct Api {
         var areaLights = [AreaLight]()
         var acceleratorName = "bvh"
         var namedCoordinateSystems = [String: Transform]()
+        var readTimer: Timer?
 }
 
 extension Api {
@@ -367,7 +368,7 @@ extension Api {
 
         // Not really part of PBRT API
         @MainActor
-        public func start() {
+        public mutating func start() {
                 readTimer = Timer("Reading...", newline: false)
                 fflush(stdout)
         }
@@ -466,7 +467,7 @@ extension Api {
 
         @MainActor
         func worldEnd() async throws {
-                print("Reading: \(readTimer.elapsed)")
+                print("Reading: \(readTimer?.elapsed ?? "unknown")")
                 if renderOptions.justParse { return }
                 let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
@@ -601,8 +602,7 @@ var currentTransform = Transform()
 @MainActor
 var transforms = [Transform]()
 
-@MainActor
-var readTimer = Timer("")
+
 
 
 
