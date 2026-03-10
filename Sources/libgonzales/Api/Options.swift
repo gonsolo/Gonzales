@@ -134,15 +134,15 @@ class Options {
         @MainActor
         func makeIntegrator(sampler _: Sampler, accelerator: Accelerator, scene: Scene) throws
                 -> VolumePathIntegrator {
-                switch options.integratorName {
+                switch self.integratorName {
                 case "path": break
                 case "volpath": break
                 default:
-                        var message = "Integrator \(options.integratorName) not implemented, "
+                        var message = "Integrator \(self.integratorName) not implemented, "
                         message += "using path integrator!"
                         warning(message)
                 }
-                let maxDepth = try options.integratorParameters.findOneInt(
+                let maxDepth = try self.integratorParameters.findOneInt(
                         called: "maxdepth",
                         else: 1
                 )

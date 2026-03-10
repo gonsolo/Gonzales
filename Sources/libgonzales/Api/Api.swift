@@ -58,6 +58,7 @@ public struct Api {
         var acceleratorName = "bvh"
         var currentTransform = Transform()
         var namedCoordinateSystems = [String: Transform]()
+        var options: Options
         var readTimer: Timer?
         var state: State
         var states = [State]()
@@ -65,6 +66,7 @@ public struct Api {
 
         @MainActor
         public init() {
+                self.options = Options()
                 self.state = State()
         }
 }
@@ -118,7 +120,7 @@ extension Api {
         }
 
         @MainActor
-        func film(name: String, parameters: ParameterDictionary) throws {
+        mutating func film(name: String, parameters: ParameterDictionary) throws {
                 let fileName = try parameters.findString(called: "filename") ?? "gonzales.exr"
                 guard fileName.hasSuffix("exr") else {
                         abort("Only exr output supported!")
@@ -183,13 +185,13 @@ extension Api {
         }
 
         @MainActor
-        func integrator(name: String, parameters: ParameterDictionary) throws {
+        mutating func integrator(name: String, parameters: ParameterDictionary) throws {
                 options.integratorName = name
                 options.integratorParameters = parameters
         }
 
         @MainActor
-        func lightSource(name: String, parameters: ParameterDictionary) throws {
+        mutating func lightSource(name: String, parameters: ParameterDictionary) throws {
                 let light = try makeLight(
                         name: name,
                         parameters: parameters,
@@ -269,13 +271,13 @@ extension Api {
         }
 
         @MainActor
-        func sampler(name: String, parameters: ParameterDictionary) {
+        mutating func sampler(name: String, parameters: ParameterDictionary) {
                 options.samplerName = name
                 options.samplerParameters = parameters
         }
 
         @MainActor
-        func pixelFilter(name: String, parameters: ParameterDictionary) {
+        mutating func pixelFilter(name: String, parameters: ParameterDictionary) {
                 options.filterName = name
                 options.filterParameters = parameters
         }
@@ -481,12 +483,7 @@ extension Api {
                 let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights)
                 try await renderer.render()
-                cleanUp()
-        }
-
-        @MainActor
-        private func cleanUp() {
-                options = Options()
+                api.options = Options()
         }
 
         @MainActor
@@ -595,6 +592,3 @@ func getTextureFrom(name: String, type: String) throws -> Texture {
 
 @MainActor
 public var api = Api()
-
-@MainActor
-var options = Options()
