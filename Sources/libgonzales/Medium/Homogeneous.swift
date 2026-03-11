@@ -1,6 +1,6 @@
 import Foundation
 
-final class Homogeneous: Medium {
+struct Homogeneous: Medium {
 
         init(scale: FloatX, absorption: RgbSpectrum, scattering: RgbSpectrum) {
                 self.scale = scale

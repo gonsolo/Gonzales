@@ -1,4 +1,4 @@
-final class HenyeyGreenstein: PhaseFunction {
+struct HenyeyGreenstein: PhaseFunction {
 
         init(geometricTerm: FloatX = 0) {
                 self.geometricTerm = geometricTerm

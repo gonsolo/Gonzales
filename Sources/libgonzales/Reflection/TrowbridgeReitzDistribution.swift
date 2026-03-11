@@ -1,6 +1,6 @@
 import Foundation  // sin, cos
 
-public final class TrowbridgeReitzDistribution: MicrofacetDistribution {
+public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
 
         public init(alpha: (FloatX, FloatX)) {
                 self.alpha = alpha
