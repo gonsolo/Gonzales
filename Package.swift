@@ -24,6 +24,12 @@ let package = Package(
                         name: "libgonzalesTests",
                         dependencies: [
                                 "libgonzales"
+                        ],
+                        swiftSettings: [
+                                .interoperabilityMode(.Cxx),
+                                .unsafeFlags(["-Ounchecked"]),
+                                .unsafeFlags(["-Xcc", "-O3"]),
+                                .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ]
                 ),
                 .executableTarget(
