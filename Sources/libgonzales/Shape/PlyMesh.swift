@@ -67,30 +67,12 @@ extension PlyMesh {
                 at index: inout Data.Index,
                 peek: Bool = false
         ) -> T {
-                var value = T()
                 let size = MemoryLayout<T>.size
-                withUnsafeMutableBytes(of: &value) { (valuePointer) in
-                        data.withUnsafeBytes { (dataPointer) in
-                                let source = dataPointer.baseAddress! + index
-                                let destination = valuePointer.baseAddress!
-                                switch endianness {
-                                case .little:
-                                        memcpy(destination, source, size)
-                                case .big:
-                                        switch size {
-                                        case 1:
-                                                memcpy(destination, source, size)
-                                        case 4:
-                                                memcpy(destination + 3, source + 0, 1)
-                                                memcpy(destination + 2, source + 1, 1)
-                                                memcpy(destination + 1, source + 2, 1)
-                                                memcpy(destination + 0, source + 3, 1)
-                                        default:
-                                                preconditionFailure("Unknown size in endian conversion: \(size)")
-                                        }
-                                }
-                        }
+                var bytes = data.subdata(in: index..<(index + size))
+                if endianness == .big {
+                        bytes.reverse()
                 }
+                let value = bytes.withUnsafeBytes { $0.load(as: T.self) }
                 if !peek {
                         index += size
                 }
