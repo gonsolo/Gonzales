@@ -52,7 +52,7 @@ public struct Vector3: Sendable, Three {
 }
 
 extension Vector3 {
-        init(point: Point3) {
+        public init(point: Point3) {
                 self.init(x: point.x, y: point.y, z: point.z)
         }
 
@@ -118,6 +118,12 @@ extension Vector3 {
 
         public static func /= (left: inout Vector3, right: FloatX) {
                 left.xyz /= right
+        }
+}
+
+extension Vector3 {
+        public init(normal: Normal3) {
+                self.init(x: normal.x, y: normal.y, z: normal.z)
         }
 }
 
