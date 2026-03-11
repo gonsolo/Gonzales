@@ -65,6 +65,7 @@ public class SceneDescription {
         var state: State
         var states = [State]()
         var transforms = [Transform]()
+        var triangleMeshBuilder = TriangleMeshBuilder()
 
         static let defaultMaterial = Material.diffuse(
                 Diffuse(
@@ -493,7 +494,8 @@ extension SceneDescription {
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
                         materials: materials, acceleratorName: acceleratorName,
                         immutableState: state.getImmutable(),
-                        renderOptions: renderOptions)
+                        renderOptions: renderOptions,
+                        meshes: triangleMeshBuilder.getMeshes())
                 try await renderer.render()
                 self.options = RenderConfiguration()
         }
@@ -552,12 +554,14 @@ extension SceneDescription {
                 case "loopsubdiv":
                         return try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
-                                parameters: parameters)
+                                parameters: parameters,
+                                triangleMeshBuilder: triangleMeshBuilder)
                 case "plymesh":
                         return try createPlyMesh(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters,
-                                sceneDirectory: renderOptions.sceneDirectory)
+                                sceneDirectory: renderOptions.sceneDirectory,
+                                triangleMeshBuilder: triangleMeshBuilder)
                 case "sphere":
                         return [
                                 try createSphere(
@@ -567,7 +571,8 @@ extension SceneDescription {
                 case "trianglemesh":
                         return try createTriangleMeshShape(
                                 objectToWorld: objectToWorld,
-                                parameters: parameters)
+                                parameters: parameters,
+                                triangleMeshBuilder: triangleMeshBuilder)
                 default:
                         throw SceneDescriptionError.makeShapes(message: name)
                 }

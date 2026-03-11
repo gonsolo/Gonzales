@@ -138,7 +138,6 @@ struct TriangleMeshes {
 }
 
 
-nonisolated(unsafe) var triangleMeshBuilder = TriangleMeshBuilder()
 
 struct TriangleIntersection {
         init() {
@@ -637,7 +636,8 @@ extension Triangle {
 
 func createTriangleMeshShape(
         objectToWorld: Transform,
-        parameters: ParameterDictionary
+        parameters: ParameterDictionary,
+        triangleMeshBuilder: TriangleMeshBuilder
 ) throws -> [ShapeType] {
         let indices = try parameters.findInts(name: "indices")
         guard indices.count % 3 == 0 else {
@@ -661,7 +661,8 @@ func createTriangleMeshShape(
 
         return try createTriangleMesh(
                 objectToWorld: objectToWorld,
-                meshData: meshData)
+                meshData: meshData,
+                triangleMeshBuilder: triangleMeshBuilder)
 }
 
 struct MeshData {
@@ -675,7 +676,8 @@ struct MeshData {
 
 func createTriangleMesh(
         objectToWorld: Transform,
-        meshData: MeshData
+        meshData: MeshData,
+        triangleMeshBuilder: TriangleMeshBuilder
 ) throws -> [ShapeType] {
         let numberTriangles = meshData.indices.count / 3
         let trianglePoints = meshData.points

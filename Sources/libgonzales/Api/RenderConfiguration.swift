@@ -165,14 +165,14 @@ class RenderConfiguration {
         }
 
 
-        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState, renderOptions: RenderOptions) async throws
+        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState, renderOptions: RenderOptions, meshes: TriangleMeshes) async throws
                 -> some Renderer {
                 let camera = try await makeCamera(quick: renderOptions.quick)
                 let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
                 let scene = Scene(
                         lights: lights,
                         materials: materials,
-                        meshes: triangleMeshBuilder.getMeshes(),
+                        meshes: meshes,
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)

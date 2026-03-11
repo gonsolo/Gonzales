@@ -364,7 +364,7 @@ extension PlyMesh {
 }
 
 
-func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
+func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String, triangleMeshBuilder: TriangleMeshBuilder) throws
         -> [ShapeType] {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = sceneDirectory + "/" + relativeFileName
@@ -391,6 +391,7 @@ func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary, sc
                 faceIndices: plyMesh.faceIndices)
         return try createTriangleMesh(
                 objectToWorld: objectToWorld,
-                meshData: meshData)
+                meshData: meshData,
+                triangleMeshBuilder: triangleMeshBuilder)
 
 }

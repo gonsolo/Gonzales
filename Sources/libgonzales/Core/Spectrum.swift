@@ -1,6 +1,6 @@
 import Foundation
 
-protocol Spectrum {
+protocol Spectrum: Sendable {
         static func * (lhs: Self, rhs: Self) -> Self
 
         // Temporary: We adopt a step-by-step strategy to convert the renderer to spectral
@@ -131,7 +131,7 @@ let copperExtinctionCoefficients = PiecewiseLinearSpectrum(
         ])
 
 
-nonisolated(unsafe) var namedSpectra: [String: any Spectrum] = [
+let namedSpectra: [String: any Spectrum] = [
         "metal-Ag-eta": silverRefractiveIndices,
         "metal-Ag-k": silverExtinctionCoefficients,
         "metal-Al-eta": aluminiumRefractiveIndices,
