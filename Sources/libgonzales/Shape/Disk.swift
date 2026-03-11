@@ -24,9 +24,8 @@ struct Disk: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX,
-                interaction _: inout SurfaceInteraction
-        ) throws {
+                tHit _: inout FloatX
+        ) throws -> SurfaceInteraction? {
                 unimplemented()
         }
 

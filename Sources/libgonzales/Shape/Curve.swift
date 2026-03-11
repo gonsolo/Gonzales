@@ -127,22 +127,22 @@ struct Curve: Shape {
                 tHit: inout FloatX,
                 rayToObject: Transform,
                 state: CurveIntersectionState
-        ) throws -> (SurfaceInteraction, FloatX) {
+        ) throws -> (SurfaceInteraction?, FloatX) {
                 let points = state.points
                 let uRange = state.uRange
                 let depth = state.depth
                 // let index = state.index
 
-                let nothing: (SurfaceInteraction, FloatX) = (SurfaceInteraction(), FloatX.infinity)
+                let nothing: (SurfaceInteraction?, FloatX) = (nil, FloatX.infinity)
 
                 let rayLength = length(ray.direction)
                 if depth > 0 {
                         let splitPoints = subdivideBezier(points: points)
                         let uSamples = [uRange.0, (uRange.0 + uRange.1) / 2, uRange.1]
-                        typealias InteractionAndT = (SurfaceInteraction, FloatX)
+                        typealias InteractionAndT = (SurfaceInteraction?, FloatX)
                         var hits: [InteractionAndT] = [
-                                (SurfaceInteraction(), 0),
-                                (SurfaceInteraction(), 0),
+                                (nil, 0),
+                                (nil, 0),
                         ]
 
                         for segment in 0..<2 {
@@ -175,15 +175,18 @@ struct Curve: Shape {
                                         state: nextState)
                                 // if hit && !tHit: shadowRays not applicable here
                         }
-                        if hits[0].0.valid && hits[1].0.valid {
+                        let hit0Valid = hits[0].0?.valid == true
+                        let hit1Valid = hits[1].0?.valid == true
+
+                        if hit0Valid && hit1Valid {
                                 if hits[0].1 < hits[1].1 {
                                         return hits[0]
                                 } else {
                                         return hits[1]
                                 }
-                        } else if hits[0].0.valid && !hits[1].0.valid {
+                        } else if hit0Valid && !hit1Valid {
                                 return hits[0]
-                        } else if !hits[0].0.valid && hits[1].0.valid {
+                        } else if !hit0Valid && hit1Valid {
                                 return hits[1]
                         } else {
                                 return nothing
@@ -301,60 +304,9 @@ struct Curve: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX,
-                interaction _: inout SurfaceInteraction
-        ) throws {
+                tHit _: inout FloatX
+        ) throws -> SurfaceInteraction? {
                 unimplemented()
-                // let ray = worldToObject * worldRay
-                // let points = blossomBezier(points: common.points, u: u)
-                // let dx = cross(ray.direction, points.3 - points.0)
-                // if lengthSquared(dx) == 0 {
-                //        throw CurveError.todo
-                // }
-                // let objectToRay = try lookAtTransform(
-                //        eye: ray.origin, at: ray.origin + ray.direction, up: dx)
-                // var controlPoints = [Point(), Point(), Point(), Point()]
-                // controlPoints[0] = objectToRay * points.0
-                // controlPoints[1] = objectToRay * points.1
-                // controlPoints[2] = objectToRay * points.2
-                // controlPoints[3] = objectToRay * points.3
-                // let maxWidth = computeMaxWidth(u: u, width: common.width)
-                // if !overlap(points: controlPoints, xyz: 1, width: maxWidth) {
-                //        return
-                // }
-                // if !overlap(points: controlPoints, xyz: 0, width: maxWidth) {
-                //        return
-                // }
-                // let rayLength = length(ray.direction)
-                // let zMax = rayLength * tHit
-                // if !overlap(points: controlPoints, xyz: 2, width: maxWidth, limits: (0, zMax)) {
-                //        return
-                // }
-                // var l0: FloatX = 0
-                // for i in 0..<2 {
-                //        let px: FloatX = abs(
-                //                controlPoints[i].x - 2.0 * controlPoints[i + 1].x
-                //                        + controlPoints[i + 2].x)
-                //        let py: FloatX = abs(
-                //                controlPoints[i].y - 2.0 * controlPoints[i + 1].y
-                //                        + controlPoints[i + 2].y)
-                //        let pz: FloatX = abs(
-                //                controlPoints[i].z - 2.0 * controlPoints[i + 1].z
-                //                        + controlPoints[i + 2].z)
-                //        l0 = max(max(l0, px), max(py, pz))
-                // }
-                // let eps = max(common.width.0, common.width.1) * 0.05
-                // let r0 = Int(log2(1.41421356237 * 6.0 * l0 / (8.0 * eps)) / 2.0)
-                // let maxDepth = clamp(value: r0, low: 0, high: 10)
-                // let interactionAndT = try recursiveIntersect(
-                //        ray: ray,
-                //        tHit: &tHit,
-                //        points: controlPoints,
-                //        rayToObject: objectToRay.inverse,
-                //        u: u,
-                //        depth: maxDepth)
-                // tHit = interactionAndT.1
-                // interaction = interactionAndT.0
         }
 
         func area(scene _: Scene) -> FloatX {

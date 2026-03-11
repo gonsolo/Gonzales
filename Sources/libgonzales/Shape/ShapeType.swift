@@ -61,19 +61,17 @@ enum ShapeType: Shape {
         func computeSurfaceInteraction(
                 scene: Scene,
                 data: TriangleIntersection?,
-                worldRay: Ray,
-                interaction: inout SurfaceInteraction
-        ) {
+                worldRay: Ray
+        ) -> SurfaceInteraction? {
                 switch self {
                 case .triangle(let triangle):
                         guard let data = data else {
-                                return
+                                return nil
                         }
                         return triangle.computeSurfaceInteraction(
                                 scene: scene,
                                 data: data,
-                                worldRay: worldRay,
-                                interaction: &interaction)
+                                worldRay: worldRay)
                 default:
                         unimplemented()
                 }
@@ -83,36 +81,17 @@ enum ShapeType: Shape {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
+        ) throws -> SurfaceInteraction? {
 
                 switch self {
                 case .triangle(let triangle):
-                        try triangle.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try triangle.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .sphere(let sphere):
-                        try sphere.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try sphere.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .disk(let disk):
-                        try disk.intersect(scene: scene, ray: ray, tHit: &tHit)
+                        return try disk.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .curve(let curve):
-                        try curve.intersect(scene: scene, ray: ray, tHit: &tHit)
-                }
-        }
-
-        func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-
-                switch self {
-                case .triangle(let triangle):
-                        try triangle.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
-                case .sphere(let sphere):
-                        try sphere.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
-                case .disk(let disk):
-                        try disk.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
-                case .curve(let curve):
-                        try curve.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
+                        return try curve.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 

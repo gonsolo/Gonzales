@@ -72,7 +72,7 @@ extension VolumePathIntegrator {
                 var throughput: RgbSpectrum
                 var albedo: RgbSpectrum
                 var firstNormal: Normal
-                var interaction: SurfaceInteraction = SurfaceInteraction()
+                var interaction: SurfaceInteraction?
         }
 
         private struct IntegratorContext {
@@ -105,13 +105,12 @@ extension VolumePathIntegrator {
                 tHit: inout FloatX,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
-                interaction: inout SurfaceInteraction
+                interaction: inout SurfaceInteraction?
         ) throws {
-                try accelerator.intersect(
+                interaction = try accelerator.intersect(
                         scene: scene,
                         ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
+                        tHit: &tHit)
                 let radiance = scene.infiniteLights.reduce(
                         black,
                         { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
@@ -159,13 +158,11 @@ extension VolumePathIntegrator {
                 }
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = FloatX.infinity
-                var brdfInteraction = SurfaceInteraction()
-                try accelerator.intersect(
+                let brdfInteraction = try accelerator.intersect(
                         scene: scene,
                         ray: ray,
-                        tHit: &tHit,
-                        interaction: &brdfInteraction)
-                if brdfInteraction.valid {
+                        tHit: &tHit)
+                if brdfInteraction != nil {
                         return zero
                 }
                 for light in scene.lights {
@@ -366,7 +363,7 @@ extension VolumePathIntegrator {
                 state: inout BounceState,
                 context: inout IntegratorContext
         ) throws -> Bool {
-                let surfaceInteraction = state.interaction
+                guard let surfaceInteraction = state.interaction else { return false }
                 if state.bounce == 0 {
                         if let areaLight = surfaceInteraction.areaLight {
                                 state.estimate +=
@@ -418,7 +415,7 @@ extension VolumePathIntegrator {
                         bounce: state.bounce,
                         estimate: &state.estimate,
                         interaction: &state.interaction)
-                if !state.interaction.valid {
+                if state.interaction == nil {
                         return false  // No surface hit, so stop this bounce
                 }
                 let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)

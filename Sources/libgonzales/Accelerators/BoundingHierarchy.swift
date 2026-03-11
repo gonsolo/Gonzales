@@ -154,18 +154,20 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         func intersect(
                 scene: Scene,
                 ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
+                tHit: inout FloatX
+        ) throws -> SurfaceInteraction? {
                 var processor = InteractionProcessor(tHit: tHit)
                 try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
 
                 tHit = processor.tHit
-                try scene.computeSurfaceInteraction(
-                        primId: primIds[processor.index],
-                        data: processor.gdata,
-                        worldRay: ray,
-                        interaction: &interaction)
+                var interaction: SurfaceInteraction?
+                if let gdata = processor.gdata {
+                        interaction = try scene.computeSurfaceInteraction(
+                                primId: primIds[processor.index],
+                                data: gdata,
+                                worldRay: ray)
+                }
+                return interaction
         }
 
         func objectBound(scene: Scene) -> Bounds3f {

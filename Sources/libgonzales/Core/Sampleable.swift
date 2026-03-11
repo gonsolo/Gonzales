@@ -44,9 +44,7 @@ extension Sampleable where Self: Intersectable {
                 throws -> FloatX {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: FloatX = 0.0
-                var interaction = SurfaceInteraction()
-                try intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
-                if !interaction.valid {
+                guard let interaction = try intersect(scene: scene, ray: ray, tHit: &tHit) else {
                         return 0
                 }
                 let squaredDistance = distanceSquared(from.position, interaction.position)

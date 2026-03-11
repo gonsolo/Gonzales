@@ -7,7 +7,7 @@ struct Visibility {
                 return try accelerator.intersect(
                         scene: scene,
                         ray: ray,
-                        tHit: &tHit)
+                        tHit: &tHit) != nil
         }
 
         let from: Point

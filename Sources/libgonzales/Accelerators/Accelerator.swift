@@ -14,24 +14,11 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
-                try boundingHierarchy.intersect(
+        ) throws -> SurfaceInteraction? {
+                return try boundingHierarchy.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-        }
-
-        func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                try boundingHierarchy.intersect(
-                        scene: scene,
-                        ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
         }
 
         func objectBound(scene: Scene) -> Bounds3f {

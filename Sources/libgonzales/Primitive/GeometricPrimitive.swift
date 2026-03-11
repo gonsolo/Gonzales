@@ -17,47 +17,33 @@ struct GeometricPrimitive: Boundable, Intersectable {
         func computeSurfaceInteraction(
                 scene: Scene,
                 data: TriangleIntersection?,
-                worldRay: Ray,
-                interaction: inout SurfaceInteraction
-        ) {
-                if alpha == 0 { return }
-                shape.computeSurfaceInteraction(
+                worldRay: Ray
+        ) -> SurfaceInteraction? {
+                if alpha == 0 { return nil }
+                var interaction = shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
-                        worldRay: worldRay,
-                        interaction: &interaction)
-                if interaction.valid {
-                        interaction.materialIndex = materialIndex
+                        worldRay: worldRay)
+                if interaction?.valid == true {
+                        interaction?.materialIndex = materialIndex
                 }
+                return interaction
         }
 
         func intersect(
                 scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
-                if alpha == 0 { return false }
-                return try shape.intersect(
+        ) throws -> SurfaceInteraction? {
+                if alpha == 0 { return nil }
+                var interaction = try shape.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-        }
-
-        func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                if alpha == 0 { return }
-                try shape.intersect(
-                        scene: scene,
-                        ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
-                if interaction.valid {
-                        interaction.materialIndex = materialIndex
+                if interaction?.valid == true {
+                        interaction?.materialIndex = materialIndex
                 }
+                return interaction
         }
 
         func worldBound(scene: Scene) async -> Bounds3f {

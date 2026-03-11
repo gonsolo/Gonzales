@@ -6,30 +6,19 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
+        ) throws -> SurfaceInteraction? {
                 let localRay = transform.inverse * ray
-                return try accelerator.intersect(
+                var interaction = try accelerator.intersect(
                         scene: scene,
                         ray: localRay,
                         tHit: &tHit)
-        }
-
-        func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                let localRay = transform.inverse * ray
-                try accelerator.intersect(
-                        scene: scene,
-                        ray: localRay,
-                        tHit: &tHit,
-                        interaction: &interaction)
-                if !interaction.valid {
-                        return
+                if interaction?.valid == false {
+                        return nil
                 }
-                interaction = transform * interaction
+                if let inter = interaction {
+                        interaction = transform * inter
+                }
+                return interaction
         }
 
         func worldBound(scene: Scene) -> Bounds3f {

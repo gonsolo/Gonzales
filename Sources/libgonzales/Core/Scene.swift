@@ -28,15 +28,15 @@ struct Scene {
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
-                        return try triangle.intersect(scene: self, ray: ray, tHit: &tHit)
+                        return try triangle.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit)
+                        return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
-                        return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit)
+                        return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 }
         }
 
@@ -71,26 +71,25 @@ struct Scene {
         func computeSurfaceInteraction(
                 primId: PrimId,
                 data: TriangleIntersection?,
-                worldRay: Ray,
-                interaction: inout SurfaceInteraction
-        ) throws {
+                worldRay: Ray
+        ) throws -> SurfaceInteraction? {
                 switch primId.type {
                 case .triangle:
                         let triangle = try Triangle(
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
-                        triangle.computeSurfaceInteraction(
-                                scene: self, data: data!, worldRay: worldRay, interaction: &interaction)
+                        return triangle.computeSurfaceInteraction(
+                                scene: self, data: data, worldRay: worldRay)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return geometricPrimitive.computeSurfaceInteraction(
-                                scene: self, data: data, worldRay: worldRay, interaction: &interaction)
+                                scene: self, data: data, worldRay: worldRay)
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return areaLight.computeSurfaceInteraction(
-                                scene: self, data: data, worldRay: worldRay, interaction: &interaction)
+                                scene: self, data: data, worldRay: worldRay)
                 }
         }
 

@@ -61,43 +61,29 @@ struct AreaLight: Boundable, Intersectable, LightSource {
         func computeSurfaceInteraction(
                 scene: Scene,
                 data: TriangleIntersection?,
-                worldRay: Ray,
-                interaction: inout SurfaceInteraction
-        ) {
-                if alpha == 0 { return }
-                shape.computeSurfaceInteraction(
+                worldRay: Ray
+        ) -> SurfaceInteraction? {
+                if alpha == 0 { return nil }
+                var interaction = shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
-                        worldRay: worldRay,
-                        interaction: &interaction)
-                interaction.areaLight = self
+                        worldRay: worldRay)
+                interaction?.areaLight = self
+                return interaction
         }
 
         func intersect(
                 scene: Scene,
                 ray: Ray,
                 tHit: inout FloatX
-        ) throws -> Bool {
-                if alpha == 0 { return false }
-                return try shape.intersect(
+        ) throws -> SurfaceInteraction? {
+                if alpha == 0 { return nil }
+                var interaction = try shape.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-        }
-
-        func intersect(
-                scene: Scene,
-                ray: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                if alpha == 0 { return }
-                try shape.intersect(
-                        scene: scene,
-                        ray: ray,
-                        tHit: &tHit,
-                        interaction: &interaction)
-                interaction.areaLight = self
+                interaction?.areaLight = self
+                return interaction
         }
 
         func getBsdf(interaction: SurfaceInteraction) -> DiffuseBsdf {

@@ -433,11 +433,10 @@ extension Triangle {
 
         func computeSurfaceInteraction(
                 scene: Scene,
-                data: TriangleIntersection,
-                worldRay: Ray,
-                interaction: inout SurfaceInteraction
-        ) {
-                var varT = data.tValue
+                data: TriangleIntersection?,
+                worldRay: Ray
+        ) -> SurfaceInteraction? {
+                var varT = data?.tValue ?? 0
                 var dataValue: TriangleIntersectionFull?
                 do {
                         dataValue = try getIntersectionDataFull(scene: scene, ray: worldRay, tHit: &varT)
@@ -445,8 +444,9 @@ extension Triangle {
                         fatalError("getIntersectionDataFull in computeSurfaceInteraction!")
                 }
                 guard let dataValue = dataValue else {
-                        return
+                        return nil
                 }
+                var interaction = SurfaceInteraction()
                 // --- Calculate Hit Point (pHit) ---
                 let hit0: Point = dataValue.barycentric0 * getPoint0(scene: scene)
                 let hit1: Point = dataValue.barycentric1 * getPoint1(scene: scene)
@@ -490,7 +490,7 @@ extension Triangle {
                                 getPoint2(scene: scene) - getPoint0(scene: scene),
                                 getPoint1(scene: scene) - getPoint0(scene: scene))
                         if lengthSquared(geometricNormal) == 0 {
-                                return  // Cannot compute valid normal/tangent space
+                                return nil // Cannot compute valid normal/tangent space
                         }
                         (dpdu, dpdv) = makeCoordinateSystem(from: normalized(geometricNormal))
                 }
@@ -546,26 +546,26 @@ extension Triangle {
                 interaction.dpdu = dpdu
                 interaction.uvCoordinates = uvHit
                 interaction.faceIndex = faceIndex
+                return interaction
         }
 
         func intersect(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
+                tHit: inout FloatX
+        ) throws -> SurfaceInteraction? {
                 var data = TriangleIntersection()
                 if try !getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data) {
-                        return
+                        return nil
                 }
 
                 // 2. Compute the full SurfaceInteraction using the new private method
-                computeSurfaceInteraction(
+                let interaction = computeSurfaceInteraction(
                         scene: scene,
                         data: data,
-                        worldRay: worldRay,
-                        interaction: &interaction
+                        worldRay: worldRay
                 )
+                return interaction?.valid == true ? interaction : nil
         }
 
         private func getLocalPoint(scene: Scene, index: Int) -> Point {

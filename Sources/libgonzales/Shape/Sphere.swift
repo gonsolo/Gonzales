@@ -123,13 +123,8 @@ struct Sphere: Shape {
         func intersect(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX,
-                interaction: inout SurfaceInteraction
-        ) throws {
-                let empty = { (_: Int) in
-                        return
-                }
-
+                tHit: inout FloatX
+        ) throws -> SurfaceInteraction? {
                 let ray = getWorldToObject(scene: scene) * worldRay
                 let originX = ray.origin.x
                 let originY = ray.origin.y
@@ -142,16 +137,16 @@ struct Sphere: Shape {
                 let coeffC = originX * originX + originY * originY + originZ * originZ - radius * radius
 
                 guard let tValues = quadratic(coeffA: coeffA, coeffB: coeffB, coeffC: coeffC) else {
-                        return empty(#line)
+                        return nil
                 }
                 guard tValues.0 < tHit && tValues.1 > 0 else {
-                        return empty(#line)
+                        return nil
                 }
                 var shapeHit = tValues.0
                 if shapeHit <= 0 {
                         shapeHit = tValues.1
                         if shapeHit > tHit {
-                                return empty(#line)
+                                return nil
                         }
                 }
                 var pHit = ray.getPointFor(parameter: shapeHit)
@@ -171,8 +166,8 @@ struct Sphere: Shape {
                         outgoing: -ray.direction,
                         dpdu: dpdu,
                         uvCoordinates: uvCoordinates)
-                interaction = objectToWorld * localInteraction
                 tHit = shapeHit
+                return objectToWorld * localInteraction
         }
 
         func getObjectToWorld(scene _: Scene) -> Transform {
