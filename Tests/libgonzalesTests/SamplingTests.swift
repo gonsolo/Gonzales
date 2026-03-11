@@ -1,59 +1,59 @@
-import XCTest
+import Testing
 
 @testable import libgonzales
 
-final class SamplingTests: XCTestCase {
+@Suite struct SamplingTests {
 
         // MARK: - Power Heuristic
 
-        func testPowerHeuristicEqualPdfs() {
+        @Test func powerHeuristicEqualPdfs() {
                 let result = powerHeuristic(pdfF: 1.0, pdfG: 1.0)
-                XCTAssertEqual(result, 0.5, accuracy: 1e-6)
+                #expect(abs(result - 0.5) <= 1e-6)
         }
 
-        func testPowerHeuristicZeroPdfF() {
+        @Test func powerHeuristicZeroPdfF() {
                 let result = powerHeuristic(pdfF: 0.0, pdfG: 1.0)
-                XCTAssertEqual(result, 0.0, accuracy: 1e-6)
+                #expect(abs(result) <= 1e-6)
         }
 
-        func testPowerHeuristicZeroPdfG() {
+        @Test func powerHeuristicZeroPdfG() {
                 let result = powerHeuristic(pdfF: 1.0, pdfG: 0.0)
-                XCTAssertEqual(result, 0.0, accuracy: 1e-6)
+                #expect(abs(result) <= 1e-6)
         }
 
-        func testPowerHeuristicBothZero() {
+        @Test func powerHeuristicBothZero() {
                 let result = powerHeuristic(pdfF: 0.0, pdfG: 0.0)
-                XCTAssertEqual(result, 0.0, accuracy: 1e-6)
+                #expect(abs(result) <= 1e-6)
         }
 
-        func testPowerHeuristicDominating() {
+        @Test func powerHeuristicDominating() {
                 // When pdfF >> pdfG, result should be close to 1
                 let result = powerHeuristic(pdfF: 100.0, pdfG: 1.0)
-                XCTAssertGreaterThan(result, 0.99)
+                #expect(result > 0.99)
         }
 
-        func testPowerHeuristicDominated() {
+        @Test func powerHeuristicDominated() {
                 // When pdfF << pdfG, result should be close to 0
                 let result = powerHeuristic(pdfF: 1.0, pdfG: 100.0)
-                XCTAssertLessThan(result, 0.01)
+                #expect(result < 0.01)
         }
 
-        func testPowerHeuristicKnownValue() {
+        @Test func powerHeuristicKnownValue() {
                 // pdfF=2, pdfG=3: result = 4 / (4+9) = 4/13
                 let result = powerHeuristic(pdfF: 2.0, pdfG: 3.0)
-                XCTAssertEqual(result, 4.0 / 13.0, accuracy: 1e-6)
+                #expect(abs(result - 4.0 / 13.0) <= 1e-6)
         }
 
         // MARK: - Concentric Disk Sampling
 
-        func testConcentricSampleDiskCenter() {
+        @Test func concentricSampleDiskCenter() {
                 // uSample = (0.5, 0.5) should map to origin
                 let result = concentricSampleDisk(uSample: (0.5, 0.5))
-                XCTAssertEqual(result.x, 0, accuracy: 1e-6)
-                XCTAssertEqual(result.y, 0, accuracy: 1e-6)
+                #expect(abs(result.x) <= 1e-6)
+                #expect(abs(result.y) <= 1e-6)
         }
 
-        func testConcentricSampleDiskWithinUnitCircle() {
+        @Test func concentricSampleDiskWithinUnitCircle() {
                 let samples: [TwoRandomVariables] = [
                         (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0),
                         (0.25, 0.75), (0.8, 0.2),
@@ -61,55 +61,56 @@ final class SamplingTests: XCTestCase {
                 for uSample in samples {
                         let result = concentricSampleDisk(uSample: uSample)
                         let radiusSquared = result.x * result.x + result.y * result.y
-                        XCTAssertLessThanOrEqual(
-                                radiusSquared, 1.0 + 1e-6,
+                        #expect(
+                                radiusSquared <= 1.0 + 1e-6,
                                 "Sample \(uSample) mapped outside unit circle: r²=\(radiusSquared)")
                 }
         }
 
         // MARK: - Cosine Hemisphere Sampling
 
-        func testCosineSampleHemisphereUnitLength() {
+        @Test func cosineSampleHemisphereUnitLength() {
                 let result = cosineSampleHemisphere(uSample: (0.3, 0.7))
-                let len = (result.x * result.x + result.y * result.y + result.z * result.z).squareRoot()
-                XCTAssertEqual(len, 1.0, accuracy: 1e-5)
+                let len = (result.x * result.x + result.y * result.y + result.z * result.z)
+                        .squareRoot()
+                #expect(abs(len - 1.0) <= 1e-5)
         }
 
-        func testCosineSampleHemispherePositiveZ() {
+        @Test func cosineSampleHemispherePositiveZ() {
                 let samples: [TwoRandomVariables] = [
                         (0.1, 0.1), (0.5, 0.5), (0.9, 0.9), (0.0, 0.0),
                 ]
                 for uSample in samples {
                         let result = cosineSampleHemisphere(uSample: uSample)
-                        XCTAssertGreaterThanOrEqual(
-                                result.z, 0,
+                        #expect(
+                                result.z >= 0,
                                 "Sample \(uSample) produced negative z: \(result.z)")
                 }
         }
 
         // MARK: - Random Sampler
 
-        func testRandomSamplerValuesInRange() {
+        @Test func randomSamplerValuesInRange() {
                 var sampler = RandomSampler(numberOfSamples: 16)
                 for _ in 0..<100 {
                         let value = sampler.get1D()
-                        XCTAssertGreaterThanOrEqual(value, 0)
-                        XCTAssertLessThan(value, 1)
+                        #expect(value >= 0)
+                        #expect(value < 1)
                 }
         }
 
-        func testRandomSampler2DInRange() {
+        @Test func randomSampler2DInRange() {
                 var sampler = RandomSampler(numberOfSamples: 16)
                 for _ in 0..<100 {
                         let (u, v) = sampler.get2D()
-                        XCTAssertGreaterThanOrEqual(u, 0)
-                        XCTAssertLessThan(u, 1)
-                        XCTAssertGreaterThanOrEqual(v, 0)
-                        XCTAssertLessThan(v, 1)
+                        #expect(u >= 0)
+                        #expect(u < 1)
+                        #expect(v >= 0)
+                        #expect(v < 1)
                 }
         }
 
-        func testRandomSamplerCloneIsIndependent() {
+        @Test func randomSamplerCloneIsIndependent() {
                 let sampler = RandomSampler(numberOfSamples: 8)
                 var clone1 = sampler.clone()
                 var clone2 = sampler.clone()
@@ -122,11 +123,11 @@ final class SamplingTests: XCTestCase {
                         }
                 }
                 // It's astronomically unlikely that 10 random floats are all equal
-                XCTAssertFalse(allSame, "Cloned samplers should produce different sequences")
+                #expect(!allSame, "Cloned samplers should produce different sequences")
         }
 
-        func testSamplerSamplesPerPixel() {
+        @Test func samplerSamplesPerPixel() {
                 let sampler = Sampler.random(RandomSampler(numberOfSamples: 64))
-                XCTAssertEqual(sampler.samplesPerPixel, 64)
+                #expect(sampler.samplesPerPixel == 64)
         }
 }

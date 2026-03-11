@@ -1,189 +1,190 @@
-import XCTest
+import Glibc
+import Testing
 
 @testable import libgonzales
 
-final class SpectrumTests: XCTestCase {
+@Suite struct SpectrumTests {
 
         // MARK: - Scalar Multiplication
 
-        func testScalarMultiplication() {
+        @Test func scalarMultiplication() {
                 let spectrum = RgbSpectrum(red: 1, green: 2, blue: 3)
                 let result = 2.0 * spectrum
-                XCTAssertEqual(result.red, 2.0, accuracy: 1e-6)
-                XCTAssertEqual(result.green, 4.0, accuracy: 1e-6)
-                XCTAssertEqual(result.blue, 6.0, accuracy: 1e-6)
+                #expect(abs(result.red - 2.0) <= 1e-6)
+                #expect(abs(result.green - 4.0) <= 1e-6)
+                #expect(abs(result.blue - 6.0) <= 1e-6)
         }
 
-        func testScalarMultiplicationCommutative() {
+        @Test func scalarMultiplicationCommutative() {
                 let spectrum = RgbSpectrum(red: 1, green: 2, blue: 3)
                 let left = 2.0 * spectrum
                 let right = spectrum * 2.0
-                XCTAssertEqual(left.red, right.red, accuracy: 1e-6)
-                XCTAssertEqual(left.green, right.green, accuracy: 1e-6)
-                XCTAssertEqual(left.blue, right.blue, accuracy: 1e-6)
+                #expect(abs(left.red - right.red) <= 1e-6)
+                #expect(abs(left.green - right.green) <= 1e-6)
+                #expect(abs(left.blue - right.blue) <= 1e-6)
         }
 
         // MARK: - Spectrum-Spectrum Multiplication
 
-        func testSpectrumMultiplication() {
+        @Test func spectrumMultiplication() {
                 var a = RgbSpectrum(red: 2, green: 3, blue: 4)
                 let b = RgbSpectrum(red: 0.5, green: 0.5, blue: 0.5)
                 a *= b
-                XCTAssertEqual(a.red, 1.0, accuracy: 1e-6)
-                XCTAssertEqual(a.green, 1.5, accuracy: 1e-6)
-                XCTAssertEqual(a.blue, 2.0, accuracy: 1e-6)
+                #expect(abs(a.red - 1.0) <= 1e-6)
+                #expect(abs(a.green - 1.5) <= 1e-6)
+                #expect(abs(a.blue - 2.0) <= 1e-6)
         }
 
-        func testMultiplyByWhiteIsIdentity() {
+        @Test func multiplyByWhiteIsIdentity() {
                 let original = RgbSpectrum(red: 0.3, green: 0.6, blue: 0.9)
                 var result = original
                 result *= white
-                XCTAssertEqual(result.red, original.red, accuracy: 1e-6)
-                XCTAssertEqual(result.green, original.green, accuracy: 1e-6)
-                XCTAssertEqual(result.blue, original.blue, accuracy: 1e-6)
+                #expect(abs(result.red - original.red) <= 1e-6)
+                #expect(abs(result.green - original.green) <= 1e-6)
+                #expect(abs(result.blue - original.blue) <= 1e-6)
         }
 
-        func testMultiplyByBlackIsBlack() {
+        @Test func multiplyByBlackIsBlack() {
                 var spectrum = RgbSpectrum(red: 0.5, green: 0.5, blue: 0.5)
                 spectrum *= black
-                XCTAssertTrue(spectrum.isBlack)
+                #expect(spectrum.isBlack)
         }
 
         // MARK: - Addition and Subtraction
 
-        func testAddScalar() {
+        @Test func addScalar() {
                 let spectrum = RgbSpectrum(red: 1, green: 2, blue: 3)
                 let result = spectrum + 0.5
-                XCTAssertEqual(result.red, 1.5, accuracy: 1e-6)
-                XCTAssertEqual(result.green, 2.5, accuracy: 1e-6)
-                XCTAssertEqual(result.blue, 3.5, accuracy: 1e-6)
+                #expect(abs(result.red - 1.5) <= 1e-6)
+                #expect(abs(result.green - 2.5) <= 1e-6)
+                #expect(abs(result.blue - 3.5) <= 1e-6)
         }
 
-        func testSubtractScalar() {
+        @Test func subtractScalar() {
                 let spectrum = RgbSpectrum(red: 1, green: 2, blue: 3)
                 let result = spectrum - 0.5
-                XCTAssertEqual(result.red, 0.5, accuracy: 1e-6)
-                XCTAssertEqual(result.green, 1.5, accuracy: 1e-6)
-                XCTAssertEqual(result.blue, 2.5, accuracy: 1e-6)
+                #expect(abs(result.red - 0.5) <= 1e-6)
+                #expect(abs(result.green - 1.5) <= 1e-6)
+                #expect(abs(result.blue - 2.5) <= 1e-6)
         }
 
         // MARK: - Division
 
-        func testDivision() {
+        @Test func division() {
                 let a = RgbSpectrum(red: 4, green: 9, blue: 16)
                 let b = RgbSpectrum(red: 2, green: 3, blue: 4)
                 let result = a / b
-                XCTAssertEqual(result.red, 2.0, accuracy: 1e-6)
-                XCTAssertEqual(result.green, 3.0, accuracy: 1e-6)
-                XCTAssertEqual(result.blue, 4.0, accuracy: 1e-6)
+                #expect(abs(result.red - 2.0) <= 1e-6)
+                #expect(abs(result.green - 3.0) <= 1e-6)
+                #expect(abs(result.blue - 4.0) <= 1e-6)
         }
 
         // MARK: - Edge Cases
 
-        func testIsBlack() {
-                XCTAssertTrue(black.isBlack)
-                XCTAssertFalse(white.isBlack)
-                XCTAssertFalse(RgbSpectrum(red: 0.001, green: 0, blue: 0).isBlack)
+        @Test func isBlack() {
+                #expect(black.isBlack)
+                #expect(!white.isBlack)
+                #expect(!RgbSpectrum(red: 0.001, green: 0, blue: 0).isBlack)
         }
 
-        func testIsNaN() {
+        @Test func isNaN() {
                 let nanSpectrum = RgbSpectrum(red: FloatX.nan, green: 0, blue: 0)
-                XCTAssertTrue(nanSpectrum.isNaN)
-                XCTAssertFalse(white.isNaN)
+                #expect(nanSpectrum.isNaN)
+                #expect(!white.isNaN)
         }
 
-        func testIsInfinite() {
+        @Test func isInfinite() {
                 let infSpectrum = RgbSpectrum(red: FloatX.infinity, green: 0, blue: 0)
-                XCTAssertTrue(infSpectrum.isInfinite)
-                XCTAssertFalse(white.isInfinite)
+                #expect(infSpectrum.isInfinite)
+                #expect(!white.isInfinite)
         }
 
         // MARK: - Derived Values
 
-        func testLuminance() {
+        @Test func luminance() {
                 // ITU-R BT.709 weights: 0.212671, 0.715160, 0.072169
                 let spectrum = RgbSpectrum(red: 1, green: 1, blue: 1)
                 let expectedLuminance: FloatX = 0.212671 + 0.715160 + 0.072169
-                XCTAssertEqual(spectrum.luminance, expectedLuminance, accuracy: 1e-4)
+                #expect(abs(spectrum.luminance - expectedLuminance) <= 1e-4)
         }
 
-        func testLuminanceRedOnly() {
+        @Test func luminanceRedOnly() {
                 let redOnly = RgbSpectrum(red: 1, green: 0, blue: 0)
-                XCTAssertEqual(redOnly.luminance, 0.212671, accuracy: 1e-4)
+                #expect(abs(redOnly.luminance - 0.212671) <= 1e-4)
         }
 
-        func testMaxValue() {
+        @Test func maxValue() {
                 let spectrum = RgbSpectrum(red: 0.3, green: 0.9, blue: 0.1)
-                XCTAssertEqual(spectrum.maxValue, 0.9, accuracy: 1e-6)
+                #expect(abs(spectrum.maxValue - 0.9) <= 1e-6)
         }
 
-        func testAverage() {
+        @Test func average() {
                 let spectrum = RgbSpectrum(red: 3, green: 6, blue: 9)
-                XCTAssertEqual(spectrum.average(), 6.0, accuracy: 1e-6)
+                #expect(abs(spectrum.average() - 6.0) <= 1e-6)
         }
 
-        func testSquareRoot() {
+        @Test func squareRoot() {
                 let spectrum = RgbSpectrum(red: 4, green: 9, blue: 16)
                 let result = spectrum.squareRoot()
-                XCTAssertEqual(result.red, 2.0, accuracy: 1e-6)
-                XCTAssertEqual(result.green, 3.0, accuracy: 1e-6)
-                XCTAssertEqual(result.blue, 4.0, accuracy: 1e-6)
+                #expect(abs(result.red - 2.0) <= 1e-6)
+                #expect(abs(result.green - 3.0) <= 1e-6)
+                #expect(abs(result.blue - 4.0) <= 1e-6)
         }
 
         // MARK: - Equality
 
-        func testEquality() {
+        @Test func equality() {
                 let a = RgbSpectrum(red: 1, green: 2, blue: 3)
                 let b = RgbSpectrum(red: 1, green: 2, blue: 3)
-                XCTAssertTrue(a == b)
+                #expect(a == b)
         }
 
-        func testInequality() {
+        @Test func inequality() {
                 let a = RgbSpectrum(red: 1, green: 2, blue: 3)
                 let b = RgbSpectrum(red: 1, green: 2, blue: 4)
-                XCTAssertTrue(a != b)
+                #expect(a != b)
         }
 
         // MARK: - Subscript
 
-        func testSubscriptGet() {
+        @Test func subscriptGet() {
                 let spectrum = RgbSpectrum(red: 1, green: 2, blue: 3)
-                XCTAssertEqual(spectrum[0], 1.0, accuracy: 1e-6)
-                XCTAssertEqual(spectrum[1], 2.0, accuracy: 1e-6)
-                XCTAssertEqual(spectrum[2], 3.0, accuracy: 1e-6)
+                #expect(abs(spectrum[0] - 1.0) <= 1e-6)
+                #expect(abs(spectrum[1] - 2.0) <= 1e-6)
+                #expect(abs(spectrum[2] - 3.0) <= 1e-6)
         }
 
-        func testSubscriptSet() {
+        @Test func subscriptSet() {
                 var spectrum = RgbSpectrum()
                 spectrum[0] = 10
                 spectrum[1] = 20
                 spectrum[2] = 30
-                XCTAssertEqual(spectrum.red, 10, accuracy: 1e-6)
-                XCTAssertEqual(spectrum.green, 20, accuracy: 1e-6)
-                XCTAssertEqual(spectrum.blue, 30, accuracy: 1e-6)
+                #expect(abs(spectrum.red - 10) <= 1e-6)
+                #expect(abs(spectrum.green - 20) <= 1e-6)
+                #expect(abs(spectrum.blue - 30) <= 1e-6)
         }
 
         // MARK: - Gamma Conversion
 
-        func testGammaLinearToSrgbLow() {
+        @Test func gammaLinearToSrgbLow() {
                 // Below threshold 0.0031308
                 let value: FloatX = 0.001
                 let result = gammaLinearToSrgb(value: value)
-                XCTAssertEqual(result, value * 12.92, accuracy: 1e-6)
+                #expect(abs(result - value * 12.92) <= 1e-6)
         }
 
-        func testGammaLinearToSrgbHigh() {
+        @Test func gammaLinearToSrgbHigh() {
                 // Above threshold
                 let value: FloatX = 0.5
                 let result = gammaLinearToSrgb(value: value)
-                let expected: FloatX = 1.055 * pow(value, 1.0 / 2.4) - 0.055
-                XCTAssertEqual(result, expected, accuracy: 1e-5)
+                let expected: FloatX = 1.055 * Glibc.powf(value, 1.0 / 2.4) - 0.055
+                #expect(abs(result - expected) <= 1e-5)
         }
 
-        func testGammaRoundTrip() {
+        @Test func gammaRoundTrip() {
                 let original: FloatX = 0.5
                 let srgb = gammaLinearToSrgb(value: original)
                 let linear = gammaSrgbToLinear(value: srgb)
-                XCTAssertEqual(linear, original, accuracy: 1e-4)
+                #expect(abs(linear - original) <= 1e-4)
         }
 }
