@@ -201,11 +201,6 @@ extension Triangle {
                 return String(number) + " bytes"
         }
 
-
-        static func statistics() {
-                unimplemented()
-        }
-
         func getTriangleMeshes(scene: Scene) -> TriangleMeshes {
                 return scene.meshes
         }

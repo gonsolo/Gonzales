@@ -44,10 +44,6 @@ struct Disk: Shape {
                 return "Disk"
         }
 
-        static func statistics() {
-                unimplemented()
-        }
-
         func getObjectToWorld(scene _: Scene) -> Transform {
                 return objectToWorld
         }

@@ -28,23 +28,6 @@ final class BoundingHierarchyBuilder {
         private let primitivesPerNode = 4
 
 
-        nonisolated(unsafe) private static var interiorNodes = 0
-
-
-        nonisolated(unsafe) private static var leafNodes = 0
-
-
-        nonisolated(unsafe) private static var totalPrimitives = 0
-
-
-        nonisolated(unsafe) private static var callsToPartition = 0
-
-
-        nonisolated(unsafe) private static var bhNodes = 0
-
-
-        nonisolated(unsafe) private static var bhPrimitives = 0
-
         private var totalNodes = 0
         private var offsetCounter = 0
         private var cachedPrimitives: [CachedPrimitive]
@@ -69,8 +52,7 @@ extension BoundingHierarchyBuilder {
         internal func getSortedPrimitivesAndNodes() throws -> (
                 [IntersectablePrimitive], [BoundingHierarchyNode]
         ) {
-                BoundingHierarchyBuilder.bhPrimitives += cachedPrimitives.count
-                BoundingHierarchyBuilder.bhNodes += nodes.count
+
                 let sortedPrimitives = try cachedPrimitives.map {
                         if let triangle = primitives[$0.index] as? Triangle {
                                 return IntersectablePrimitive.triangle(triangle)
@@ -97,14 +79,6 @@ extension BoundingHierarchyBuilder {
         }
 
 
-        internal static func statistics() {
-                print("  BVH:")
-                print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
-                print("    Leaf nodes:\t\t\t\t\t\t\t\t\(leafNodes)")
-                let ratio = String(format: " (%.2f)", Float(totalPrimitives) / Float(leafNodes))
-                print("    Primitives per leaf node:\t\t\t\t\t", terminator: "")
-                print("\(totalPrimitives) /    \(leafNodes)\(ratio)")
-        }
 
         private struct CachedPrimitive {
                 let index: Int
@@ -163,9 +137,9 @@ extension BoundingHierarchyBuilder {
                         count: range.count,
                         offset: offset,
                         axis: 0)
-                BoundingHierarchyBuilder.leafNodes += 1
+
                 offsetCounter += range.count
-                BoundingHierarchyBuilder.totalPrimitives += range.count
+
         }
 
         private func isSmaller(_ primitive: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
@@ -368,7 +342,7 @@ extension BoundingHierarchyBuilder {
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
                 nodes[counter] = BoundingHierarchyNode(bounds: combinedBounds, offset: beforeRight, axis: dim)
-                BoundingHierarchyBuilder.interiorNodes += 1
+
         }
 
 }

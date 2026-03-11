@@ -180,8 +180,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 }
         }
 
-        static func statistics() {}
-
         let nodes: [BoundingHierarchyNode]
         var primIds: [PrimId]
 }

@@ -1,6 +1,4 @@
 
-nonisolated(unsafe) var numberCameraRays = 0
-
 final class PerspectiveCamera: Camera, Transformable {
 
 
@@ -49,11 +47,6 @@ final class PerspectiveCamera: Camera, Transformable {
                 let ray = depthOfField(ray: pinholeRay, cameraSample: cameraSample)
                 // numberCameraRays += 1
                 return objectToWorld * ray
-        }
-
-
-        static func statistics() {
-                print("  Camera rays traced:\t\t\t\t\t\t\t\(numberCameraRays)")
         }
 
         func getObjectToWorld(scene _: Scene) -> Transform {

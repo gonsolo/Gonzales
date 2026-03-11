@@ -1,7 +1,6 @@
 import Foundation  // sqrt, log2
 
 
-nonisolated(unsafe) var numberOfCurves = 0
 
 enum CurveError: Error {
         case index
@@ -72,7 +71,6 @@ struct Curve: Shape {
                 self.common = common
                 self.uRange = uRange
                 self.objectToWorld = objectToWorld
-                numberOfCurves += 1
         }
 
         func worldBound(scene: Scene) -> Bounds3f {
@@ -372,11 +370,6 @@ struct Curve: Shape {
 
         public var description: String {
                 return "Curve"
-        }
-
-
-        static func statistics() {
-                print("  Number of curves:\t\t\t\t\t\t\t\(numberOfCurves)")
         }
 
         func getObjectToWorld(scene _: Scene) -> Transform {

@@ -9,7 +9,6 @@ struct EmbreeCurve: Shape {
                 self.objectToWorld = objectToWorld
                 self.controlPoints = controlPoints
                 self.widths = widths
-                numberOfCurves += 1
         }
 
         func intersect(

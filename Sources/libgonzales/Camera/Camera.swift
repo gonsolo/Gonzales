@@ -9,8 +9,6 @@ protocol Camera: Sendable {
 
         func getSampleBounds() async -> Bounds2i
 
-        static func statistics() async
-
         var film: Film { get }
 }
 

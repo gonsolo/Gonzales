@@ -161,10 +161,6 @@ extension Bounds3 {
 
                 return tNear <= tFar
         }
-
-        static func statistics() {
-                print("  Bounds3:")
-        }
 }
 
 extension Bounds3f {
