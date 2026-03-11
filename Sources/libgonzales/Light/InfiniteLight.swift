@@ -2,7 +2,7 @@ import Foundation  // sin, cos
 
 let sceneDiameter: FloatX = 100.0
 
-struct InfiniteLight {
+struct InfiniteLight: LightSource {
 
         init(
                 lightToWorld: Transform,
@@ -14,7 +14,7 @@ struct InfiniteLight {
                 self.texture = texture
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator) -> LightSample {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene) -> LightSample {
                 let theta = samples.1 * FloatX.pi
                 let phi = samples.0 * 2 * FloatX.pi
                 let lightDirection = Vector(
@@ -35,8 +35,8 @@ struct InfiniteLight {
                 return LightSample(radiance: color, direction: direction, pdf: pdf, visibility: visibility)
         }
 
-        func probabilityDensityFor(
-                scene _: Scene, samplingDirection direction: Vector, from _: any Interaction
+        func probabilityDensityFor<I: Interaction>(
+                scene _: Scene, samplingDirection direction: Vector, from _: I
         )
                 throws -> FloatX {
                 let incoming = worldToLight * direction
@@ -105,7 +105,7 @@ struct InfiniteLight {
                 return radiance
         }
 
-        func power() -> FloatX {
+        func power(scene _: Scene) -> FloatX {
                 let worldRadius = sceneDiameter / 2
                 return FloatX.pi * square(worldRadius) * brightness.average()
         }
@@ -136,4 +136,8 @@ extension InfiniteLight {
         let texture = try getTextureFrom(name: mapname, type: "color", sceneDirectory: sceneDirectory)
         return InfiniteLight(lightToWorld: lightToWorld, brightness: white, texture: texture)
 }
+}
+
+extension InfiniteLight {
+        var isDelta: Bool { true }
 }

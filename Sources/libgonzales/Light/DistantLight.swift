@@ -1,13 +1,13 @@
 import Foundation
 
-struct DistantLight {
+struct DistantLight: LightSource {
 
         init(lightToWorld: Transform, brightness: RgbSpectrum, direction: Vector) {
                 self.brightness = brightness
                 self.direction = normalized(lightToWorld * direction)
         }
 
-        func sample(point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator)
+        func sample(point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene)
                 -> LightSample {  // radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
                 let outside = point + direction * 2 * worldRadius
                 let visibility = Visibility(
@@ -15,8 +15,8 @@ struct DistantLight {
                 return LightSample(radiance: brightness, direction: direction, pdf: 1, visibility: visibility)
         }
 
-        func probabilityDensityFor(
-                scene _: Scene, samplingDirection _: Vector, from _: any Interaction
+        func probabilityDensityFor<I: Interaction>(
+                scene _: Scene, samplingDirection _: Vector, from _: I
         )
                 throws -> FloatX {
                 return 0
@@ -24,7 +24,7 @@ struct DistantLight {
 
         func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
-        func power() -> FloatX {
+        func power(scene _: Scene) -> FloatX {
                 let value = square(worldRadius) * FloatX.pi * brightness.average()
                 return value
         }
@@ -46,4 +46,8 @@ extension DistantLight {
         return DistantLight(
                 lightToWorld: lightToWorld, brightness: brightness, direction: direction)
 }
+}
+
+extension DistantLight {
+        var isDelta: Bool { true }
 }

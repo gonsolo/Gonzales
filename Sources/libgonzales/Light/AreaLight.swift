@@ -1,6 +1,6 @@
 import Foundation
 
-struct AreaLight: Boundable, Intersectable {
+struct AreaLight: Boundable, Intersectable, LightSource {
 
         init(brightness: RgbSpectrum, shape: ShapeType, alpha: FloatX, idx: Int) {
                 self.brightness = brightness
@@ -118,4 +118,8 @@ extension AreaLight: Equatable {
                 return
                         lhs.brightness == rhs.brightness && lhs.alpha == rhs.alpha
         }
+}
+
+extension AreaLight {
+        var isDelta: Bool { false }
 }

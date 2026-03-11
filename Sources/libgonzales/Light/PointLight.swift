@@ -1,13 +1,13 @@
 import Foundation
 
-struct PointLight {
+struct PointLight: LightSource {
 
         init(lightToWorld: Transform, intensity: RgbSpectrum) {
                 position = lightToWorld * origin
                 self.intensity = intensity
         }
 
-        func sample(point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator) -> LightSample {
+        func sample(point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene) -> LightSample {
                 let direction: Vector = normalized(position - point)
                 let pdf: FloatX = 1.0
                 let visibility = Visibility(from: point, target: position)
@@ -16,8 +16,8 @@ struct PointLight {
                 return LightSample(radiance: radiance, direction: direction, pdf: pdf, visibility: visibility)
         }
 
-        func probabilityDensityFor(
-                scene _: Scene, samplingDirection _: Vector, from _: any Interaction
+        func probabilityDensityFor<I: Interaction>(
+                scene _: Scene, samplingDirection _: Vector, from _: I
         )
                 throws -> FloatX {
                 return 0
@@ -25,7 +25,7 @@ struct PointLight {
 
         func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
-        func power() -> FloatX {
+        func power(scene _: Scene) -> FloatX {
                 return intensity.average() * 4 * FloatX.pi
         }
 
@@ -44,4 +44,8 @@ extension PointLight {
         }
         return PointLight(lightToWorld: lightToWorld, intensity: scale * intensity)
 }
+}
+
+extension PointLight {
+        var isDelta: Bool { true }
 }

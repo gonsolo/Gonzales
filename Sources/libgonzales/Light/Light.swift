@@ -1,5 +1,17 @@
 ///        A light source
 
+protocol LightSource: Sendable {
+        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
+                -> LightSample
+        func probabilityDensityFor<I: Interaction>(
+                scene: Scene, samplingDirection direction: Vector, from reference: I
+        )
+                throws -> FloatX
+        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum
+        func power(scene: Scene) -> FloatX
+        var isDelta: Bool { get }
+}
+
 enum Light: Sendable {
 
         case area(AreaLight)
@@ -7,86 +19,37 @@ enum Light: Sendable {
         case distant(DistantLight)
         case point(PointLight)
 
+        var source: any LightSource {
+                switch self {
+                case .area(let l): return l
+                case .infinite(let l): return l
+                case .distant(let l): return l
+                case .point(let l): return l
+                }
+        }
+
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
                 -> LightSample {
-                switch self {
-                case .area(let areaLight):
-                        return areaLight.sample(
-                                point: point, samples: samples, accelerator: accelerator, scene: scene)
-                case .infinite(let infiniteLight):
-                        return infiniteLight.sample(point: point, samples: samples, accelerator: accelerator)
-                case .distant(let distantLight):
-                        return distantLight.sample(point: point, samples: samples, accelerator: accelerator)
-                case .point(let pointLight):
-                        return pointLight.sample(point: point, samples: samples, accelerator: accelerator)
-                }
+                return source.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
         }
 
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
                 throws -> FloatX {
-                switch self {
-                case .area(let areaLight):
-                        return try areaLight.probabilityDensityFor(
-                                scene: scene,
-                                samplingDirection: direction,
-                                from: reference)
-                case .infinite(let infiniteLight):
-                        return try infiniteLight.probabilityDensityFor(
-                                scene: scene,
-                                samplingDirection: direction,
-                                from: reference)
-                case .distant(let distantLight):
-                        return try distantLight.probabilityDensityFor(
-                                scene: scene,
-                                samplingDirection: direction,
-                                from: reference)
-                case .point(let pointLight):
-                        return try pointLight.probabilityDensityFor(
-                                scene: scene,
-                                samplingDirection: direction,
-                                from: reference)
-                }
+                return try source.probabilityDensityFor(
+                        scene: scene, samplingDirection: direction, from: reference)
         }
 
-
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
-                switch self {
-                case .area(let areaLight):
-                        return areaLight.radianceFromInfinity(for: ray)
-                case .infinite(let infiniteLight):
-                        return infiniteLight.radianceFromInfinity(for: ray)
-                case .distant(let distantLight):
-                        return distantLight.radianceFromInfinity(for: ray)
-                case .point(let pointLight):
-                        return pointLight.radianceFromInfinity(for: ray)
-                }
+                return source.radianceFromInfinity(for: ray)
         }
 
         func power(scene: Scene) -> FloatX {
-                switch self {
-                case .area(let areaLight):
-                        return areaLight.power(scene: scene)
-                case .infinite(let infiniteLight):
-                        return infiniteLight.power()
-                case .distant(let distantLight):
-                        return distantLight.power()
-                case .point(let pointLight):
-                        return pointLight.power()
-                }
+                return source.power(scene: scene)
         }
 
         var isDelta: Bool {
-                switch self {
-                case .area:
-                        return false
-                case .infinite:
-                        return true
-                case .distant:
-                        return true
-                case .point:
-                        return true
-                }
+                return source.isDelta
         }
 }
