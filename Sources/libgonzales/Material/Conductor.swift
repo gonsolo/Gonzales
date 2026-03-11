@@ -21,7 +21,6 @@ struct Conductor {
         var roughness: (FloatX, FloatX)
 }
 
-
 extension Conductor {
         static func create(parameters: ParameterDictionary) throws -> Conductor {
                 let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
@@ -33,7 +32,7 @@ extension Conductor {
                 let vRoughness =
                         try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
                 let roughness = (uRoughness, vRoughness)
-        
+
                 let etaRgb = eta.asRgb()
                 let extinctionRgb = extinctionParameter.asRgb()
                 return Conductor(eta: etaRgb, extinction: extinctionRgb, roughness: roughness)

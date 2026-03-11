@@ -14,7 +14,10 @@ struct InfiniteLight: LightSource {
                 self.texture = texture
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene) -> LightSample {
+        func sample(
+                point: Point, samples: TwoRandomVariables,
+                accelerator _: Accelerator, scene _: Scene
+        ) -> LightSample {
                 let theta = samples.1 * FloatX.pi
                 let phi = samples.0 * 2 * FloatX.pi
                 let lightDirection = Vector(
@@ -118,7 +121,6 @@ struct InfiniteLight: LightSource {
         let lightToWorld: Transform
         let texture: Texture
 }
-
 
 extension InfiniteLight {
         static func create(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws

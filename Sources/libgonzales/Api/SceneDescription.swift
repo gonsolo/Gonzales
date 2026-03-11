@@ -1,7 +1,10 @@
 @preconcurrency import Foundation
 
-
-func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable], acceleratorName: String) async throws -> Accelerator {
+func makeAccelerator(
+        scene: Scene,
+        primitives: [any Boundable & Intersectable],
+        acceleratorName: String
+) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
                 let builder = await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
@@ -12,7 +15,6 @@ func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable], 
                 throw SceneDescriptionError.accelerator
         }
 }
-
 
 func lookAtTransform(eye: Point, target: Point, upVector: Vector) throws -> Transform {
         let dir: Vector = normalized(target - eye)
@@ -72,7 +74,6 @@ public class SceneDescription {
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
 
-
         public init(renderOptions: RenderOptions) {
                 self.options = RenderConfiguration()
                 self.renderOptions = renderOptions
@@ -83,12 +84,10 @@ public class SceneDescription {
 
 extension SceneDescription {
 
-
         func attributeBegin() throws {
                 try transformBegin()
                 states.append(state)
         }
-
 
         func attributeEnd() throws {
                 try transformEnd()
@@ -98,7 +97,6 @@ extension SceneDescription {
                 state = last
         }
 
-
         func camera(name _: String, parameters: ParameterDictionary) throws {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
@@ -106,11 +104,9 @@ extension SceneDescription {
                 namedCoordinateSystems["camera"] = options.cameraToWorld
         }
 
-
         func coordinateSystem(name: String) {
                 namedCoordinateSystems[name] = currentTransform
         }
-
 
         func coordSysTransform(name: String) throws {
                 guard let transform = namedCoordinateSystems[name] else {
@@ -118,7 +114,6 @@ extension SceneDescription {
                 }
                 currentTransform = transform
         }
-
 
         func concatTransform(values: [FloatX]) throws {
                 let matrix = Matrix(
@@ -129,7 +124,6 @@ extension SceneDescription {
                 currentTransform *= Transform(matrix: matrix)
         }
 
-
         func film(name: String, parameters: ParameterDictionary) throws {
                 let fileName = try parameters.findString(called: "filename") ?? "gonzales.exr"
                 guard fileName.hasSuffix("exr") else {
@@ -139,16 +133,13 @@ extension SceneDescription {
                 options.filmParameters = parameters
         }
 
-
         func identity() {
                 currentTransform = Transform()
         }
 
-
         func importFile(file sceneName: String) async throws {
                 try await include(file: sceneName, render: false)
         }
-
 
         public func include(file sceneName: String, render: Bool) async throws {
                 print(sceneName)
@@ -161,7 +152,9 @@ extension SceneDescription {
                                 throw RenderError.fileNotExisting(name: absoluteSceneName)
                         }
                         if #available(OSX 10.15, *) {
-                                let parser = try Parser(fileName: absoluteSceneName, sceneDescription: self, render: render)
+                                let parser = try Parser(
+                                        fileName: absoluteSceneName,
+                                        sceneDescription: self, render: render)
                                 try await parser.parse()
                         } else {
                                 // Fallback on earlier versions
@@ -171,7 +164,6 @@ extension SceneDescription {
                 }
         }
 
-
         func areaLight(name: String, parameters: ParameterDictionary) throws {
                 guard name == "diffuse" || name == "area" else {
                         throw SceneDescriptionError.areaLight
@@ -179,7 +171,6 @@ extension SceneDescription {
                 state.areaLight = name
                 state.areaLightParameters = parameters
         }
-
 
         func accelerator(name: String, parameters _: ParameterDictionary) throws {
                 switch name {
@@ -194,12 +185,10 @@ extension SceneDescription {
                 }
         }
 
-
         func integrator(name: String, parameters: ParameterDictionary) throws {
                 options.integratorName = name
                 options.integratorParameters = parameters
         }
-
 
         func lightSource(name: String, parameters: ParameterDictionary) throws {
                 let light = try makeLight(
@@ -209,18 +198,15 @@ extension SceneDescription {
                 options.lights.append(light)
         }
 
-
         func lookAt(eye: Point, target: Point, upVector: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, target: target, upVector: upVector)
                 currentTransform *= transform
         }
 
-
         func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
                 let type = try parameters.findString(called: "type") ?? "defaultMaterial"
                 state.namedMaterials[name] = UninstancedMaterial(type: type, parameters: parameters)
         }
-
 
         func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
                 guard let type = try parameters.findString(called: "type") else {
@@ -248,50 +234,41 @@ extension SceneDescription {
                 }
         }
 
-
         func material(type: String, parameters: ParameterDictionary) throws {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }
-
 
         func mediumInterface(interior: String, exterior: String) {
                 state.currentMediumInterface = MediumInterface(interior: interior, exterior: exterior)
         }
 
-
         func namedMaterial(name: String) throws {
                 state.currentNamedMaterial = name
         }
-
 
         func objectBegin(name: String) throws {
                 try attributeBegin()
                 state.objectName = name
         }
 
-
         func objectEnd() throws {
                 try attributeEnd()
                 state.objectName = nil
         }
 
-
         func objectInstance(name _: String) async throws {
                 unimplemented()
         }
-
 
         func sampler(name: String, parameters: ParameterDictionary) {
                 options.samplerName = name
                 options.samplerParameters = parameters
         }
 
-
         func pixelFilter(name: String, parameters: ParameterDictionary) {
                 options.filterName = name
                 options.filterParameters = parameters
         }
-
 
         func shape(name: String, parameters: ParameterDictionary) throws {
                 var areaLights = [Light]()
@@ -354,7 +331,6 @@ extension SceneDescription {
                 }
         }
 
-
         func transform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
@@ -364,11 +340,9 @@ extension SceneDescription {
                 currentTransform = Transform(matrix: matrix)
         }
 
-
         func transformBegin() throws {
                 transforms.append(currentTransform)
         }
-
 
         func transformEnd() throws {
                 guard let last = transforms.popLast() else {
@@ -376,7 +350,6 @@ extension SceneDescription {
                 }
                 currentTransform = last
         }
-
 
         func scale(x: FloatX, y: FloatX, z: FloatX) throws {
                 let matrix = Matrix(
@@ -393,7 +366,6 @@ extension SceneDescription {
                 readTimer = Timer("Reading...", newline: false)
                 fflush(stdout)
         }
-
 
         func rotate(by angle: FloatX, around axis: Vector) throws {
                 let normalizedAxis = normalized(axis)
@@ -417,7 +389,6 @@ extension SceneDescription {
                 currentTransform *= Transform(matrix: matrix)
         }
 
-
         func texture(
                 name: String,
                 type: String,
@@ -436,17 +407,21 @@ extension SceneDescription {
                 case "constant":
                         switch type {
                         case "spectrum", "color":
-                                let rgbSpectrumTexture = try parameters.findRgbSpectrumTexture(name: "value", textures: state.textures)
+                                let rgbSpectrumTexture = try parameters.findRgbSpectrumTexture(
+                                        name: "value", textures: state.textures)
                                 texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
-                                let floatTexture = try parameters.findFloatXTexture(name: "value", textures: state.textures)
+                                let floatTexture = try parameters.findFloatXTexture(
+                                        name: "value", textures: state.textures)
                                 texture = Texture.floatTexture(floatTexture)
                         default:
                                 unimplemented()
                         }
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
-                        texture = try getTextureFrom(name: fileName, type: type, sceneDirectory: renderOptions.sceneDirectory)
+                        texture = try getTextureFrom(
+                                name: fileName, type: type,
+                                sceneDirectory: renderOptions.sceneDirectory)
                 case "mix":
                         switch type {
                         case "color", "spectrum":
@@ -458,7 +433,9 @@ extension SceneDescription {
                         }
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
-                        texture = try getTextureFrom(name: fileName, type: type, sceneDirectory: renderOptions.sceneDirectory)
+                        texture = try getTextureFrom(
+                                name: fileName, type: type,
+                                sceneDirectory: renderOptions.sceneDirectory)
                 case "scale":
                         unimplemented()
                 default:
@@ -467,7 +444,6 @@ extension SceneDescription {
                 }
                 state.textures[name] = texture
         }
-
 
         func translate(amount: Vector) throws {
                 let matrix = Matrix(
@@ -479,13 +455,9 @@ extension SceneDescription {
                 currentTransform *= translation
         }
 
-
         public func worldBegin() {
                 currentTransform = Transform()
         }
-
-
-
 
         func worldEnd() async throws {
                 print("Reading: \(readTimer?.elapsed ?? "unknown")")
@@ -499,7 +471,6 @@ extension SceneDescription {
                 try await renderer.render()
                 self.options = RenderConfiguration()
         }
-
 
         private func makeLight(
                 name: String,
@@ -529,7 +500,6 @@ extension SceneDescription {
                         throw SceneDescriptionError.makeLight(message: name)
                 }
         }
-
 
         private func makeShapes(
                 name: String,
@@ -579,7 +549,6 @@ extension SceneDescription {
         }
 }
 
-
 func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -> Texture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
@@ -609,4 +578,3 @@ func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -
                 throw SceneDescriptionError.unknownTextureFormat(suffix: String(suffix))
         }
 }
-

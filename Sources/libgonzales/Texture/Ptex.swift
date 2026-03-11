@@ -3,7 +3,6 @@ import ptexBridge
 
 struct PtexCache {
 
-
         init(ptexMemory: Int) {
                 initPtexCache(ptexMemory)
         }

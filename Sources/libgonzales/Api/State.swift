@@ -9,7 +9,6 @@ struct ImmutableState {
 
 struct State {
 
-
         init(ptexMemory: Int) {
                 namedMaterials = [String: UninstancedMaterial]()
                 currentNamedMaterial = "None"
@@ -24,7 +23,6 @@ struct State {
                 ptexCache = PtexCache(ptexMemory: ptexMemory)
         }
 
-
         private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
                 print("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
@@ -32,7 +30,6 @@ struct State {
                 let diffuse = try Diffuse.create(parameters: parameters, textures: textures)
                 return Material.diffuse(diffuse)
         }
-
 
         func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
 
@@ -52,7 +49,8 @@ struct State {
                         let diffuse = try Diffuse.create(parameters: parameters, textures: textures)
                         material = Material.diffuse(diffuse)
                 case "diffusetransmission":
-                        let diffuseTransmission = try DiffuseTransmission.create(parameters: parameters, textures: textures)
+                        let diffuseTransmission = try DiffuseTransmission.create(
+                                parameters: parameters, textures: textures)
                         material = Material.diffuseTransmission(diffuseTransmission)
                 case "hair":
                         let hair = try Hair.create(parameters: parameters, textures: textures)
@@ -71,7 +69,6 @@ struct State {
                 }
                 return material
         }
-
 
         func createMaterial(parameters: ParameterDictionary) throws -> Material {
                 var material: UninstancedMaterial!

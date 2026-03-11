@@ -137,8 +137,6 @@ struct TriangleMeshes {
         let meshes: [TriangleMesh]
 }
 
-
-
 struct TriangleIntersection {
         init() {
                 primId = PrimId()
@@ -619,7 +617,6 @@ extension Triangle {
                 return (worldInteraction, pdf)
         }
 
-
         var description: String {
                 var descriptionString = "Triangle [ "
                 // let (p0, p1, p2) = getLocalPoints()
@@ -632,7 +629,6 @@ extension Triangle {
                 return getTriangleMeshes(scene: scene).getObjectToWorldFor(meshIndex: meshIndex)
         }
 }
-
 
 extension Triangle {
         static func createFromParameters(

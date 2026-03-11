@@ -29,7 +29,6 @@ struct Hair {
         var eumelanin: FloatTexture
 }
 
-
 extension Hair {
         static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Hair {
         let eumelanin = try parameters.findFloatXTexture(name: "eumelanin", textures: textures, else: 1.3)

@@ -1,7 +1,5 @@
 import Foundation  // sqrt, log2
 
-
-
 enum CurveError: Error {
         case index
         case numberControlPoints
@@ -65,7 +63,6 @@ private struct CurveIntersectionState {
 }
 
 struct Curve: Shape {
-
 
         init(objectToWorld: Transform, common: CurveCommon, uRange: TwoFloats) {
                 self.common = common
@@ -387,7 +384,6 @@ struct CurveCommon {
         let width: TwoFloats
 }
 
-
 extension Curve {
         static func create(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [ShapeType] {
         let common = CurveCommon(points: points, width: width)
@@ -405,7 +401,6 @@ extension Curve {
         }
         return segments
 }
-
 
         static func createBVH(
         controlPoints: [Point],
@@ -447,8 +442,11 @@ extension Curve {
         return curves
 }
 
-
-        static func createShape(objectToWorld: Transform, parameters: ParameterDictionary, acceleratorName: String) throws -> [ShapeType] {
+        static func createShape(
+                objectToWorld: Transform,
+                parameters: ParameterDictionary,
+                acceleratorName: String
+        ) throws -> [ShapeType] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")
         let width = try parameters.findOneFloatX(called: "width", else: 0.5)

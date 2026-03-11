@@ -43,7 +43,6 @@ struct OpenImageIOTexture {
                 return value
         }
 
-
         func evaluate(at interaction: any Interaction) -> any TextureEvaluation {
                 switch textureType {
                 case .float:

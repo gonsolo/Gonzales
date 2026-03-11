@@ -27,14 +27,12 @@ final class BoundingHierarchyBuilder {
 
         private let primitivesPerNode = 4
 
-
         private var totalNodes = 0
         private var offsetCounter = 0
         private var cachedPrimitives: [CachedPrimitive]
         private var primitives: [any Boundable]
 
         var nodes = [BoundingHierarchyNode]()
-
 
         internal init(scene: Scene, primitives: [any Boundable]) async {
                 self.cachedPrimitives = await primitives.enumerated().asyncMap { index, primitive in
@@ -47,7 +45,6 @@ final class BoundingHierarchyBuilder {
 }
 
 extension BoundingHierarchyBuilder {
-
 
         internal func getSortedPrimitivesAndNodes() throws -> (
                 [IntersectablePrimitive], [BoundingHierarchyNode]
@@ -72,13 +69,10 @@ extension BoundingHierarchyBuilder {
                 return (sortedPrimitives, nodes)
         }
 
-
         internal func getBoundingHierarchy() throws -> BoundingHierarchy {
                 let (sortedPrimitives, nodes) = try getSortedPrimitivesAndNodes()
                 return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
-
-
 
         private struct CachedPrimitive {
                 let index: Int
@@ -106,13 +100,11 @@ extension BoundingHierarchyBuilder {
                 }
         }
 
-
         private func buildHierarchy() {
                 if cachedPrimitives.isEmpty { return }
                 _ = build(range: 0..<cachedPrimitives.count)
                 // printNodes()
         }
-
 
         private func growNodes(counter: Int) {
                 let missing = counter - nodes.count + 1
@@ -121,7 +113,6 @@ extension BoundingHierarchyBuilder {
                         nodes += Array(repeating: BoundingHierarchyNode(bounds: bounds), count: missing)
                 }
         }
-
 
         private func addLeafNode(
                 offset: Int,
@@ -176,12 +167,10 @@ extension BoundingHierarchyBuilder {
                 return (start, mid, end)
         }
 
-
         struct BVHSplitBucket {
                 var count = 0
                 var bounds = Bounds3f()
         }
-
 
         private func splitSurfaceAreaHeuristic(
                 bounds: Bounds3f,
@@ -267,7 +256,6 @@ extension BoundingHierarchyBuilder {
                 return (start, mid, end, Bounds3f())
         }
 
-
         private func build(range: Range<Int>) -> Bounds3f {
                 let counter = totalNodes
                 totalNodes += 1
@@ -337,7 +325,6 @@ extension BoundingHierarchyBuilder {
                         beforeRight: beforeRight)
                 return combinedBounds
         }
-
 
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)

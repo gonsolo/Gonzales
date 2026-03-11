@@ -1,6 +1,4 @@
-
 final class PerspectiveCamera: Camera, Transformable {
-
 
         init(
                 cameraToWorld: Transform,

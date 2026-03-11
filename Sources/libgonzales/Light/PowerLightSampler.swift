@@ -33,7 +33,6 @@ extension Sequence {
 
 struct PowerLightSampler: Sendable {
 
-
         init(sampler: Sampler, lights: [Light], scene: Scene) async {
                 self.sampler = sampler
                 self.lights = lights

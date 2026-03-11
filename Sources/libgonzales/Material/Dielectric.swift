@@ -28,7 +28,6 @@ struct Dielectric {
         let remapRoughness: Bool
 }
 
-
 extension Dielectric {
         static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Dielectric {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)

@@ -2,7 +2,6 @@
 
 struct TileRenderer: Renderer {
 
-
         init(
                 camera: PerspectiveCamera,
                 integrator: VolumePathIntegrator,
@@ -63,7 +62,6 @@ struct TileRenderer: Renderer {
                 )
                 return samples
         }
-
 
         func runProgressReporter(reporter: ProgressReporter) async {
                 let reportInterval: Duration = .milliseconds(500)
@@ -128,7 +126,6 @@ struct TileRenderer: Renderer {
                         fflush(stdout)
                 }
         }
-
 
         private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {
                 let tiles = generateTiles(from: bounds)

@@ -38,7 +38,6 @@ extension ParameterDictionary {
                 return try findString(called: name) ?? ""
         }
 
-
         func findRgbSpectrumTexture(
                 name: String,
                 textures: [String: Texture],
@@ -71,8 +70,10 @@ extension ParameterDictionary {
                 }
         }
 
-
-        func findFloatXTexture(name: String, textures: [String: Texture], else value: FloatX = 1.0) throws -> FloatTexture {
+        func findFloatXTexture(
+                name: String, textures: [String: Texture],
+                else value: FloatX = 1.0
+        ) throws -> FloatTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
                         guard let texture = textures[textureName] else {

@@ -1,16 +1,5 @@
 struct EmbreeCurve: Shape {
 
-
-        init(
-                objectToWorld: Transform,
-                controlPoints: [Point],
-                widths: (Float, Float)
-        ) {
-                self.objectToWorld = objectToWorld
-                self.controlPoints = controlPoints
-                self.widths = widths
-        }
-
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
@@ -71,7 +60,6 @@ struct EmbreeCurve: Shape {
         let controlPoints: [Point]
         let widths: (Float, Float)
 }
-
 
 extension EmbreeCurve {
         static func create(

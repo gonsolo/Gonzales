@@ -276,7 +276,7 @@ format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
 	@swift-format -i -p $(shell find Sources Tests -name \*.swift -not -name SobolMatrices.swift)
 lint:
-	swiftlint Sources/gonzales
+	swiftlint Sources
 codespell:
 	codespell -L inout Sources
 lldb:

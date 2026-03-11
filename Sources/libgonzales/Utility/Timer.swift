@@ -17,7 +17,6 @@ extension TimeInterval {
 
 final class Timer {
 
-
         init(_ name: String, newline: Bool = true) {
                 self.name = name
                 if newline {

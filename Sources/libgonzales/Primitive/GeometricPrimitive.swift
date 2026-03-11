@@ -77,4 +77,3 @@ struct GeometricPrimitive: Boundable, Intersectable {
 
 typealias MaterialIndex = Int
 let noMaterial = -1
-

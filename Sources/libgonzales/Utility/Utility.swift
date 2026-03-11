@@ -15,7 +15,6 @@ public struct RenderOptions: Sendable {
         public init() {}
 }
 
-
 func radians(deg: FloatX) -> FloatX {
         return (FloatX.pi / 180) * deg
 }

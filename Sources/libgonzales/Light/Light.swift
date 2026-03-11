@@ -21,10 +21,10 @@ enum Light: Sendable {
 
         var source: any LightSource {
                 switch self {
-                case .area(let l): return l
-                case .infinite(let l): return l
-                case .distant(let l): return l
-                case .point(let l): return l
+                case .area(let light): return light
+                case .infinite(let light): return light
+                case .distant(let light): return light
+                case .point(let light): return light
                 }
         }
 

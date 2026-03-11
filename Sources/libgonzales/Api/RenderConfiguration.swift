@@ -20,7 +20,6 @@ class RenderConfiguration {
         var primitives = [any Boundable & Intersectable]()
         var objects = ["": [any Boundable & Intersectable]()]
 
-
         func makeFilm(filter: any Filter, quick: Bool) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
@@ -74,7 +73,6 @@ class RenderConfiguration {
                 return filter
         }
 
-
         func makeCamera(quick: Bool) async throws -> PerspectiveCamera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
@@ -121,7 +119,6 @@ class RenderConfiguration {
                 )
         }
 
-
         func makeIntegrator(sampler _: Sampler, accelerator: Accelerator, scene: Scene) throws
                 -> VolumePathIntegrator {
                 switch self.integratorName {
@@ -138,7 +135,6 @@ class RenderConfiguration {
                 )
                 return VolumePathIntegrator(maxDepth: maxDepth, accelerator: accelerator, scene: scene)
         }
-
 
         func makeSampler(film: Film, quick: Bool) throws -> Sampler {
                 switch samplerName {
@@ -164,9 +160,16 @@ class RenderConfiguration {
                 objects.removeAll()
         }
 
-
-        func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState, renderOptions: RenderOptions, meshes: TriangleMeshes) async throws
-                -> some Renderer {
+        // swiftlint:disable:next function_parameter_count
+        func makeRenderer(
+                geometricPrimitives: [GeometricPrimitive],
+                areaLights: [AreaLight],
+                materials: [Material],
+                acceleratorName: String,
+                immutableState: ImmutableState,
+                renderOptions: RenderOptions,
+                meshes: TriangleMeshes
+        ) async throws -> some Renderer {
                 let camera = try await makeCamera(quick: renderOptions.quick)
                 let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
                 let scene = Scene(
@@ -176,7 +179,9 @@ class RenderConfiguration {
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try await makeAccelerator(scene: scene, primitives: primitives, acceleratorName: acceleratorName)
+                let accelerator = try await makeAccelerator(
+                        scene: scene, primitives: primitives,
+                        acceleratorName: acceleratorName)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)

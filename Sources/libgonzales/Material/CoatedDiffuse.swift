@@ -36,7 +36,6 @@ struct CoatedDiffuse {
         var remapRoughness: Bool
 }
 
-
 extension CoatedDiffuse {
         static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)

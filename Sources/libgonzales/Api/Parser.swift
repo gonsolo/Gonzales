@@ -9,7 +9,12 @@ final class Parser {
         var worldEndSeen = false
         let sceneDescription: SceneDescription
 
-        init(fileName: String, sceneDescription: SceneDescription, render: Bool = true, function _: String = #function) throws {
+        init(
+                fileName: String,
+                sceneDescription: SceneDescription,
+                render: Bool = true,
+                function _: String = #function
+        ) throws {
                 self.scanner = try PbrtScanner(path: fileName)
                 self.fileName = fileName
                 self.render = render
@@ -57,7 +62,6 @@ extension Parser {
                 case worldBegin = "WorldBegin"
                 case worldEnd = "WorldEnd"
         }
-
 
         func parse() async throws {
                 while !scanner.isAtEnd {
@@ -221,7 +225,6 @@ extension Parser {
                 return result
         }
 
-
         private func parseNamedSpectrum() throws -> (any Spectrum)? {
                 guard let string = try parseStringOpt() else {
                         return nil
@@ -235,7 +238,6 @@ extension Parser {
                 }
         }
 
-
         private func parseRgbSpectrum() throws -> (any Spectrum)? {
                 if let namedSpectrum = try parseNamedSpectrum() {
                         return namedSpectrum
@@ -245,7 +247,6 @@ extension Parser {
                 }
                 return RgbSpectrum(rgb: threeFloats)
         }
-
 
         private func parseRGBSpectra() throws -> [any Spectrum] {
                 var spectra = [any Spectrum]()
@@ -308,7 +309,6 @@ extension Parser {
                 return normals
         }
 
-
         // swiftlint:disable:next cyclomatic_complexity
         private func parseValue(type: String) throws -> any Parameter {
                 switch type {
@@ -367,12 +367,10 @@ extension Parser {
                 }
         }
 
-
         private func blackBodyDummy(value _: FloatX) -> [RgbSpectrum] {
                 warning("Blackbody emission is not implemented!")
                 return [gray]
         }
-
 
         // swiftlint:disable:next cyclomatic_complexity
         private func parseValues(type: String) throws -> any Parameter {
@@ -407,7 +405,6 @@ extension Parser {
                 }
         }
 
-
         private func parseParameter() throws -> (String, any Parameter)? {
                 parseComments()
                 if scanner.scanString("\"") == nil { return nil }
@@ -428,7 +425,6 @@ extension Parser {
                 return (name, parameter)
         }
 
-
         private func parseParameters() throws -> ParameterDictionary {
                 var parameters = ParameterDictionary()
                 var nameAndParameter = try parseParameter()
@@ -442,20 +438,17 @@ extension Parser {
                 return parameters
         }
 
-
         private func parseIntegrator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try sceneDescription.integrator(name: name, parameters: parameters)
         }
 
-
         private func parseLightSource() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try sceneDescription.lightSource(name: name, parameters: parameters)
         }
-
 
         private func parseLookAt() throws {
                 parseComments()
@@ -470,7 +463,6 @@ extension Parser {
                 let upVector = try parseVector()
                 try sceneDescription.lookAt(eye: eye, target: target, upVector: upVector)
         }
-
 
         private func parseRotate() throws {
                 guard let angle = try parseFloatX() else { try bail() }
@@ -490,22 +482,18 @@ extension Parser {
                 return values
         }
 
-
         private func parseTransform() throws {
                 let values = try scanTransform()
                 try sceneDescription.transform(values: values)
         }
 
-
         private func parseTransformBegin() throws {
                 try sceneDescription.transformBegin()
         }
 
-
         private func parseTransformEnd() throws {
                 try sceneDescription.transformEnd()
         }
-
 
         private func parseTranslate() throws {
                 guard let floats = try parseThreeFloatXs() else { try bail() }
@@ -513,19 +501,16 @@ extension Parser {
                 try sceneDescription.translate(amount: translation)
         }
 
-
         private func parseSampler() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 sceneDescription.sampler(name: name, parameters: parameters)
         }
 
-
         private func parseScale() throws {
                 guard let floats = try parseThreeFloatXs() else { try bail() }
                 try sceneDescription.scale(x: floats.0, y: floats.1, z: floats.2)
         }
-
 
         private func parsePixelFilter() throws {
                 let name = try parseString()
@@ -533,11 +518,9 @@ extension Parser {
                 sceneDescription.pixelFilter(name: name, parameters: parameters)
         }
 
-
         private func parseReverseOrientation() {
                 warning("Ignoring reverseOrientation!")
         }
-
 
         private func parseFilm() throws {
                 let filmType = try parseString()
@@ -551,23 +534,19 @@ extension Parser {
                 try sceneDescription.film(name: filmType, parameters: parameters)
         }
 
-
         private func parseIdentity() {
                 sceneDescription.identity()
         }
-
 
         private func parseImport() async throws {
                 let name = try parseString()
                 try await sceneDescription.importFile(file: name)
         }
 
-
         private func parseInclude() async throws {
                 let name = try parseString()
                 try await sceneDescription.include(file: name, render: false)
         }
-
 
         private func parseCamera() throws {
                 let name = try parseString()
@@ -578,35 +557,29 @@ extension Parser {
                 try sceneDescription.camera(name: name, parameters: parameters)
         }
 
-
         private func parseCoordinateSystem() throws {
                 let name = try parseString()
                 sceneDescription.coordinateSystem(name: name)
         }
-
 
         private func parseCoordSysTransform() throws {
                 let name = try parseString()
                 try sceneDescription.coordSysTransform(name: name)
         }
 
-
         private func parseConcatTransform() throws {
                 let values = try scanTransform()
                 try sceneDescription.concatTransform(values: values)
         }
 
-
         private func parseWorldBegin() throws {
                 sceneDescription.worldBegin()
         }
-
 
         private func parseWorldEnd() async throws {
                 worldEndSeen = true
                 try await sceneDescription.worldEnd()
         }
-
 
         private func parseMakeNamedMaterial() throws {
                 let name = try parseString()
@@ -614,13 +587,11 @@ extension Parser {
                 try sceneDescription.makeNamedMaterial(name: name, parameters: parameters)
         }
 
-
         private func parseMakeNamedMedium() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try sceneDescription.makeNamedMedium(name: name, parameters: parameters)
         }
-
 
         private func parseMaterial() throws {
                 let type = try parseString()
@@ -628,43 +599,36 @@ extension Parser {
                 try sceneDescription.material(type: type, parameters: parameters)
         }
 
-
         private func parseMediumInterface() throws {
                 let interior = try parseString()
                 let exterior = try parseString()
                 sceneDescription.mediumInterface(interior: interior, exterior: exterior)
         }
 
-
         private func parseNamedMaterial() throws {
                 let name = try parseString()
                 try sceneDescription.namedMaterial(name: name)
         }
-
 
         private func parseObjectBegin() throws {
                 let name = try parseString()
                 try sceneDescription.objectBegin(name: name)
         }
 
-
         private func parseObjectEnd() throws {
                 try sceneDescription.objectEnd()
         }
-
 
         private func parseObjectInstance() async throws {
                 let name = try parseString()
                 try await sceneDescription.objectInstance(name: name)
         }
 
-
         private func parseShape() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try sceneDescription.shape(name: name, parameters: parameters)
         }
-
 
         private func parseTexture() throws {
                 let textureName = try parseString()
@@ -679,23 +643,19 @@ extension Parser {
                 )
         }
 
-
         private func parseAttributeBegin() throws {
                 try sceneDescription.attributeBegin()
         }
 
-
         private func parseAttributeEnd() throws {
                 try sceneDescription.attributeEnd()
         }
-
 
         private func parseAccelerator() throws {
                 let name = try parseString()
                 let parameters = try parseParameters()
                 try sceneDescription.accelerator(name: name, parameters: parameters)
         }
-
 
         private func parseAreaLightSource() throws {
                 let name = try parseString()
@@ -718,7 +678,6 @@ extension Parser {
                         commentFound = parseComment()
                 } while commentFound
         }
-
 
         // swiftlint:disable:next cyclomatic_complexity
         private func handleRenderStatement(_ input: String) async throws {

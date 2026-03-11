@@ -24,7 +24,6 @@ struct Diffuse {
         let reflectance: Texture
 }
 
-
 extension Diffuse {
         static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")

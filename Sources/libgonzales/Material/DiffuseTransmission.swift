@@ -15,7 +15,6 @@ struct DiffuseTransmission {
         var scale: FloatTexture
 }
 
-
 extension DiffuseTransmission {
         static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> DiffuseTransmission {
         let reflectance = try parameters.findRgbSpectrumTexture(
