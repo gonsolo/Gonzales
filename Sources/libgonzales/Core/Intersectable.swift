@@ -45,7 +45,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 				tHit: &tHit,
 				data: &data)
 		case .transformedPrimitive:
-			unimplemented()
+			throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
 		}
 
 	}
@@ -54,10 +54,10 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 		scene: Scene,
 		data: TriangleIntersection,
 		worldRay: Ray
-	) -> SurfaceInteraction? {
+	) throws -> SurfaceInteraction? {
 		switch self {
 		case .geometricPrimitive(let geometricPrimitive):
-			return geometricPrimitive.computeSurfaceInteraction(
+			return try geometricPrimitive.computeSurfaceInteraction(
 				scene: scene,
 				data: data,
 				worldRay: worldRay)
@@ -67,9 +67,9 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 				data: data,
 				worldRay: worldRay)
 		case .transformedPrimitive:
-			unimplemented()
+			throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
 		case .areaLight(let areaLight):
-			return areaLight.computeSurfaceInteraction(
+			return try areaLight.computeSurfaceInteraction(
 				scene: scene,
 				data: data,
 				worldRay: worldRay)

@@ -1,8 +1,8 @@
 struct Interface {
 
-        func getBsdf() -> GlobalBsdfType {
+        func getBsdf() throws -> GlobalBsdfType {
                 // Unimplemented by design
-                unimplemented()
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 }
 

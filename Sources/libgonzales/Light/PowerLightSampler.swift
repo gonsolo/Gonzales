@@ -33,31 +33,31 @@ extension Sequence {
 
 struct PowerLightSampler: Sendable {
 
-        init(sampler: Sampler, lights: [Light], scene: Scene) async {
+        init(sampler: Sampler, lights: [Light], scene: Scene) async throws {
                 self.sampler = sampler
                 self.lights = lights
 
                 var cumulativePowers = [FloatX]()
-                totalPower = await lights.asyncReduce(
-                        0, { total, light in total + light.power(scene: scene) })
+                totalPower = try await lights.asyncReduce(
+                        0, { total, light in try total + light.power(scene: scene) })
                 for (index, light) in lights.enumerated() {
                         if index == 0 {
-                                cumulativePowers.append(light.power(scene: scene))
+                                cumulativePowers.append(try light.power(scene: scene))
                         } else {
-                                cumulativePowers.append(cumulativePowers.last! + light.power(scene: scene))
+                                cumulativePowers.append(try cumulativePowers.last! + light.power(scene: scene))
                         }
                 }
 
                 self.cumulativePowers = cumulativePowers
         }
 
-        mutating func chooseLight(scene: Scene) -> (Light, FloatX) {
+        mutating func chooseLight(scene: Scene) throws -> (Light, FloatX) {
                 assert(lights.count > 0)
                 let uSample = sampler.get1D()
                 let powerIndex = uSample * totalPower
                 let (index, _) = lowerBound(cumulativePowers, key: powerIndex)
                 let light = lights[index]
-                let probabilityDensity = light.power(scene: scene) / totalPower
+                let probabilityDensity = try light.power(scene: scene) / totalPower
                 return (light, probabilityDensity)
         }
 

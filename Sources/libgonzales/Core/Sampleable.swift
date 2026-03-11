@@ -7,11 +7,11 @@
 
 protocol Sampleable {
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(samples: TwoRandomVariables, scene: Scene) throws -> (
                 interaction: SurfaceInteraction, pdf: FloatX
         )
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX)
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, FloatX)
 
         func probabilityDensityFor(
                 scene: Scene,
@@ -19,13 +19,13 @@ protocol Sampleable {
                 from interaction: SurfaceInteraction
         ) throws -> FloatX
 
-        func area(scene: Scene) -> FloatX
+        func area(scene: Scene) throws -> FloatX
 }
 
 extension Sampleable {
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (SurfaceInteraction, FloatX) {
-                var (intr, pdf) = sample(samples: samples, scene: scene)
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, FloatX) {
+                var (intr, pdf) = try sample(samples: samples, scene: scene)
                 let incident: Vector = normalized(intr.position - point)
                 let squaredDistance = distanceSquared(point, intr.position)
                 let angle = absDot(Vector(normal: intr.normal), -incident)
@@ -49,7 +49,7 @@ extension Sampleable where Self: Intersectable {
                 }
                 let squaredDistance = distanceSquared(from.position, interaction.position)
                 let angle = absDot(interaction.normal, -direction)
-                let angleTimesArea = angle * area(scene: scene)
+                let angleTimesArea = angle * (try area(scene: scene))
                 let density = squaredDistance / angleTimesArea
                 if density.isInfinite {
                         return 0

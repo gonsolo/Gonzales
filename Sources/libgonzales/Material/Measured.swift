@@ -4,8 +4,8 @@ enum MeasuredError: Error {
 
 struct Measured {
 
-        func getBsdf(_: any Interaction) -> DiffuseBsdf {
-                unimplemented()
+        func getBsdf(_: any Interaction) throws -> DiffuseBsdf {
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 }
 

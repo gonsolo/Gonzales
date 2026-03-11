@@ -232,8 +232,8 @@ extension Parser {
                 if let namedSpectrum = namedSpectra[string] {
                         return namedSpectrum
                 } else {
-                        warning("Unknown named spectrum \(string)!")
-                        warning("Returning default spectrum!")
+                        print("Warning: Unknown named spectrum \(string)!")
+                        print("Warning: Returning default spectrum!")
                         return RgbSpectrum(rgb: (1, 1, 1))
                 }
         }
@@ -368,7 +368,7 @@ extension Parser {
         }
 
         private func blackBodyDummy(value _: FloatX) -> [RgbSpectrum] {
-                warning("Blackbody emission is not implemented!")
+                print("Warning: Blackbody emission is not implemented!")
                 return [gray]
         }
 
@@ -519,7 +519,7 @@ extension Parser {
         }
 
         private func parseReverseOrientation() {
-                warning("Ignoring reverseOrientation!")
+                print("Warning: Ignoring reverseOrientation!")
         }
 
         private func parseFilm() throws {

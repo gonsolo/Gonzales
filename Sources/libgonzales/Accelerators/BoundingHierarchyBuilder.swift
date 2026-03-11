@@ -34,9 +34,9 @@ final class BoundingHierarchyBuilder {
 
         var nodes = [BoundingHierarchyNode]()
 
-        internal init(scene: Scene, primitives: [any Boundable]) async {
-                self.cachedPrimitives = await primitives.enumerated().asyncMap { index, primitive in
-                        let bound = await primitive.worldBound(scene: scene)
+        internal init(scene: Scene, primitives: [any Boundable]) async throws {
+                self.cachedPrimitives = try await primitives.enumerated().asyncMap { index, primitive in
+                        let bound = try await primitive.worldBound(scene: scene)
                         return CachedPrimitive(index: index, bound: bound, center: bound.center)
                 }
                 self.primitives = primitives

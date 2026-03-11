@@ -18,9 +18,9 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) -> SurfaceInteraction? {
+        ) throws -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                var interaction = shape.computeSurfaceInteraction(
+                var interaction = try shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
@@ -46,12 +46,12 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return interaction
         }
 
-        func worldBound(scene: Scene) async -> Bounds3f {
-                return shape.worldBound(scene: scene)
+        func worldBound(scene: Scene) async throws -> Bounds3f {
+                return try shape.worldBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) async -> Bounds3f {
-                return shape.objectBound(scene: scene)
+        func objectBound(scene: Scene) async throws -> Bounds3f {
+                return try shape.objectBound(scene: scene)
         }
 
         var shape: ShapeType

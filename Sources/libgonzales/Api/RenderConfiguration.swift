@@ -96,7 +96,7 @@ class RenderConfiguration {
                 let screenWindow = try cameraParameters.findFloatXs(called: "screenwindow")
                 if !screenWindow.isEmpty {
                         if screenWindow.count != 4 {
-                                warning("screenwindow must be four coordinates!")
+                                print("Warning: screenwindow must be four coordinates!")
                         } else {
                                 screen.pMin.x = screenWindow[0]
                                 screen.pMax.x = screenWindow[1]
@@ -127,7 +127,7 @@ class RenderConfiguration {
                 default:
                         var message = "Integrator \(self.integratorName) not implemented, "
                         message += "using path integrator!"
-                        warning(message)
+                        print("Warning: \(message)")
                 }
                 let maxDepth = try self.integratorParameters.findOneInt(
                         called: "maxdepth",
@@ -148,7 +148,7 @@ class RenderConfiguration {
                                 createRandomSampler(
                                         parameters: samplerParameters, quick: quick))
                 default:
-                        warning("Unknown sampler, using random sampler.")
+                        print("Warning: Unknown sampler, using random sampler.")
                         return try .random(
                                 createRandomSampler(
                                         parameters: samplerParameters, quick: quick))
@@ -185,7 +185,7 @@ class RenderConfiguration {
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
-                let powerLightSampler = await PowerLightSampler(
+                let powerLightSampler = try await PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
                 let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
                 let tileSize = (32, 32)

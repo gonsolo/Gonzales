@@ -2,13 +2,13 @@
 
 protocol LightSource: Sendable {
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
-                -> LightSample
+                throws -> LightSample
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
                 throws -> FloatX
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum
-        func power(scene: Scene) -> FloatX
+        func power(scene: Scene) throws -> FloatX
         var isDelta: Bool { get }
 }
 
@@ -29,8 +29,8 @@ enum Light: Sendable {
         }
 
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
-                -> LightSample {
-                return source.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
+                throws -> LightSample {
+                return try source.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
         }
 
         func probabilityDensityFor<I: Interaction>(
@@ -45,8 +45,8 @@ enum Light: Sendable {
                 return source.radianceFromInfinity(for: ray)
         }
 
-        func power(scene: Scene) -> FloatX {
-                return source.power(scene: scene)
+        func power(scene: Scene) throws -> FloatX {
+                return try source.power(scene: scene)
         }
 
         var isDelta: Bool {

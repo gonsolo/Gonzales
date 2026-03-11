@@ -15,8 +15,8 @@ struct AreaLight: Boundable, Intersectable, LightSource {
         }
 
         func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene: Scene)
-                -> LightSample {
-                let (shapeInteraction, pdf) = shape.sample(point: point, samples: samples, scene: scene)
+                throws -> LightSample {
+                let (shapeInteraction, pdf) = try shape.sample(point: point, samples: samples, scene: scene)
                 let direction: Vector = normalized(shapeInteraction.position - point)
                 assert(!direction.isNaN)
                 let visibility = Visibility(from: point, target: shapeInteraction.position)
@@ -36,16 +36,16 @@ struct AreaLight: Boundable, Intersectable, LightSource {
 
         func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
-        func power(scene: Scene) -> FloatX {
-                return brightness.average() * shape.area(scene: scene) * FloatX.pi
+        func power(scene: Scene) throws -> FloatX {
+                return try brightness.average() * shape.area(scene: scene) * FloatX.pi
         }
 
-        func worldBound(scene: Scene) async -> Bounds3f {
-                return shape.worldBound(scene: scene)
+        func worldBound(scene: Scene) async throws -> Bounds3f {
+                return try shape.worldBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) async -> Bounds3f {
-                return shape.objectBound(scene: scene)
+        func objectBound(scene: Scene) async throws -> Bounds3f {
+                return try shape.objectBound(scene: scene)
         }
 
         func getIntersectionData(
@@ -62,9 +62,9 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) -> SurfaceInteraction? {
+        ) throws -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                var interaction = shape.computeSurfaceInteraction(
+                var interaction = try shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay)

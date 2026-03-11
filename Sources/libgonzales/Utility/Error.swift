@@ -1,9 +1,3 @@
-#if os(Linux)
-        import Glibc
-#else
-        import Darwin
-#endif
-
 public enum RenderError: Error {
         case fopen
         case insufficientArguments
@@ -20,31 +14,5 @@ public enum RenderError: Error {
         case readFloatX
         case readInt32
         case readUInt8
-}
-
-func unimplemented(
-        function: String = #function, file: String = #file, line: Int = #line, message: String = ""
-) -> Never {
-        print("Unimplemented in function \(function) in file \(file), line \(line), \(message)")
-        fatalError()
-}
-
-func todo(
-        function: String = #function, file: String = #file, line: Int = #line, message: String = ""
-) -> Never {
-        unimplemented(function: function, file: file, line: line, message: message)
-}
-
-func notOverridden(function: String = #function, file: String = #file, line: Int = #line) -> Never {
-        print("Function \(function) in file \(file), line \(line) has to be overridden!")
-        fatalError()
-}
-
-func warning(_ message: String) {
-        print("Warning: \(message)")
-}
-
-func abort(_ message: String) -> Never {
-        print("Error: \(message)")
-        exit(-1)
+        case unimplemented(function: String, file: String, line: Int, message: String)
 }

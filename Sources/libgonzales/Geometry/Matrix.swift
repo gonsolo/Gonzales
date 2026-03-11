@@ -137,10 +137,10 @@ public struct Matrix: Sendable {
                         // return Matrix(minv)
                         return Matrix(backing: minv)
                 } catch MatrixError.singularMatrix {
-                        warning("Singular matrix encountered!")
+                        print("Warning: Singular matrix encountered!")
                         return Matrix()
                 } catch {
-                        abort("Unhandled error in matrix invert!")
+                        fatalError("Unhandled error in matrix invert: \(error)")
                 }
         }
 

@@ -117,7 +117,7 @@ struct Sphere: Shape {
                 ray _: Ray,
                 tHit _: inout FloatX
         ) throws -> Bool {
-                unimplemented()
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
         func intersect(

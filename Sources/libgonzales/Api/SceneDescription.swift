@@ -7,7 +7,7 @@ func makeAccelerator(
 ) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
-                let builder = await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
+                let builder = try await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
                 return accelerator
@@ -127,7 +127,7 @@ extension SceneDescription {
         func film(name: String, parameters: ParameterDictionary) throws {
                 let fileName = try parameters.findString(called: "filename") ?? "gonzales.exr"
                 guard fileName.hasSuffix("exr") else {
-                        abort("Only exr output supported!")
+                        throw SceneDescriptionError.input(message: "Only exr output supported!")
                 }
                 options.filmName = name
                 options.filmParameters = parameters
@@ -214,7 +214,7 @@ extension SceneDescription {
                 }
                 switch type {
                 case "cloud":
-                        warning("Cloud is not implemented!")
+                        print("Warning: Cloud is not implemented!")
                 case "homogeneous":
                         let scale = try parameters.findOneFloatX(called: "scale", else: 1)
                         let absorption =
@@ -226,9 +226,9 @@ extension SceneDescription {
                                 absorption: absorption,
                                 scattering: scattering)
                 case "nanovdb":
-                        warning("Nanovdb is not implemented!")
+                        print("Warning: Nanovdb is not implemented!")
                 case "uniformgrid":
-                        warning("Uniform grid is not implemented!")
+                        print("Warning: Uniform grid is not implemented!")
                 default:
                         throw SceneDescriptionError.namedMedium
                 }
@@ -257,7 +257,7 @@ extension SceneDescription {
         }
 
         func objectInstance(name _: String) async throws {
-                unimplemented()
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
         func sampler(name: String, parameters: ParameterDictionary) {
@@ -396,13 +396,13 @@ extension SceneDescription {
         )
                 throws {
                 guard type == "spectrum" || type == "float" || type == "color" else {
-                        warning("Unimplemented texture type: \(type)")
+                        print("Warning: Unimplemented texture type: \(type)")
                         return
                 }
                 var texture: Texture
                 switch textureClass {
                 case "checkerboard":
-                        unimplemented()
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 case "constant":
                         switch type {
                         case "spectrum", "color":
@@ -414,7 +414,7 @@ extension SceneDescription {
                                         name: "value", textures: state.textures)
                                 texture = Texture.floatTexture(floatTexture)
                         default:
-                                unimplemented()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                         }
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
@@ -424,11 +424,11 @@ extension SceneDescription {
                 case "mix":
                         switch type {
                         case "color", "spectrum":
-                                unimplemented()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                         case "float":
-                                unimplemented()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                         default:
-                                unimplemented()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                         }
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
@@ -436,9 +436,9 @@ extension SceneDescription {
                                 name: fileName, type: type,
                                 sceneDirectory: renderOptions.sceneDirectory)
                 case "scale":
-                        unimplemented()
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 default:
-                        warning("Unimplemented texture class: \(textureClass)")
+                        print("Warning: Unimplemented texture class: \(textureClass)")
                         return
                 }
                 state.textures[name] = texture
@@ -552,7 +552,7 @@ func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
-                warning("Can't find texture file: \(absoluteFileName)")
+                print("Warning: Can't find texture file: \(absoluteFileName)")
                 return Texture.rgbSpectrumTexture(
                         RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
         }
@@ -571,7 +571,7 @@ func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -
                                 FloatTexture.openImageIoTexture(
                                         OpenImageIOTexture(path: absoluteFileName, type: type)))
                 default:
-                        unimplemented()
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 }
         default:
                 throw SceneDescriptionError.unknownTextureFormat(suffix: String(suffix))

@@ -97,7 +97,7 @@ extension VolumePathIntegrator {
                 scene: Scene
         ) throws
                 -> (Light, FloatX) {
-                return lightSampler.chooseLight(scene: scene)
+                return try lightSampler.chooseLight(scene: scene)
         }
 
         private func intersectOrInfiniteLights(
@@ -126,7 +126,7 @@ extension VolumePathIntegrator {
                 sampler: inout Sampler,
                 scene: Scene
         ) throws -> BsdfSample {
-                let lightSample = light.sample(
+                let lightSample = try light.sample(
                         point: interaction.position, samples: sampler.get2D(), accelerator: accelerator,
                         scene: scene)
                 guard !lightSample.radiance.isBlack && !lightSample.pdf.isInfinite else {
@@ -374,7 +374,7 @@ extension VolumePathIntegrator {
                         }
                 }
                 assert(surfaceInteraction.materialIndex >= 0)
-                let bsdf = scene.materials[surfaceInteraction.materialIndex].getBsdf(
+                let bsdf = try scene.materials[surfaceInteraction.materialIndex].getBsdf(
                         interaction: surfaceInteraction)
 
                 if state.bounce == 0 {

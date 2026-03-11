@@ -51,7 +51,7 @@ extension ParameterDictionary {
                         }
                         switch texture {
                         case .floatTexture:
-                                warning("Could not find texture \(textureName)")
+                                print("Warning: Could not find texture \(textureName)")
                                 let constantTexture = ConstantTexture<RgbSpectrum>(value: red)
                                 let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
                                 return rgbSpectrumTexture

@@ -288,7 +288,7 @@ struct Curve: Shape {
                 ray _: Ray,
                 tHit _: inout FloatX
         ) throws -> Bool {
-                unimplemented()
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
         func intersect(
@@ -296,15 +296,15 @@ struct Curve: Shape {
                 ray _: Ray,
                 tHit _: inout FloatX
         ) throws -> SurfaceInteraction? {
-                unimplemented()
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func area(scene _: Scene) -> FloatX {
-                fatalError("Not implemented")
+        func area(scene _: Scene) throws -> FloatX {
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) -> (interaction: I, pdf: FloatX) {
-                fatalError("Not implemented")
+        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) throws -> (interaction: I, pdf: FloatX) {
+                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
         public var description: String {

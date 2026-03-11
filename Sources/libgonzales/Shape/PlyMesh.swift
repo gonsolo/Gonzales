@@ -332,7 +332,7 @@ extension PlyMesh {
                                 throw SceneDescriptionError.ply(message: "Only 8 and 32 bits supported")
                         }
                         if numberIndices != 3 {
-                                warning("Number of indices is not 3 but \(numberIndices)")
+                                print("Warning: Number of indices is not 3 but \(numberIndices)")
                                 // throw SceneDescriptionError.ply(
                                 //        message:
                                 //                "Number of indices must be 3 but is \(numberIndices)"
@@ -371,7 +371,7 @@ extension PlyMesh {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""
         let absoluteFileName = sceneDirectory + "/" + relativeFileName
         guard FileManager.default.fileExists(atPath: absoluteFileName) else {
-                warning("Could not find ply file at: \(absoluteFileName)")
+                print("Warning: Could not find ply file at: \(absoluteFileName)")
                 return []
         }
         guard let file = FileHandle(forReadingAtPath: absoluteFileName) else {

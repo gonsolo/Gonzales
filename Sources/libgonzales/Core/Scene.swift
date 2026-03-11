@@ -33,7 +33,7 @@ struct Scene {
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 case .transformedPrimitive:
-                        unimplemented()
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit) != nil
@@ -59,7 +59,7 @@ struct Scene {
                         return try geometricPrimitive.getIntersectionData(
                                 scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .transformedPrimitive:
-                        unimplemented()
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.getIntersectionData(
@@ -81,13 +81,13 @@ struct Scene {
                                 scene: self, data: data, worldRay: worldRay)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return geometricPrimitive.computeSurfaceInteraction(
+                        return try geometricPrimitive.computeSurfaceInteraction(
                                 scene: self, data: data, worldRay: worldRay)
                 case .transformedPrimitive:
-                        unimplemented()
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
-                        return areaLight.computeSurfaceInteraction(
+                        return try areaLight.computeSurfaceInteraction(
                                 scene: self, data: data, worldRay: worldRay)
                 }
         }
