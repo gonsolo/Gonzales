@@ -96,7 +96,7 @@ extension LayeredBsdf {
                 return result
         }
 
-        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) async -> BsdfSample {
+        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
                 var localOutgoing = outgoing
                 var flipIncident = false
 
@@ -193,7 +193,7 @@ extension LayeredBsdf {
                 return invalidBsdfSample
         }
 
-        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) async -> FloatX {
+        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
                 var localOutgoing = outgoing
                 var localIncident = incident
                 if twoSided && localOutgoing.z < 0 {

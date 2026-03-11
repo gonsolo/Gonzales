@@ -7,14 +7,14 @@ protocol Camera: Sendable {
 
         func generateRay(cameraSample: CameraSample) -> Ray
 
-        func getSampleBounds() async -> Bounds2i
+        func getSampleBounds() -> Bounds2i
 
         var film: Film { get }
 }
 
 extension Camera {
 
-        func getSampleBounds() async -> Bounds2i {
+        func getSampleBounds() -> Bounds2i {
                 return film.getSampleBounds()
         }
 

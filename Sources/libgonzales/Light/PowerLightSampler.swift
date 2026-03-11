@@ -17,28 +17,14 @@ public func lowerBound<T: Comparable>(_ array: [T], key: T) -> (Int, T) {
         return (lowerBound, array[lowerBound])
 }
 
-// No async reduce in Swift as for now
-extension Sequence {
-        func asyncReduce<Result>(
-                _ initialResult: Result,
-                _ nextPartialResult: (@Sendable (Result, Element) async throws -> Result)
-        ) async rethrows -> Result {
-                var result = initialResult
-                for element in self {
-                        result = try await nextPartialResult(result, element)
-                }
-                return result
-        }
-}
-
 struct PowerLightSampler: Sendable {
 
-        init(sampler: Sampler, lights: [Light], scene: Scene) async throws {
+        init(sampler: Sampler, lights: [Light], scene: Scene) throws {
                 self.sampler = sampler
                 self.lights = lights
 
                 var cumulativePowers = [FloatX]()
-                totalPower = try await lights.asyncReduce(
+                totalPower = try lights.reduce(
                         0, { total, light in try total + light.power(scene: scene) })
                 for (index, light) in lights.enumerated() {
                         if index == 0 {

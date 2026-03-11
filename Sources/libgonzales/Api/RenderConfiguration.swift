@@ -73,7 +73,7 @@ class RenderConfiguration {
                 return filter
         }
 
-        func makeCamera(quick: Bool) async throws -> PerspectiveCamera {
+        func makeCamera(quick: Bool) throws -> PerspectiveCamera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter, quick: quick)
@@ -109,7 +109,7 @@ class RenderConfiguration {
                         called: "focaldistance",
                         else: 1e6)
                 let lensRadius = try cameraParameters.findOneFloatX(called: "lensradius", else: 0)
-                return try await PerspectiveCamera(
+                return try PerspectiveCamera(
                         cameraToWorld: cameraToWorld,
                         screenWindow: screen,
                         fov: fov,
@@ -169,8 +169,8 @@ class RenderConfiguration {
                 immutableState: ImmutableState,
                 renderOptions: RenderOptions,
                 meshes: TriangleMeshes
-        ) async throws -> some Renderer {
-                let camera = try await makeCamera(quick: renderOptions.quick)
+        ) throws -> some Renderer {
+                let camera = try makeCamera(quick: renderOptions.quick)
                 let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
                 let scene = Scene(
                         lights: lights,
@@ -179,18 +179,18 @@ class RenderConfiguration {
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
-                let accelerator = try await makeAccelerator(
+                let accelerator = try makeAccelerator(
                         scene: scene, primitives: primitives,
                         acceleratorName: acceleratorName)
                 cleanUp()
                 print("Building accelerator: \(acceleratorTimer.elapsed)")
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
-                let powerLightSampler = try await PowerLightSampler(
+                let powerLightSampler = try PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
                 let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
                 let tileSize = (32, 32)
 
-                return await TileRenderer(
+                return TileRenderer(
                         camera: camera,
                         integrator: integrator,
                         sampler: sampler,

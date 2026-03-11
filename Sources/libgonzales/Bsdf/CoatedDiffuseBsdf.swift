@@ -37,12 +37,12 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                 return value
         }
 
-        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) async -> BsdfSample {
-                return await layered.sampleLocal(outgoing: outgoing, uSample: uSample)
+        public func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+                return layered.sampleLocal(outgoing: outgoing, uSample: uSample)
         }
 
-        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) async -> FloatX {
-                return await layered.probabilityDensityLocal(outgoing: outgoing, incident: incident)
+        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+                return layered.probabilityDensityLocal(outgoing: outgoing, incident: incident)
         }
 
         public func albedo() -> RgbSpectrum {

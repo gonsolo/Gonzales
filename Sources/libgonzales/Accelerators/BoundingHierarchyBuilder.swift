@@ -9,20 +9,6 @@ enum BoundingHierarchyBuilderError: Error {
         case unknown
 }
 
-// No async map in Swift as of now
-extension Sequence {
-        func asyncMap<T>(
-                _ transform: @Sendable (Element) async throws -> T
-        ) async rethrows -> [T] {
-                var values = [T]()
-
-                for element in self {
-                        try await values.append(transform(element))
-                }
-                return values
-        }
-}
-
 final class BoundingHierarchyBuilder {
 
         private let primitivesPerNode = 4
@@ -34,9 +20,9 @@ final class BoundingHierarchyBuilder {
 
         var nodes = [BoundingHierarchyNode]()
 
-        internal init(scene: Scene, primitives: [any Boundable]) async throws {
-                self.cachedPrimitives = try await primitives.enumerated().asyncMap { index, primitive in
-                        let bound = try await primitive.worldBound(scene: scene)
+        internal init(scene: Scene, primitives: [any Boundable]) throws {
+                self.cachedPrimitives = try primitives.enumerated().map { index, primitive in
+                        let bound = try primitive.worldBound(scene: scene)
                         return CachedPrimitive(index: index, bound: bound, center: bound.center)
                 }
                 self.primitives = primitives

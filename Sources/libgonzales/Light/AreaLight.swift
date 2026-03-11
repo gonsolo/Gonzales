@@ -40,11 +40,11 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                 return try brightness.average() * shape.area(scene: scene) * FloatX.pi
         }
 
-        func worldBound(scene: Scene) async throws -> Bounds3f {
+        func worldBound(scene: Scene) throws -> Bounds3f {
                 return try shape.worldBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) async throws -> Bounds3f {
+        func objectBound(scene: Scene) throws -> Bounds3f {
                 return try shape.objectBound(scene: scene)
         }
 

@@ -619,9 +619,9 @@ extension Parser {
                 try sceneDescription.objectEnd()
         }
 
-        private func parseObjectInstance() async throws {
+        private func parseObjectInstance() throws {
                 let name = try parseString()
-                try await sceneDescription.objectInstance(name: name)
+                try sceneDescription.objectInstance(name: name)
         }
 
         private func parseShape() throws {
@@ -710,7 +710,7 @@ extension Parser {
                 case .namedMaterial: try parseNamedMaterial()
                 case .objectBegin: try parseObjectBegin()
                 case .objectEnd: try parseObjectEnd()
-                case .objectInstance: try await parseObjectInstance()
+                case .objectInstance: try parseObjectInstance()
                 case .pixelFilter: try parsePixelFilter()
                 case .reverseOrientation: parseReverseOrientation()
                 case .rotate: try parseRotate()

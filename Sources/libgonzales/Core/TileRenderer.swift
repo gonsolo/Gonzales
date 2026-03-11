@@ -10,7 +10,7 @@ struct TileRenderer: Renderer {
                 tileSize: (Int, Int),
                 immutableState: ImmutableState,
                 renderOptions: RenderOptions
-        ) async {
+        ) {
                 self.camera = camera
                 self.integrator = integrator
                 self.sampler = sampler
@@ -19,7 +19,7 @@ struct TileRenderer: Renderer {
                 self.immutableState = immutableState
                 self.renderOptions = renderOptions
 
-                let sampleBounds = await camera.getSampleBounds()
+                let sampleBounds = camera.getSampleBounds()
                 if renderOptions.singleRay {
                         let point = sampleBounds.pMin + renderOptions.singleRayCoordinate
                         bounds = Bounds2i(pMin: point, pMax: point + Point2i(x: 1, y: 1))

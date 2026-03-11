@@ -7,7 +7,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 focalDistance: FloatX,
                 lensRadius: FloatX,
                 film: Film
-        ) async throws {
+        ) throws {
                 self.objectToWorld = cameraToWorld
                 self.fieldOfView = fov
                 self.focalDistance = focalDistance

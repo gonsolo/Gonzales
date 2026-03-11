@@ -4,10 +4,10 @@ func makeAccelerator(
         scene: Scene,
         primitives: [any Boundable & Intersectable],
         acceleratorName: String
-) async throws -> Accelerator {
+) throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
-                let builder = try await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
+                let builder = try BoundingHierarchyBuilder(scene: scene, primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
                 return accelerator
@@ -256,7 +256,7 @@ extension SceneDescription {
                 state.objectName = nil
         }
 
-        func objectInstance(name _: String) async throws {
+        func objectInstance(name _: String) throws {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
@@ -461,7 +461,7 @@ extension SceneDescription {
         func worldEnd() async throws {
                 print("Reading: \(readTimer?.elapsed ?? "unknown")")
                 if renderOptions.justParse { return }
-                let renderer = try await options.makeRenderer(
+                let renderer = try options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
                         materials: materials, acceleratorName: acceleratorName,
                         immutableState: state.getImmutable(),
