@@ -1,4 +1,4 @@
-@preconcurrency import Foundation
+import Foundation
 
 struct TileRenderer: Renderer {
 
@@ -104,8 +104,7 @@ struct TileRenderer: Renderer {
                                 )
 
                                 // Periodic Update
-                                print(progressString, terminator: "\r")
-                                fflush(stdout)
+                                FileHandle.standardOutput.write(Data((progressString + "\r").utf8))
 
                                 if metrics.completed >= metrics.total {
                                         break
@@ -122,8 +121,7 @@ struct TileRenderer: Renderer {
                                 "Progress: \(finalMetrics.total) / \(finalMetrics.total) (100.0%) - "
                                 + "Rendering Complete. Total Time: \(formatTime(finalMetrics.timeElapsed))\n"
 
-                        print(finalString, terminator: "")
-                        fflush(stdout)
+                        FileHandle.standardOutput.write(Data(finalString.utf8))
                 }
         }
 
@@ -133,41 +131,33 @@ struct TileRenderer: Renderer {
 
                 async let progressTask: Void = runProgressReporter(reporter: reporter)
 
-                let renderingQueue = DispatchQueue(
-                        label: "com.renderer.heavy-work", qos: .userInitiated, attributes: .concurrent)
+                // Limit concurrency to keep one cooperative thread free for the progress reporter.
+                let maxConcurrent = max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
 
                 try await withThrowingTaskGroup(of: [Sample].self) { group in
-                        for tile in tiles {
+                        var tileIterator = tiles.makeIterator()
 
+                        // Seed the group with maxConcurrent tasks
+                        for _ in 0..<maxConcurrent {
+                                guard let tile = tileIterator.next() else { break }
                                 group.addTask {
-
-                                        return try await withCheckedThrowingContinuation { continuation in
-
-                                                // Use a custom DispatchQueue to avoid thread pool starvation in Swift concurrency.
-                                                // Long-running CPU-bound synchronous work in the rendering loops can block the
-                                                // global cooperative pool, preventing the progress reporter actor from running.
-                                                renderingQueue.async {
-                                                        do {
-                                                                let samples = try self.renderTile(
-                                                                        tile: tile, state: immutableState)
-
-                                                                Task {
-                                                                        await reporter.tileFinished()
-                                                                }
-
-                                                                continuation.resume(returning: samples)
-
-                                                        } catch {
-                                                                continuation.resume(throwing: error)
-                                                        }
-                                                }
-                                        }
+                                        let samples = try self.renderTile(tile: tile, state: immutableState)
+                                        await reporter.tileFinished()
+                                        return samples
                                 }
                         }
 
+                        // As each task completes, add the next tile
                         var allSamples: [Sample] = []
                         for try await samples in group {
                                 allSamples.append(contentsOf: samples)
+                                if let tile = tileIterator.next() {
+                                        group.addTask {
+                                                let samples = try self.renderTile(tile: tile, state: immutableState)
+                                                await reporter.tileFinished()
+                                                return samples
+                                        }
+                                }
                         }
 
                         try await self.camera.film.writeImages(samples: allSamples, tileSize: tileSize)
@@ -179,9 +169,8 @@ struct TileRenderer: Renderer {
         func render() async throws {
                 let timer = Timer("Rendering...")
                 try await renderImage(bounds: bounds, immutableState: immutableState)
-                print("\n")
-                print(timer.elapsed)
-                fflush(stdout)
+                let output = "\n\n" + timer.elapsed + "\n"
+                FileHandle.standardOutput.write(Data(output.utf8))
         }
 
         let camera: PerspectiveCamera

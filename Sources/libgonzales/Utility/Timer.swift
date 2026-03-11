@@ -1,4 +1,4 @@
-@preconcurrency import Foundation
+import Foundation
 
 extension TimeInterval {
         public var humanReadable: String {
@@ -22,9 +22,8 @@ final class Timer {
                 if newline {
                         print(name)
                 } else {
-                        print(name, terminator: "")
+                        FileHandle.standardOutput.write(Data(name.utf8))
                 }
-                fflush(stdout)
                 startTime = Date()
         }
 

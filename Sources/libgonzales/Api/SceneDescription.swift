@@ -1,4 +1,4 @@
-@preconcurrency import Foundation
+import Foundation
 
 func makeAccelerator(
         scene: Scene,
@@ -364,7 +364,6 @@ extension SceneDescription {
 
         public func start() {
                 readTimer = Timer("Reading...", newline: false)
-                fflush(stdout)
         }
 
         func rotate(by angle: FloatX, around axis: Vector) throws {
