@@ -134,7 +134,7 @@ struct TileRenderer: Renderer {
                 let tiles = generateTiles(from: bounds)
                 let reporter = ProgressReporter(total: tiles.count)
 
-                async let _: Void = runProgressReporter(reporter: reporter)
+                async let progressTask: Void = runProgressReporter(reporter: reporter)
 
                 let renderingQueue = DispatchQueue(
                         label: "com.renderer.heavy-work", qos: .userInitiated, attributes: .concurrent)
@@ -172,6 +172,8 @@ struct TileRenderer: Renderer {
 
                         try await self.camera.film.writeImages(samples: allSamples, tileSize: tileSize)
                 }
+
+                await progressTask
         }
 
         func render() async throws {
