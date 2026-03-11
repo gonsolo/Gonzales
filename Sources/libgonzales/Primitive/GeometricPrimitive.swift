@@ -16,7 +16,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
 
         func computeSurfaceInteraction(
                 scene: Scene,
-                data: TriangleIntersection?,
+                data: TriangleIntersection,
                 worldRay: Ray
         ) -> SurfaceInteraction? {
                 if alpha == 0 { return nil }

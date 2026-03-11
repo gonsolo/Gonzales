@@ -70,7 +70,7 @@ struct Scene {
 
         func computeSurfaceInteraction(
                 primId: PrimId,
-                data: TriangleIntersection?,
+                data: TriangleIntersection,
                 worldRay: Ray
         ) throws -> SurfaceInteraction? {
                 switch primId.type {

@@ -141,24 +141,23 @@ struct TriangleIntersection {
         init() {
                 primId = PrimId()
                 tValue = FloatX.greatestFiniteMagnitude
+                barycentric0 = 0
+                barycentric1 = 0
+                barycentric2 = 0
         }
 
-        init(primId: PrimId, tValue: FloatX) {
+        init(primId: PrimId, tValue: FloatX, barycentric0: FloatX, barycentric1: FloatX, barycentric2: FloatX) {
                 self.primId = primId
                 self.tValue = tValue
+                self.barycentric0 = barycentric0
+                self.barycentric1 = barycentric1
+                self.barycentric2 = barycentric2
         }
         let primId: PrimId
-        let tValue: FloatX
-}
-
-struct TriangleIntersectionFull {
         let tValue: FloatX
         let barycentric0: FloatX
         let barycentric1: FloatX
         let barycentric2: FloatX
-        let pHit: Point?  // Optional, only needed for SurfaceInteraction, but calculate outside the test for efficiency
-        let dp02: Vector
-        let dp12: Vector
 }
 
 struct Triangle: Shape {
@@ -249,94 +248,6 @@ extension Triangle {
                 return uvHit
         }
 
-        func getIntersectionDataFull(
-                scene: Scene,
-                ray worldRay: Ray,
-                tHit: inout FloatX
-        ) throws -> TriangleIntersectionFull? {
-
-                // Transform the ray to object space
-                let ray = getObjectToWorld(scene: scene) * worldRay
-
-                // --- Setup and Plane Projection ---
-
-                var p0t: Point = getPoint0(scene: scene) - ray.origin
-                var p1t: Point = getPoint1(scene: scene) - ray.origin
-                var p2t: Point = getPoint2(scene: scene) - ray.origin
-
-                let axisZ = maxDimension(abs(ray.direction))
-                let axisX = (axisZ + 1) % 3
-                let axisY = (axisX + 1) % 3
-                let directionVector: Vector = permute(vector: ray.direction, x: axisX, y: axisY, z: axisZ)
-                p0t = permute(point: p0t, x: axisX, y: axisY, z: axisZ)
-                p1t = permute(point: p1t, x: axisX, y: axisY, z: axisZ)
-                p2t = permute(point: p2t, x: axisX, y: axisY, z: axisZ)
-
-                let shearX: FloatX = -directionVector.x / directionVector.z
-                let shearY: FloatX = -directionVector.y / directionVector.z
-                let shearZ: FloatX = 1.0 / directionVector.z
-
-                // Shearing transformation
-                p0t.x += shearX * p0t.z
-                p0t.y += shearY * p0t.z
-                p1t.x += shearX * p1t.z
-                p1t.y += shearY * p1t.z
-                p2t.x += shearX * p2t.z
-                p2t.y += shearY * p2t.z
-
-                // Compute edge functions e0, e1, e2
-                let edge0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
-                let edge1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
-                let edge2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
-
-                // Check edge functions for hit (same sign)
-                if (edge0 < 0 || edge1 < 0 || edge2 < 0) && (edge0 > 0 || edge1 > 0 || edge2 > 0) {
-                        return nil
-                }
-                let det: FloatX = edge0 + edge1 + edge2
-                if det == 0 {
-                        return nil  // Degenerate triangle or ray parallel to plane
-                }
-
-                // --- Compute t value and check range ---
-
-                p0t.z *= shearZ
-                p1t.z *= shearZ
-                p2t.z *= shearZ
-                let tScaled: FloatX = edge0 * p0t.z + edge1 * p1t.z + edge2 * p2t.z
-
-                // Ray t range test against tHit and ray segment limits (0)
-                let hitCondition = det > 0
-                if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
-                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det)) {
-                        return nil
-                }
-
-                // --- Intersection found ---
-
-                let invDet: FloatX = 1 / det
-                let barycentric0: FloatX = edge0 * invDet
-                let barycentric1: FloatX = edge1 * invDet
-                let barycentric2: FloatX = edge2 * invDet
-                let tValue: FloatX = tScaled * invDet
-
-                tHit = tValue  // Update closest hit distance
-
-                // Calculate necessary geometric data
-                let dp02 = Vector(point: getPoint0(scene: scene) - getPoint2(scene: scene))
-                let dp12 = Vector(point: getPoint1(scene: scene) - getPoint2(scene: scene))
-
-                return TriangleIntersectionFull(
-                        tValue: tValue,
-                        barycentric0: barycentric0,
-                        barycentric1: barycentric1,
-                        barycentric2: barycentric2,
-                        pHit: nil,  // pHit calculation is only needed for SurfaceInteraction
-                        dp02: dp02,
-                        dp12: dp12
-                )
-        }
-
         func getIntersectionData(
                 scene: Scene,
                 ray worldRay: Ray,
@@ -404,20 +315,19 @@ extension Triangle {
                 // --- Intersection found ---
 
                 let invDet: FloatX = 1 / det
-                // let barycentric0: FloatX = edge0 * invDet
-                // let barycentric1: FloatX = edge1 * invDet
-                // let barycentric2: FloatX = edge2 * invDet
+                let barycentric0: FloatX = edge0 * invDet
+                let barycentric1: FloatX = edge1 * invDet
+                let barycentric2: FloatX = edge2 * invDet
                 let tValue: FloatX = tScaled * invDet
 
                 tHit = tValue  // Update closest hit distance
 
-                // Calculate necessary geometric data
-                // let dp02 = Vector(point: point0 - point2)
-                // let dp12 = Vector(point: point1 - point2)
-
                 data = TriangleIntersection(
                         primId: PrimId(id1: meshIndex, id2: triangleIndex, type: .triangle),
                         tValue: tValue,
+                        barycentric0: barycentric0,
+                        barycentric1: barycentric1,
+                        barycentric2: barycentric2
                 )
                 return true
         }
@@ -433,28 +343,26 @@ extension Triangle {
 
         func computeSurfaceInteraction(
                 scene: Scene,
-                data: TriangleIntersection?,
+                data: TriangleIntersection,
                 worldRay: Ray
         ) -> SurfaceInteraction? {
-                var varT = data?.tValue ?? 0
-                var dataValue: TriangleIntersectionFull?
-                do {
-                        dataValue = try getIntersectionDataFull(scene: scene, ray: worldRay, tHit: &varT)
-                } catch {
-                        fatalError("getIntersectionDataFull in computeSurfaceInteraction!")
-                }
-                guard let dataValue = dataValue else {
-                        return nil
-                }
+                let barycentric0 = data.barycentric0
+                let barycentric1 = data.barycentric1
+                let barycentric2 = data.barycentric2
+
+                // Calculate necessary geometric data
+                let dp02 = Vector(point: getPoint0(scene: scene) - getPoint2(scene: scene))
+                let dp12 = Vector(point: getPoint1(scene: scene) - getPoint2(scene: scene))
+
                 var interaction = SurfaceInteraction()
                 // --- Calculate Hit Point (pHit) ---
-                let hit0: Point = dataValue.barycentric0 * getPoint0(scene: scene)
-                let hit1: Point = dataValue.barycentric1 * getPoint1(scene: scene)
-                let hit2: Point = dataValue.barycentric2 * getPoint2(scene: scene)
+                let hit0: Point = barycentric0 * getPoint0(scene: scene)
+                let hit1: Point = barycentric1 * getPoint1(scene: scene)
+                let hit2: Point = barycentric2 * getPoint2(scene: scene)
                 let pHitValue: Point = hit0 + hit1 + hit2
 
                 // --- Geometric Normal ---
-                let normal = normalized(Normal(cross(dataValue.dp02, dataValue.dp12)))
+                let normal = normalized(Normal(cross(dp02, dp12)))
 
                 // --- UVs, Tangent Space (dpdu/dpdv), and Shading Normal ---
 
@@ -465,8 +373,8 @@ extension Triangle {
                                 getVertexIndex2(scene: scene)
                         ))
                 let uvHit = computeUVHit(
-                        barycentric0: dataValue.barycentric0, barycentric1: dataValue.barycentric1,
-                        barycentric2: dataValue.barycentric2, uvCoordinates: uvCoordinates)
+                        barycentric0: barycentric0, barycentric1: barycentric1,
+                        barycentric2: barycentric2, uvCoordinates: uvCoordinates)
 
                 let duv02: Vector2F = uvCoordinates.0 - uvCoordinates.2
                 let duv12: Vector2F = uvCoordinates.1 - uvCoordinates.2
@@ -477,10 +385,10 @@ extension Triangle {
 
                 if !degenerateUV {
                         let invDeterminantUV = 1 / determinantUV
-                        let termA: Vector = +duv12[1] * dataValue.dp02
-                        let termB: Vector = +duv02[1] * dataValue.dp12
-                        let termC: Vector = -duv12[0] * dataValue.dp02
-                        let termD: Vector = +duv02[0] * dataValue.dp12
+                        let termA: Vector = +duv12[1] * dp02
+                        let termB: Vector = +duv02[1] * dp12
+                        let termC: Vector = -duv12[0] * dp02
+                        let termD: Vector = +duv02[0] * dp12
                         dpdu = (termA - termB) * invDeterminantUV
                         dpdv = (termC - termD) * invDeterminantUV
                 }
@@ -501,13 +409,13 @@ extension Triangle {
                 } else {
                         let normal0 = getTriangleMeshes(scene: scene).getNormal(
                                 meshIndex: meshIndex, vertexIndex: getVertexIndex0(scene: scene))
-                        let sn0 = dataValue.barycentric0 * normal0
+                        let sn0 = barycentric0 * normal0
                         let normal1 = getTriangleMeshes(scene: scene).getNormal(
                                 meshIndex: meshIndex, vertexIndex: getVertexIndex1(scene: scene))
-                        let sn1 = dataValue.barycentric1 * normal1
+                        let sn1 = barycentric1 * normal1
                         let normal2 = getTriangleMeshes(scene: scene).getNormal(
                                 meshIndex: meshIndex, vertexIndex: getVertexIndex2(scene: scene))
-                        let sn2 = dataValue.barycentric2 * normal2
+                        let sn2 = barycentric2 * normal2
                         shadingNormal = sn0 + sn1 + sn2
                         if lengthSquared(shadingNormal) > 0 {
                                 shadingNormal = normalized(shadingNormal)

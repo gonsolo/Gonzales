@@ -60,14 +60,11 @@ enum ShapeType: Shape {
 
         func computeSurfaceInteraction(
                 scene: Scene,
-                data: TriangleIntersection?,
+                data: TriangleIntersection,
                 worldRay: Ray
         ) -> SurfaceInteraction? {
                 switch self {
                 case .triangle(let triangle):
-                        guard let data = data else {
-                                return nil
-                        }
                         return triangle.computeSurfaceInteraction(
                                 scene: scene,
                                 data: data,

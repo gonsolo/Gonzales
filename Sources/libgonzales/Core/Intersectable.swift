@@ -52,7 +52,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 
 	func computeSurfaceInteraction(
 		scene: Scene,
-		data: TriangleIntersection?,
+		data: TriangleIntersection,
 		worldRay: Ray
 	) -> SurfaceInteraction? {
 		switch self {
