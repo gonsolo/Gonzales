@@ -175,8 +175,8 @@ struct Curve: Shape {
                                         state: nextState)
                                 // if hit && !tHit: shadowRays not applicable here
                         }
-                        let hit0Valid = hits[0].0?.valid == true
-                        let hit1Valid = hits[1].0?.valid == true
+                        let hit0Valid = hits[0].0 != nil
+                        let hit1Valid = hits[1].0 != nil
 
                         if hit0Valid && hit1Valid {
                                 if hits[0].1 < hits[1].1 {
@@ -247,17 +247,7 @@ struct Curve: Shape {
                                 uvCoordinates: uvHit,
                                 faceIndex: 0)
                         let worldInteraction = objectToWorld * localInteraction
-                        let validWorldInteraction = SurfaceInteraction(
-                                valid: true,
-                                position: worldInteraction.position,
-                                normal: worldInteraction.normal,
-                                shadingNormal: worldInteraction.shadingNormal,
-                                outgoing: worldInteraction.outgoing,
-                                dpdu: worldInteraction.dpdu,
-                                uvCoordinates: worldInteraction.uvCoordinates,
-                                faceIndex: worldInteraction.faceIndex,
-                                materialIndex: worldInteraction.materialIndex)
-                        return (validWorldInteraction, tHit)
+                        return (worldInteraction, tHit)
                 }
         }
 

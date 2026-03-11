@@ -12,7 +12,7 @@ struct TransformedPrimitive: Boundable, Intersectable {
                         scene: scene,
                         ray: localRay,
                         tHit: &tHit)
-                if interaction?.valid == false {
+                if interaction == nil {
                         return nil
                 }
                 if let inter = interaction {

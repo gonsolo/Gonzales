@@ -24,7 +24,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
-                if interaction?.valid == true {
+                if interaction != nil {
                         interaction?.materialIndex = materialIndex
                 }
                 return interaction
@@ -40,7 +40,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-                if interaction?.valid == true {
+                if interaction != nil {
                         interaction?.materialIndex = materialIndex
                 }
                 return interaction

@@ -446,7 +446,6 @@ extension Triangle {
                 // --- Finalize SurfaceInteraction ---
                 let rayObjectSpace = getObjectToWorld(scene: scene) * worldRay
 
-                interaction.valid = true
                 interaction.position = getObjectToWorld(scene: scene) * pHitValue
                 interaction.normal = normalized(getObjectToWorld(scene: scene) * normal)
                 interaction.shadingNormal = normalized(getObjectToWorld(scene: scene) * shadingNormal)
@@ -473,7 +472,7 @@ extension Triangle {
                         data: data,
                         worldRay: worldRay
                 )
-                return interaction?.valid == true ? interaction : nil
+                return interaction
         }
 
         private func getLocalPoint(scene: Scene, index: Int) -> Point {

@@ -7,7 +7,6 @@ public protocol DistributionModel {
 
 struct SurfaceInteraction: Interaction, Sendable {
 
-        var valid = false
         var position = Point()
         var normal = Normal()
         var shadingNormal = Normal()
@@ -23,7 +22,7 @@ struct SurfaceInteraction: Interaction, Sendable {
 extension SurfaceInteraction: CustomStringConvertible {
         var description: String {
                 return
-                        "[" + "valid: \(valid) " + "pos: \(position) " + "n: \(normal) "
+                        "[" + "pos: \(position) " + "n: \(normal) "
                         + "shadingNormal: \(shadingNormal) " + "outgoing: \(outgoing) " + "dpdu: \(dpdu) "
                         + "uvCoordinates: \(uvCoordinates) " + "faceIndex: \(faceIndex) "
                         + "areaLight: \(areaLight as Optional) "
@@ -35,7 +34,7 @@ extension SurfaceInteraction: CustomStringConvertible {
 extension SurfaceInteraction: Equatable {
         static func == (lhs: SurfaceInteraction, rhs: SurfaceInteraction) -> Bool {
                 return
-                        lhs.valid == rhs.valid && lhs.position == rhs.position && lhs.normal == rhs.normal
+                        lhs.position == rhs.position && lhs.normal == rhs.normal
                         && lhs.shadingNormal == rhs.shadingNormal && lhs.outgoing == rhs.outgoing
                         && lhs.dpdu == rhs.dpdu && lhs.uvCoordinates == rhs.uvCoordinates
                         && lhs.faceIndex == rhs.faceIndex && lhs.areaLight == rhs.areaLight

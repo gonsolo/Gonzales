@@ -159,7 +159,6 @@ struct Sphere: Shape {
 
                 let uvCoordinates = Point2f()
                 let localInteraction = SurfaceInteraction(
-                        valid: true,
                         position: pHit,
                         normal: normal,
                         shadingNormal: normal,
