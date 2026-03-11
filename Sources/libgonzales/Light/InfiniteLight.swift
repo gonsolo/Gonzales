@@ -120,7 +120,8 @@ struct InfiniteLight {
 }
 
 
-func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
+extension InfiniteLight {
+        static func create(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
         -> InfiniteLight {
         guard let mapname = try parameters.findString(called: "filename") else {
                 let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
@@ -134,4 +135,5 @@ func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionar
         }
         let texture = try getTextureFrom(name: mapname, type: "color", sceneDirectory: sceneDirectory)
         return InfiniteLight(lightToWorld: lightToWorld, brightness: white, texture: texture)
+}
 }

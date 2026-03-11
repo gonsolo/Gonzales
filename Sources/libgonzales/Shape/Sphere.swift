@@ -183,7 +183,9 @@ struct Sphere: Shape {
         let radius: FloatX
 }
 
-func createSphere(objectToWorld: Transform, parameters: ParameterDictionary) throws -> ShapeType {
+extension Sphere {
+        static func create(objectToWorld: Transform, parameters: ParameterDictionary) throws -> ShapeType {
         let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
         return .sphere(Sphere(radius: radius, objectToWorld: objectToWorld))
+}
 }

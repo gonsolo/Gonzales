@@ -634,7 +634,8 @@ extension Triangle {
 }
 
 
-func createTriangleMeshShape(
+extension Triangle {
+        static func createFromParameters(
         objectToWorld: Transform,
         parameters: ParameterDictionary,
         triangleMeshBuilder: TriangleMeshBuilder
@@ -659,10 +660,12 @@ func createTriangleMeshShape(
                 uvs: uvs,
                 faceIndices: faceIndices)
 
-        return try createTriangleMesh(
+        return try createMesh(
                 objectToWorld: objectToWorld,
                 meshData: meshData,
                 triangleMeshBuilder: triangleMeshBuilder)
+}
+
 }
 
 struct MeshData {
@@ -673,8 +676,8 @@ struct MeshData {
         let faceIndices: [Int]
 }
 
-
-func createTriangleMesh(
+extension Triangle {
+        static func createMesh(
         objectToWorld: Transform,
         meshData: MeshData,
         triangleMeshBuilder: TriangleMeshBuilder
@@ -706,4 +709,5 @@ func createTriangleMesh(
                                         triangleMeshes: triangleMeshes)))
         }
         return triangles
+}
 }

@@ -33,7 +33,8 @@ struct PointLight {
         let intensity: RgbSpectrum
 }
 
-func createPointLight(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight {
+extension PointLight {
+        static func create(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight {
         guard let intensity = try parameters.findSpectrum(name: "I") as? RgbSpectrum else {
                 throw ParameterError.missing(parameter: "I", function: #function)
         }
@@ -42,4 +43,5 @@ func createPointLight(lightToWorld: Transform, parameters: ParameterDictionary) 
                 throw ParameterError.missing(parameter: "scale", function: #function)
         }
         return PointLight(lightToWorld: lightToWorld, intensity: scale * intensity)
+}
 }

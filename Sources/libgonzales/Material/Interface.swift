@@ -6,6 +6,8 @@ struct Interface {
         }
 }
 
-func createInterface(parameters _: ParameterDictionary) throws -> Interface {
+extension Interface {
+        static func create(parameters _: ParameterDictionary) throws -> Interface {
         return Interface()
+}
 }

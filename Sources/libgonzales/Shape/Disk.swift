@@ -52,8 +52,10 @@ struct Disk: Shape {
         let radius: FloatX
 }
 
-func createDiskShape(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [ShapeType] {
+extension Disk {
+        static func create(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [ShapeType] {
         let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
         let shape = ShapeType.disk(Disk(objectToWorld: objectToWorld, radius: radius))
         return [shape]
+}
 }

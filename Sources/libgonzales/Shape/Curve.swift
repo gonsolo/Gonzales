@@ -388,7 +388,8 @@ struct CurveCommon {
 }
 
 
-func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [ShapeType] {
+extension Curve {
+        static func create(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [ShapeType] {
         let common = CurveCommon(points: points, width: width)
         // The default splitdepth in pbrt is 3 which would make this 8 segments (1 << splitDepth).
         // Let's use 4 for the time being to save a little bit of memory.
@@ -406,7 +407,7 @@ func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats)
 }
 
 
-func createBVHCurveShape(
+        static func createBVH(
         controlPoints: [Point],
         widths: (Float, Float),
         objectToWorld: Transform,
@@ -436,7 +437,7 @@ func createBVHCurveShape(
                 let width1 = lerp(
                         with: FloatX(segment + 1) / FloatX(numberOfSegments), between: widths.0,
                         and: widths.1)
-                let curve = createCurve(
+                let curve = Curve.create(
                         objectToWorld: objectToWorld,
                         points: bezierPoints,
                         width: (width0, width1))
@@ -447,7 +448,7 @@ func createBVHCurveShape(
 }
 
 
-func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary, acceleratorName: String) throws -> [ShapeType] {
+        static func createShape(objectToWorld: Transform, parameters: ParameterDictionary, acceleratorName: String) throws -> [ShapeType] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")
         let width = try parameters.findOneFloatX(called: "width", else: 0.5)
@@ -459,13 +460,13 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary,
         var curves = [ShapeType]()
         switch acceleratorName {
         case "bvh":
-                curves = createBVHCurveShape(
+                curves = Curve.createBVH(
                         controlPoints: controlPoints,
                         widths: (width0, width1),
                         objectToWorld: objectToWorld,
                         degree: degree)
         case "embree":
-                curves = createEmbreeCurveShape(
+                curves = EmbreeCurve.create(
                         controlPoints: controlPoints,
                         widths: (width0, width1),
                         objectToWorld: objectToWorld
@@ -474,4 +475,5 @@ func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary,
                 throw CurveError.accelerator
         }
         return curves
+}
 }

@@ -22,18 +22,20 @@ struct Conductor {
 }
 
 
-func createConductor(parameters: ParameterDictionary) throws -> Conductor {
-        let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
-        let extinctionParameter = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
-        // let remapRoughness = try findOneBool(called: "remaproughness", else: false)
-        let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
-        let uRoughness =
-                try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
-        let vRoughness =
-                try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
-        let roughness = (uRoughness, vRoughness)
-
-        let etaRgb = eta.asRgb()
-        let extinctionRgb = extinctionParameter.asRgb()
-        return Conductor(eta: etaRgb, extinction: extinctionRgb, roughness: roughness)
+extension Conductor {
+        static func create(parameters: ParameterDictionary) throws -> Conductor {
+                let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
+                let extinctionParameter = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
+                // let remapRoughness = try findOneBool(called: "remaproughness", else: false)
+                let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
+                let uRoughness =
+                        try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
+                let vRoughness =
+                        try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
+                let roughness = (uRoughness, vRoughness)
+        
+                let etaRgb = eta.asRgb()
+                let extinctionRgb = extinctionParameter.asRgb()
+                return Conductor(eta: etaRgb, extinction: extinctionRgb, roughness: roughness)
+}
 }

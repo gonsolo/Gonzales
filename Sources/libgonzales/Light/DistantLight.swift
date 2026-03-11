@@ -34,7 +34,8 @@ struct DistantLight {
         let worldRadius: FloatX = 100.0
 }
 
-func createDistantLight(lightToWorld: Transform, parameters: ParameterDictionary) throws
+extension DistantLight {
+        static func create(lightToWorld: Transform, parameters: ParameterDictionary) throws
         -> DistantLight {
         let from = try parameters.findOnePoint(name: "from", else: origin)
         let target = try parameters.findOnePoint(name: "to", else: origin)
@@ -44,4 +45,5 @@ func createDistantLight(lightToWorld: Transform, parameters: ParameterDictionary
         let direction: Vector = from - target
         return DistantLight(
                 lightToWorld: lightToWorld, brightness: brightness, direction: direction)
+}
 }

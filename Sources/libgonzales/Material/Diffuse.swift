@@ -25,7 +25,8 @@ struct Diffuse {
 }
 
 
-func createDiffuse(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Diffuse {
+extension Diffuse {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {
                 let texture: Texture =
@@ -42,4 +43,5 @@ func createDiffuse(parameters: ParameterDictionary, textures: [String: Texture])
                 return Diffuse(reflectance: texture)
         }
         throw DiffuseError.noReflectance
+}
 }

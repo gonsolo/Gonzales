@@ -37,7 +37,8 @@ struct CoatedDiffuse {
 }
 
 
-func createCoatedDiffuse(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
+extension CoatedDiffuse {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
         let uRoughness =
@@ -52,4 +53,5 @@ func createCoatedDiffuse(parameters: ParameterDictionary, textures: [String: Tex
                 reflectance: reflectance,
                 refractiveIndex: refractiveIndex,
                 remapRoughness: remapRoughness)
+}
 }

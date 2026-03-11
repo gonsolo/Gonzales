@@ -16,7 +16,8 @@ struct DiffuseTransmission {
 }
 
 
-func createDiffuseTransmission(parameters: ParameterDictionary, textures: [String: Texture]) throws -> DiffuseTransmission {
+extension DiffuseTransmission {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> DiffuseTransmission {
         let reflectance = try parameters.findRgbSpectrumTexture(
                 name: "reflectance",
                 textures: textures,
@@ -30,4 +31,5 @@ func createDiffuseTransmission(parameters: ParameterDictionary, textures: [Strin
                 reflectance: reflectance,
                 transmittance: transmittance,
                 scale: scale)
+}
 }

@@ -29,7 +29,8 @@ struct Dielectric {
 }
 
 
-func createDielectric(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Dielectric {
+extension Dielectric {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Dielectric {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
         let uRoughness =
@@ -42,4 +43,5 @@ func createDielectric(parameters: ParameterDictionary, textures: [String: Textur
                 refractiveIndex: refractiveIndex,
                 roughness: roughness,
                 remapRoughness: remapRoughness)
+}
 }

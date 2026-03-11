@@ -73,7 +73,8 @@ struct EmbreeCurve: Shape {
 }
 
 
-func createEmbreeCurveShape(
+extension EmbreeCurve {
+        static func create(
         controlPoints: [Point],
         widths: (Float, Float),
         objectToWorld: Transform
@@ -85,4 +86,5 @@ func createEmbreeCurveShape(
                 widths: widths)
         let shape = ShapeType.embreeCurve(curve)
         return [shape]
+}
 }

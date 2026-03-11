@@ -509,19 +509,19 @@ extension SceneDescription {
                 throws -> Light {
                 switch name {
                 case "distant":
-                        let distantLight = try createDistantLight(
+                        let distantLight = try DistantLight.create(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
                         return Light.distant(distantLight)
                 case "infinite":
-                        let infiniteLight = try createInfiniteLight(
+                        let infiniteLight = try InfiniteLight.create(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters,
                                 sceneDirectory: renderOptions.sceneDirectory)
                         // immortalize(infiniteLight)
                         return Light.infinite(infiniteLight)
                 case "point":
-                        let pointLight = try createPointLight(
+                        let pointLight = try PointLight.create(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters)
                         return Light.point(pointLight)
@@ -541,35 +541,35 @@ extension SceneDescription {
                 case "bilinearmesh":
                         return []  // Ignore for now
                 case "curve":
-                        return try createCurveShape(
+                        return try Curve.createShape(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters,
                                 acceleratorName: acceleratorName)
                 case "cylinder":
                         return []  // Ignore for now
                 case "disk":
-                        return try createDiskShape(
+                        return try Disk.create(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters)
                 case "loopsubdiv":
-                        return try createTriangleMeshShape(
+                        return try Triangle.createFromParameters(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters,
                                 triangleMeshBuilder: triangleMeshBuilder)
                 case "plymesh":
-                        return try createPlyMesh(
+                        return try PlyMesh.create(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters,
                                 sceneDirectory: renderOptions.sceneDirectory,
                                 triangleMeshBuilder: triangleMeshBuilder)
                 case "sphere":
                         return [
-                                try createSphere(
+                                try Sphere.create(
                                         objectToWorld: objectToWorld,
                                         parameters: parameters)
                         ]
                 case "trianglemesh":
-                        return try createTriangleMeshShape(
+                        return try Triangle.createFromParameters(
                                 objectToWorld: objectToWorld,
                                 parameters: parameters,
                                 triangleMeshBuilder: triangleMeshBuilder)

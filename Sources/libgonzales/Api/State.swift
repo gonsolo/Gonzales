@@ -29,7 +29,7 @@ struct State {
                 print("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
                 parameters["reflectance"] = [gray]
-                let diffuse = try createDiffuse(parameters: parameters, textures: textures)
+                let diffuse = try Diffuse.create(parameters: parameters, textures: textures)
                 return Material.diffuse(diffuse)
         }
 
@@ -39,29 +39,29 @@ struct State {
                 var material: Material
                 switch type {
                 case "coateddiffuse":
-                        let coatedDiffuse = try createCoatedDiffuse(parameters: parameters, textures: textures)
+                        let coatedDiffuse = try CoatedDiffuse.create(parameters: parameters, textures: textures)
                         material = Material.coatedDiffuse(coatedDiffuse)
                 // coatedconductor missing
                 case "conductor":
-                        let conductor = try createConductor(parameters: parameters)
+                        let conductor = try Conductor.create(parameters: parameters)
                         material = Material.conductor(conductor)
                 case "dielectric":
-                        let dielectric = try createDielectric(parameters: parameters, textures: textures)
+                        let dielectric = try Dielectric.create(parameters: parameters, textures: textures)
                         material = Material.dielectric(dielectric)
                 case "diffuse":
-                        let diffuse = try createDiffuse(parameters: parameters, textures: textures)
+                        let diffuse = try Diffuse.create(parameters: parameters, textures: textures)
                         material = Material.diffuse(diffuse)
                 case "diffusetransmission":
-                        let diffuseTransmission = try createDiffuseTransmission(parameters: parameters, textures: textures)
+                        let diffuseTransmission = try DiffuseTransmission.create(parameters: parameters, textures: textures)
                         material = Material.diffuseTransmission(diffuseTransmission)
                 case "hair":
-                        let hair = try createHair(parameters: parameters, textures: textures)
+                        let hair = try Hair.create(parameters: parameters, textures: textures)
                         material = Material.hair(hair)
                 case "interface":
-                        let interface = try createInterface(parameters: parameters)
+                        let interface = try Interface.create(parameters: parameters)
                         material = Material.interface(interface)
                 case "measured":
-                        let measured = try createMeasured(parameters: parameters)
+                        let measured = try Measured.create(parameters: parameters)
                         material = Material.measured(measured)
                 // mix missing
                 // subsurface missing

@@ -9,6 +9,8 @@ struct Measured {
         }
 }
 
-func createMeasured(parameters _: ParameterDictionary) throws -> Measured {
+extension Measured {
+        static func create(parameters _: ParameterDictionary) throws -> Measured {
         return Measured()
+}
 }
