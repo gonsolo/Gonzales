@@ -50,7 +50,7 @@ enum Light: Sendable {
                 }
         }
 
-        @MainActor
+
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 switch self {
                 case .area(let areaLight):

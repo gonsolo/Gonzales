@@ -1,6 +1,6 @@
 @preconcurrency import Foundation
 
-@MainActor
+
 func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable], acceleratorName: String) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
@@ -13,7 +13,7 @@ func makeAccelerator(scene: Scene, primitives: [any Boundable & Intersectable], 
         }
 }
 
-@MainActor
+
 func lookAtTransform(eye: Point, target: Point, upVector: Vector) throws -> Transform {
         let dir: Vector = normalized(target - eye)
         var upVector = normalized(upVector)
@@ -71,7 +71,7 @@ public class SceneDescription {
                         reflectance: Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
 
-        @MainActor
+
         public init(renderOptions: RenderOptions) {
                 self.options = RenderConfiguration()
                 self.renderOptions = renderOptions
@@ -82,13 +82,13 @@ public class SceneDescription {
 
 extension SceneDescription {
 
-        @MainActor
+
         func attributeBegin() throws {
                 try transformBegin()
                 states.append(state)
         }
 
-        @MainActor
+
         func attributeEnd() throws {
                 try transformEnd()
                 guard let last = states.popLast() else {
@@ -97,7 +97,7 @@ extension SceneDescription {
                 state = last
         }
 
-        @MainActor
+
         func camera(name _: String, parameters: ParameterDictionary) throws {
                 options.cameraName = "perspective"
                 options.cameraParameters = parameters
@@ -105,12 +105,12 @@ extension SceneDescription {
                 namedCoordinateSystems["camera"] = options.cameraToWorld
         }
 
-        @MainActor
+
         func coordinateSystem(name: String) {
                 namedCoordinateSystems[name] = currentTransform
         }
 
-        @MainActor
+
         func coordSysTransform(name: String) throws {
                 guard let transform = namedCoordinateSystems[name] else {
                         throw SceneDescriptionError.coordSysTransform
@@ -118,7 +118,7 @@ extension SceneDescription {
                 currentTransform = transform
         }
 
-        @MainActor
+
         func concatTransform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
@@ -128,7 +128,7 @@ extension SceneDescription {
                 currentTransform *= Transform(matrix: matrix)
         }
 
-        @MainActor
+
         func film(name: String, parameters: ParameterDictionary) throws {
                 let fileName = try parameters.findString(called: "filename") ?? "gonzales.exr"
                 guard fileName.hasSuffix("exr") else {
@@ -138,17 +138,17 @@ extension SceneDescription {
                 options.filmParameters = parameters
         }
 
-        @MainActor
+
         func identity() {
                 currentTransform = Transform()
         }
 
-        @MainActor
+
         func importFile(file sceneName: String) async throws {
                 try await include(file: sceneName, render: false)
         }
 
-        @MainActor
+
         public func include(file sceneName: String, render: Bool) async throws {
                 print(sceneName)
                 do {
@@ -170,7 +170,7 @@ extension SceneDescription {
                 }
         }
 
-        @MainActor
+
         func areaLight(name: String, parameters: ParameterDictionary) throws {
                 guard name == "diffuse" || name == "area" else {
                         throw SceneDescriptionError.areaLight
@@ -179,7 +179,7 @@ extension SceneDescription {
                 state.areaLightParameters = parameters
         }
 
-        @MainActor
+
         func accelerator(name: String, parameters _: ParameterDictionary) throws {
                 switch name {
                 case "bvh":
@@ -193,13 +193,13 @@ extension SceneDescription {
                 }
         }
 
-        @MainActor
+
         func integrator(name: String, parameters: ParameterDictionary) throws {
                 options.integratorName = name
                 options.integratorParameters = parameters
         }
 
-        @MainActor
+
         func lightSource(name: String, parameters: ParameterDictionary) throws {
                 let light = try makeLight(
                         name: name,
@@ -208,19 +208,19 @@ extension SceneDescription {
                 options.lights.append(light)
         }
 
-        @MainActor
+
         func lookAt(eye: Point, target: Point, upVector: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, target: target, upVector: upVector)
                 currentTransform *= transform
         }
 
-        @MainActor
+
         func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
                 let type = try parameters.findString(called: "type") ?? "defaultMaterial"
                 state.namedMaterials[name] = UninstancedMaterial(type: type, parameters: parameters)
         }
 
-        @MainActor
+
         func makeNamedMedium(name: String, parameters: ParameterDictionary) throws {
                 guard let type = try parameters.findString(called: "type") else {
                         throw SceneDescriptionError.namedMedium
@@ -247,51 +247,51 @@ extension SceneDescription {
                 }
         }
 
-        @MainActor
+
         func material(type: String, parameters: ParameterDictionary) throws {
                 state.currentMaterial = UninstancedMaterial(type: type, parameters: parameters)
         }
 
-        @MainActor
+
         func mediumInterface(interior: String, exterior: String) {
                 state.currentMediumInterface = MediumInterface(interior: interior, exterior: exterior)
         }
 
-        @MainActor
+
         func namedMaterial(name: String) throws {
                 state.currentNamedMaterial = name
         }
 
-        @MainActor
+
         func objectBegin(name: String) throws {
                 try attributeBegin()
                 state.objectName = name
         }
 
-        @MainActor
+
         func objectEnd() throws {
                 try attributeEnd()
                 state.objectName = nil
         }
 
-        @MainActor
+
         func objectInstance(name _: String) async throws {
                 unimplemented()
         }
 
-        @MainActor
+
         func sampler(name: String, parameters: ParameterDictionary) {
                 options.samplerName = name
                 options.samplerParameters = parameters
         }
 
-        @MainActor
+
         func pixelFilter(name: String, parameters: ParameterDictionary) {
                 options.filterName = name
                 options.filterParameters = parameters
         }
 
-        @MainActor
+
         func shape(name: String, parameters: ParameterDictionary) throws {
                 var areaLights = [Light]()
                 var prims = [any Boundable & Intersectable]()
@@ -353,7 +353,7 @@ extension SceneDescription {
                 }
         }
 
-        @MainActor
+
         func transform(values: [FloatX]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
@@ -363,12 +363,12 @@ extension SceneDescription {
                 currentTransform = Transform(matrix: matrix)
         }
 
-        @MainActor
+
         func transformBegin() throws {
                 transforms.append(currentTransform)
         }
 
-        @MainActor
+
         func transformEnd() throws {
                 guard let last = transforms.popLast() else {
                         throw SceneDescriptionError.transformsEmpty
@@ -376,7 +376,7 @@ extension SceneDescription {
                 currentTransform = last
         }
 
-        @MainActor
+
         func scale(x: FloatX, y: FloatX, z: FloatX) throws {
                 let matrix = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
@@ -387,13 +387,13 @@ extension SceneDescription {
         }
 
         // Not really part of PBRT API
-        @MainActor
+
         public func start() {
                 readTimer = Timer("Reading...", newline: false)
                 fflush(stdout)
         }
 
-        @MainActor
+
         func rotate(by angle: FloatX, around axis: Vector) throws {
                 let normalizedAxis = normalized(axis)
                 let theta = radians(deg: angle)
@@ -416,7 +416,7 @@ extension SceneDescription {
                 currentTransform *= Transform(matrix: matrix)
         }
 
-        @MainActor
+
         func texture(
                 name: String,
                 type: String,
@@ -467,7 +467,7 @@ extension SceneDescription {
                 state.textures[name] = texture
         }
 
-        @MainActor
+
         func translate(amount: Vector) throws {
                 let matrix = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: amount.x,
@@ -478,14 +478,14 @@ extension SceneDescription {
                 currentTransform *= translation
         }
 
-        @MainActor
+
         public func worldBegin() {
                 currentTransform = Transform()
         }
 
 
 
-        @MainActor
+
         func worldEnd() async throws {
                 print("Reading: \(readTimer?.elapsed ?? "unknown")")
                 if renderOptions.justParse { return }
@@ -498,7 +498,7 @@ extension SceneDescription {
                 self.options = RenderConfiguration()
         }
 
-        @MainActor
+
         private func makeLight(
                 name: String,
                 parameters: ParameterDictionary,
@@ -528,7 +528,7 @@ extension SceneDescription {
                 }
         }
 
-        @MainActor
+
         private func makeShapes(
                 name: String,
                 objectToWorld: Transform,
@@ -574,7 +574,7 @@ extension SceneDescription {
         }
 }
 
-@MainActor
+
 func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -> Texture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name

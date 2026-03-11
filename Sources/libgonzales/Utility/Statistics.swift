@@ -1,6 +1,6 @@
 struct Statistics {
 
-        @MainActor
+
         func report() {
                 print("Statistics:")
                 // BoundingHierarchyBuilder.statistics()
@@ -11,5 +11,5 @@ struct Statistics {
         }
 }
 
-@MainActor
-var statistics = Statistics()
+
+nonisolated(unsafe) var statistics = Statistics()

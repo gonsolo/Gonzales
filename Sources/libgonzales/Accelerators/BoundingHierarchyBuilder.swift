@@ -27,23 +27,23 @@ final class BoundingHierarchyBuilder {
 
         private let primitivesPerNode = 4
 
-        @MainActor
-        private static var interiorNodes = 0
 
-        @MainActor
-        private static var leafNodes = 0
+        nonisolated(unsafe) private static var interiorNodes = 0
 
-        @MainActor
-        private static var totalPrimitives = 0
 
-        @MainActor
-        private static var callsToPartition = 0
+        nonisolated(unsafe) private static var leafNodes = 0
 
-        @MainActor
-        private static var bhNodes = 0
 
-        @MainActor
-        private static var bhPrimitives = 0
+        nonisolated(unsafe) private static var totalPrimitives = 0
+
+
+        nonisolated(unsafe) private static var callsToPartition = 0
+
+
+        nonisolated(unsafe) private static var bhNodes = 0
+
+
+        nonisolated(unsafe) private static var bhPrimitives = 0
 
         private var totalNodes = 0
         private var offsetCounter = 0
@@ -52,7 +52,7 @@ final class BoundingHierarchyBuilder {
 
         var nodes = [BoundingHierarchyNode]()
 
-        @MainActor
+
         internal init(scene: Scene, primitives: [any Boundable]) async {
                 self.cachedPrimitives = await primitives.enumerated().asyncMap { index, primitive in
                         let bound = await primitive.worldBound(scene: scene)
@@ -65,7 +65,7 @@ final class BoundingHierarchyBuilder {
 
 extension BoundingHierarchyBuilder {
 
-        @MainActor
+
         internal func getSortedPrimitivesAndNodes() throws -> (
                 [IntersectablePrimitive], [BoundingHierarchyNode]
         ) {
@@ -90,13 +90,13 @@ extension BoundingHierarchyBuilder {
                 return (sortedPrimitives, nodes)
         }
 
-        @MainActor
+
         internal func getBoundingHierarchy() throws -> BoundingHierarchy {
                 let (sortedPrimitives, nodes) = try getSortedPrimitivesAndNodes()
                 return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
 
-        @MainActor
+
         internal static func statistics() {
                 print("  BVH:")
                 print("    Interior nodes:\t\t\t\t\t\t\t\(interiorNodes)")
@@ -132,14 +132,14 @@ extension BoundingHierarchyBuilder {
                 }
         }
 
-        @MainActor
+
         private func buildHierarchy() {
                 if cachedPrimitives.isEmpty { return }
                 _ = build(range: 0..<cachedPrimitives.count)
                 // printNodes()
         }
 
-        @MainActor
+
         private func growNodes(counter: Int) {
                 let missing = counter - nodes.count + 1
                 if missing > 0 {
@@ -148,7 +148,7 @@ extension BoundingHierarchyBuilder {
                 }
         }
 
-        @MainActor
+
         private func addLeafNode(
                 offset: Int,
                 bounds: Bounds3f,
@@ -202,13 +202,13 @@ extension BoundingHierarchyBuilder {
                 return (start, mid, end)
         }
 
-        @MainActor
+
         struct BVHSplitBucket {
                 var count = 0
                 var bounds = Bounds3f()
         }
 
-        @MainActor
+
         private func splitSurfaceAreaHeuristic(
                 bounds: Bounds3f,
                 centroidBounds: Bounds3f,
@@ -293,7 +293,7 @@ extension BoundingHierarchyBuilder {
                 return (start, mid, end, Bounds3f())
         }
 
-        @MainActor
+
         private func build(range: Range<Int>) -> Bounds3f {
                 let counter = totalNodes
                 totalNodes += 1
@@ -364,7 +364,7 @@ extension BoundingHierarchyBuilder {
                 return combinedBounds
         }
 
-        @MainActor
+
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
                 growNodes(counter: counter)
                 nodes[counter] = BoundingHierarchyNode(bounds: combinedBounds, offset: beforeRight, axis: dim)

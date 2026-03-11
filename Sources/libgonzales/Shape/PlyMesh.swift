@@ -39,7 +39,7 @@ struct PlyMesh {
         var listBits = 8
         var endianness = Endianness.little
 
-        @MainActor
+
         init(from data: Data) throws {
                 try readPlyHeader(from: data)
                 try readVertices(from: data)
@@ -319,7 +319,7 @@ extension PlyMesh {
                 }
         }
 
-        @MainActor
+
         mutating func readFaces(from data: Data) throws {
                 for _ in 0..<plyHeader.faceCount {
                         var numberIndices: UInt32 = 0
@@ -363,7 +363,7 @@ extension PlyMesh {
         }
 }
 
-@MainActor
+
 func createPlyMesh(objectToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
         -> [ShapeType] {
         let relativeFileName = try parameters.findString(called: "filename") ?? ""

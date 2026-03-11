@@ -32,7 +32,7 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 interaction = transform * interaction
         }
 
-        @MainActor
+
         func worldBound(scene: Scene) -> Bounds3f {
                 let bound = transform * accelerator.worldBound(scene: scene)
                 return bound

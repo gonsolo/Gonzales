@@ -1,7 +1,7 @@
 import Foundation  // sqrt, log2
 
-@MainActor
-var numberOfCurves = 0
+
+nonisolated(unsafe) var numberOfCurves = 0
 
 enum CurveError: Error {
         case index
@@ -67,7 +67,7 @@ private struct CurveIntersectionState {
 
 struct Curve: Shape {
 
-        @MainActor
+
         init(objectToWorld: Transform, common: CurveCommon, uRange: TwoFloats) {
                 self.common = common
                 self.uRange = uRange
@@ -374,7 +374,7 @@ struct Curve: Shape {
                 return "Curve"
         }
 
-        @MainActor
+
         static func statistics() {
                 print("  Number of curves:\t\t\t\t\t\t\t\(numberOfCurves)")
         }
@@ -394,7 +394,7 @@ struct CurveCommon {
         let width: TwoFloats
 }
 
-@MainActor
+
 func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [ShapeType] {
         let common = CurveCommon(points: points, width: width)
         // The default splitdepth in pbrt is 3 which would make this 8 segments (1 << splitDepth).
@@ -412,7 +412,7 @@ func createCurve(objectToWorld: Transform, points: FourPoints, width: TwoFloats)
         return segments
 }
 
-@MainActor
+
 func createBVHCurveShape(
         controlPoints: [Point],
         widths: (Float, Float),
@@ -453,7 +453,7 @@ func createBVHCurveShape(
         return curves
 }
 
-@MainActor
+
 func createCurveShape(objectToWorld: Transform, parameters: ParameterDictionary, acceleratorName: String) throws -> [ShapeType] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")

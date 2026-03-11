@@ -9,7 +9,7 @@ struct ImmutableState {
 
 struct State {
 
-        @MainActor
+
         init(ptexMemory: Int) {
                 namedMaterials = [String: UninstancedMaterial]()
                 currentNamedMaterial = "None"
@@ -24,7 +24,7 @@ struct State {
                 ptexCache = PtexCache(ptexMemory: ptexMemory)
         }
 
-        @MainActor
+
         private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
                 print("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
@@ -33,7 +33,7 @@ struct State {
                 return Material.diffuse(diffuse)
         }
 
-        @MainActor
+
         func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
 
                 var material: Material
@@ -72,7 +72,7 @@ struct State {
                 return material
         }
 
-        @MainActor
+
         func createMaterial(parameters: ParameterDictionary) throws -> Material {
                 var material: UninstancedMaterial!
                 if currentMaterial != nil {

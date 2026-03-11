@@ -137,8 +137,8 @@ struct TriangleMeshes {
         let meshes: [TriangleMesh]
 }
 
-@MainActor
-var triangleMeshBuilder = TriangleMeshBuilder()
+
+nonisolated(unsafe) var triangleMeshBuilder = TriangleMeshBuilder()
 
 struct TriangleIntersection {
         init() {
@@ -201,7 +201,7 @@ extension Triangle {
                 return String(number) + " bytes"
         }
 
-        @MainActor
+
         static func statistics() {
                 unimplemented()
         }
@@ -625,7 +625,7 @@ extension Triangle {
                 return (worldInteraction, pdf)
         }
 
-        @MainActor
+
         var description: String {
                 var descriptionString = "Triangle [ "
                 // let (p0, p1, p2) = getLocalPoints()
@@ -639,7 +639,7 @@ extension Triangle {
         }
 }
 
-@MainActor
+
 func createTriangleMeshShape(
         objectToWorld: Transform,
         parameters: ParameterDictionary
@@ -677,7 +677,7 @@ struct MeshData {
         let faceIndices: [Int]
 }
 
-@MainActor
+
 func createTriangleMesh(
         objectToWorld: Transform,
         meshData: MeshData

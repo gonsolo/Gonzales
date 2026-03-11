@@ -20,7 +20,7 @@ class RenderConfiguration {
         var primitives = [any Boundable & Intersectable]()
         var objects = ["": [any Boundable & Intersectable]()]
 
-        @MainActor
+
         func makeFilm(filter: any Filter, quick: Bool) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
                 var y = try filmParameters.findOneInt(called: "yresolution", else: 32)
@@ -74,7 +74,7 @@ class RenderConfiguration {
                 return filter
         }
 
-        @MainActor
+
         func makeCamera(quick: Bool) async throws -> PerspectiveCamera {
                 guard cameraName == "perspective" else { throw OptionError.camera }
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
@@ -121,7 +121,7 @@ class RenderConfiguration {
                 )
         }
 
-        @MainActor
+
         func makeIntegrator(sampler _: Sampler, accelerator: Accelerator, scene: Scene) throws
                 -> VolumePathIntegrator {
                 switch self.integratorName {
@@ -139,7 +139,7 @@ class RenderConfiguration {
                 return VolumePathIntegrator(maxDepth: maxDepth, accelerator: accelerator, scene: scene)
         }
 
-        @MainActor
+
         func makeSampler(film: Film, quick: Bool) throws -> Sampler {
                 switch samplerName {
                 case "sobol", "zsobol":
@@ -164,7 +164,7 @@ class RenderConfiguration {
                 objects.removeAll()
         }
 
-        @MainActor
+
         func makeRenderer(geometricPrimitives: [GeometricPrimitive], areaLights: [AreaLight], materials: [Material], acceleratorName: String, immutableState: ImmutableState, renderOptions: RenderOptions) async throws
                 -> some Renderer {
                 let camera = try await makeCamera(quick: renderOptions.quick)

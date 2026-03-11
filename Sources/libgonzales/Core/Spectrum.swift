@@ -130,8 +130,8 @@ let copperExtinctionCoefficients = PiecewiseLinearSpectrum(
                 4.430000, 4.619563, 4.817000, 5.034125, 5.260000, 5.485625, 5.717000,
         ])
 
-@MainActor
-var namedSpectra: [String: any Spectrum] = [
+
+nonisolated(unsafe) var namedSpectra: [String: any Spectrum] = [
         "metal-Ag-eta": silverRefractiveIndices,
         "metal-Ag-k": silverExtinctionCoefficients,
         "metal-Al-eta": aluminiumRefractiveIndices,

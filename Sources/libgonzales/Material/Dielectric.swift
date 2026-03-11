@@ -28,7 +28,7 @@ struct Dielectric {
         let remapRoughness: Bool
 }
 
-@MainActor
+
 func createDielectric(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Dielectric {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")

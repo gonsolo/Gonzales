@@ -1,6 +1,6 @@
 struct EmbreeCurve: Shape {
 
-        @MainActor
+
         init(
                 objectToWorld: Transform,
                 controlPoints: [Point],
@@ -73,7 +73,7 @@ struct EmbreeCurve: Shape {
         let widths: (Float, Float)
 }
 
-@MainActor
+
 func createEmbreeCurveShape(
         controlPoints: [Point],
         widths: (Float, Float),

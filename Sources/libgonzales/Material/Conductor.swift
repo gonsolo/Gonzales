@@ -21,7 +21,7 @@ struct Conductor {
         var roughness: (FloatX, FloatX)
 }
 
-@MainActor
+
 func createConductor(parameters: ParameterDictionary) throws -> Conductor {
         let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
         let extinctionParameter = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!

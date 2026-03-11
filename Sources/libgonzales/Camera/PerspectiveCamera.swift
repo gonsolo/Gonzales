@@ -1,9 +1,9 @@
-@MainActor
-var numberCameraRays = 0
+
+nonisolated(unsafe) var numberCameraRays = 0
 
 final class PerspectiveCamera: Camera, Transformable {
 
-        @MainActor
+
         init(
                 cameraToWorld: Transform,
                 screenWindow: Bounds2f,
@@ -51,7 +51,7 @@ final class PerspectiveCamera: Camera, Transformable {
                 return objectToWorld * ray
         }
 
-        @MainActor
+
         static func statistics() {
                 print("  Camera rays traced:\t\t\t\t\t\t\t\(numberCameraRays)")
         }

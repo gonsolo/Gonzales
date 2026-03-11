@@ -24,7 +24,7 @@ struct Diffuse {
         let reflectance: Texture
 }
 
-@MainActor
+
 func createDiffuse(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Diffuse {
         let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
         if !reflectanceTextureName.isEmpty {

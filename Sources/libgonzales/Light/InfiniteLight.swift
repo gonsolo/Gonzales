@@ -119,7 +119,7 @@ struct InfiniteLight {
         let texture: Texture
 }
 
-@MainActor
+
 func createInfiniteLight(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
         -> InfiniteLight {
         guard let mapname = try parameters.findString(called: "filename") else {

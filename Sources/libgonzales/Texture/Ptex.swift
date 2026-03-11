@@ -3,7 +3,7 @@ import ptexBridge
 
 struct PtexCache {
 
-        @MainActor
+
         init(ptexMemory: Int) {
                 initPtexCache(ptexMemory)
         }

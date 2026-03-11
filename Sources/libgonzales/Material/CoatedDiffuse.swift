@@ -36,7 +36,7 @@ struct CoatedDiffuse {
         var remapRoughness: Bool
 }
 
-@MainActor
+
 func createCoatedDiffuse(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
