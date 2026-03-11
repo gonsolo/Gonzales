@@ -463,12 +463,6 @@ extension Curve {
                         widths: (width0, width1),
                         objectToWorld: objectToWorld,
                         degree: degree)
-        case "embree":
-                curves = EmbreeCurve.create(
-                        controlPoints: controlPoints,
-                        widths: (width0, width1),
-                        objectToWorld: objectToWorld
-                )
         default:
                 throw CurveError.accelerator
         }

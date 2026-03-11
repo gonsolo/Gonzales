@@ -3,7 +3,6 @@ enum ShapeType: Shape {
         case sphere(Sphere)
         case disk(Disk)
         case curve(Curve)
-        case embreeCurve(EmbreeCurve)
 
         func getObjectToWorld(scene: Scene) -> Transform {
                 switch self {
@@ -15,8 +14,6 @@ enum ShapeType: Shape {
                         return disk.getObjectToWorld(scene: scene)
                 case .curve(let curve):
                         return curve.getObjectToWorld(scene: scene)
-                case .embreeCurve(let embreeCurve):
-                        return embreeCurve.getObjectToWorld(scene: scene)
                 }
         }
 
@@ -30,8 +27,6 @@ enum ShapeType: Shape {
                         return disk.objectBound(scene: scene)
                 case .curve(let curve):
                         return curve.objectBound(scene: scene)
-                case .embreeCurve(let embreeCurve):
-                        return embreeCurve.objectBound(scene: scene)
                 }
         }
 
@@ -45,8 +40,6 @@ enum ShapeType: Shape {
                         return disk.worldBound(scene: scene)
                 case .curve(let curve):
                         return curve.worldBound(scene: scene)
-                case .embreeCurve(let embreeCurve):
-                        return embreeCurve.worldBound(scene: scene)
                 }
         }
 
@@ -101,8 +94,6 @@ enum ShapeType: Shape {
                         try disk.intersect(scene: scene, ray: ray, tHit: &tHit)
                 case .curve(let curve):
                         try curve.intersect(scene: scene, ray: ray, tHit: &tHit)
-                case .embreeCurve(let embreeCurve):
-                        try embreeCurve.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 
@@ -122,9 +113,6 @@ enum ShapeType: Shape {
                         try disk.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 case .curve(let curve):
                         try curve.intersect(scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
-                case .embreeCurve(let embreeCurve):
-                        try embreeCurve.intersect(
-                                scene: scene, ray: ray, tHit: &tHit, interaction: &interaction)
                 }
         }
 
@@ -140,8 +128,6 @@ enum ShapeType: Shape {
                         return disk.sample(samples: samples, scene: scene)
                 case .curve(let curve):
                         return curve.sample(samples: samples, scene: scene)
-                case .embreeCurve(let embreeCurve):
-                        return embreeCurve.sample(samples: samples, scene: scene)
                 }
         }
 
@@ -155,8 +141,6 @@ enum ShapeType: Shape {
                         return disk.sample(point: point, samples: samples, scene: scene)
                 case .curve(let curve):
                         return curve.sample(point: point, samples: samples, scene: scene)
-                case .embreeCurve(let embreeCurve):
-                        return embreeCurve.sample(point: point, samples: samples, scene: scene)
                 }
         }
 
@@ -170,8 +154,6 @@ enum ShapeType: Shape {
                         return disk.area(scene: scene)
                 case .curve(let curve):
                         return curve.area(scene: scene)
-                case .embreeCurve(let embreeCurve):
-                        return embreeCurve.area(scene: scene)
                 }
         }
 
@@ -194,9 +176,6 @@ enum ShapeType: Shape {
                                 scene: scene, samplingDirection: direction, from: interaction)
                 case .curve(let curve):
                         return try curve.probabilityDensityFor(
-                                scene: scene, samplingDirection: direction, from: interaction)
-                case .embreeCurve(let embreeCurve):
-                        return try embreeCurve.probabilityDensityFor(
                                 scene: scene, samplingDirection: direction, from: interaction)
                 }
         }
