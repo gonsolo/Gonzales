@@ -24,23 +24,8 @@ public struct Point3: Sendable, Three {
         }
 
         subscript(index: Int) -> FloatX {
-                get {
-                        switch index {
-                        case 0: return xyz.x
-                        case 1: return xyz.y
-                        case 2: return xyz.z
-                        default: return xyz.x
-                        }
-                }
-
-                set(newValue) {
-                        switch index {
-                        case 0: xyz.x = newValue
-                        case 1: xyz.y = newValue
-                        case 2: xyz.z = newValue
-                        default: xyz.x = newValue
-                        }
-                }
+                get { return xyz[index] }
+                set(newValue) { xyz[index] = newValue }
         }
 
         public var x: FloatX {
@@ -59,27 +44,39 @@ public struct Point3: Sendable, Three {
         }
 
         public static func * (mul: FloatX, point: Point3) -> Point3 {
-                return Point3(x: point.x * mul, y: point.y * mul, z: point.z * mul)
+                var p = Point3()
+                p.xyz = point.xyz * mul
+                return p
         }
 
         public static func / (point: Point3, divisor: FloatX) -> Point3 {
-                return Point3(x: point.x / divisor, y: point.y / divisor, z: point.z / divisor)
+                var p = Point3()
+                p.xyz = point.xyz / divisor
+                return p
         }
 
         public static func + (left: Point3, right: Point3) -> Point3 {
-                return Point3(x: left.x + right.x, y: left.y + right.y, z: left.z + right.z)
+                var p = Point3()
+                p.xyz = left.xyz + right.xyz
+                return p
         }
 
         public static func + (left: Point3, right: Vector3) -> Point3 {
-                return Point3(x: left.x + right.x, y: left.y + right.y, z: left.z + right.z)
+                var p = Point3()
+                p.xyz = left.xyz + right.xyz
+                return p
         }
 
         public static func - (left: Point3, right: Point3) -> Point3 {
-                return Point3(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
+                var p = Point3()
+                p.xyz = left.xyz - right.xyz
+                return p
         }
 
         public static func - (left: Point3, right: Point3) -> Vector3 {
-                return Vector3(x: left.x - right.x, y: left.y - right.y, z: left.z - right.z)
+                var v = Vector3()
+                v.xyz = left.xyz - right.xyz
+                return v
         }
 
         var xyz: SIMD4<FloatX>

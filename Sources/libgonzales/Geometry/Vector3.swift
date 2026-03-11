@@ -21,22 +21,8 @@ public struct Vector3: Sendable, Three {
         }
 
         subscript(index: Int) -> FloatX {
-                get {
-                        switch index {
-                        case 0: return x
-                        case 1: return y
-                        case 2: return z
-                        default: return x
-                        }
-                }
-                set(newValue) {
-                        switch index {
-                        case 0: x = newValue
-                        case 1: y = newValue
-                        case 2: z = newValue
-                        default: x = newValue
-                        }
-                }
+                get { return xyz[index] }
+                set(newValue) { xyz[index] = newValue }
         }
 
         var isNaN: Bool {
@@ -69,11 +55,69 @@ extension Vector3 {
         init(point: Point3) {
                 self.init(x: point.x, y: point.y, z: point.z)
         }
-}
 
-extension Vector3 {
-        init(normal: Normal3) {
-                self.init(x: normal.x, y: normal.y, z: normal.z)
+        public static func + (left: Vector3, right: Vector3) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left.xyz + right.xyz
+                return v
+        }
+
+        public static func - (left: Vector3, right: Vector3) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left.xyz - right.xyz
+                return v
+        }
+
+        public static func * (left: Vector3, right: Vector3) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left.xyz * right.xyz
+                return v
+        }
+
+        public static func * (left: Vector3, right: FloatX) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left.xyz * right
+                return v
+        }
+
+        public static func * (left: FloatX, right: Vector3) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left * right.xyz
+                return v
+        }
+
+        public static func / (left: Vector3, right: FloatX) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left.xyz / right
+                return v
+        }
+
+        public static func / (left: Vector3, right: Vector3) -> Vector3 {
+                var v = Vector3()
+                v.xyz = left.xyz / right.xyz
+                return v
+        }
+
+        public static prefix func - (vector: Vector3) -> Vector3 {
+                var v = Vector3()
+                v.xyz = -vector.xyz
+                return v
+        }
+
+        public static func += (left: inout Vector3, right: Vector3) {
+                left.xyz += right.xyz
+        }
+
+        public static func -= (left: inout Vector3, right: Vector3) {
+                left.xyz -= right.xyz
+        }
+
+        public static func *= (left: inout Vector3, right: FloatX) {
+                left.xyz *= right
+        }
+
+        public static func /= (left: inout Vector3, right: FloatX) {
+                left.xyz /= right
         }
 }
 
