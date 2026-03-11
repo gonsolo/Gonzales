@@ -1,4 +1,4 @@
-public struct Vector3: Sendable, Three {
+public struct Vector3: Sendable, ThreeComponent {
 
         public init(x: FloatX, y: FloatX, z: FloatX) {
                 self.xyz = SIMD4<FloatX>(x, y, z, 1.0)

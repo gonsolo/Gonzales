@@ -1,7 +1,7 @@
 /// A type that provides the base for all types consisting of three
 /// values like points and normals.
 
-public protocol Three {
+public protocol ThreeComponent {
 
         associatedtype FloatType: FloatingPoint
 
@@ -12,99 +12,99 @@ public protocol Three {
         var z: FloatType { get set }
 }
 
-func lengthSquared<T: Three>(_ vector: T) -> T.FloatType {
+func lengthSquared<T: ThreeComponent>(_ vector: T) -> T.FloatType {
         return vector.x * vector.x + vector.y * vector.y + vector.z * vector.z
 }
 
-func length<T: Three>(_ vector: T) -> T.FloatType {
+func length<T: ThreeComponent>(_ vector: T) -> T.FloatType {
         return lengthSquared(vector).squareRoot()
 }
 
-func distanceSquared<T: Three>(_ left: T, _ right: T) -> T.FloatType {
+func distanceSquared<T: ThreeComponent>(_ left: T, _ right: T) -> T.FloatType {
         return lengthSquared(left - right)
 }
 
-func distance<T: Three>(_ left: T, _ right: T) -> T.FloatType {
+func distance<T: ThreeComponent>(_ left: T, _ right: T) -> T.FloatType {
         return distanceSquared(left, right).squareRoot()
 }
 
-prefix func - <T: Three>(vector: T) -> T {
+prefix func - <T: ThreeComponent>(vector: T) -> T {
         return T.init(x: -vector.x, y: -vector.y, z: -vector.z)
 }
 
-func / <T: Three>(vector: T, divisor: T.FloatType) -> T {
+func / <T: ThreeComponent>(vector: T, divisor: T.FloatType) -> T {
         return T.init(x: vector.x / divisor, y: vector.y / divisor, z: vector.z / divisor)
 }
 
-func / <T: Three>(vector: T, divisorVector: T) -> T {
+func / <T: ThreeComponent>(vector: T, divisorVector: T) -> T {
         return T.init(x: vector.x / divisorVector.x, y: vector.y / divisorVector.y, z: vector.z / divisorVector.z)
 }
 
-func * <T: Three>(left: T, right: T) -> T {
+func * <T: ThreeComponent>(left: T, right: T) -> T {
         return T.init(
                 x: left.x * right.x,
                 y: left.y * right.y,
                 z: left.z * right.z)
 }
 
-func + <T: Three>(left: T, right: T) -> T {
+func + <T: ThreeComponent>(left: T, right: T) -> T {
         return T.init(
                 x: left.x + right.x,
                 y: left.y + right.y,
                 z: left.z + right.z)
 }
 
-func - <T: Three>(left: T, right: T) -> T {
+func - <T: ThreeComponent>(left: T, right: T) -> T {
         return T.init(
                 x: left.x - right.x,
                 y: left.y - right.y,
                 z: left.z - right.z)
 }
 
-func * <T: Three>(left: T, right: T.FloatType) -> T {
+func * <T: ThreeComponent>(left: T, right: T.FloatType) -> T {
         return T.init(
                 x: left.x * right,
                 y: left.y * right,
                 z: left.z * right)
 }
 
-func * <T: Three>(left: T.FloatType, right: T) -> T {
+func * <T: ThreeComponent>(left: T.FloatType, right: T) -> T {
         return right * left
 }
 
-func += <T: Three>(left: inout T, right: T) {
+func += <T: ThreeComponent>(left: inout T, right: T) {
         left.x += right.x
         left.y += right.y
         left.z += right.z
 }
 
-func *= <T: Three>(left: inout T, right: T.FloatType) {
+func *= <T: ThreeComponent>(left: inout T, right: T.FloatType) {
         left.x *= right
         left.y *= right
         left.z *= right
 }
 
-func /= <T: Three>(left: inout T, right: T.FloatType) {
+func /= <T: ThreeComponent>(left: inout T, right: T.FloatType) {
         left.x /= right
         left.y /= right
         left.z /= right
 }
 
-func == <T: Three>(left: T, right: T) -> Bool {
+func == <T: ThreeComponent>(left: T, right: T) -> Bool {
         return left.x == right.x && left.y == right.y && left.z == right.z
 }
 
-func != <T: Three>(left: T, right: T) -> Bool {
+func != <T: ThreeComponent>(left: T, right: T) -> Bool {
         return !(left == right)
 }
 
-extension Three {
+extension ThreeComponent {
         public mutating func normalize() {
                 self = normalized(self)
         }
 }
 
-public func normalized<T: Three>(_ vector: T) -> T {
+public func normalized<T: ThreeComponent>(_ vector: T) -> T {
         var ret: T
         let len = length(vector)
         if len == 0 {
@@ -115,7 +115,7 @@ public func normalized<T: Three>(_ vector: T) -> T {
         return ret
 }
 
-public func cross<T: Three>(_ vectorA: T, _ vectorB: T) -> T
+public func cross<T: ThreeComponent>(_ vectorA: T, _ vectorB: T) -> T
 where T.FloatType: FloatingPoint {
 
         // Ensure all arithmetic operations (multiplication, subtraction) use the correct FloatType
@@ -127,10 +127,10 @@ where T.FloatType: FloatingPoint {
         return T(x: x, y: y, z: z)
 }
 
-func dot<T: Three>(_ vectorA: T, _ vectorB: T) -> T.FloatType {
+func dot<T: ThreeComponent>(_ vectorA: T, _ vectorB: T) -> T.FloatType {
         return vectorA.x * vectorB.x + vectorA.y * vectorB.y + vectorA.z * vectorB.z
 }
 
-func absDot<T: Three>(_ vectorA: T, _ vectorB: T) -> T.FloatType {
+func absDot<T: ThreeComponent>(_ vectorA: T, _ vectorB: T) -> T.FloatType {
         return abs(dot(vectorA, vectorB))
 }

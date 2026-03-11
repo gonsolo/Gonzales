@@ -139,7 +139,7 @@ let namedSpectra: [String: any Spectrum] = [
         "metal-Cu-k": copperExtinctionCoefficients,
 ]
 
-public struct BaseRgbSpectrum: Initializable, Sendable, Three {
+public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
 
         init() {
                 self.init(red: 0, green: 0, blue: 0)
@@ -169,7 +169,7 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
                 return red.isInfinite || green.isInfinite || blue.isInfinite
         }
 
-        // Convenience accessors for RgbSpectrum
+        // Convenience accessors
         var red: FloatType {
                 get { return x }
                 set { x = newValue }
@@ -201,76 +201,71 @@ public struct BaseRgbSpectrum: Initializable, Sendable, Three {
         var xyz: SIMD4<FloatX>
 }
 
-extension BaseRgbSpectrum: CustomStringConvertible {
+extension RgbSpectrum: CustomStringConvertible {
 
         public var description: String {
                 return "[ \(red) \(green) \(blue) ]"
         }
 }
 
-extension BaseRgbSpectrum {
+extension RgbSpectrum {
 
         var isBlack: Bool {
                 return red == 0 && green == 0 && blue == 0
         }
 }
 
-extension BaseRgbSpectrum {
+extension RgbSpectrum {
 
-        public static func * (mul: FloatX, spectrum: BaseRgbSpectrum) -> BaseRgbSpectrum {
-                return BaseRgbSpectrum(
-                        red: mul * spectrum.x,
-                        green: mul * spectrum.y,
-                        blue: mul * spectrum.z)
+        // MARK: - SIMD Arithmetic
+
+        public static func * (mul: FloatX, spectrum: RgbSpectrum) -> RgbSpectrum {
+                var result = RgbSpectrum()
+                result.xyz = mul * spectrum.xyz
+                return result
         }
 
-        public static func * (spectrum: BaseRgbSpectrum, mul: FloatX) -> BaseRgbSpectrum {
+        public static func * (spectrum: RgbSpectrum, mul: FloatX) -> RgbSpectrum {
                 return mul * spectrum
         }
 
-        public static func *= (left: inout BaseRgbSpectrum, right: BaseRgbSpectrum) {
-                left.x *= right.x
-                left.y *= right.y
-                left.z *= right.z
+        public static func *= (left: inout RgbSpectrum, right: RgbSpectrum) {
+                left.xyz *= right.xyz
         }
 
-        public static func + (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
-                return BaseRgbSpectrum(
-                        red: spectrum.red + value,
-                        green: spectrum.green + value,
-                        blue: spectrum.blue + value)
+        public static func + (spectrum: RgbSpectrum, value: FloatX) -> RgbSpectrum {
+                var result = RgbSpectrum()
+                result.xyz = spectrum.xyz + value
+                return result
         }
 
-        public static func - (spectrum: BaseRgbSpectrum, value: FloatX) -> BaseRgbSpectrum {
-                return BaseRgbSpectrum(
-                        red: spectrum.red - value,
-                        green: spectrum.green - value,
-                        blue: spectrum.blue - value)
+        public static func - (spectrum: RgbSpectrum, value: FloatX) -> RgbSpectrum {
+                var result = RgbSpectrum()
+                result.xyz = spectrum.xyz - value
+                return result
         }
 
         public static func / (
-                numerator: BaseRgbSpectrum,
-                denominator: BaseRgbSpectrum
-        ) -> BaseRgbSpectrum {
-                return BaseRgbSpectrum(
-                        red: numerator.red / denominator.red,
-                        green: numerator.green / denominator.green,
-                        blue: numerator.blue / denominator.blue)
+                numerator: RgbSpectrum,
+                denominator: RgbSpectrum
+        ) -> RgbSpectrum {
+                var result = RgbSpectrum()
+                result.xyz = numerator.xyz / denominator.xyz
+                return result
         }
 
-        public static func == (lhs: BaseRgbSpectrum, rhs: BaseRgbSpectrum) -> Bool {
+        public static func == (lhs: RgbSpectrum, rhs: RgbSpectrum) -> Bool {
                 return lhs.red == rhs.red && lhs.green == rhs.green && lhs.blue == rhs.blue
         }
 
-        public static func != (lhs: BaseRgbSpectrum, rhs: BaseRgbSpectrum) -> Bool {
+        public static func != (lhs: RgbSpectrum, rhs: RgbSpectrum) -> Bool {
                 return !(lhs == rhs)
         }
 
-        public func squareRoot() -> BaseRgbSpectrum {
-                return BaseRgbSpectrum(
-                        red: red.squareRoot(),
-                        green: green.squareRoot(),
-                        blue: blue.squareRoot())
+        public func squareRoot() -> RgbSpectrum {
+                var result = RgbSpectrum()
+                result.xyz = xyz.squareRoot()
+                return result
         }
 
         func average() -> FloatType {
@@ -302,10 +297,10 @@ extension BaseRgbSpectrum {
 
 }
 
-extension BaseRgbSpectrum {
+extension RgbSpectrum {
 
         func asRgb() -> RgbSpectrum {
-                return RgbSpectrum(red: FloatX(red), green: FloatX(green), blue: FloatX(blue))
+                return self
         }
 
         var luminance: FloatType {
@@ -316,17 +311,13 @@ extension BaseRgbSpectrum {
         }
 }
 
-extension BaseRgbSpectrum {
+extension RgbSpectrum {
 
         init(from normal: Normal3) {
                 let normal = normalized(normal)
                 self.init(red: abs(normal.x), green: abs(normal.y), blue: abs(normal.z))
         }
 }
-
-public typealias RgbSpectrum = BaseRgbSpectrum
-
-extension RgbSpectrum: Spectrum {}
 
 let black = RgbSpectrum(intensity: 0)
 let gray = RgbSpectrum(intensity: 0.5)

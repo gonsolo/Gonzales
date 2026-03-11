@@ -1,4 +1,4 @@
-public struct Point3: Sendable, Three {
+public struct Point3: Sendable, ThreeComponent {
 
         init() {
                 self.init(x: 0, y: 0, z: 0)
