@@ -41,7 +41,6 @@ struct Scene {
         }
 
         func getIntersectionData(
-                scene: Scene,
                 primId: PrimId,
                 ray: Ray,
                 tHit: inout FloatX,
@@ -54,17 +53,17 @@ struct Scene {
                                 meshIndex: primId.id1, number: primId.id2,
                                 triangleMeshes: meshes)
                         return try triangle.getIntersectionData(
-                                scene: scene, ray: ray, tHit: &tHit, data: &data)
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .geometricPrimitive:
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return try geometricPrimitive.getIntersectionData(
-                                scene: scene, ray: ray, tHit: &tHit, data: &data)
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .transformedPrimitive:
                         unimplemented()
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.getIntersectionData(
-                                scene: scene, ray: ray, tHit: &tHit, data: &data)
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 }
         }
 

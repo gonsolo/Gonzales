@@ -137,7 +137,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         var currentData = TriangleIntersection()
                         for index in 0..<node.count {
                                 let intersectionFound = try scene.getIntersectionData(
-                                        scene: scene,
                                         primId: hierarchy.primIds[node.offset + index],
                                         ray: ray,
                                         tHit: &tHit,
