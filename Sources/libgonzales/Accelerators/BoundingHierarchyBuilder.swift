@@ -289,7 +289,7 @@ extension BoundingHierarchyBuilder {
                 var start = 0
                 var mid = 0
                 var end = 0
-                var blaBounds = Bounds3f()
+                var sahLeafBounds = Bounds3f()
                 switch splitStrategy {
                 case .equal:
                         (start, mid, end) = splitEqual(
@@ -302,7 +302,7 @@ extension BoundingHierarchyBuilder {
                                 dimension: dim,
                                 range: range)
                 case .surfaceArea:
-                        (start, mid, end, blaBounds) = splitSurfaceAreaHeuristic(
+                        (start, mid, end, sahLeafBounds) = splitSurfaceAreaHeuristic(
                                 bounds: bounds,
                                 centroidBounds: centroidBounds,
                                 dimension: dim,
@@ -310,7 +310,7 @@ extension BoundingHierarchyBuilder {
                                 counter: counter)
                 }
                 if start == 0 && mid == 0 && end == 0 {
-                        return blaBounds
+                        return sahLeafBounds
                 }
 
                 let leftBounds = build(range: start..<mid)
