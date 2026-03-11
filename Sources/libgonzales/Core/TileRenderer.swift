@@ -143,6 +143,9 @@ struct TileRenderer: Renderer {
 
                                         return try await withCheckedThrowingContinuation { continuation in
 
+                                                // Use a custom DispatchQueue to avoid thread pool starvation in Swift concurrency.
+                                                // Long-running CPU-bound synchronous work in the rendering loops can block the
+                                                // global cooperative pool, preventing the progress reporter actor from running.
                                                 renderingQueue.async {
                                                         do {
                                                                 let samples = try self.renderTile(
