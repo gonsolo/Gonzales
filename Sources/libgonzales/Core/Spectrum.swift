@@ -33,7 +33,9 @@ struct PiecewiseLinearSpectrum: Spectrum {
 
 extension PiecewiseLinearSpectrum {
         static func * (_: Self, _: Self) -> Self {
-                fatalError()
+                // This multiplication is not meaningful for piecewise linear spectra
+                // and should never be called in practice
+                preconditionFailure("PiecewiseLinearSpectrum multiplication not supported")
         }
 }
 

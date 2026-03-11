@@ -60,7 +60,7 @@ public struct Matrix: Sendable {
                 return result
         }
 
-        public func invert(m _: Matrix) -> Matrix {
+        public func invert(m _: Matrix) throws -> Matrix {
 
                 var indxc = [0, 0, 0, 0]
                 var indxr = [0, 0, 0, 0]
@@ -140,7 +140,7 @@ public struct Matrix: Sendable {
                         print("Warning: Singular matrix encountered!")
                         return Matrix()
                 } catch {
-                        fatalError("Unhandled error in matrix invert: \(error)")
+                        throw error
                 }
         }
 
@@ -155,7 +155,9 @@ public struct Matrix: Sendable {
         }
 
         public var inverse: Matrix {
-                return invert(m: self)
+                get throws {
+                        return try invert(m: self)
+                }
         }
 
         var backing: MatrixBacking

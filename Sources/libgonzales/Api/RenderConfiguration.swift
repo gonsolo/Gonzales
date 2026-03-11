@@ -68,7 +68,7 @@ class RenderConfiguration {
                         let support = try makeSupport(withDefault: (2, 2))
                         filter = TriangleFilter(support: support)
                 default:
-                        fatalError("Unknown pixel filter!")
+                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Unknown pixel filter: \(name)")
                 }
                 return filter
         }

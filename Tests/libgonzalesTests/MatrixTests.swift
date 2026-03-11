@@ -94,26 +94,26 @@ import Testing
 
         // MARK: - Inverse
 
-        @Test func inverseOfDiagonal() {
+        @Test func inverseOfDiagonal() throws {
                 let m = Matrix(
                         t00: 2, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: 4, t12: 0, t13: 0,
                         t20: 0, t21: 0, t22: 5, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                let inv = m.inverse
+                let inv = try m.inverse
                 #expect(abs(inv[0, 0] - 0.5) <= 1e-5)
                 #expect(abs(inv[1, 1] - 0.25) <= 1e-5)
                 #expect(abs(inv[2, 2] - 0.2) <= 1e-5)
                 #expect(abs(inv[3, 3] - 1) <= 1e-5)
         }
 
-        @Test func inverseTimesOriginalIsIdentity() {
+        @Test func inverseTimesOriginalIsIdentity() throws {
                 let m = Matrix(
                         t00: 2, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: 4, t12: 0, t13: 0,
                         t20: 0, t21: 0, t22: 5, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                let result = m * m.inverse
+                let result = m * (try m.inverse)
                 for i in 0..<4 {
                         for j in 0..<4 {
                                 let expected: FloatX = (i == j) ? 1 : 0

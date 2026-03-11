@@ -7,8 +7,8 @@ struct Transform: Sendable {
                 self.inverseMatrix = inverseMatrix
         }
 
-        public init(matrix: Matrix) {
-                self.init(matrix: matrix, inverseMatrix: matrix.inverse)
+        public init(matrix: Matrix) throws {
+                self.init(matrix: matrix, inverseMatrix: try matrix.inverse)
         }
 
         public init() {
@@ -64,12 +64,12 @@ extension Transform {
                 return pointLocal / weightP
         }
 
-        public static func *= (left: inout Transform, right: Transform) {
-                left = left * right
+        public static func *= (left: inout Transform, right: Transform) throws {
+                left = try left * right
         }
 
-        public static func * (left: Transform, right: Transform) -> Transform {
-                return Transform(matrix: left.matrix * right.matrix)
+        public static func * (left: Transform, right: Transform) throws -> Transform {
+                return try Transform(matrix: left.matrix * right.matrix)
         }
 }
 
@@ -97,7 +97,7 @@ extension Transform {
                         t10: 0, t11: y, t12: 0, t13: 0,
                         t20: 0, t21: 0, t22: z, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                return Transform(matrix: matrix)
+                return try Transform(matrix: matrix)
         }
 
         static func makeTranslation(from delta: Vector) throws -> Transform {
@@ -106,6 +106,6 @@ extension Transform {
                         t10: 0, t11: 1, t12: 0, t13: delta.y,
                         t20: 0, t21: 0, t22: 1, t23: delta.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                return Transform(matrix: matrix)
+                return try Transform(matrix: matrix)
         }
 }

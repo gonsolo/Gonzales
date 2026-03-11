@@ -1,5 +1,9 @@
 import Foundation
 
+enum TextureError: Error {
+        case unknownType(String)
+}
+
 struct OpenImageIOTexture {
 
         enum TextureType {
@@ -7,7 +11,7 @@ struct OpenImageIOTexture {
                 case rgb
         }
 
-        init(path: String, type: String) {
+        init(path: String, type: String) throws {
                 filename = path
                 switch type {
                 case "spectrum", "color":
@@ -15,7 +19,7 @@ struct OpenImageIOTexture {
                 case "float":
                         textureType = .float
                 default:
-                        fatalError("Unknown texture type in OpenImageIOTexture!")
+                        throw TextureError.unknownType(type)
                 }
         }
 

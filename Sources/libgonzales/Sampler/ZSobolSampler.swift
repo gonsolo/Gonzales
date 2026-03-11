@@ -4,7 +4,7 @@ let floatOneMinusEpsilon: Float = 1.0 - 1e-6  // Ensure type is Float
 
 func sobolSample(sampleIndex: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float {
         guard dimension < NSobolDimensions else {
-                fatalError("Sobol dimension \(dimension) is out of range (\(NSobolDimensions)).")
+                preconditionFailure("Sobol dimension \(dimension) is out of range (\(NSobolDimensions))")
         }
 
         var accumulator: UInt32 = 0

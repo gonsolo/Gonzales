@@ -47,7 +47,7 @@ extension ParameterDictionary {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
-                                fatalError("Could not find texture!")
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Could not find texture")
                         }
                         switch texture {
                         case .floatTexture:
@@ -60,10 +60,10 @@ extension ParameterDictionary {
                         }
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
-                                fatalError()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Missing spectrum")
                         }
                         guard let rgbSpectrum = spectrum as? RgbSpectrum else {
-                                fatalError()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Expected RgbSpectrum")
                         }
                         let constantTexture = ConstantTexture(value: rgbSpectrum)
                         return RgbSpectrumTexture.constantTexture(constantTexture)
@@ -78,14 +78,14 @@ extension ParameterDictionary {
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
                                 print("No named texture \"\(textureName)\"")
-                                fatalError()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "No named texture \"\(textureName)\"")
                         }
                         switch texture {
                         case .floatTexture(let floatTexture):
                                 return floatTexture
                         case .rgbSpectrumTexture:
                                 print("No named float texture \"\(textureName)\"")
-                                fatalError()
+                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "No named float texture \"\(textureName)\"")
                         }
                 } else {
                         let value = try findOneFloatX(called: name, else: value)

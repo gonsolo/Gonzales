@@ -80,7 +80,7 @@ import Testing
                 let scale = try Transform.makeScale(x: 2, y: 2, z: 2)
                 let translate = try Transform.makeTranslation(from: Vector(x: 1, y: 0, z: 0))
                 // translate * scale: first scale, then translate
-                let combined = translate * scale
+                let combined = try translate * scale
                 let p = Point(x: 1, y: 0, z: 0)
                 let result = combined * p
                 // Scale (1,0,0) -> (2,0,0), then translate -> (3,0,0)
@@ -95,7 +95,7 @@ import Testing
                 let t = try Transform.makeScale(x: 2, y: 3, z: 4)
                 let p = Point(x: 1, y: 2, z: 3)
                 let transformed = t * p
-                let recovered = t.inverse * transformed
+                let recovered = try t.inverse * transformed
                 #expect(abs(recovered.x - p.x) <= 1e-4)
                 #expect(abs(recovered.y - p.y) <= 1e-4)
                 #expect(abs(recovered.z - p.z) <= 1e-4)

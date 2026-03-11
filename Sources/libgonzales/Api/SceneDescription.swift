@@ -28,7 +28,7 @@ func lookAtTransform(eye: Point, target: Point, upVector: Vector) throws -> Tran
                 t20: right.z, t21: upVector.z, t22: dir.z, t23: eye.z,
                 t30: 0, t31: 0, t32: 0, t33: 1
         )
-        let transform = Transform(matrix: matrix.inverse)
+        let transform = try Transform(matrix: matrix.inverse)
         return transform
 }
 
@@ -121,7 +121,7 @@ extension SceneDescription {
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
                         t20: values[2], t21: values[6], t22: values[10], t23: values[14],
                         t30: values[3], t31: values[7], t32: values[11], t33: values[15])
-                currentTransform *= Transform(matrix: matrix)
+                try (currentTransform *= Transform(matrix: matrix))
         }
 
         func film(name: String, parameters: ParameterDictionary) throws {
@@ -200,7 +200,7 @@ extension SceneDescription {
 
         func lookAt(eye: Point, target: Point, upVector: Vector) throws {
                 let transform = try lookAtTransform(eye: eye, target: target, upVector: upVector)
-                currentTransform *= transform
+                try (currentTransform *= transform)
         }
 
         func makeNamedMaterial(name: String, parameters: ParameterDictionary) throws {
@@ -337,7 +337,7 @@ extension SceneDescription {
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
                         t20: values[2], t21: values[6], t22: values[10], t23: values[14],
                         t30: values[3], t31: values[7], t32: values[11], t33: values[15])
-                currentTransform = Transform(matrix: matrix)
+                currentTransform = try Transform(matrix: matrix)
         }
 
         func transformBegin() throws {
@@ -357,7 +357,7 @@ extension SceneDescription {
                         t10: 0, t11: y, t12: 0, t13: 0,
                         t20: 0, t21: 0, t22: z, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                currentTransform *= Transform(matrix: matrix)
+                try (currentTransform *= Transform(matrix: matrix))
         }
 
         // Not really part of PBRT API
@@ -385,7 +385,7 @@ extension SceneDescription {
                         t10: t10, t11: t11, t12: t12, t13: 0,
                         t20: t20, t21: t21, t22: t22, t23: 0,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                currentTransform *= Transform(matrix: matrix)
+                try (currentTransform *= Transform(matrix: matrix))
         }
 
         func texture(
@@ -450,8 +450,8 @@ extension SceneDescription {
                         t10: 0, t11: 1, t12: 0, t13: amount.y,
                         t20: 0, t21: 0, t22: 1, t23: amount.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                let translation = Transform(matrix: matrix)
-                currentTransform *= translation
+                let translation = try Transform(matrix: matrix)
+                try (currentTransform *= translation)
         }
 
         public func worldBegin() {
@@ -565,11 +565,11 @@ func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -
                 case "spectrum", "color":
                         return Texture.rgbSpectrumTexture(
                                 RgbSpectrumTexture.openImageIoTexture(
-                                        OpenImageIOTexture(path: absoluteFileName, type: type)))
+                                        try OpenImageIOTexture(path: absoluteFileName, type: type)))
                 case "float":
                         return Texture.floatTexture(
                                 FloatTexture.openImageIoTexture(
-                                        OpenImageIOTexture(path: absoluteFileName, type: type)))
+                                        try OpenImageIOTexture(path: absoluteFileName, type: type)))
                 default:
                         throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
                 }

@@ -33,7 +33,6 @@ final class Timer {
 
         var duration: TimeInterval {
                 stop()
-                guard #available(macOS 10.12, *) else { fatalError() }
                 return DateInterval(start: startTime, end: endTime!).duration
         }
 

@@ -86,7 +86,7 @@ extension PlyMesh {
                                                 memcpy(destination + 1, source + 2, 1)
                                                 memcpy(destination + 0, source + 3, 1)
                                         default:
-                                                fatalError("Unknown size in endian conversion!")
+                                                preconditionFailure("Unknown size in endian conversion: \(size)")
                                         }
                                 }
                         }

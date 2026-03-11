@@ -20,9 +20,9 @@ struct CameraTransform {
                                 x: -screenWindow.pMin.x,
                                 y: -screenWindow.pMax.y,
                                 z: 0))
-                self.screenToRaster = resolutionScale * screenScale * translation
+                self.screenToRaster = try resolutionScale * screenScale * translation
                 self.rasterToScreen = screenToRaster.inverse
-                self.rasterToCamera = cameraToScreen.inverse * rasterToScreen
+                self.rasterToCamera = try cameraToScreen.inverse * rasterToScreen
         }
 
         public var cameraToScreen: Transform
