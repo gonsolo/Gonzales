@@ -8,10 +8,7 @@ Sampler "sobol" "integer pixelsamples" [ 8 ] # gonsolo 512
 #PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ]
 PixelFilter "gaussian" "float xradius" [ 3 ] "float yradius" [ 5 ] "float sigma" [1.5]
 
-# gonsolo
 Accelerator "bvh"
-#Accelerator "embree"
-#Accelerator "optix"
 
 Film "rgb"
     "string filename" [ "layered-cornell-box.exr" ]

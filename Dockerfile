@@ -12,7 +12,6 @@ RUN pacman -Syu --noconfirm && \
     wget \
     unzip \
     sudo \
-    embree \
     fmt
 
 # Setup builder user for AUR

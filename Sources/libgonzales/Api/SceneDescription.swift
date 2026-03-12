@@ -176,10 +176,6 @@ extension SceneDescription {
                 switch name {
                 case "bvh":
                         acceleratorName = "bvh"
-                case "embree":
-                        acceleratorName = "embree"
-                case "optix":
-                        acceleratorName = "optix"
                 default:
                         throw SceneDescriptionError.accelerator
                 }

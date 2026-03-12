@@ -14,7 +14,6 @@ struct Hair {
         func getBsdf(interaction: any Interaction) -> HairBsdf {
                 let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
                 let absorption = absorptionFrom(eumelaninConcentration: eumelanin)
-                // Embree already provides values from -1 to 1 for flat bspline curves
                 let hOffsetValue = interaction.uvCoordinates[1]
                 let alpha: Real = 2
                 let bsdfFrame = BsdfFrame(interaction: interaction)
