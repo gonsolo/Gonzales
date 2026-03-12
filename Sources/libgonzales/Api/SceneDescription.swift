@@ -366,7 +366,7 @@ extension SceneDescription {
                 readTimer = Timer("Reading...", newline: false)
         }
 
-        func rotate(by angle: Real, around axis: Vector) throws {
+        func rotate(by angle: Angle, around axis: Vector) throws {
                 let normalizedAxis = normalized(axis)
                 let theta = radians(deg: angle)
                 let sinTheta = sin(theta)

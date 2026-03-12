@@ -69,7 +69,7 @@ extension DielectricBsdf {
                 }
         }
 
-        private func sampleSpecularReflection(outgoing: Vector, reflected: Real, probabilityReflected: Real)
+        private func sampleSpecularReflection(outgoing: Vector, reflected: Real, probabilityReflected: Probability)
                 -> BsdfSample {
                 let incident = mirror(outgoing)
                 let estimate = RgbSpectrum(intensity: reflected / absCosTheta(incident))
@@ -79,7 +79,7 @@ extension DielectricBsdf {
         private func sampleSpecularTransmission(
                 outgoing: Vector,
                 transmitted: Real,
-                probabilityTransmitted: Real
+                probabilityTransmitted: Probability
         ) -> BsdfSample {
                 let upNormal = Normal(x: 0, y: 0, z: 1)
                 guard let (incident, etap) = refract(incident: outgoing, normal: upNormal, eta: refractiveIndex) else {
@@ -115,7 +115,7 @@ extension DielectricBsdf {
                 outgoing: Vector,
                 halfVector: Vector,
                 reflected: Real,
-                probabilityReflected: Real
+                probabilityReflected: Probability
         ) -> BsdfSample {
                 let incident = reflect(vector: outgoing, by: halfVector)
                 guard sameHemisphere(outgoing, incident) else {
@@ -137,7 +137,7 @@ extension DielectricBsdf {
                 outgoing: Vector,
                 halfVector: Vector,
                 transmitted: Real,
-                probabilityTransmitted: Real
+                probabilityTransmitted: Probability
         ) -> BsdfSample {
                 guard let (incident, etap) = refract(
                         incident: outgoing, normal: Normal(halfVector), eta: refractiveIndex)

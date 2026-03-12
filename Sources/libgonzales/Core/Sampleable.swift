@@ -19,7 +19,7 @@ protocol Sampleable {
                 from interaction: SurfaceInteraction
         ) throws -> Real
 
-        func area(scene: Scene) throws -> Real
+        func area(scene: Scene) throws -> Area
 }
 
 extension Sampleable {

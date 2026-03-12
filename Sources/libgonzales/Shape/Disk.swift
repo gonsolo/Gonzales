@@ -1,6 +1,6 @@
 struct Disk: Shape {
 
-        init(objectToWorld: Transform, radius: Real) {
+        init(objectToWorld: Transform, radius: Distance) {
                 self.objectToWorld = objectToWorld
                 self.radius = radius
         }
@@ -29,7 +29,7 @@ struct Disk: Shape {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func area(scene _: Scene) throws -> Real {
+        func area(scene _: Scene) throws -> Area {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
@@ -48,7 +48,7 @@ struct Disk: Shape {
         }
 
         let objectToWorld: Transform
-        let radius: Real
+        let radius: Distance
 }
 
 extension Disk {

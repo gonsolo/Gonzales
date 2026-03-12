@@ -120,7 +120,7 @@ enum ShapeType: Shape {
                 }
         }
 
-        func area(scene: Scene) throws -> Real {
+        func area(scene: Scene) throws -> Area {
                 switch self {
                 case .triangle(let triangle):
                         return triangle.area(scene: scene)

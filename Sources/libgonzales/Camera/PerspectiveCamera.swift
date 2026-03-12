@@ -3,9 +3,9 @@ final class PerspectiveCamera: Camera, Transformable {
         init(
                 cameraToWorld: Transform,
                 screenWindow: Bounds2f,
-                fov: Real,
-                focalDistance: Real,
-                lensRadius: Real,
+                fov: Angle,
+                focalDistance: Distance,
+                lensRadius: Distance,
                 film: Film
         ) throws {
                 self.objectToWorld = cameraToWorld
@@ -51,9 +51,9 @@ final class PerspectiveCamera: Camera, Transformable {
                 return objectToWorld
         }
 
-        let fieldOfView: Real
-        let focalDistance: Real
-        let lensRadius: Real
+        let fieldOfView: Angle
+        let focalDistance: Distance
+        let lensRadius: Distance
         let cameraTransform: CameraTransform
         let objectToWorld: Transform
         let film: Film

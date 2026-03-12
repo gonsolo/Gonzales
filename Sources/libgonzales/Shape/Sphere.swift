@@ -2,7 +2,7 @@ import Foundation
 
 struct Sphere: Shape {
 
-        init(radius: Real, objectToWorld: Transform) {
+        init(radius: Distance, objectToWorld: Transform) {
                 self.radius = radius
                 self.objectToWorld = objectToWorld
         }
@@ -92,7 +92,7 @@ struct Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func area(scene _: Scene) -> Real {
+        func area(scene _: Scene) -> Area {
                 return 4 * Real.pi * radius * radius
         }
 
@@ -174,7 +174,7 @@ struct Sphere: Shape {
         }
 
         let objectToWorld: Transform
-        let radius: Real
+        let radius: Distance
 }
 
 extension Sphere {

@@ -299,7 +299,7 @@ struct Curve: Shape {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func area(scene _: Scene) throws -> Real {
+        func area(scene _: Scene) throws -> Area {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 

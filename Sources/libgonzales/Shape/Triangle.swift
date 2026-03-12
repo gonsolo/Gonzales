@@ -502,7 +502,7 @@ extension Triangle {
                 return Point2f(x: 1 - su0, y: samples.1 * su0)
         }
 
-        func area(scene: Scene) -> Real {
+        func area(scene: Scene) -> Area {
                 let (point0, point1, point2) = getLocalPoints(scene: scene)
                 return 0.5 * length(cross(Vector(vector: (point1 - point0)), point2 - point0))
         }
