@@ -16,8 +16,6 @@ let package = Package(
                         ],
                         swiftSettings: [
                                 .unsafeFlags(["-Ounchecked"]),
-                                .unsafeFlags(["-Xcc", "-O3"]),
-                                .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ]
                 ),
                 .testTarget(
@@ -28,8 +26,6 @@ let package = Package(
                         swiftSettings: [
                                 .interoperabilityMode(.Cxx),
                                 .unsafeFlags(["-Ounchecked"]),
-                                .unsafeFlags(["-Xcc", "-O3"]),
-                                .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ]
                 ),
                 .executableTarget(
@@ -39,8 +35,6 @@ let package = Package(
                         ],
                         swiftSettings: [
                                 .unsafeFlags(["-Ounchecked"]),
-                                .unsafeFlags(["-Xcc", "-O3"]),
-                                .unsafeFlags(["-Xcc", "-ffast-math"]),
                         ],
                 ),
                 .target(
