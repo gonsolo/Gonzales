@@ -21,7 +21,7 @@ import Testing
                 let outgoing = Vector(x: 0.0, y: 0.0, z: 1.0)
                 let incident = Vector(x: 0.0, y: 0.1, z: 1.0)
 
-                let worldSpectrum = coated.evaluateWorld(outgoing: outgoing, incident: incident)
+                let worldSpectrum = coated.evaluateWorldSpace(outgoing: outgoing, incident: incident)
 
                 #expect(
                         worldSpectrum.x > 0.2 && worldSpectrum.x < 0.4,
