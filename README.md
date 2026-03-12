@@ -43,6 +43,8 @@ v0.1, 2023: Rendering Moana with a little help from Embree takes 78 minutes (192
 
 v0.2, 2026: Cleanup, tuning to get rid of ARC traffic, removal of Embree.
 
+v.0.3, 2026: [Release Notes](Documentation/ReleaseNotes/0.3.md)
+
 ### Get it from Arch AUR
 
 ```yay gonzales-git```
