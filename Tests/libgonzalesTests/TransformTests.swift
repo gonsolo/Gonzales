@@ -95,7 +95,7 @@ import Testing
                 let t = try Transform.makeScale(x: 2, y: 3, z: 4)
                 let p = Point(x: 1, y: 2, z: 3)
                 let transformed = t * p
-                let recovered = try t.inverse * transformed
+                let recovered = t.inverse * transformed
                 #expect(abs(recovered.x - p.x) <= 1e-4)
                 #expect(abs(recovered.y - p.y) <= 1e-4)
                 #expect(abs(recovered.z - p.z) <= 1e-4)
