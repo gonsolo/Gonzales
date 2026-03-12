@@ -7,5 +7,5 @@ struct FloatMixTexture {
         }
 
         let textures: (FloatTexture, FloatTexture)
-        let amount: FloatX
+        let amount: Real
 }

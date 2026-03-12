@@ -24,7 +24,7 @@ struct MicrofacetReflection: FramedBsdf {
                 return BsdfSample(radiance, incident, density)
         }
 
-        func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 guard sameHemisphere(outgoing, incident) else { return 0 }
                 let half = normalized(outgoing + incident)
                 return distribution.probabilityDensity(outgoing: outgoing, half: half) / (4 * dot(outgoing, half))

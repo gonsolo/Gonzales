@@ -14,8 +14,8 @@ extension ConstantTexture where T == RgbSpectrum {
         }
 }
 
-extension ConstantTexture where T == FloatX {
-        func evaluateFloat(at _: any Interaction) -> FloatX {
+extension ConstantTexture where T == Real {
+        func evaluateFloat(at _: any Interaction) -> Real {
                 return value
         }
 }

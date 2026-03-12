@@ -5,7 +5,7 @@ protocol Intersectable {
 	func intersect(
 		scene: Scene,
 		ray: Ray,
-		tHit: inout FloatX
+		tHit: inout Real
 	) throws -> SurfaceInteraction?
 }
 
@@ -22,7 +22,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 	func getIntersectionData(
 		scene: Scene,
 		ray worldRay: Ray,
-		tHit: inout FloatX,
+		tHit: inout Real,
 		data: inout TriangleIntersection
 	) throws -> Bool {
 		switch self {
@@ -79,7 +79,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 	func intersect(
 		scene: Scene,
 		ray: Ray,
-		tHit: inout FloatX
+		tHit: inout Real
 	) throws -> SurfaceInteraction? {
 		switch self {
 		case .areaLight(let areaLight):

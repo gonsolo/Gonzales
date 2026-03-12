@@ -1,8 +1,8 @@
 struct BoxFilter: Filter {
 
-        func evaluate(atLocation _: Point2f) -> FloatX { return 1 }
+        func evaluate(atLocation _: Point2f) -> Real { return 1 }
 
-        func sample(uSample: (FloatX, FloatX)) -> FilterSample {
+        func sample(uSample: (Real, Real)) -> FilterSample {
                 let sample = FilterSample(
                         location: Point2f(
                                 x: (2 * uSample.0 - 1) * support.x,

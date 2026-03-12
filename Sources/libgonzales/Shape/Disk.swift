@@ -1,6 +1,6 @@
 struct Disk: Shape {
 
-        init(objectToWorld: Transform, radius: FloatX) {
+        init(objectToWorld: Transform, radius: Real) {
                 self.objectToWorld = objectToWorld
                 self.radius = radius
         }
@@ -16,7 +16,7 @@ struct Disk: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX
+                tHit _: inout Real
         ) throws -> Bool {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
@@ -24,17 +24,17 @@ struct Disk: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX
+                tHit _: inout Real
         ) throws -> SurfaceInteraction? {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func area(scene _: Scene) throws -> FloatX {
+        func area(scene _: Scene) throws -> Real {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
         func sample<I: Interaction>(samples _: TwoRandomVariables, scene _: Scene) throws -> (
-                interaction: I, pdf: FloatX
+                interaction: I, pdf: Real
         ) {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
@@ -48,12 +48,12 @@ struct Disk: Shape {
         }
 
         let objectToWorld: Transform
-        let radius: FloatX
+        let radius: Real
 }
 
 extension Disk {
         static func create(objectToWorld: Transform, parameters: ParameterDictionary) throws -> [ShapeType] {
-        let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
+        let radius = try parameters.findOneReal(called: "radius", else: 1.0)
         let shape = ShapeType.disk(Disk(objectToWorld: objectToWorld, radius: radius))
         return [shape]
 }

@@ -27,8 +27,8 @@ public struct Vector2<T: Sendable>: Sendable {
         public var y: T
 }
 
-public typealias Vector2F = Vector2<FloatX>
-extension Vector2F: GetFloatXY {}
+public typealias Vector2F = Vector2<Real>
+extension Vector2F: GetRealY {}
 
 extension Vector2 where T: FloatingPoint {
         public init() {
@@ -45,11 +45,11 @@ func != (left: Vector2F, right: Vector2F) -> Bool {
         return !(left == right)
 }
 
-func lengthSquared(_ vector: Vector2F) -> FloatX {
+func lengthSquared(_ vector: Vector2F) -> Real {
         return vector.x * vector.x + vector.y * vector.y
 }
 
-func length(_ vector: Vector2F) -> FloatX {
+func length(_ vector: Vector2F) -> Real {
         return lengthSquared(vector).squareRoot()
 }
 

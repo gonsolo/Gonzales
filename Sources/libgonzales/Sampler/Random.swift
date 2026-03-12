@@ -11,7 +11,7 @@ public struct RandomSampler: Sendable {
         }
 
         mutating func get1D() -> RandomVariable {
-                return FloatX.random(in: 0..<1, using: &xoshiro)
+                return Real.random(in: 0..<1, using: &xoshiro)
         }
 
         mutating func get2D() -> TwoRandomVariables {

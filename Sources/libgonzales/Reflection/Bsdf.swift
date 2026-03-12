@@ -5,7 +5,7 @@ public protocol Bsdf {
 
         func albedo() -> RgbSpectrum
         func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum
-        func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX
+        func probabilityDensity(outgoing: Vector, incident: Vector) -> Real
         func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample
 
         var isReflective: Bool { get }
@@ -30,9 +30,9 @@ extension Bsdf {
                 return sample(outgoing: outgoing, uSample: uSample, evaluate: self.evaluate)
         }
 
-        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 guard sameHemisphere(outgoing, incident) else { return 0 }
-                let result = absCosTheta(incident) / FloatX.pi
+                let result = absCosTheta(incident) / Real.pi
                 return result
         }
 

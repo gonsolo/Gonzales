@@ -2,7 +2,7 @@
 ///        Describes how light is scattered by a surface.
 public protocol FramedBsdf: BsdfFrameProtocol, DistributionModel, Bsdf, Sendable {
         func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
-        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> FloatX
+        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real
         func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
@@ -23,7 +23,7 @@ extension FramedBsdf {
                 return totalLightScattered
         }
 
-        public func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> FloatX {
+        public func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real {
                 let incidentLocal = worldToLocal(world: incidentWorld)
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
                 if outgoingLocal.z == 0 { return 0 }
@@ -55,7 +55,7 @@ extension FramedBsdf {
                 return bsdfSample
         }
 
-        public func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        public func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 return probabilityDensityWorldSpace(outgoing: outgoing, incident: incident)
         }
 }

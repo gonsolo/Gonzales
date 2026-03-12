@@ -2,14 +2,14 @@
 
 protocol Filter: Sendable {
 
-        func evaluate(atLocation: Point2f) -> FloatX
+        func evaluate(atLocation: Point2f) -> Real
 
-        func sample(uSample: (FloatX, FloatX)) -> FilterSample
+        func sample(uSample: (Real, Real)) -> FilterSample
 
         var support: Vector2F { get }
 }
 
 struct FilterSample {
         let location: Point2f
-        let probabilityDensity: FloatX
+        let probabilityDensity: Real
 }

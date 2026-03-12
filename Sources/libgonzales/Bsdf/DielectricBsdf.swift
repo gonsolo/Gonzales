@@ -1,15 +1,15 @@
 public struct DielectricBsdf: FramedBsdf {
 
         public let distribution: any MicrofacetDistribution
-        public let refractiveIndexVacuum: FloatX = 1
+        public let refractiveIndexVacuum: Real = 1
         // eta in PBRT
         // Vacuum: 1
         // Water: 1.3
         // Glass: 1.52
-        public let refractiveIndex: FloatX
+        public let refractiveIndex: Real
         public let bsdfFrame: BsdfFrame
 
-        public init(distribution: any MicrofacetDistribution, refractiveIndex: FloatX, bsdfFrame: BsdfFrame) {
+        public init(distribution: any MicrofacetDistribution, refractiveIndex: Real, bsdfFrame: BsdfFrame) {
                 self.distribution = distribution
                 self.refractiveIndex = refractiveIndex
                 self.bsdfFrame = bsdfFrame
@@ -29,7 +29,7 @@ extension DielectricBsdf {
                 let cosThetaO = cosTheta(outgoing)
                 let cosThetaI = cosTheta(incident)
                 let reflect = cosThetaI * cosThetaO > 0
-                var etap: FloatX = 1
+                var etap: Real = 1
                 if !reflect {
                         etap = cosThetaO > 0 ? refractiveIndex : (1 / refractiveIndex)
                 }
@@ -69,7 +69,7 @@ extension DielectricBsdf {
                 }
         }
 
-        private func sampleSpecularReflection(outgoing: Vector, reflected: FloatX, probabilityReflected: FloatX)
+        private func sampleSpecularReflection(outgoing: Vector, reflected: Real, probabilityReflected: Real)
                 -> BsdfSample {
                 let incident = mirror(outgoing)
                 let estimate = RgbSpectrum(intensity: reflected / absCosTheta(incident))
@@ -78,8 +78,8 @@ extension DielectricBsdf {
 
         private func sampleSpecularTransmission(
                 outgoing: Vector,
-                transmitted: FloatX,
-                probabilityTransmitted: FloatX
+                transmitted: Real,
+                probabilityTransmitted: Real
         ) -> BsdfSample {
                 let upNormal = Normal(x: 0, y: 0, z: 1)
                 guard let (incident, etap) = refract(incident: outgoing, normal: upNormal, eta: refractiveIndex) else {
@@ -114,8 +114,8 @@ extension DielectricBsdf {
         private func sampleRoughReflection(
                 outgoing: Vector,
                 halfVector: Vector,
-                reflected: FloatX,
-                probabilityReflected: FloatX
+                reflected: Real,
+                probabilityReflected: Real
         ) -> BsdfSample {
                 let incident = reflect(vector: outgoing, by: halfVector)
                 guard sameHemisphere(outgoing, incident) else {
@@ -136,8 +136,8 @@ extension DielectricBsdf {
         private func sampleRoughTransmission(
                 outgoing: Vector,
                 halfVector: Vector,
-                transmitted: FloatX,
-                probabilityTransmitted: FloatX
+                transmitted: Real,
+                probabilityTransmitted: Real
         ) -> BsdfSample {
                 guard let (incident, etap) = refract(
                         incident: outgoing, normal: Normal(halfVector), eta: refractiveIndex)
@@ -196,14 +196,14 @@ extension DielectricBsdf {
                 }
         }
 
-        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 if refractiveIndex == refractiveIndexVacuum || isSpecular {
                         return 0
                 }
                 let cosThetaO = cosTheta(outgoing)
                 let cosThetaI = cosTheta(incident)
                 let reflect = cosThetaI * cosThetaO > 0
-                var etap: FloatX = 1
+                var etap: Real = 1
                 if !reflect {
                         etap = cosThetaO > 0 ? refractiveIndex : 1 / refractiveIndex
                 }
@@ -221,11 +221,11 @@ extension DielectricBsdf {
                 let fresnelT = 1 - fresnelR
                 let probabilityReflected = fresnelR
                 let probabilityTransmitted = fresnelT
-                var pdf: FloatX = 0
+                var pdf: Real = 0
                 if reflect {
-                        let dPdf: FloatX = distribution.probabilityDensity(outgoing: outgoing, half: halfVector)
-                        let four: FloatX = 4 * absDot(outgoing, halfVector)
-                        let probability: FloatX = probabilityReflected / (probabilityReflected + probabilityTransmitted)
+                        let dPdf: Real = distribution.probabilityDensity(outgoing: outgoing, half: halfVector)
+                        let four: Real = 4 * absDot(outgoing, halfVector)
+                        let probability: Real = probabilityReflected / (probabilityReflected + probabilityTransmitted)
                         pdf = dPdf / four * probability
                 } else {
                         let denom = square(dot(incident, halfVector) + dot(outgoing, halfVector) / etap)

@@ -20,7 +20,7 @@ enum BsdfVariant: FramedBsdf {
                 }
         }
 
-        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> FloatX {
+        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real {
                 switch self {
                 case .coatedDiffuseBsdf(let bsdf):
                         return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)

@@ -4,7 +4,7 @@ struct LayeredBsdf<Top: Bsdf & Sendable, Bottom: Bsdf & Sendable>: FramedBsdf {
 
         let top: Top
         let bottom: Bottom
-        let thickness: FloatX
+        let thickness: Real
 
         private let _albedo: RgbSpectrum
 
@@ -27,9 +27,9 @@ extension LayeredBsdf {
                 bottom: Bottom,
                 topIsSpecular: Bool,
                 bottomIsSpecular: Bool,
-                thickness: FloatX,
+                thickness: Real,
                 albedo: RgbSpectrum,
-                geometricTerm: FloatX,
+                geometricTerm: Real,
                 maxDepth: Int,
                 nSamples: Int,
                 bsdfFrame: BsdfFrame,
@@ -39,7 +39,7 @@ extension LayeredBsdf {
                 self.bottom = bottom
                 self.topIsSpecular = topIsSpecular
                 self.bottomIsSpecular = bottomIsSpecular
-                self.thickness = max(thickness, FloatX.leastNormalMagnitude)
+                self.thickness = max(thickness, Real.leastNormalMagnitude)
                 self._albedo = albedo
                 self.phaseFunction = HenyeyGreenstein(geometricTerm: geometricTerm)
                 self.maxDepth = maxDepth
@@ -66,7 +66,7 @@ extension LayeredBsdf {
 
                 let enteredTop = twoSided || localOutgoing.z > 0
                 let isSameHemisphere = sameHemisphere(localOutgoing, localIncident)
-                let exitZ: FloatX = (isSameHemisphere != enteredTop) ? 0 : thickness
+                let exitZ: Real = (isSameHemisphere != enteredTop) ? 0 : thickness
 
                 if isSameHemisphere {
                         let entranceEval: RgbSpectrum
@@ -75,7 +75,7 @@ extension LayeredBsdf {
                         } else {
                                 entranceEval = bottom.evaluate(outgoing: localOutgoing, incident: localIncident)
                         }
-                        scatteredRadiance += FloatX(nSamples) * entranceEval
+                        scatteredRadiance += Real(nSamples) * entranceEval
                 }
 
                 var sampler: Sampler = .random(RandomSampler())
@@ -92,7 +92,7 @@ extension LayeredBsdf {
                                 sampler: &sampler)
                 }
 
-                let result = scatteredRadiance / FloatX(nSamples)
+                let result = scatteredRadiance / Real(nSamples)
                 return result
         }
 
@@ -143,7 +143,7 @@ extension LayeredBsdf {
                         if sampledDirection.z == 0 { return invalidBsdfSample }
 
                         if !_albedo.isBlack {
-                                let sigmaTotal: FloatX = 1.0
+                                let sigmaTotal: Real = 1.0
                                 let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(sampledDirection))
                                 let proposedZ = sampledDirection.z > 0 ? (zCurrent + deltaZ) : (zCurrent - deltaZ)
 
@@ -193,7 +193,7 @@ extension LayeredBsdf {
                 return invalidBsdfSample
         }
 
-        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 var localOutgoing = outgoing
                 var localIncident = incident
                 if twoSided && localOutgoing.z < 0 {
@@ -203,23 +203,23 @@ extension LayeredBsdf {
 
                 var sampler = RandomSampler()
                 let enteredTop = twoSided || localOutgoing.z > 0
-                var pdfSum: FloatX = 0
+                var pdfSum: Real = 0
 
                 if sameHemisphere(localOutgoing, localIncident) {
-                        let rPdf: FloatX
+                        let rPdf: Real
                         if enteredTop {
                                 rPdf = top.probabilityDensity(outgoing: localOutgoing, incident: localIncident)
                         } else {
                                 rPdf = bottom.probabilityDensity(outgoing: localOutgoing, incident: localIncident)
                         }
-                        pdfSum += FloatX(nSamples) * rPdf
+                        pdfSum += Real(nSamples) * rPdf
                 }
 
                 for _ in 0..<nSamples {
                         if sameHemisphere(localOutgoing, localIncident) {
                                 let outgoingSample: BsdfSample
                                 let incidentSample: BsdfSample
-                                let rInterfacePdf: FloatX
+                                let rInterfacePdf: Real
 
                                 if enteredTop {
                                         outgoingSample = top.sample(
@@ -291,8 +291,8 @@ extension LayeredBsdf {
 
                 return lerp(
                         with: 0.9,
-                        between: 1 / (4 * FloatX.pi),
-                        and: pdfSum / FloatX(nSamples))
+                        between: 1 / (4 * Real.pi),
+                        and: pdfSum / Real(nSamples))
         }
 
 }
@@ -304,7 +304,7 @@ extension LayeredBsdf {
                 let localIncident: Vector
                 let enteredTop: Bool
                 let isSameHemisphere: Bool
-                let exitZ: FloatX
+                let exitZ: Real
         }
 
         private func evaluateSample(
@@ -356,7 +356,7 @@ extension LayeredBsdf {
                 outgoingSample: BsdfSample,
                 incidentSample: BsdfSample,
                 enteredTop: Bool,
-                exitZ: FloatX,
+                exitZ: Real,
                 sampler: inout Sampler
         ) -> RgbSpectrum {
                 var throughput = outgoingSample.estimate * absCosTheta(outgoingSample.incoming)
@@ -376,7 +376,7 @@ extension LayeredBsdf {
                                 zCurrent = (zCurrent == thickness) ? 0 : thickness
                                 throughput *= white
                         } else {
-                                let sigmaTotal: FloatX = 1.0
+                                let sigmaTotal: Real = 1.0
                                 let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / absCosTheta(sampledDirection))
                                 let proposedZ = sampledDirection.z > 0 ? (zCurrent + deltaZ) : (zCurrent - deltaZ)
 
@@ -384,7 +384,7 @@ extension LayeredBsdf {
 
                                 if proposedZ > 0 && proposedZ < thickness {
 
-                                        let transmitted: FloatX = 1
+                                        let transmitted: Real = 1
 
                                         let phaseVal = phaseFunction.evaluate(
                                                 outgoing: -sampledDirection, incident: -incidentSample.incoming)
@@ -434,7 +434,7 @@ extension LayeredBsdf {
         }
 
         private func handleExit(
-                zCurrent: FloatX,
+                zCurrent: Real,
                 sampledDirection: inout Vector,
                 throughput: inout RgbSpectrum,
                 sampler: inout Sampler
@@ -462,7 +462,7 @@ extension LayeredBsdf {
         }
 
         private struct NonExitParams {
-                let zCurrent: FloatX
+                let zCurrent: Real
                 let incidentSample: BsdfSample
         }
 
@@ -521,12 +521,12 @@ extension LayeredBsdf {
                 return nil
         }
 
-        private func transmittance(deltaZ: FloatX, direction: Vector) -> RgbSpectrum {
-                if abs(deltaZ) < FloatX.leastNormalMagnitude {
+        private func transmittance(deltaZ: Real, direction: Vector) -> RgbSpectrum {
+                if abs(deltaZ) < Real.leastNormalMagnitude {
                         return RgbSpectrum(intensity: 1.0)
                 }
                 let val = abs(deltaZ / direction.z)
-                let transmittanceValue = FloatX(exp(Float(-val)))
+                let transmittanceValue = Real(exp(Float(-val)))
                 return RgbSpectrum(intensity: transmittanceValue)
         }
 }

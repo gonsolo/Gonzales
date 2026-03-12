@@ -8,8 +8,8 @@ struct CameraTransform {
                 throws {
                 self.cameraToScreen = cameraToScreen
                 let resolutionScale = try Transform.makeScale(
-                        x: FloatX(resolution.x),
-                        y: FloatX(resolution.y),
+                        x: Real(resolution.x),
+                        y: Real(resolution.y),
                         z: 1)
                 let screenScale = try Transform.makeScale(
                         x: 1 / (screenWindow.pMax.x - screenWindow.pMin.x),

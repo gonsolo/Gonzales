@@ -8,23 +8,23 @@
 protocol Sampleable {
 
         func sample(samples: TwoRandomVariables, scene: Scene) throws -> (
-                interaction: SurfaceInteraction, pdf: FloatX
+                interaction: SurfaceInteraction, pdf: Real
         )
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, FloatX)
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real)
 
         func probabilityDensityFor(
                 scene: Scene,
                 samplingDirection direction: Vector,
                 from interaction: SurfaceInteraction
-        ) throws -> FloatX
+        ) throws -> Real
 
-        func area(scene: Scene) throws -> FloatX
+        func area(scene: Scene) throws -> Real
 }
 
 extension Sampleable {
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, FloatX) {
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real) {
                 var (intr, pdf) = try sample(samples: samples, scene: scene)
                 let incident: Vector = normalized(intr.position - point)
                 let squaredDistance = distanceSquared(point, intr.position)
@@ -41,9 +41,9 @@ extension Sampleable where Self: Intersectable {
                 samplingDirection direction: Vector,
                 from: I
         )
-                throws -> FloatX {
+                throws -> Real {
                 let ray = from.spawnRay(inDirection: direction)
-                var tHit: FloatX = 0.0
+                var tHit: Real = 0.0
                 guard let interaction = try intersect(scene: scene, ray: ray, tHit: &tHit) else {
                         return 0
                 }

@@ -1,13 +1,13 @@
 import Foundation  // sin, cos
 
-func sphericalDirection(sinTheta: FloatX, cosTheta: FloatX, phi: FloatX) -> Vector {
+func sphericalDirection(sinTheta: Real, cosTheta: Real, phi: Real) -> Vector {
         return Vector(x: sinTheta * cos(phi), y: sinTheta * sin(phi), z: cosTheta)
 }
 
 func sphericalDirection(
-        sinTheta: FloatX,
-        cosTheta: FloatX,
-        phi: FloatX,
+        sinTheta: Real,
+        cosTheta: Real,
+        phi: Real,
         frame: ShadingFrame
 ) -> Vector {
         let vectorX = sinTheta * cos(phi) * frame.x
@@ -16,30 +16,30 @@ func sphericalDirection(
         return vectorX + vectorY + vectorZ
 }
 
-func sphericalCoordinatesFrom(vector: Vector) -> (theta: FloatX, phi: FloatX) {
+func sphericalCoordinatesFrom(vector: Vector) -> (theta: Real, phi: Real) {
         let theta = acos(vector.z)
         let atan = atan2(vector.y, vector.x)
-        let phi = atan < 0 ? atan + 2 * FloatX.pi : atan
+        let phi = atan < 0 ? atan + 2 * Real.pi : atan
         return (theta, phi)
 }
 
-func dot(_ vector: Vector, _ normal: Normal) -> FloatX {
+func dot(_ vector: Vector, _ normal: Normal) -> Real {
         return vector.x * normal.x + vector.y * normal.y + vector.z * normal.z
 }
 
-func dot(_ normal: Normal, _ vector: Vector) -> FloatX {
+func dot(_ normal: Normal, _ vector: Vector) -> Real {
         return normal.x * vector.x + normal.y * vector.y + normal.z * vector.z
 }
 
-func dot(_ vector1: Vector2F, _ vector2: Vector2F) -> FloatX {
+func dot(_ vector1: Vector2F, _ vector2: Vector2F) -> Real {
         return vector1.x * vector2.x + vector1.y * vector2.y
 }
 
-func absDot(_ vector: Vector, _ normal: Normal) -> FloatX {
+func absDot(_ vector: Vector, _ normal: Normal) -> Real {
         return abs(dot(vector, normal))
 }
 
-func absDot(_ normal: Normal, _ vector: Vector) -> FloatX {
+func absDot(_ normal: Normal, _ vector: Vector) -> Real {
         return abs(dot(Vector(normal: normal), vector))
 }
 

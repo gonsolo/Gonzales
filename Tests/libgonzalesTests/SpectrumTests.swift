@@ -88,13 +88,13 @@ import Testing
         }
 
         @Test func isNaN() {
-                let nanSpectrum = RgbSpectrum(red: FloatX.nan, green: 0, blue: 0)
+                let nanSpectrum = RgbSpectrum(red: Real.nan, green: 0, blue: 0)
                 #expect(nanSpectrum.isNaN)
                 #expect(!white.isNaN)
         }
 
         @Test func isInfinite() {
-                let infSpectrum = RgbSpectrum(red: FloatX.infinity, green: 0, blue: 0)
+                let infSpectrum = RgbSpectrum(red: Real.infinity, green: 0, blue: 0)
                 #expect(infSpectrum.isInfinite)
                 #expect(!white.isInfinite)
         }
@@ -104,7 +104,7 @@ import Testing
         @Test func luminance() {
                 // ITU-R BT.709 weights: 0.212671, 0.715160, 0.072169
                 let spectrum = RgbSpectrum(red: 1, green: 1, blue: 1)
-                let expectedLuminance: FloatX = 0.212671 + 0.715160 + 0.072169
+                let expectedLuminance: Real = 0.212671 + 0.715160 + 0.072169
                 #expect(abs(spectrum.luminance - expectedLuminance) <= 1e-4)
         }
 
@@ -168,21 +168,21 @@ import Testing
 
         @Test func gammaLinearToSrgbLow() {
                 // Below threshold 0.0031308
-                let value: FloatX = 0.001
+                let value: Real = 0.001
                 let result = gammaLinearToSrgb(value: value)
                 #expect(abs(result - value * 12.92) <= 1e-6)
         }
 
         @Test func gammaLinearToSrgbHigh() {
                 // Above threshold
-                let value: FloatX = 0.5
+                let value: Real = 0.5
                 let result = gammaLinearToSrgb(value: value)
-                let expected: FloatX = 1.055 * Glibc.powf(value, 1.0 / 2.4) - 0.055
+                let expected: Real = 1.055 * Glibc.powf(value, 1.0 / 2.4) - 0.055
                 #expect(abs(result - expected) <= 1e-5)
         }
 
         @Test func gammaRoundTrip() {
-                let original: FloatX = 0.5
+                let original: Real = 0.5
                 let srgb = gammaLinearToSrgb(value: original)
                 let linear = gammaSrgbToLinear(value: srgb)
                 #expect(abs(linear - original) <= 1e-4)

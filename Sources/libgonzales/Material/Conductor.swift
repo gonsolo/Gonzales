@@ -18,7 +18,7 @@ struct Conductor {
 
         var eta: RgbSpectrum
         var extinction: RgbSpectrum
-        var roughness: (FloatX, FloatX)
+        var roughness: (Real, Real)
 }
 
 extension Conductor {
@@ -26,11 +26,11 @@ extension Conductor {
                 let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
                 let extinctionParameter = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
                 // let remapRoughness = try findOneBool(called: "remaproughness", else: false)
-                let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
+                let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
                 let uRoughness =
-                        try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
+                        try roughnessOptional ?? parameters.findOneReal(called: "uroughness", else: 0.5)
                 let vRoughness =
-                        try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
+                        try roughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
                 let roughness = (uRoughness, vRoughness)
 
                 let etaRgb = eta.asRgb()

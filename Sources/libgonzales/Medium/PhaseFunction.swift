@@ -1,6 +1,6 @@
 protocol PhaseFunction: DistributionModel, Sendable {
-        func evaluate(outgoing: Vector, incident: Vector) -> FloatX
-        func samplePhase(outgoing: Vector, sampler: inout Sampler) -> (value: FloatX, incident: Vector)
+        func evaluate(outgoing: Vector, incident: Vector) -> Real
+        func samplePhase(outgoing: Vector, sampler: inout Sampler) -> (value: Real, incident: Vector)
 }
 
 extension PhaseFunction {
@@ -20,7 +20,7 @@ extension PhaseFunction {
                 return BsdfSample(RgbSpectrum(intensity: value), incident, value)
         }
 
-        func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 return evaluate(outgoing: outgoing, incident: incident)
         }
 }

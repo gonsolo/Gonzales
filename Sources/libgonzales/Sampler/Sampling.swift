@@ -6,14 +6,14 @@ func concentricSampleDisk(uSample: TwoRandomVariables) -> Point2f {
         if uOffset.x == 0 && uOffset.y == 0 {
                 return Point2f()
         }
-        var theta: FloatX = 0.0
-        var radius: FloatX = 0.0
+        var theta: Real = 0.0
+        var radius: Real = 0.0
         if abs(uOffset.x) > abs(uOffset.y) {
                 radius = uOffset.x
-                theta = (FloatX.pi / 4.0) * (uOffset.y / uOffset.x)
+                theta = (Real.pi / 4.0) * (uOffset.y / uOffset.x)
         } else {
                 radius = uOffset.y
-                theta = (FloatX.pi / 2.0) - (FloatX.pi / 4.0) * (uOffset.x / uOffset.y)
+                theta = (Real.pi / 2.0) - (Real.pi / 4.0) * (uOffset.x / uOffset.y)
         }
         return radius * Point2f(x: cos(theta), y: sin(theta))
 }
@@ -24,7 +24,7 @@ func cosineSampleHemisphere(uSample: TwoRandomVariables) -> Vector {
         return Vector(x: diskSample.x, y: diskSample.y, z: zComponent)
 }
 
-func powerHeuristic(pdfF: FloatX, pdfG: FloatX) -> FloatX {
+func powerHeuristic(pdfF: Real, pdfG: Real) -> Real {
         if pdfF == 0 || pdfG == 0 { return 0 }
         return (pdfF * pdfF) / (pdfF * pdfF + pdfG * pdfG)
 }

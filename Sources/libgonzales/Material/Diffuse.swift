@@ -8,7 +8,7 @@ struct Diffuse {
         func getBsdf(interaction: SurfaceInteraction) -> DiffuseBsdf {
                 let evaluation = reflectance.evaluate(at: interaction)
                 var reflectance = black
-                let reflectanceFloat = evaluation as? FloatX
+                let reflectanceFloat = evaluation as? Real
                 if reflectanceFloat != nil {
                         reflectance = RgbSpectrum(intensity: reflectanceFloat!)
                 }

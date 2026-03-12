@@ -6,7 +6,7 @@ public struct Normal3: Sendable, ThreeComponent {
                 self.z = 0
         }
 
-        public init(x: FloatX = 0, y: FloatX = 0, z: FloatX = 1) {
+        public init(x: Real = 0, y: Real = 0, z: Real = 1) {
                 self.x = x
                 self.y = y
                 self.z = z
@@ -36,9 +36,9 @@ public struct Normal3: Sendable, ThreeComponent {
                 self.z = xyz.2
         }
 
-        public var x: FloatX
-        public var y: FloatX
-        public var z: FloatX
+        public var x: Real
+        public var y: Real
+        public var z: Real
 }
 
 extension Normal3: CustomStringConvertible {

@@ -1,6 +1,6 @@
 import Foundation  // sin, cos
 
-let sceneDiameter: FloatX = 100.0
+let sceneDiameter: Real = 100.0
 
 struct InfiniteLight: LightSource {
 
@@ -18,14 +18,14 @@ struct InfiniteLight: LightSource {
                 point: Point, samples: TwoRandomVariables,
                 accelerator _: Accelerator, scene _: Scene
         ) -> LightSample {
-                let theta = samples.1 * FloatX.pi
-                let phi = samples.0 * 2 * FloatX.pi
+                let theta = samples.1 * Real.pi
+                let phi = samples.0 * 2 * Real.pi
                 let lightDirection = Vector(
                         x: sin(theta) * cos(phi),
                         y: sin(theta) * sin(phi),
                         z: cos(theta))
                 let direction = lightToWorld * lightDirection
-                let pdf = theta < machineEpsilon ? 0 : 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
+                let pdf = theta < machineEpsilon ? 0 : 1 / (2 * Real.pi * Real.pi * sin(theta))
                 let distantPoint = point + direction * sceneDiameter
                 let visibility = Visibility(from: point, target: distantPoint)
                 let uvCoordinates = directionToUV(direction: -direction)
@@ -41,26 +41,26 @@ struct InfiniteLight: LightSource {
         func probabilityDensityFor<I: Interaction>(
                 scene _: Scene, samplingDirection direction: Vector, from _: I
         )
-                throws -> FloatX {
+                throws -> Real {
                 let incoming = worldToLight * direction
                 let (theta, _) = sphericalCoordinatesFrom(vector: incoming)
                 guard theta > machineEpsilon else { return 0 }
-                let pdf: FloatX = 1 / (2 * FloatX.pi * FloatX.pi * sin(theta))
+                let pdf: Real = 1 / (2 * Real.pi * Real.pi * sin(theta))
                 return pdf
         }
 
-        let inv2Pi: FloatX = 1.0 / (2.0 * FloatX.pi)
+        let inv2Pi: Real = 1.0 / (2.0 * Real.pi)
 
-        private func sphericalPhi(_ vector: Vector) -> FloatX {
+        private func sphericalPhi(_ vector: Vector) -> Real {
                 let phi = atan2(vector.y, vector.x)
                 if phi < 0.0 {
-                        return phi + 2.0 * FloatX.pi
+                        return phi + 2.0 * Real.pi
                 } else {
                         return phi
                 }
         }
 
-        private func sphericalTheta(_ vector: Vector) -> FloatX {
+        private func sphericalTheta(_ vector: Vector) -> Real {
                 return acos(clamp(value: vector.z, low: -1, high: 1))
         }
 
@@ -82,12 +82,12 @@ struct InfiniteLight: LightSource {
                 } else {
                         coeffB /= coeffA
                 }
-                var phi = atan(coeffB) * 2 / FloatX.pi
+                var phi = atan(coeffB) * 2 / Real.pi
                 if x < y {
                         phi = 1 - phi
                 }
-                var vCoord: FloatX = phi * radius
-                var uCoord: FloatX = radius - vCoord
+                var vCoord: Real = phi * radius
+                var uCoord: Real = radius - vCoord
                 if direction.z < 0 {
                         swap(&uCoord, &vCoord)
                         uCoord = 1 - uCoord
@@ -108,9 +108,9 @@ struct InfiniteLight: LightSource {
                 return radiance
         }
 
-        func power(scene _: Scene) -> FloatX {
+        func power(scene _: Scene) -> Real {
                 let worldRadius = sceneDiameter / 2
-                return FloatX.pi * square(worldRadius) * brightness.average()
+                return Real.pi * square(worldRadius) * brightness.average()
         }
 
         var worldToLight: Transform {

@@ -181,9 +181,9 @@ extension Parser {
                 return string
         }
 
-        private func parseFloatXs() throws -> [FloatX] {
-                var values = [FloatX]()
-                while let value = try parseFloatX() {
+        private func parseReals() throws -> [Real] {
+                var values = [Real]()
+                while let value = try parseReal() {
                         values.append(value)
                 }
                 return values
@@ -203,24 +203,24 @@ extension Parser {
                 return x
         }
 
-        private func parseFloatX() throws -> FloatX? {
+        private func parseReal() throws -> Real? {
                 var x: Float = 0
                 guard try scanner.scanFloat(&x) else { return nil }
-                return FloatX(x)
+                return Real(x)
         }
 
-        private func parseTwoFloatXs() throws -> (FloatX, FloatX)? {
-                guard let x = try parseFloatX() else { return nil }
-                guard let y = try parseFloatX() else { return nil }
+        private func parseTwoReals() throws -> (Real, Real)? {
+                guard let x = try parseReal() else { return nil }
+                guard let y = try parseReal() else { return nil }
                 let result = (x, y)
                 return result
         }
 
         // swiftlint:disable:next large_tuple
-        private func parseThreeFloatXs() throws -> (FloatX, FloatX, FloatX)? {
-                guard let x = try parseFloatX() else { return nil }
-                guard let y = try parseFloatX() else { return nil }
-                guard let z = try parseFloatX() else { return nil }
+        private func parseThreeReals() throws -> (Real, Real, Real)? {
+                guard let x = try parseReal() else { return nil }
+                guard let y = try parseReal() else { return nil }
+                guard let z = try parseReal() else { return nil }
                 let result = (x, y, z)
                 return result
         }
@@ -242,7 +242,7 @@ extension Parser {
                 if let namedSpectrum = try parseNamedSpectrum() {
                         return namedSpectrum
                 }
-                guard let threeFloats = try parseThreeFloatXs() else {
+                guard let threeFloats = try parseThreeReals() else {
                         return nil
                 }
                 return RgbSpectrum(rgb: threeFloats)
@@ -257,14 +257,14 @@ extension Parser {
         }
 
         private func parsePoint() throws -> Point? {
-                guard let threeFloats = try parseThreeFloatXs() else {
+                guard let threeFloats = try parseThreeReals() else {
                         return nil
                 }
                 return Point(xyz: threeFloats)
         }
 
         private func parsePoint2() throws -> Point2f? {
-                guard let twoFloats = try parseTwoFloatXs() else {
+                guard let twoFloats = try parseTwoReals() else {
                         return nil
                 }
                 return Point2f(xAndY: twoFloats)
@@ -279,7 +279,7 @@ extension Parser {
         }
 
         private func parseVector() throws -> Vector {
-                guard let floats = try parseThreeFloatXs() else {
+                guard let floats = try parseThreeReals() else {
                         try bail()
                 }
                 return Vector(xyz: floats)
@@ -287,7 +287,7 @@ extension Parser {
 
         private func parseVectors() throws -> [Vector] {
                 var vectors = [Vector]()
-                while let floats = try parseThreeFloatXs() {
+                while let floats = try parseThreeReals() {
                         let vector = Vector(xyz: floats)
                         vectors.append(vector)
                 }
@@ -295,7 +295,7 @@ extension Parser {
         }
 
         private func parseNormal() throws -> Normal? {
-                guard let threeFloats = try parseThreeFloatXs() else {
+                guard let threeFloats = try parseThreeReals() else {
                         return nil
                 }
                 return Normal(xyz: threeFloats)
@@ -313,14 +313,14 @@ extension Parser {
         private func parseValue(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
-                        guard let value = try parseFloatX() else {
+                        guard let value = try parseReal() else {
                                 try bail(message: "Blackbody expected")
                         }
                         return blackBodyDummy(value: value)
                 case "bool":
                         return try parseBool()
                 case "float":
-                        guard let value = try parseFloatX() else {
+                        guard let value = try parseReal() else {
                                 try bail(message: "Float expected")
                         }
                         return [value]
@@ -367,7 +367,7 @@ extension Parser {
                 }
         }
 
-        private func blackBodyDummy(value _: FloatX) -> [RgbSpectrum] {
+        private func blackBodyDummy(value _: Real) -> [RgbSpectrum] {
                 print("Warning: Blackbody emission is not implemented!")
                 return [gray]
         }
@@ -376,12 +376,12 @@ extension Parser {
         private func parseValues(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
-                        let value = try parseFloatXs()
+                        let value = try parseReals()
                         return blackBodyDummy(value: value[0])
                 case "bool":
                         return try parseBool()
                 case "float":
-                        return try parseFloatXs()
+                        return try parseReals()
                 case "integer":
                         return parseIntegers()
                 case "normal":
@@ -389,7 +389,7 @@ extension Parser {
                 case "point", "point3":
                         return try parsePoints()
                 case "point2":
-                        return try parseFloatXs()
+                        return try parseReals()
                 case "rgb", "color", "spectrum":
                         return try parseRGBSpectra()
                 case "string":
@@ -465,17 +465,17 @@ extension Parser {
         }
 
         private func parseRotate() throws {
-                guard let angle = try parseFloatX() else { try bail() }
-                guard let floats = try parseThreeFloatXs() else { try bail() }
+                guard let angle = try parseReal() else { try bail() }
+                guard let floats = try parseThreeReals() else { try bail() }
                 let axis = Vector(xyz: floats)
-                try sceneDescription.rotate(by: FloatX(angle), around: axis)
+                try sceneDescription.rotate(by: Real(angle), around: axis)
         }
 
-        private func scanTransform() throws -> [FloatX] {
+        private func scanTransform() throws -> [Real] {
                 if scanner.scanString("[") == nil { try bail() }
-                var values = [FloatX]()
+                var values = [Real]()
                 for _ in 0..<16 {
-                        guard let value = try parseFloatX() else { try bail() }
+                        guard let value = try parseReal() else { try bail() }
                         values.append(value)
                 }
                 if scanner.scanString("]") == nil { try bail() }
@@ -496,7 +496,7 @@ extension Parser {
         }
 
         private func parseTranslate() throws {
-                guard let floats = try parseThreeFloatXs() else { try bail() }
+                guard let floats = try parseThreeReals() else { try bail() }
                 let translation = Vector(xyz: floats)
                 try sceneDescription.translate(amount: translation)
         }
@@ -508,7 +508,7 @@ extension Parser {
         }
 
         private func parseScale() throws {
-                guard let floats = try parseThreeFloatXs() else { try bail() }
+                guard let floats = try parseThreeReals() else { try bail() }
                 try sceneDescription.scale(x: floats.0, y: floats.1, z: floats.2)
         }
 

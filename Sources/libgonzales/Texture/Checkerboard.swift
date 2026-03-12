@@ -19,5 +19,5 @@ struct Checkerboard {
         }
 
         let textures: (Texture, Texture)
-        let scale: (FloatX, FloatX)
+        let scale: (Real, Real)
 }

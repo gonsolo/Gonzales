@@ -29,7 +29,7 @@ class RenderConfiguration {
                 }
                 let resolution = Point2i(x: x, y: y)
                 let fileName = try filmParameters.findString(called: "filename") ?? "gonzales.exr"
-                let crop = try filmParameters.findFloatXs(called: "cropwindow")
+                let crop = try filmParameters.findReals(called: "cropwindow")
                 var cropWindow = Bounds2f()
                 if !crop.isEmpty {
                         guard crop.count == 4 else { throw OptionError.crop }
@@ -47,9 +47,9 @@ class RenderConfiguration {
 
         func makeFilter(name: String, parameters: ParameterDictionary) throws -> any Filter {
 
-                func makeSupport(withDefault support: (FloatX, FloatX) = (2, 2)) throws -> Vector2F {
-                        let xwidth = try parameters.findOneFloatX(called: "xradius", else: support.0)
-                        let ywidth = try parameters.findOneFloatX(called: "yradius", else: support.1)
+                func makeSupport(withDefault support: (Real, Real) = (2, 2)) throws -> Vector2F {
+                        let xwidth = try parameters.findOneReal(called: "xradius", else: support.0)
+                        let ywidth = try parameters.findOneReal(called: "yradius", else: support.1)
                         return Vector2F(x: xwidth, y: ywidth)
                 }
 
@@ -60,7 +60,7 @@ class RenderConfiguration {
                         filter = BoxFilter(support: support)
                 case "gaussian":
                         let support = try makeSupport(withDefault: (1.5, 1.5))
-                        let sigma = try parameters.findOneFloatX(called: "sigma", else: 0.5)
+                        let sigma = try parameters.findOneReal(called: "sigma", else: 0.5)
                         filter = GaussianFilter(withSupport: support, withSigma: sigma)
                 // mitchell missing
                 // sinc missing
@@ -78,7 +78,7 @@ class RenderConfiguration {
                 let filter = try makeFilter(name: filterName, parameters: filterParameters)
                 let film = try makeFilm(filter: filter, quick: quick)
                 let resolution = film.getResolution()
-                let frame = FloatX(resolution.x) / FloatX(resolution.y)
+                let frame = Real(resolution.x) / Real(resolution.y)
                 var screen = Bounds2f()
 
                 if frame > 1 {
@@ -93,7 +93,7 @@ class RenderConfiguration {
                         screen.pMin.y = -1 / frame
                         screen.pMax.y = +1 / frame
                 }
-                let screenWindow = try cameraParameters.findFloatXs(called: "screenwindow")
+                let screenWindow = try cameraParameters.findReals(called: "screenwindow")
                 if !screenWindow.isEmpty {
                         if screenWindow.count != 4 {
                                 print("Warning: screenwindow must be four coordinates!")
@@ -104,11 +104,11 @@ class RenderConfiguration {
                                 screen.pMax.y = screenWindow[3]
                         }
                 }
-                let fov = try cameraParameters.findOneFloatX(called: "fov", else: 30)
-                let focalDistance = try cameraParameters.findOneFloatX(
+                let fov = try cameraParameters.findOneReal(called: "fov", else: 30)
+                let focalDistance = try cameraParameters.findOneReal(
                         called: "focaldistance",
                         else: 1e6)
-                let lensRadius = try cameraParameters.findOneFloatX(called: "lensradius", else: 0)
+                let lensRadius = try cameraParameters.findOneReal(called: "lensradius", else: 0)
                 return try PerspectiveCamera(
                         cameraToWorld: cameraToWorld,
                         screenWindow: screen,

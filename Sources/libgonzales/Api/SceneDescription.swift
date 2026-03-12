@@ -115,7 +115,7 @@ extension SceneDescription {
                 currentTransform = transform
         }
 
-        func concatTransform(values: [FloatX]) throws {
+        func concatTransform(values: [Real]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
@@ -216,7 +216,7 @@ extension SceneDescription {
                 case "cloud":
                         print("Warning: Cloud is not implemented!")
                 case "homogeneous":
-                        let scale = try parameters.findOneFloatX(called: "scale", else: 1)
+                        let scale = try parameters.findOneReal(called: "scale", else: 1)
                         let absorption =
                                 try parameters.findSpectrum(name: "sigma_a", else: white)?.asRgb() ?? white
                         let scattering =
@@ -281,7 +281,7 @@ extension SceneDescription {
                         return
                 }
                 let material = try state.createMaterial(parameters: parameters)
-                let alpha = try parameters.findOneFloatX(called: "alpha", else: 1)
+                let alpha = try parameters.findOneReal(called: "alpha", else: 1)
                 if !state.areaLight.isEmpty {
                         for shape in shapes {
                                 guard state.areaLight == "area" || state.areaLight == "diffuse"
@@ -331,7 +331,7 @@ extension SceneDescription {
                 }
         }
 
-        func transform(values: [FloatX]) throws {
+        func transform(values: [Real]) throws {
                 let matrix = Matrix(
                         t00: values[0], t01: values[4], t02: values[8], t03: values[12],
                         t10: values[1], t11: values[5], t12: values[9], t13: values[13],
@@ -351,7 +351,7 @@ extension SceneDescription {
                 currentTransform = last
         }
 
-        func scale(x: FloatX, y: FloatX, z: FloatX) throws {
+        func scale(x: Real, y: Real, z: Real) throws {
                 let matrix = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: y, t12: 0, t13: 0,
@@ -366,7 +366,7 @@ extension SceneDescription {
                 readTimer = Timer("Reading...", newline: false)
         }
 
-        func rotate(by angle: FloatX, around axis: Vector) throws {
+        func rotate(by angle: Real, around axis: Vector) throws {
                 let normalizedAxis = normalized(axis)
                 let theta = radians(deg: angle)
                 let sinTheta = sin(theta)
@@ -410,7 +410,7 @@ extension SceneDescription {
                                         name: "value", textures: state.textures)
                                 texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
                         case "float":
-                                let floatTexture = try parameters.findFloatXTexture(
+                                let floatTexture = try parameters.findRealTexture(
                                         name: "value", textures: state.textures)
                                 texture = Texture.floatTexture(floatTexture)
                         default:

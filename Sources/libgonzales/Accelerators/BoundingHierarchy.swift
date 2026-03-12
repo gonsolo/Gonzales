@@ -32,7 +32,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray)
                         throws
-                var tHit: FloatX { get set }
+                var tHit: Real { get set }
         }
 
         // --- 2. Private Traversal Helper (Generic Shared Logic) ---
@@ -97,7 +97,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         private struct OcclusionProcessor: LeafProcessor {
                 var intersected: Bool = false
-                var tHit: FloatX
+                var tHit: Real
 
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
@@ -117,7 +117,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         func intersect(
                 scene: Scene,
                 ray: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> Bool {
                 var processor = OcclusionProcessor(tHit: tHit)
                 try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
@@ -129,7 +129,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         private struct InteractionProcessor: LeafProcessor {
                 var index: Int = 0
                 var gdata: TriangleIntersection?
-                var tHit: FloatX
+                var tHit: Real
 
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
@@ -153,7 +153,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         func intersect(
                 scene: Scene,
                 ray: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> SurfaceInteraction? {
                 var processor = InteractionProcessor(tHit: tHit)
                 try traverseHierarchy(scene: scene, ray: ray, processor: &processor)

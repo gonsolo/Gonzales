@@ -22,7 +22,7 @@ struct Scene {
                 self.areaLights = areaLights
         }
 
-        func intersect(primId: PrimId, ray: Ray, tHit: inout FloatX) throws -> Bool {
+        func intersect(primId: PrimId, ray: Ray, tHit: inout Real) throws -> Bool {
                 switch primId.type {
                 case .triangle:
                         let triangle = try Triangle(
@@ -43,7 +43,7 @@ struct Scene {
         func getIntersectionData(
                 primId: PrimId,
                 ray: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 data: inout TriangleIntersection
         ) throws
                 -> Bool {

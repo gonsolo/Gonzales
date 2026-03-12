@@ -46,7 +46,7 @@ enum ShapeType: Shape {
         func getIntersectionData(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 switch self {
@@ -77,7 +77,7 @@ enum ShapeType: Shape {
         func intersect(
                 scene: Scene,
                 ray: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> SurfaceInteraction? {
 
                 switch self {
@@ -93,7 +93,7 @@ enum ShapeType: Shape {
         }
 
         func sample(samples: TwoRandomVariables, scene: Scene) throws -> (
-                interaction: SurfaceInteraction, pdf: FloatX
+                interaction: SurfaceInteraction, pdf: Real
         ) {
                 switch self {
                 case .triangle(let triangle):
@@ -107,7 +107,7 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, FloatX) {
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real) {
                 switch self {
                 case .triangle(let triangle):
                         return try triangle.sample(point: point, samples: samples, scene: scene)
@@ -120,7 +120,7 @@ enum ShapeType: Shape {
                 }
         }
 
-        func area(scene: Scene) throws -> FloatX {
+        func area(scene: Scene) throws -> Real {
                 switch self {
                 case .triangle(let triangle):
                         return triangle.area(scene: scene)
@@ -137,7 +137,7 @@ enum ShapeType: Shape {
                 scene: Scene,
                 samplingDirection direction: Vector,
                 from interaction: I
-        ) throws -> FloatX {
+        ) throws -> Real {
                 switch self {
                 case .triangle(let triangle):
                         return try triangle.probabilityDensityFor(

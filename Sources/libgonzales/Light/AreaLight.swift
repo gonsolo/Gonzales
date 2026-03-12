@@ -2,7 +2,7 @@ import Foundation
 
 struct AreaLight: Boundable, Intersectable, LightSource {
 
-        init(brightness: RgbSpectrum, shape: ShapeType, alpha: FloatX, idx: Int) {
+        init(brightness: RgbSpectrum, shape: ShapeType, alpha: Real, idx: Int) {
                 self.brightness = brightness
                 self.shape = shape
                 self.alpha = alpha
@@ -29,15 +29,15 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                 samplingDirection direction: Vector,
                 from reference: I
         )
-                throws -> FloatX {
+                throws -> Real {
                 return try shape.probabilityDensityFor(
                         scene: scene, samplingDirection: direction, from: reference)
         }
 
         func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
-        func power(scene: Scene) throws -> FloatX {
-                return try brightness.average() * shape.area(scene: scene) * FloatX.pi
+        func power(scene: Scene) throws -> Real {
+                return try brightness.average() * shape.area(scene: scene) * Real.pi
         }
 
         func worldBound(scene: Scene) throws -> Bounds3f {
@@ -51,7 +51,7 @@ struct AreaLight: Boundable, Intersectable, LightSource {
         func getIntersectionData(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 if alpha == 0 { return false }
@@ -75,7 +75,7 @@ struct AreaLight: Boundable, Intersectable, LightSource {
         func intersect(
                 scene: Scene,
                 ray: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
                 var interaction = try shape.intersect(
@@ -95,7 +95,7 @@ struct AreaLight: Boundable, Intersectable, LightSource {
 
         let shape: ShapeType
         let brightness: RgbSpectrum
-        let alpha: FloatX
+        let alpha: Real
         let idx: Int
 }
 

@@ -26,7 +26,7 @@ extension VolumePathIntegrator {
 
         mutating func evaluateRayPath(
                 from ray: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 with sampler: inout Sampler,
                 lightSampler: inout LightSampler,
                 state: ImmutableState
@@ -66,7 +66,7 @@ extension VolumePathIntegrator {
 extension VolumePathIntegrator {
         private struct BounceState {
                 var ray: Ray
-                var tHit: FloatX
+                var tHit: Real
                 var bounce: Int
                 var estimate: RgbSpectrum
                 var throughput: RgbSpectrum
@@ -87,7 +87,7 @@ extension VolumePathIntegrator {
                 outgoing: Vector,
                 distributionModel: D,
                 sample: Vector
-        ) -> FloatX {
+        ) -> Real {
                 return distributionModel.evaluateProbabilityDensity(outgoing: outgoing, incident: sample)
         }
 
@@ -96,13 +96,13 @@ extension VolumePathIntegrator {
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws
-                -> (Light, FloatX) {
+                -> (Light, Real) {
                 return try lightSampler.chooseLight(scene: scene)
         }
 
         private func intersectOrInfiniteLights(
                 ray: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 bounce: Int,
                 estimate: inout RgbSpectrum,
                 interaction: inout SurfaceInteraction?
@@ -157,7 +157,7 @@ extension VolumePathIntegrator {
                         return zero
                 }
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
-                var tHit = FloatX.infinity
+                var tHit = Real.infinity
                 let brdfInteraction = try accelerator.intersect(
                         scene: scene,
                         ray: ray,
@@ -313,8 +313,8 @@ extension VolumePathIntegrator {
         private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
                 -> Bool {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
-                        let probability: FloatX = max(0, 1 - pathThroughputWeight.maxValue)
-                        let roulette = FloatX.random(in: 0..<1, using: &xoshiro)
+                        let probability: Real = max(0, 1 - pathThroughputWeight.maxValue)
+                        let roulette = Real.random(in: 0..<1, using: &xoshiro)
                         if roulette < probability {
                                 return true
                         }
@@ -444,7 +444,7 @@ extension VolumePathIntegrator {
                         }
                 }
 
-                state.tHit = FloatX.infinity
+                state.tHit = Real.infinity
                 if stopWithRussianRoulette(
                         bounce: state.bounce,
                         pathThroughputWeight: &state.throughput) {

@@ -17,7 +17,7 @@ import Testing
         @Test func normalIncidenceWater() {
                 // Water η≈1.33: R = ((1 - 1.33) / (1 + 1.33))^2 = 0.02
                 let result = FresnelDielectric.reflected(cosThetaI: 1.0, refractiveIndex: 1.33)
-                let expected: FloatX = Glibc.powf(FloatX((1 - 1.33) / (1 + 1.33)), FloatX(2))
+                let expected: Real = Glibc.powf(Real((1 - 1.33) / (1 + 1.33)), Real(2))
                 #expect(abs(result - expected) <= 1e-4)
         }
 
@@ -56,8 +56,8 @@ import Testing
         // MARK: - Symmetry and Range
 
         @Test func resultAlwaysInZeroOneRange() {
-                let angles: [FloatX] = [-1.0, -0.5, -0.1, 0.0, 0.1, 0.5, 0.7, 0.9, 1.0]
-                let etas: [FloatX] = [1.0, 1.33, 1.5, 2.0, 2.5]
+                let angles: [Real] = [-1.0, -0.5, -0.1, 0.0, 0.1, 0.5, 0.7, 0.9, 1.0]
+                let etas: [Real] = [1.0, 1.33, 1.5, 2.0, 2.5]
                 for cosTheta in angles {
                         for eta in etas {
                                 let result = FresnelDielectric.reflected(
@@ -74,10 +74,10 @@ import Testing
 
         @Test func reflectanceIncreasesWithAngle() {
                 // Reflectance should increase monotonically as cosθ decreases from 1 to 0
-                let eta: FloatX = 1.5
-                var previousReflectance: FloatX = 0
+                let eta: Real = 1.5
+                var previousReflectance: Real = 0
                 for i in stride(from: 10, through: 1, by: -1) {
-                        let cosTheta = FloatX(i) / 10.0
+                        let cosTheta = Real(i) / 10.0
                         let reflectance = FresnelDielectric.reflected(
                                 cosThetaI: cosTheta, refractiveIndex: eta)
                         #expect(

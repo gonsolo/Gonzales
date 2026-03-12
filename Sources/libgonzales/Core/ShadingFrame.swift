@@ -34,7 +34,7 @@ extension ShadingFrame {
                 var y: Vector
                 let z = normalized(z)
 
-                let sign: FloatX = (z.z >= 0) ? 1.0 : -1.0
+                let sign: Real = (z.z >= 0) ? 1.0 : -1.0
 
                 let valA = -1.0 / (sign + z.z)
                 let valB = z.x * z.y * valA

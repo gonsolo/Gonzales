@@ -23,7 +23,7 @@ struct PowerLightSampler: Sendable {
                 self.sampler = sampler
                 self.lights = lights
 
-                var cumulativePowers = [FloatX]()
+                var cumulativePowers = [Real]()
                 totalPower = try lights.reduce(
                         0, { total, light in try total + light.power(scene: scene) })
                 for (index, light) in lights.enumerated() {
@@ -37,7 +37,7 @@ struct PowerLightSampler: Sendable {
                 self.cumulativePowers = cumulativePowers
         }
 
-        mutating func chooseLight(scene: Scene) throws -> (Light, FloatX) {
+        mutating func chooseLight(scene: Scene) throws -> (Light, Real) {
                 assert(lights.count > 0)
                 let uSample = sampler.get1D()
                 let powerIndex = uSample * totalPower
@@ -49,6 +49,6 @@ struct PowerLightSampler: Sendable {
 
         var sampler: Sampler
         let lights: [Light]
-        let cumulativePowers: [FloatX]
-        let totalPower: FloatX
+        let cumulativePowers: [Real]
+        let totalPower: Real
 }

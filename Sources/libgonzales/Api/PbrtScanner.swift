@@ -141,7 +141,7 @@ final class PbrtScanner {
                         doubleValue *= pow(Double(10), Double(exponent))
                 }
 
-                float = FloatX(doubleValue)
+                float = Real(doubleValue)
 
                 if isNegative && intPart == 0 {
                         float = -float

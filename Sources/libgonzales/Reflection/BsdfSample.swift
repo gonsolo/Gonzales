@@ -3,7 +3,7 @@ public struct BsdfSample: Sendable {
         init(
                 _ estimate: RgbSpectrum = black,
                 _ incoming: Vector = nullVector,
-                _ probabilityDensity: FloatX = 0
+                _ probabilityDensity: Real = 0
         ) {
                 self.estimate = estimate
                 self.incoming = incoming
@@ -28,7 +28,7 @@ public struct BsdfSample: Sendable {
 
         var estimate: RgbSpectrum
         let incoming: Vector
-        var probabilityDensity: FloatX
+        var probabilityDensity: Real
 }
 
 let invalidBsdfSample = BsdfSample()

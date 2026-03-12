@@ -4,16 +4,16 @@ public struct Point3: Sendable, ThreeComponent {
                 self.init(x: 0, y: 0, z: 0)
         }
 
-        public init(x: FloatX, y: FloatX, z: FloatX) {
-                self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
+        public init(x: Real, y: Real, z: Real) {
+                self.xyz = SIMD4<Real>(x, y, z, 1.0)
         }
 
         init(_ point: Point3) {
-                self.xyz = SIMD4<FloatX>(point.x, point.y, point.z, 1.0)
+                self.xyz = SIMD4<Real>(point.x, point.y, point.z, 1.0)
         }
 
-        init(xyz: (FloatX, FloatX, FloatX)) {
-                self.xyz = SIMD4<FloatX>(xyz.0, xyz.1, xyz.2, 1.0)
+        init(xyz: (Real, Real, Real)) {
+                self.xyz = SIMD4<Real>(xyz.0, xyz.1, xyz.2, 1.0)
         }
 
         init(_ normal: Normal3) {
@@ -23,33 +23,33 @@ public struct Point3: Sendable, ThreeComponent {
                         z: normal.z)
         }
 
-        subscript(index: Int) -> FloatX {
+        subscript(index: Int) -> Real {
                 get { return xyz[index] }
                 set(newValue) { xyz[index] = newValue }
         }
 
-        public var x: FloatX {
+        public var x: Real {
                 get { return xyz.x }
                 set { xyz.x = newValue }
         }
 
-        public var y: FloatX {
+        public var y: Real {
                 get { return xyz.y }
                 set { xyz.y = newValue }
         }
 
-        public var z: FloatX {
+        public var z: Real {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }
 
-        public static func * (mul: FloatX, point: Point3) -> Point3 {
+        public static func * (mul: Real, point: Point3) -> Point3 {
                 var p = Point3()
                 p.xyz = point.xyz * mul
                 return p
         }
 
-        public static func / (point: Point3, divisor: FloatX) -> Point3 {
+        public static func / (point: Point3, divisor: Real) -> Point3 {
                 var p = Point3()
                 p.xyz = point.xyz / divisor
                 return p
@@ -79,7 +79,7 @@ public struct Point3: Sendable, ThreeComponent {
                 return v
         }
 
-        var xyz: SIMD4<FloatX>
+        var xyz: SIMD4<Real>
 }
 
 extension Point3: CustomStringConvertible {

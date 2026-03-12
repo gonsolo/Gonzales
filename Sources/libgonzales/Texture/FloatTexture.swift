@@ -1,12 +1,12 @@
 enum FloatTexture {
-        case constantTexture(ConstantTexture<FloatX>)
+        case constantTexture(ConstantTexture<Real>)
         case openImageIoTexture(OpenImageIOTexture)
 
         // This should be not here: It forces FloatTexture to be indirect which forces it to be
         // stored on the heap.
         // case floatMixTexture(FloatMixTexture)
 
-        func evaluateFloat(at interaction: any Interaction) -> FloatX {
+        func evaluateFloat(at interaction: any Interaction) -> Real {
                 switch self {
                 case .constantTexture(let constantTexture):
                         return constantTexture.evaluateFloat(at: interaction)

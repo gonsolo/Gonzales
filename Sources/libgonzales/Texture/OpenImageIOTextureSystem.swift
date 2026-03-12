@@ -22,10 +22,10 @@ final class OpenImageIOTextureSystem: Sendable {
                 }
         }
 
-        func evaluate(filename: String, s: Float, t: Float) -> FloatX {
+        func evaluate(filename: String, s: Float, t: Float) -> Real {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 1)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)
-                let result = FloatX(pointer[0])
+                let result = Real(pointer[0])
                 return result
         }
 

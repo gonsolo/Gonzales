@@ -7,7 +7,7 @@ import Testing
         func runShadingTest(frame shadingFrame: ShadingFrame, description: String) {
 
                 let bsdfFrame = BsdfFrame(geometricNormal: upNormal, shadingFrame: shadingFrame)
-                let alpha: (FloatX, FloatX) = (0.001, 0.001)
+                let alpha: (Real, Real) = (0.001, 0.001)
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let dielectric = DielectricBsdf(
                         distribution: distribution, refractiveIndex: 1.0, bsdfFrame: bsdfFrame)

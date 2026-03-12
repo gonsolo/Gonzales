@@ -70,9 +70,9 @@ extension ParameterDictionary {
                 }
         }
 
-        func findFloatXTexture(
+        func findRealTexture(
                 name: String, textures: [String: Texture],
-                else value: FloatX = 1.0
+                else value: Real = 1.0
         ) throws -> FloatTexture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
@@ -88,8 +88,8 @@ extension ParameterDictionary {
                                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "No named float texture \"\(textureName)\"")
                         }
                 } else {
-                        let value = try findOneFloatX(called: name, else: value)
-                        return FloatTexture.constantTexture(ConstantTexture<FloatX>(value: value))
+                        let value = try findOneReal(called: name, else: value)
+                        return FloatTexture.constantTexture(ConstantTexture<Real>(value: value))
                 }
         }
 
@@ -102,8 +102,8 @@ extension ParameterDictionary {
                 }
         }
 
-        func findOneFloatXOptional(called name: String) throws -> FloatX? {
-                let floats = try findFloatXs(called: name)
+        func findOneRealOptional(called name: String) throws -> Real? {
+                let floats = try findReals(called: name)
                 if floats.isEmpty {
                         return nil
                 } else {
@@ -111,8 +111,8 @@ extension ParameterDictionary {
                 }
         }
 
-        func findOneFloatX(called name: String, else preset: FloatX) throws -> FloatX {
-                let floats = try findFloatXs(called: name)
+        func findOneReal(called name: String, else preset: Real) throws -> Real {
+                let floats = try findReals(called: name)
                 if floats.isEmpty {
                         return preset
                 } else {
@@ -129,8 +129,8 @@ extension ParameterDictionary {
                 }
         }
 
-        func findFloatXs(called name: String) throws -> [FloatX] {
-                guard let floats = self[name] as? [FloatX] else {
+        func findReals(called name: String) throws -> [Real] {
+                guard let floats = self[name] as? [Real] else {
                         return []
                 }
                 return floats

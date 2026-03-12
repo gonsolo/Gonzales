@@ -12,7 +12,7 @@ struct PointLight: LightSource {
                 accelerator _: Accelerator, scene _: Scene
         ) -> LightSample {
                 let direction: Vector = normalized(position - point)
-                let pdf: FloatX = 1.0
+                let pdf: Real = 1.0
                 let visibility = Visibility(from: point, target: position)
                 let distance2 = distanceSquared(position, point)
                 let radiance = intensity / distance2
@@ -22,14 +22,14 @@ struct PointLight: LightSource {
         func probabilityDensityFor<I: Interaction>(
                 scene _: Scene, samplingDirection _: Vector, from _: I
         )
-                throws -> FloatX {
+                throws -> Real {
                 return 0
         }
 
         func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
-        func power(scene _: Scene) -> FloatX {
-                return intensity.average() * 4 * FloatX.pi
+        func power(scene _: Scene) -> Real {
+                return intensity.average() * 4 * Real.pi
         }
 
         let position: Point

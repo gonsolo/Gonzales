@@ -25,7 +25,7 @@ extension DiffuseTransmission {
                 name: "transmittance",
                 textures: textures,
                 else: RgbSpectrum(intensity: 1))
-        let scale = try parameters.findFloatXTexture(name: "scale", textures: textures, else: 1.0)
+        let scale = try parameters.findRealTexture(name: "scale", textures: textures, else: 1.0)
         return DiffuseTransmission(
                 reflectance: reflectance,
                 transmittance: transmittance,

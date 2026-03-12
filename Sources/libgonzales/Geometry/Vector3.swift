@@ -1,11 +1,11 @@
 public struct Vector3: Sendable, ThreeComponent {
 
-        public init(x: FloatX, y: FloatX, z: FloatX) {
-                self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
+        public init(x: Real, y: Real, z: Real) {
+                self.xyz = SIMD4<Real>(x, y, z, 1.0)
         }
 
-        init(value: FloatX) {
-                self.xyz = SIMD4<FloatX>(value, value, value, 1.0)
+        init(value: Real) {
+                self.xyz = SIMD4<Real>(value, value, value, 1.0)
         }
 
         init() {
@@ -16,11 +16,11 @@ public struct Vector3: Sendable, ThreeComponent {
                 self.init(x: vector.x, y: vector.y, z: vector.z)
         }
 
-        init(xyz: (FloatX, FloatX, FloatX)) {
+        init(xyz: (Real, Real, Real)) {
                 self.init(x: xyz.0, y: xyz.1, z: xyz.2)
         }
 
-        subscript(index: Int) -> FloatX {
+        subscript(index: Int) -> Real {
                 get { return xyz[index] }
                 set(newValue) { xyz[index] = newValue }
         }
@@ -33,22 +33,22 @@ public struct Vector3: Sendable, ThreeComponent {
                 return x.isZero && y.isZero && z.isZero
         }
 
-        public var x: FloatX {
+        public var x: Real {
                 get { return xyz.x }
                 set { xyz.x = newValue }
         }
 
-        public var y: FloatX {
+        public var y: Real {
                 get { return xyz.y }
                 set { xyz.y = newValue }
         }
 
-        public var z: FloatX {
+        public var z: Real {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }
 
-        var xyz: SIMD4<FloatX>
+        var xyz: SIMD4<Real>
 }
 
 extension Vector3 {
@@ -74,19 +74,19 @@ extension Vector3 {
                 return v
         }
 
-        public static func * (left: Vector3, right: FloatX) -> Vector3 {
+        public static func * (left: Vector3, right: Real) -> Vector3 {
                 var v = Vector3()
                 v.xyz = left.xyz * right
                 return v
         }
 
-        public static func * (left: FloatX, right: Vector3) -> Vector3 {
+        public static func * (left: Real, right: Vector3) -> Vector3 {
                 var v = Vector3()
                 v.xyz = left * right.xyz
                 return v
         }
 
-        public static func / (left: Vector3, right: FloatX) -> Vector3 {
+        public static func / (left: Vector3, right: Real) -> Vector3 {
                 var v = Vector3()
                 v.xyz = left.xyz / right
                 return v
@@ -112,11 +112,11 @@ extension Vector3 {
                 left.xyz -= right.xyz
         }
 
-        public static func *= (left: inout Vector3, right: FloatX) {
+        public static func *= (left: inout Vector3, right: Real) {
                 left.xyz *= right
         }
 
-        public static func /= (left: inout Vector3, right: FloatX) {
+        public static func /= (left: inout Vector3, right: Real) {
                 left.xyz /= right
         }
 }

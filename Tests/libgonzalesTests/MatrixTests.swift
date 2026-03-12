@@ -10,7 +10,7 @@ import Testing
                 let m = Matrix()
                 for i in 0..<4 {
                         for j in 0..<4 {
-                                let expected: FloatX = (i == j) ? 1 : 0
+                                let expected: Real = (i == j) ? 1 : 0
                                 #expect(abs(m[i, j] - expected) <= 1e-6)
                         }
                 }
@@ -116,7 +116,7 @@ import Testing
                 let result = m * (try m.inverse)
                 for i in 0..<4 {
                         for j in 0..<4 {
-                                let expected: FloatX = (i == j) ? 1 : 0
+                                let expected: Real = (i == j) ? 1 : 0
                                 #expect(abs(result[i, j] - expected) <= 1e-4)
                         }
                 }

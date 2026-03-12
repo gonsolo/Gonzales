@@ -7,5 +7,5 @@ struct RgbSpectrumMixTexture {
         }
 
         let textures: (RgbSpectrumTexture, RgbSpectrumTexture)
-        let amount: FloatX
+        let amount: Real
 }

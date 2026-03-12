@@ -16,7 +16,7 @@ struct Ray: Sendable {
                 self.cameraSample = cameraSample
         }
 
-        func getPointFor(parameter: FloatX) -> Point {
+        func getPointFor(parameter: Real) -> Point {
                 return origin + parameter * direction
         }
 

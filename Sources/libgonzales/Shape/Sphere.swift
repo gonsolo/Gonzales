@@ -2,7 +2,7 @@ import Foundation
 
 struct Sphere: Shape {
 
-        init(radius: FloatX, objectToWorld: Transform) {
+        init(radius: Real, objectToWorld: Transform) {
                 self.radius = radius
                 self.objectToWorld = objectToWorld
         }
@@ -27,24 +27,24 @@ struct Sphere: Shape {
 
                 let zComponent = 1 - 2 * samples.0
                 let radiusValue = max(0, 1 - zComponent * zComponent).squareRoot()
-                let phi = 2 * FloatX.pi * samples.1
+                let phi = 2 * Real.pi * samples.1
                 return Point(x: radiusValue * cos(phi), y: radiusValue * sin(phi), z: zComponent)
         }
 
         func sample(samples: TwoRandomVariables, scene _: Scene) -> (
-                interaction: SurfaceInteraction, pdf: FloatX
+                interaction: SurfaceInteraction, pdf: Real
         ) {
 
                 let localPosition = radius * uniformSampleSphere(samples: samples)
                 let worldNormal = normalized(objectToWorld * Normal(point: localPosition))
                 let worldPosition = objectToWorld * localPosition
                 let interaction = SurfaceInteraction(position: worldPosition, normal: worldNormal)
-                let pdf: FloatX = 1.0
+                let pdf: Real = 1.0
                 return (interaction, pdf)
         }
 
         func sample(ref: any Interaction, samples: TwoRandomVariables, scene: Scene)
-                -> (interaction: any Interaction, pdf: FloatX) {
+                -> (interaction: any Interaction, pdf: Real) {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
                         var (interaction, pdf) = sample(samples: samples, scene: scene)
@@ -78,7 +78,7 @@ struct Sphere: Shape {
                         sinTheta2 * invSinThetaMax + cosTheta
                         * (max(0, 1 - sinTheta2 * invSinThetaMax * invSinThetaMax)).squareRoot()
                 let sinAlpha = max(0, 1 - cosAlpha * cosAlpha).squareRoot()
-                let phi = samples.1 * 2 * FloatX.pi
+                let phi = samples.1 * 2 * Real.pi
                 let frame = ShadingFrame(x: -wcX, y: -wcY, z: -vectorCenter)
                 let worldNormal = Normal(
                         sphericalDirection(
@@ -88,25 +88,25 @@ struct Sphere: Shape {
                                 frame: frame))
                 let worldPoint = center + radius * Point(worldNormal)
                 let interaction = SurfaceInteraction(position: worldPoint, normal: worldNormal)
-                let pdf: FloatX = 1.0 / (2 * FloatX.pi * (1 - cosThetaMax))
+                let pdf: Real = 1.0 / (2 * Real.pi * (1 - cosThetaMax))
                 return (interaction, pdf)
         }
 
-        func area(scene _: Scene) -> FloatX {
-                return 4 * FloatX.pi * radius * radius
+        func area(scene _: Scene) -> Real {
+                return 4 * Real.pi * radius * radius
         }
 
-        func quadratic(coeffA: FloatX, coeffB: FloatX, coeffC: FloatX) -> (FloatX, FloatX)? {
+        func quadratic(coeffA: Real, coeffB: Real, coeffC: Real) -> (Real, Real)? {
                 let discriminant = coeffB * coeffB - 4 * coeffA * coeffC
                 guard discriminant > 0 else {
                         return nil
                 }
                 let rootDiscriminant = discriminant.squareRoot()
-                var qValue: FloatX = 0.0
+                var qValue: Real = 0.0
                 if coeffB < 0 {
-                        qValue = -FloatX(0.5) * (coeffB - rootDiscriminant)
+                        qValue = -Real(0.5) * (coeffB - rootDiscriminant)
                 } else {
-                        qValue = -FloatX(0.5) * (coeffB + rootDiscriminant)
+                        qValue = -Real(0.5) * (coeffB + rootDiscriminant)
                 }
                 let roots = [qValue / coeffA, coeffC / qValue].sorted()
                 return (roots[0], roots[1])
@@ -115,7 +115,7 @@ struct Sphere: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX
+                tHit _: inout Real
         ) throws -> Bool {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
@@ -123,7 +123,7 @@ struct Sphere: Shape {
         func intersect(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> SurfaceInteraction? {
                 let ray = getWorldToObject(scene: scene) * worldRay
                 let originX = ray.origin.x
@@ -154,7 +154,7 @@ struct Sphere: Shape {
                 if pHit.x == 0 && pHit.y == 0 { pHit.x = 0.00001 * radius }
                 let normal = normalized(Normal(point: pHit))
 
-                let phiMax = 2 * FloatX.pi
+                let phiMax = 2 * Real.pi
                 let dpdu = Vector(x: -phiMax * pHit.y, y: phiMax * pHit.x, z: 0)
 
                 let uvCoordinates = Point2f()
@@ -174,12 +174,12 @@ struct Sphere: Shape {
         }
 
         let objectToWorld: Transform
-        let radius: FloatX
+        let radius: Real
 }
 
 extension Sphere {
         static func create(objectToWorld: Transform, parameters: ParameterDictionary) throws -> ShapeType {
-        let radius = try parameters.findOneFloatX(called: "radius", else: 1.0)
+        let radius = try parameters.findOneReal(called: "radius", else: 1.0)
         return .sphere(Sphere(radius: radius, objectToWorld: objectToWorld))
 }
 }

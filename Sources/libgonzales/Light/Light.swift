@@ -6,9 +6,9 @@ protocol LightSource: Sendable {
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
-                throws -> FloatX
+                throws -> Real
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum
-        func power(scene: Scene) throws -> FloatX
+        func power(scene: Scene) throws -> Real
         var isDelta: Bool { get }
 }
 
@@ -36,7 +36,7 @@ enum Light: Sendable {
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
-                throws -> FloatX {
+                throws -> Real {
                 return try source.probabilityDensityFor(
                         scene: scene, samplingDirection: direction, from: reference)
         }
@@ -45,7 +45,7 @@ enum Light: Sendable {
                 return source.radianceFromInfinity(for: ray)
         }
 
-        func power(scene: Scene) throws -> FloatX {
+        func power(scene: Scene) throws -> Real {
                 return try source.power(scene: scene)
         }
 

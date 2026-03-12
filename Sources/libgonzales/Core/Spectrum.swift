@@ -13,7 +13,7 @@ protocol Spectrum: Sendable {
 
 struct PiecewiseLinearSpectrum: Spectrum {
 
-        private func findIndex(wavelength: FloatX) -> Int {
+        private func findIndex(wavelength: Real) -> Int {
                 for (index, lambda) in lambdas.enumerated() where wavelength < lambda {
                         return index
                 }
@@ -27,8 +27,8 @@ struct PiecewiseLinearSpectrum: Spectrum {
                 return RgbSpectrum(red: red, green: green, blue: blue)
         }
 
-        let lambdas: [FloatX]
-        let values: [FloatX]
+        let lambdas: [Real]
+        let values: [Real]
 }
 
 extension PiecewiseLinearSpectrum {
@@ -39,7 +39,7 @@ extension PiecewiseLinearSpectrum {
         }
 }
 
-let metalWavelengths: [FloatX] = [
+let metalWavelengths: [Real] = [
         298.757050, 302.400421, 306.133759, 309.960449, 313.884003, 317.908142, 322.036835,
         326.274139, 330.624481, 335.092377, 339.682678, 344.400482, 349.251221, 354.240509,
         359.374420, 364.659332, 370.102020, 375.709625, 381.489777, 387.450562, 393.600555,
@@ -147,15 +147,15 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
                 self.init(red: 0, green: 0, blue: 0)
         }
 
-        public init(x: FloatX, y: FloatX, z: FloatX) {
-                self.xyz = SIMD4<FloatX>(x, y, z, 1.0)
+        public init(x: Real, y: Real, z: Real) {
+                self.xyz = SIMD4<Real>(x, y, z, 1.0)
         }
 
-        public init(red: FloatX, green: FloatX, blue: FloatX) {
+        public init(red: Real, green: Real, blue: Real) {
                 self.init(x: red, y: green, z: blue)
         }
 
-        init(intensity: FloatX) {
+        init(intensity: Real) {
                 self.init(x: intensity, y: intensity, z: intensity)
         }
 
@@ -187,20 +187,20 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
                 set { z = newValue }
         }
 
-        public var x: FloatX {
+        public var x: Real {
                 get { return xyz.x }
                 set { xyz.x = newValue }
         }
-        public var y: FloatX {
+        public var y: Real {
                 get { return xyz.y }
                 set { xyz.y = newValue }
         }
-        public var z: FloatX {
+        public var z: Real {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }
 
-        var xyz: SIMD4<FloatX>
+        var xyz: SIMD4<Real>
 }
 
 extension RgbSpectrum: CustomStringConvertible {
@@ -221,13 +221,13 @@ extension RgbSpectrum {
 
         // MARK: - SIMD Arithmetic
 
-        public static func * (mul: FloatX, spectrum: RgbSpectrum) -> RgbSpectrum {
+        public static func * (mul: Real, spectrum: RgbSpectrum) -> RgbSpectrum {
                 var result = RgbSpectrum()
                 result.xyz = mul * spectrum.xyz
                 return result
         }
 
-        public static func * (spectrum: RgbSpectrum, mul: FloatX) -> RgbSpectrum {
+        public static func * (spectrum: RgbSpectrum, mul: Real) -> RgbSpectrum {
                 return mul * spectrum
         }
 
@@ -235,13 +235,13 @@ extension RgbSpectrum {
                 left.xyz *= right.xyz
         }
 
-        public static func + (spectrum: RgbSpectrum, value: FloatX) -> RgbSpectrum {
+        public static func + (spectrum: RgbSpectrum, value: Real) -> RgbSpectrum {
                 var result = RgbSpectrum()
                 result.xyz = spectrum.xyz + value
                 return result
         }
 
-        public static func - (spectrum: RgbSpectrum, value: FloatX) -> RgbSpectrum {
+        public static func - (spectrum: RgbSpectrum, value: Real) -> RgbSpectrum {
                 var result = RgbSpectrum()
                 result.xyz = spectrum.xyz - value
                 return result
@@ -328,7 +328,7 @@ public let red = RgbSpectrum(red: 1, green: 0, blue: 0)
 let blue = RgbSpectrum(red: 0, green: 0, blue: 1)
 let green = RgbSpectrum(red: 0, green: 1, blue: 0)
 
-func pow(base: RgbSpectrum, exp: FloatX) -> RgbSpectrum {
+func pow(base: RgbSpectrum, exp: Real) -> RgbSpectrum {
         return RgbSpectrum(
                 red: pow(base.red, exp),
                 green: pow(base.green, exp),

@@ -54,8 +54,8 @@ public typealias Bounds3f = Bounds3
 extension Bounds3 {
 
         init() {
-                pMin = Point3(x: FloatX.infinity, y: FloatX.infinity, z: FloatX.infinity)
-                pMax = Point3(x: -FloatX.infinity, y: -FloatX.infinity, z: -FloatX.infinity)
+                pMin = Point3(x: Real.infinity, y: Real.infinity, z: Real.infinity)
+                pMax = Point3(x: -Real.infinity, y: -Real.infinity, z: -Real.infinity)
         }
 
         static func * (transform: Transform, bound: Bounds3) -> Bounds3 {
@@ -95,7 +95,7 @@ extension Bounds3 {
                 return result
         }
 
-        func surfaceArea() -> FloatX {
+        func surfaceArea() -> Real {
                 let diag = diagonal()
                 return 2 * (diag.x * diag.y + diag.x * diag.z + diag.y * diag.z)
         }
@@ -113,7 +113,7 @@ func union(first: Bounds3f, second: Bounds3f) -> Bounds3f {
         return Bounds3f(first: pMin, second: pMax)
 }
 
-func expand(bounds: Bounds3f, by delta: FloatX) -> Bounds3f {
+func expand(bounds: Bounds3f, by delta: Real) -> Bounds3f {
         return Bounds3f(
                 first: bounds.pMin - Point(x: delta, y: delta, z: delta),
                 second: bounds.pMax + Point(x: delta, y: delta, z: delta))
@@ -140,14 +140,14 @@ func max(_ lhs: Vector3, _ rhs: Vector3) -> Vector3 {
 extension Bounds3 {
 
         @inline(__always)
-        func intersects(ray: Ray, tHit: FloatX) -> Bool {
+        func intersects(ray: Ray, tHit: Real) -> Bool {
                 let tMin = (pMin - ray.origin) * ray.inverseDirection
                 let tMax = (pMax - ray.origin) * ray.inverseDirection
 
                 let tEntry = min(tMin, tMax)
                 var tExit = max(tMin, tMax)
 
-                let errorCorrection: FloatX = 1.0 + 2.0 * gamma(count: 3)
+                let errorCorrection: Real = 1.0 + 2.0 * gamma(count: 3)
                 tExit *= errorCorrection
 
                 var tNear = max(tEntry.x, tEntry.y)

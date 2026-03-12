@@ -12,7 +12,7 @@ public struct DiffuseBsdf: FramedBsdf {
 extension DiffuseBsdf {
 
         public func evaluate(outgoing _: Vector, incident _: Vector) -> RgbSpectrum {
-                return reflectance / FloatX.pi
+                return reflectance / Real.pi
         }
 
         public func albedo() -> RgbSpectrum { return reflectance }

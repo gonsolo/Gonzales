@@ -1,10 +1,10 @@
 public struct Matrix: Sendable {
 
         public init(
-                t00: FloatX, t01: FloatX, t02: FloatX, t03: FloatX,
-                t10: FloatX, t11: FloatX, t12: FloatX, t13: FloatX,
-                t20: FloatX, t21: FloatX, t22: FloatX, t23: FloatX,
-                t30: FloatX, t31: FloatX, t32: FloatX, t33: FloatX
+                t00: Real, t01: Real, t02: Real, t03: Real,
+                t10: Real, t11: Real, t12: Real, t13: Real,
+                t20: Real, t21: Real, t22: Real, t23: Real,
+                t30: Real, t31: Real, t32: Real, t33: Real
         ) {
                 self.init()
 
@@ -41,7 +41,7 @@ public struct Matrix: Sendable {
                 backing = MatrixBacking()
         }
 
-        subscript(row: Int, column: Int) -> FloatX {
+        subscript(row: Int, column: Int) -> Real {
                 get { return backing[row, column] }
                 set { backing[row, column] = newValue }
         }
@@ -68,7 +68,7 @@ public struct Matrix: Sendable {
                 var minv = backing
 
                 func choosePivot(irow: inout Int, icol: inout Int) throws {
-                        var big: FloatX = 0.0
+                        var big: Real = 0.0
                         for row in 0..<4 where ipiv[row] != 1 {
                                 for col in 0..<4 {
                                         if ipiv[col] == 0 {

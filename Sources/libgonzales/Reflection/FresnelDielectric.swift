@@ -1,6 +1,6 @@
 struct FresnelDielectric {
 
-        static func reflected(cosThetaI: FloatX, refractiveIndex: FloatX) -> FloatX {
+        static func reflected(cosThetaI: Real, refractiveIndex: Real) -> Real {
                 var refractiveIndex = refractiveIndex
                 var cosThetaI = clamp(value: cosThetaI, low: -1, high: 1)
                 if cosThetaI < 0 {

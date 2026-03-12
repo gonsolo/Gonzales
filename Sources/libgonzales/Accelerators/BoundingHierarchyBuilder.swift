@@ -119,7 +119,7 @@ extension BoundingHierarchyBuilder {
 
         }
 
-        private func isSmaller(_ primitive: CachedPrimitive, _ pivot: FloatX, in dimension: Int) -> Bool {
+        private func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool {
                 return primitive.center[dimension] < pivot
         }
 
@@ -190,28 +190,28 @@ extension BoundingHierarchyBuilder {
                                         second: prim.bound)
                         }
                         let nSplits = nBuckets - 1
-                        var costs = Array(repeating: FloatX(0.0), count: nSplits)
+                        var costs = Array(repeating: Real(0.0), count: nSplits)
                         var countBelow = 0
                         var boundBelow = Bounds3f()
                         for index in 0..<nSplits {
                                 boundBelow = union(first: boundBelow, second: buckets[index].bounds)
                                 countBelow += buckets[index].count
-                                costs[index] += FloatX(countBelow) * boundBelow.surfaceArea()
+                                costs[index] += Real(countBelow) * boundBelow.surfaceArea()
                         }
                         var countAbove = 0
                         var boundAbove = Bounds3f()
                         for index in (1...nSplits).reversed() {
                                 boundAbove = union(first: boundAbove, second: buckets[index].bounds)
                                 countAbove += buckets[index].count
-                                costs[index - 1] += FloatX(countAbove) * boundAbove.surfaceArea()
+                                costs[index - 1] += Real(countAbove) * boundAbove.surfaceArea()
                         }
                         var minCostSplitBucket = -1
-                        var minCost = FloatX.infinity
+                        var minCost = Real.infinity
                         for index in 0..<nSplits where costs[index] < minCost {
                                 minCost = costs[index]
                                 minCostSplitBucket = index
                         }
-                        let leafCost = FloatX(range.count)
+                        let leafCost = Real(range.count)
 
                         minCost = 1.0 / 2.0 + minCost / bounds.surfaceArea()
 
@@ -221,7 +221,7 @@ extension BoundingHierarchyBuilder {
                                         let offsetPoint = centroidBounds.offset(
                                                 point: $0.centroid())
                                         let offset = offsetPoint[dimension]
-                                        var bucketIndex = Int(FloatX(nBuckets) * offset)
+                                        var bucketIndex = Int(Real(nBuckets) * offset)
                                         if bucketIndex == nBuckets {
                                                 bucketIndex = nBuckets - 1
                                         }

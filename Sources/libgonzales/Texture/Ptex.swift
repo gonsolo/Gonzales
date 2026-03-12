@@ -21,7 +21,7 @@ struct Ptex {
                         path, interaction.faceIndex, Float(interaction.uvCoordinates[0]),
                         Float(interaction.uvCoordinates[1]), pointer)
                 let spectrum = RgbSpectrum(
-                        red: FloatX(pointer[0]), green: FloatX(pointer[1]), blue: FloatX(pointer[2]))
+                        red: Real(pointer[0]), green: Real(pointer[1]), blue: Real(pointer[2]))
                 return gammaSrgbToLinear(light: spectrum)
         }
 

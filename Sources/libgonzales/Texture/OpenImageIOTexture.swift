@@ -23,7 +23,7 @@ struct OpenImageIOTexture {
                 }
         }
 
-        private func getTextureCoordinates(at interaction: any Interaction) -> (s: FloatX, t: FloatX) {
+        private func getTextureCoordinates(at interaction: any Interaction) -> (s: Real, t: Real) {
                 var (_, s) = modf(interaction.uvCoordinates.x)
                 var (_, t) = modf(interaction.uvCoordinates.y)
                 if s < 0 {
@@ -35,7 +35,7 @@ struct OpenImageIOTexture {
                 return (s, t)
         }
 
-        func evaluateFloat(at interaction: any Interaction) -> FloatX {
+        func evaluateFloat(at interaction: any Interaction) -> Real {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }

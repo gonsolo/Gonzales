@@ -4,7 +4,7 @@ enum PixelError: Error {
 
 struct Pixel {
 
-        init(light: RgbSpectrum = RgbSpectrum(), weight: FloatX = 0) {
+        init(light: RgbSpectrum = RgbSpectrum(), weight: Real = 0) {
                 self.light = light
                 self.weight = weight
         }
@@ -15,12 +15,12 @@ struct Pixel {
                 return Pixel(light: self.light / self.weight, weight: 1)
         }
 
-        func intensity() -> FloatX {
+        func intensity() -> Real {
                 return (light.red + light.green + light.blue) / 3.0
         }
 
         var light: RgbSpectrum
-        private var weight: FloatX
+        private var weight: Real
 }
 
 extension Pixel: CustomStringConvertible {

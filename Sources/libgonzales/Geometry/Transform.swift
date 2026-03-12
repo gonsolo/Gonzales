@@ -80,7 +80,7 @@ extension Transform: CustomStringConvertible {
 }
 
 extension Transform {
-        static public func makePerspective(fov: FloatX, near: FloatX, far _: FloatX) throws
+        static public func makePerspective(fov: Real, near: Real, far _: Real) throws
                 -> Transform {
                 let persp = Matrix(
                         t00: 1, t01: 0, t02: 0, t03: 0,
@@ -91,7 +91,7 @@ extension Transform {
                 return try makeScale(x: invTanAng, y: invTanAng, z: 1) * Transform(matrix: persp)
         }
 
-        static func makeScale(x: FloatX, y: FloatX, z: FloatX) throws -> Transform {
+        static func makeScale(x: Real, y: Real, z: Real) throws -> Transform {
                 let matrix = Matrix(
                         t00: x, t01: 0, t02: 0, t03: 0,
                         t10: 0, t11: y, t12: 0, t13: 0,

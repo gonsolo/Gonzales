@@ -215,23 +215,23 @@ extension PlyMesh {
         }
 
         mutating func appendPoint(from data: Data) {
-                let x: FloatX = readValue(in: data, at: &dataIndex)
-                let y: FloatX = readValue(in: data, at: &dataIndex)
-                let z: FloatX = readValue(in: data, at: &dataIndex)
-                points.append(Point(x: FloatX(x), y: FloatX(y), z: FloatX(z)))
+                let x: Real = readValue(in: data, at: &dataIndex)
+                let y: Real = readValue(in: data, at: &dataIndex)
+                let z: Real = readValue(in: data, at: &dataIndex)
+                points.append(Point(x: Real(x), y: Real(y), z: Real(z)))
         }
 
         mutating func appendNormal(from data: Data) {
-                let normalX: FloatX = readValue(in: data, at: &dataIndex)
-                let normalY: FloatX = readValue(in: data, at: &dataIndex)
-                let normalZ: FloatX = readValue(in: data, at: &dataIndex)
-                normals.append(Normal(x: FloatX(normalX), y: FloatX(normalY), z: FloatX(normalZ)))
+                let normalX: Real = readValue(in: data, at: &dataIndex)
+                let normalY: Real = readValue(in: data, at: &dataIndex)
+                let normalZ: Real = readValue(in: data, at: &dataIndex)
+                normals.append(Normal(x: Real(normalX), y: Real(normalY), z: Real(normalZ)))
         }
 
         mutating func appendUV(from data: Data) {
-                let uCoord: FloatX = readValue(in: data, at: &dataIndex)
-                let vCoord: FloatX = readValue(in: data, at: &dataIndex)
-                uvs.append(Vector2F(x: FloatX(uCoord), y: FloatX(vCoord)))
+                let uCoord: Real = readValue(in: data, at: &dataIndex)
+                let vCoord: Real = readValue(in: data, at: &dataIndex)
+                uvs.append(Vector2F(x: Real(uCoord), y: Real(vCoord)))
         }
 
         mutating func readVertices(from data: Data) throws {

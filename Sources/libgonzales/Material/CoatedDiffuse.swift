@@ -1,7 +1,7 @@
 struct CoatedDiffuse {
 
         init(
-                roughness: (FloatX, FloatX),
+                roughness: (Real, Real),
                 reflectance: RgbSpectrumTexture,
                 refractiveIndex: FloatTexture,
                 remapRoughness: Bool
@@ -17,7 +17,7 @@ struct CoatedDiffuse {
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
 
-                let alpha: (FloatX, FloatX) = (0.001, 0.001)
+                let alpha: (Real, Real) = (0.001, 0.001)
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let dielectric = DielectricBsdf(
                         distribution: distribution, refractiveIndex: refractiveIndex, bsdfFrame: bsdfFrame)
@@ -32,21 +32,21 @@ struct CoatedDiffuse {
 
         var reflectance: RgbSpectrumTexture
         var refractiveIndex: FloatTexture
-        var roughness: (FloatX, FloatX)
+        var roughness: (Real, Real)
         var remapRoughness: Bool
 }
 
 extension CoatedDiffuse {
         static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
-        let roughnessOptional = try parameters.findOneFloatXOptional(called: "roughness")
+        let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
         let uRoughness =
-                try roughnessOptional ?? parameters.findOneFloatX(called: "uroughness", else: 0.5)
+                try roughnessOptional ?? parameters.findOneReal(called: "uroughness", else: 0.5)
         let vRoughness =
-                try roughnessOptional ?? parameters.findOneFloatX(called: "vroughness", else: 0.5)
+                try roughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
         let roughness = (uRoughness, vRoughness)
         let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures)
-        let refractiveIndex = try parameters.findFloatXTexture(name: "eta", textures: textures, else: 1.5)
+        let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, else: 1.5)
         return CoatedDiffuse(
                 roughness: roughness,
                 reflectance: reflectance,

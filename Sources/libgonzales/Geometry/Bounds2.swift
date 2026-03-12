@@ -10,7 +10,7 @@ public struct Bounds2<T: Sendable>: Sendable {
 }
 
 public typealias Bounds2i = Bounds2<Int>
-public typealias Bounds2f = Bounds2<FloatX>
+public typealias Bounds2f = Bounds2<Real>
 
 extension Bounds2 where T: BinaryInteger {
 

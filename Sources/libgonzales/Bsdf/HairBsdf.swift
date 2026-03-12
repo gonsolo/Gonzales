@@ -4,27 +4,27 @@ struct HairBsdf: FramedBsdf {
 
         let pMax = 3
         var absorption: RgbSpectrum
-        let indexRefraction: FloatX = 1.55
-        let gammaO: FloatX
-        let hOffset: FloatX
-        let sParameter: FloatX
-        var vParameter: [FloatX]
-        var sin2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
-        var cos2kAlpha: [FloatX] = Array(repeating: 0, count: 3)
+        let indexRefraction: Real = 1.55
+        let gammaO: Real
+        let hOffset: Real
+        let sParameter: Real
+        var vParameter: [Real]
+        var sin2kAlpha: [Real] = Array(repeating: 0, count: 3)
+        var cos2kAlpha: [Real] = Array(repeating: 0, count: 3)
         let bsdfFrame: BsdfFrame
 
-        init(alpha: FloatX, hOffset: FloatX, absorption: RgbSpectrum, bsdfFrame: BsdfFrame) {
+        init(alpha: Real, hOffset: Real, absorption: RgbSpectrum, bsdfFrame: BsdfFrame) {
                 self.hOffset = hOffset
                 self.absorption = absorption
-                let sqrtPiOver8: FloatX = 0.626657069
+                let sqrtPiOver8: Real = 0.626657069
                 gammaO = asin(hOffset)
-                let azimuthalRoughness: FloatX = 0.3
+                let azimuthalRoughness: Real = 0.3
                 sParameter =
                         sqrtPiOver8
                         * (0.265 * azimuthalRoughness + 1.194 * square(azimuthalRoughness) + 5.372
                                 * pow(azimuthalRoughness, 2))
                 vParameter = Array(repeating: 0, count: pMax + 1)
-                let longitudinalRoughness: FloatX = 0.3
+                let longitudinalRoughness: Real = 0.3
                 vParameter[0] = square(
                         0.726 * longitudinalRoughness + 0.812 * square(longitudinalRoughness) + 3.7
                                 * pow(longitudinalRoughness, 20))
@@ -46,9 +46,9 @@ struct HairBsdf: FramedBsdf {
 extension HairBsdf {
 
         private func computeAttenutation(
-                cosThetaO: FloatX,
-                indexRefraction: FloatX,
-                hOffset: FloatX,
+                cosThetaO: Real,
+                indexRefraction: Real,
+                hOffset: Real,
                 transmittance: RgbSpectrum
         ) -> [RgbSpectrum] {
                 var attenuation = Array(repeating: black, count: pMax + 1)
@@ -70,15 +70,15 @@ extension HairBsdf {
         }
 
         private func computeLongitudinalScattering(
-                _ cosThetaI: FloatX,
-                _ cosThetaO: FloatX,
-                _ sinThetaI: FloatX,
-                _ sinThetaO: FloatX,
-                _ vParameter: FloatX
-        ) -> FloatX {
+                _ cosThetaI: Real,
+                _ cosThetaO: Real,
+                _ sinThetaI: Real,
+                _ sinThetaO: Real,
+                _ vParameter: Real
+        ) -> Real {
                 let termA = cosThetaI * cosThetaO / vParameter
                 let termB = sinThetaI * sinThetaO / vParameter
-                var longitudinalScattering: FloatX
+                var longitudinalScattering: Real
                 if vParameter <= 0.1 {
                         longitudinalScattering = exp(
                                 logI0(termA) - termB - 1 / vParameter + 0.6931 + log(1 / (2 * vParameter)))
@@ -88,48 +88,48 @@ extension HairBsdf {
                 return longitudinalScattering
         }
 
-        private func computePhi(pIndex: Int, gammaO: FloatX, gammaT: FloatX) -> FloatX {
-                return 2 * FloatX(pIndex) * gammaT - 2 * gammaO + FloatX(pIndex) * FloatX.pi
+        private func computePhi(pIndex: Int, gammaO: Real, gammaT: Real) -> Real {
+                return 2 * Real(pIndex) * gammaT - 2 * gammaO + Real(pIndex) * Real.pi
         }
 
-        private func logistic(_ xVal: FloatX, _ sVal: FloatX) -> FloatX {
+        private func logistic(_ xVal: Real, _ sVal: Real) -> Real {
                 let xVal = abs(xVal)
                 return exp(-xVal / sVal) / (sVal * square(1 + exp(-xVal / sVal)))
         }
 
-        private func logisticCDF(_ xVal: FloatX, _ sVal: FloatX) -> FloatX {
+        private func logisticCDF(_ xVal: Real, _ sVal: Real) -> Real {
                 return 1 / (1 + exp(-xVal / sVal))
         }
 
-        private func trimmedLogistic(_ xVal: FloatX, _ sVal: FloatX, _ lower: FloatX, _ upper: FloatX) -> FloatX {
+        private func trimmedLogistic(_ xVal: Real, _ sVal: Real, _ lower: Real, _ upper: Real) -> Real {
                 return logistic(xVal, sVal) / (logisticCDF(upper, sVal) - logisticCDF(lower, sVal))
         }
 
         private func computeAzimuthalScattering(
-                _ phi: FloatX,
+                _ phi: Real,
                 _ pIndex: Int,
-                _ sVal: FloatX,
-                _ gammaO: FloatX,
-                _ gammaT: FloatX
-        ) -> FloatX {
+                _ sVal: Real,
+                _ gammaO: Real,
+                _ gammaT: Real
+        ) -> Real {
                 var dphi = phi - computePhi(pIndex: pIndex, gammaO: gammaO, gammaT: gammaT)
-                while dphi > FloatX.pi {
-                        dphi -= 2 * FloatX.pi
+                while dphi > Real.pi {
+                        dphi -= 2 * Real.pi
                 }
-                while dphi < -FloatX.pi {
-                        dphi += 2 * FloatX.pi
+                while dphi < -Real.pi {
+                        dphi += 2 * Real.pi
                 }
-                return trimmedLogistic(dphi, sVal, -FloatX.pi, FloatX.pi)
+                return trimmedLogistic(dphi, sVal, -Real.pi, Real.pi)
         }
 
-        private func i0(_ xVal: FloatX) -> FloatX {
-                var val: FloatX = 0
-                var x2i: FloatX = 1
-                var ifact: FloatX = 1
-                var powerOfFour: FloatX = 1
+        private func i0(_ xVal: Real) -> Real {
+                var val: Real = 0
+                var x2i: Real = 1
+                var ifact: Real = 1
+                var powerOfFour: Real = 1
                 for index in 0..<10 {
                         if index > 1 {
-                                ifact *= FloatX(index)
+                                ifact *= Real(index)
                         }
                         val += x2i / (powerOfFour * square(ifact))
                         x2i *= xVal * xVal
@@ -138,17 +138,17 @@ extension HairBsdf {
                 return val
         }
 
-        private func logI0(_ xVal: FloatX) -> FloatX {
+        private func logI0(_ xVal: Real) -> Real {
                 if xVal > 12 {
-                        return xVal + 0.5 * (-log(2 * FloatX.pi) + log(1 / xVal) + 1 / (8 * xVal))
+                        return xVal + 0.5 * (-log(2 * Real.pi) + log(1 / xVal) + 1 / (8 * xVal))
                 } else {
                         return log(i0(xVal))
                 }
         }
 
-        private func computeThetaOp(pIndex: Int, sinThetaO: FloatX, cosThetaO: FloatX) -> (FloatX, FloatX) {
-                var sinThetaOp: FloatX
-                var cosThetaOp: FloatX
+        private func computeThetaOp(pIndex: Int, sinThetaO: Real, cosThetaO: Real) -> (Real, Real) {
+                var sinThetaOp: Real
+                var cosThetaOp: Real
                 if pIndex == 0 {
                         sinThetaOp = sinThetaO * cos2kAlpha[1] - cosThetaO * sin2kAlpha[1]
                         cosThetaOp = cosThetaO * cos2kAlpha[1] + sinThetaO * sin2kAlpha[1]
@@ -167,17 +167,17 @@ extension HairBsdf {
 
         private struct ScatteringContext {
                 let pIndex: Int
-                let sinThetaI: FloatX
-                let cosThetaI: FloatX
-                let sinThetaO: FloatX
-                let cosThetaO: FloatX
-                let phi: FloatX
-                let gammaT: FloatX
+                let sinThetaI: Real
+                let cosThetaI: Real
+                let sinThetaO: Real
+                let cosThetaO: Real
+                let phi: Real
+                let gammaT: Real
         }
 
         private func computeScattering(
                 context: ScatteringContext
-        ) -> (FloatX, FloatX) {
+        ) -> (Real, Real) {
                 let pIndex = context.pIndex
                 let sinThetaI = context.sinThetaI
                 let cosThetaI = context.cosThetaI
@@ -247,14 +247,14 @@ extension HairBsdf {
                         sinThetaI,
                         sinThetaO,
                         vParameter[pMax])
-                fsum += longitudinalScattering * attenuation[pMax] / (2 * FloatX.pi)
+                fsum += longitudinalScattering * attenuation[pMax] / (2 * Real.pi)
                 if absCosTheta(incident) > 0 {
                         fsum /= absCosTheta(incident)
                 }
                 return fsum
         }
 
-        private func computeAttenuationPdf(cosThetaO: FloatX) -> [FloatX] {
+        private func computeAttenuationPdf(cosThetaO: Real) -> [Real] {
                 let sinThetaO = (1 - square(cosThetaO)).squareRoot()
                 let sinThetaT = sinThetaO / indexRefraction
                 let cosThetaT = (1 - square(sinThetaT)).squareRoot()
@@ -275,7 +275,7 @@ extension HairBsdf {
                 return attenuation.map { $0.average() / sumY }
         }
 
-        func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 let sinThetaO = outgoing.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
                 let phiO = atan2(outgoing.z, outgoing.y)
@@ -288,7 +288,7 @@ extension HairBsdf {
                 let attenuationPdf = computeAttenuationPdf(cosThetaO: cosThetaO)
 
                 let phi = phiI - phiO
-                var pdfValue: FloatX = 0
+                var pdfValue: Real = 0
                 for pIndex in 0..<pMax {
                         let context = ScatteringContext(
                                 pIndex: pIndex,
@@ -307,7 +307,7 @@ extension HairBsdf {
                         sinThetaI,
                         sinThetaO,
                         vParameter[pMax])
-                pdfValue += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
+                pdfValue += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * Real.pi))
                 return pdfValue
         }
 
@@ -321,13 +321,13 @@ extension HairBsdf {
                 return x
         }
 
-        private func demux(_ fValue: FloatX) -> (FloatX, FloatX) {
-                let bitsValue = UInt(fValue * FloatX((UInt(1) << 32)))
+        private func demux(_ fValue: Real) -> (Real, Real) {
+                let bitsValue = UInt(fValue * Real((UInt(1) << 32)))
                 let bits: (UInt32, UInt32) = (compact1by1(UInt32(bitsValue)), compact1by1(UInt32(bitsValue >> 1)))
-                return (FloatX(bits.0) / FloatX(1 << 16), FloatX(bits.1) / FloatX(1 << 16))
+                return (Real(bits.0) / Real(1 << 16), Real(bits.1) / Real(1 << 16))
         }
 
-        private func sampleTrimmedLogistic(uSample: FloatX, sVal: FloatX, lower: FloatX, upper: FloatX) -> FloatX {
+        private func sampleTrimmedLogistic(uSample: Real, sVal: Real, lower: Real, upper: Real) -> Real {
                 let kValue = logisticCDF(upper, sVal) - logisticCDF(lower, sVal)
                 let xValue = -sVal * log(1 / (uSample * kValue + logisticCDF(lower, sVal)) - 1)
                 return clamp(value: xValue, low: lower, high: upper)
@@ -335,7 +335,7 @@ extension HairBsdf {
 
         // func sample(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector)
         //  -> RgbSpectrum) async -> (
-        //        RgbSpectrum, Vector, FloatX
+        //        RgbSpectrum, Vector, Real
         // ) {
         //        var samples = samples
         //        let sinThetaO = wo.x
@@ -355,30 +355,30 @@ extension HairBsdf {
         //                p: p,
         //                sinThetaO: sinThetaO,
         //                cosThetaO: cosThetaO)
-        //        samples.1 = max(samples.1, FloatX(1e-5))
+        //        samples.1 = max(samples.1, Real(1e-5))
         //        let cosTheta = 1 + v[p] * log(samples.1 + (1 - samples.1) * exp(-2 / v[p]))
         //        let sinTheta = (1 - square(cosTheta)).squareRoot()
-        //        let cosPhi = cos(2 * FloatX.pi * samples.2)
+        //        let cosPhi = cos(2 * Real.pi * samples.2)
         //        let sinThetaI = -cosTheta * sinThetaOp + sinTheta * cosPhi * cosThetaOp
         //        let cosThetaI = (1 - square(sinThetaI)).squareRoot()
         //        let etap = (square(indexRefraction) - square(sinThetaO)).squareRoot() / cosThetaO
         //        let sinGammaT = h / etap
         //        let gammaT = asin(sinGammaT)
-        //        var dphi: FloatX
+        //        var dphi: Real
         //        if p < pMax {
         //                let phi = computePhi(p: p, gammaO: gammaO, gammaT: gammaT)
         //                let sampled = sampleTrimmedLogistic(
         //                        u: samples.3,
         //                        s: s,
-        //                        a: -FloatX.pi,
-        //                        b: FloatX.pi)
+        //                        a: -Real.pi,
+        //                        b: Real.pi)
         //                dphi = phi + sampled
         //        } else {
-        //                dphi = 2 * FloatX.pi * samples.3
+        //                dphi = 2 * Real.pi * samples.3
         //        }
         //        let phiI = phiO + dphi
         //        let wi = Vector3(x: sinThetaI, y: cosThetaI * cos(phiI), z: cosThetaI * sin(phiI))
-        //        var pdf: FloatX = 0
+        //        var pdf: Real = 0
         //        for p in 0..<pMax {
         //                let (longitudinalScattering, azimuthalScattering) = computeScattering(
         //                        p: p,
@@ -396,7 +396,7 @@ extension HairBsdf {
         //                sinThetaI,
         //                sinThetaO,
         //                v[pMax])
-        //        pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * FloatX.pi))
+        //        pdf += longitudinalScattering * attenuationPdf[pMax] * (1 / (2 * Real.pi))
         //        let radiance = evaluate(wo, wi)
         //        return (radiance, wi, pdf)
         // }

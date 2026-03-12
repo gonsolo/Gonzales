@@ -13,7 +13,7 @@ struct Tile: Sendable {
                                 let cameraSample = sampler.getCameraSample(
                                         pixel: pixel, filter: camera.film.filter)
                                 let ray = camera.generateRay(cameraSample: cameraSample)
-                                var tHit: FloatX = Float.infinity
+                                var tHit: Real = Float.infinity
                                 let rayTraceSample = try integrator.evaluateRayPath(
                                         from: ray,
                                         tHit: &tHit,
@@ -21,8 +21,8 @@ struct Tile: Sendable {
                                         lightSampler: &lightSampler,
                                         state: state)
 
-                                let deltaX = cameraSample.film.0 - (FloatX(pixel.x) + 0.5)
-                                let deltaY = cameraSample.film.1 - (FloatX(pixel.y) + 0.5)
+                                let deltaX = cameraSample.film.0 - (Real(pixel.x) + 0.5)
+                                let deltaY = cameraSample.film.1 - (Real(pixel.y) + 0.5)
                                 let filterLocation = Point2f(x: deltaX, y: deltaY)
                                 let filterValue = camera.film.filter.evaluate(atLocation: filterLocation)
                                 let rayWeight = filterValue / cameraSample.filterWeight

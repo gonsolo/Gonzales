@@ -8,7 +8,7 @@ struct DistantLight: LightSource {
         }
 
         func sample(point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene)
-                -> LightSample {  // radiance: RgbSpectrum, direction: Vector, pdf: FloatX, visibility: Visibility
+                -> LightSample {  // radiance: RgbSpectrum, direction: Vector, pdf: Real, visibility: Visibility
                 let outside = point + direction * 2 * worldRadius
                 let visibility = Visibility(
                         from: point, target: outside)
@@ -18,20 +18,20 @@ struct DistantLight: LightSource {
         func probabilityDensityFor<I: Interaction>(
                 scene _: Scene, samplingDirection _: Vector, from _: I
         )
-                throws -> FloatX {
+                throws -> Real {
                 return 0
         }
 
         func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
 
-        func power(scene _: Scene) -> FloatX {
-                let value = square(worldRadius) * FloatX.pi * brightness.average()
+        func power(scene _: Scene) -> Real {
+                let value = square(worldRadius) * Real.pi * brightness.average()
                 return value
         }
 
         let direction: Vector
         let brightness: RgbSpectrum
-        let worldRadius: FloatX = 100.0
+        let worldRadius: Real = 100.0
 }
 
 extension DistantLight {

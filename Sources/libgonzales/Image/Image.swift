@@ -20,7 +20,7 @@ struct Image {
 
         mutating func addPixel(
                 withColor color: RgbSpectrum,
-                withWeight weight: FloatX,
+                withWeight weight: Real,
                 atLocation location: Point2i
         ) {
                 let index = location.y * fullResolution.x + location.x

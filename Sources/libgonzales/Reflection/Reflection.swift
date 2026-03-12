@@ -1,12 +1,12 @@
 func sameHemisphere(_ vector1: Vector, _ vector2: Vector) -> Bool { vector1.z * vector2.z > 0 }
 
-func absCosTheta(_ vector: Vector) -> FloatX { abs(vector.z) }
+func absCosTheta(_ vector: Vector) -> Real { abs(vector.z) }
 
 func reflect(vector: Vector, by normal: Vector) -> Vector {
         -vector + 2 * dot(vector, normal) * normal
 }
 
-func refract(incident: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)? {
+func refract(incident: Vector, normal: Normal, eta: Real) -> (Vector, Real)? {
         var eta = eta
         var cosThetaI = dot(normal, incident)
         var normal = -normal
@@ -25,14 +25,14 @@ func refract(incident: Vector, normal: Normal, eta: FloatX) -> (Vector, FloatX)?
         return (transmitted, eta)
 }
 
-func sinTheta(_ vector: Vector) -> FloatX { return sin2Theta(vector).squareRoot() }
-func sin2Theta(_ vector: Vector) -> FloatX { return max(0, 1 - cos2Theta(vector)) }
-func cosTheta(_ vector: Vector) -> FloatX { return vector.z }
-func cos2Theta(_ vector: Vector) -> FloatX { return vector.z * vector.z }
-func tan2Theta(_ vector: Vector) -> FloatX { return sin2Theta(vector) / cos2Theta(vector) }
-func tanTheta(_ vector: Vector) -> FloatX { return sinTheta(vector) / cosTheta(vector) }
+func sinTheta(_ vector: Vector) -> Real { return sin2Theta(vector).squareRoot() }
+func sin2Theta(_ vector: Vector) -> Real { return max(0, 1 - cos2Theta(vector)) }
+func cosTheta(_ vector: Vector) -> Real { return vector.z }
+func cos2Theta(_ vector: Vector) -> Real { return vector.z * vector.z }
+func tan2Theta(_ vector: Vector) -> Real { return sin2Theta(vector) / cos2Theta(vector) }
+func tanTheta(_ vector: Vector) -> Real { return sinTheta(vector) / cosTheta(vector) }
 
-func sinPhi(_ vector: Vector) -> FloatX {
+func sinPhi(_ vector: Vector) -> Real {
         if sinTheta(vector) == 0 {
                 return 0
         } else {
@@ -40,10 +40,10 @@ func sinPhi(_ vector: Vector) -> FloatX {
         }
 }
 
-func sin2Phi(_ vector: Vector) -> FloatX { return sinPhi(vector) * sinPhi(vector) }
-func cos2Phi(_ vector: Vector) -> FloatX { return cosPhi(vector) * cosPhi(vector) }
+func sin2Phi(_ vector: Vector) -> Real { return sinPhi(vector) * sinPhi(vector) }
+func cos2Phi(_ vector: Vector) -> Real { return cosPhi(vector) * cosPhi(vector) }
 
-func cosPhi(_ vector: Vector) -> FloatX {
+func cosPhi(_ vector: Vector) -> Real {
         if sinTheta(vector) == 0 {
                 return 1
         } else {

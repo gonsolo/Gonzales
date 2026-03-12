@@ -11,7 +11,7 @@ public enum RenderError: Error {
         case unsupportedFilter
         case noSceneSpecified
         case noLights
-        case readFloatX
+        case readReal
         case readInt32
         case readUInt8
         case unimplemented(function: String, file: String, line: Int, message: String)

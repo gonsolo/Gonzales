@@ -1,6 +1,6 @@
-protocol GetFloatXY {
-        var x: FloatX { get }
-        var y: FloatX { get }
+protocol GetRealY {
+        var x: Real { get }
+        var y: Real { get }
 }
 
 protocol GetIntXY {
@@ -69,8 +69,8 @@ extension Point2 where T: BinaryInteger {
 
 public typealias Point2i = Point2<Int>
 extension Point2i: GetIntXY {}
-public typealias Point2f = Point2<FloatX>
-extension Point2f: GetFloatXY {}
+public typealias Point2f = Point2<Real>
+extension Point2f: GetRealY {}
 
 extension Point2 where T: BinaryInteger {
 

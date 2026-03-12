@@ -24,7 +24,7 @@ import Testing
         @Test func boxFilterSampleWithinSupport() {
                 let support = Vector2F(x: 2, y: 3)
                 let filter = BoxFilter(support: support)
-                let samples: [(FloatX, FloatX)] = [
+                let samples: [(Real, Real)] = [
                         (0, 0), (1, 1), (0.5, 0.5), (0.25, 0.75),
                 ]
                 for uSample in samples {
@@ -99,7 +99,7 @@ import Testing
         @Test func gaussianFilterSampleWithinSupport() {
                 let support = Vector2F(x: 2, y: 2)
                 let filter = GaussianFilter(withSupport: support, withSigma: 1)
-                let samples: [(FloatX, FloatX)] = [
+                let samples: [(Real, Real)] = [
                         (0.1, 0.1), (0.5, 0.5), (0.9, 0.9),
                 ]
                 for uSample in samples {

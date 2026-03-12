@@ -2,20 +2,20 @@ import Foundation  // sin, cos
 
 public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
 
-        public init(alpha: (FloatX, FloatX)) {
+        public init(alpha: (Real, Real)) {
                 self.alpha = alpha
         }
 
-        public func differentialArea(withNormal half: Vector) -> FloatX {
+        public func differentialArea(withNormal half: Vector) -> Real {
                 let tan2 = tan2Theta(half)
                 if tan2.isInfinite { return 0 }
                 let cos4 = cos2Theta(half) * cos2Theta(half)
                 let exponent = tan2 * (square(cosPhi(half) / alpha.0) + square(sinPhi(half) / alpha.1))
-                let area = 1 / (FloatX.pi * alpha.0 * alpha.1 * cos4 * square(1 + exponent))
+                let area = 1 / (Real.pi * alpha.0 * alpha.1 * cos4 * square(1 + exponent))
                 return area
         }
 
-        public func lambda(_ vector: Vector) -> FloatX {
+        public func lambda(_ vector: Vector) -> Real {
                 let absTanTheta = abs(tanTheta(vector))
                 if absTanTheta.isInfinite { return 0 }
                 let alphaTerm = (cos2Phi(vector) * alpha.0 * alpha.0 + sin2Phi(vector) * alpha.1 * alpha.1)
@@ -37,10 +37,10 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                 }
         }
 
-        private func trowbridgeReitzSample11(cosTheta: FloatX, uSample: TwoRandomVariables) -> (FloatX, FloatX) {
+        private func trowbridgeReitzSample11(cosTheta: Real, uSample: TwoRandomVariables) -> (Real, Real) {
                 if cosTheta > 0.9999 {
                         let radius = (uSample.0 / (1 - uSample.0)).squareRoot()
-                        let phi = 2 * FloatX.pi * uSample.1
+                        let phi = 2 * Real.pi * uSample.1
                         let slope = (radius * cos(phi), radius * sin(phi))
                         return slope
                 }
@@ -56,13 +56,13 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                         - (alphaTerm * alphaTerm - tanThetaValue * tanThetaValue) * tmp)).squareRoot()
                 let slopeX1 = tanThetaValue * tmp - discriminantValue
                 let slopeX2 = tanThetaValue * tmp + discriminantValue
-                var slope: (FloatX, FloatX) = (0.0, 0.0)
+                var slope: (Real, Real) = (0.0, 0.0)
                 if alphaTerm < 0 || slopeX2 > 1 / tanTheta {
                         slope.0 = slopeX1
                 } else {
                         slope.0 = slopeX2
                 }
-                var sign: FloatX = 0.0
+                var sign: Real = 0.0
                 var uMutable = uSample
                 if uMutable.1 > 0.5 {
                         sign = 1
@@ -80,7 +80,7 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return slope
         }
 
-        private func trowbridgeReitzSample(incident: Vector, alpha: (FloatX, FloatX), uSample: TwoRandomVariables)
+        private func trowbridgeReitzSample(incident: Vector, alpha: (Real, Real), uSample: TwoRandomVariables)
                 -> Vector {
                 let incidentStretched = normalized(
                         Vector(x: alpha.0 * incident.x, y: alpha.1 * incident.y, z: incident.z))
@@ -93,11 +93,11 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return normalized(Vector(x: -slope.0, y: -slope.1, z: 1))
         }
 
-        static func getAlpha(from roughness: (FloatX, FloatX)) -> (FloatX, FloatX) {
+        static func getAlpha(from roughness: (Real, Real)) -> (Real, Real) {
                 return (getAlpha(from: roughness.0), getAlpha(from: roughness.1))
         }
 
-        static func getAlpha(from roughness: FloatX) -> FloatX {
+        static func getAlpha(from roughness: Real) -> Real {
                 return roughness.squareRoot()
         }
 
@@ -109,5 +109,5 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
         // σ = height
         // τ = area/length
         // α  corresponds to roughness: 0.1 is smooth (spiky highlight), 1 is Lambertian.
-        let alpha: (FloatX, FloatX)
+        let alpha: (Real, Real)
 }

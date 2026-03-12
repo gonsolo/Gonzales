@@ -3,6 +3,6 @@
 struct LightSample {
         let radiance: RgbSpectrum
         let direction: Vector
-        let pdf: FloatX
+        let pdf: Real
         let visibility: Visibility
 }

@@ -10,8 +10,8 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
                 diffuse: DiffuseBsdf,
                 bsdfFrame: BsdfFrame
         ) {
-                let thickness: FloatX = 0.01
-                let asymmetryFactor: FloatX = 0.0
+                let thickness: Real = 0.01
+                let asymmetryFactor: Real = 0.0
                 let maxDepth = 10
                 let nSamples = 32
                 let mediumAlbedo = RgbSpectrum(intensity: 0.0)
@@ -41,7 +41,7 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
                 return layered.sample(outgoing: outgoing, uSample: uSample)
         }
 
-        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {
                 return layered.probabilityDensity(outgoing: outgoing, incident: incident)
         }
 

@@ -69,8 +69,8 @@ public enum Sampler: Sendable {
 
                 return CameraSample(
                         film: (
-                                FloatX(pixel.x) + 0.5 + deltaX,
-                                FloatX(pixel.y) + 0.5 + deltaY
+                                Real(pixel.x) + 0.5 + deltaX,
+                                Real(pixel.y) + 0.5 + deltaY
                         ),
                         lens: get2D(),
                         filterWeight: filterSample.probabilityDensity
@@ -90,7 +90,7 @@ public enum Sampler: Sendable {
 
 }
 
-public typealias RandomVariable = FloatX
+public typealias RandomVariable = Real
 public typealias TwoRandomVariables = (RandomVariable, RandomVariable)
 public typealias ThreeRandomVariables = (RandomVariable, RandomVariable, RandomVariable)
 // swiftlint:disable:next large_tuple

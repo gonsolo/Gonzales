@@ -140,13 +140,13 @@ struct TriangleMeshes {
 struct TriangleIntersection {
         init() {
                 primId = PrimId()
-                tValue = FloatX.greatestFiniteMagnitude
+                tValue = Real.greatestFiniteMagnitude
                 barycentric0 = 0
                 barycentric1 = 0
                 barycentric2 = 0
         }
 
-        init(primId: PrimId, tValue: FloatX, barycentric0: FloatX, barycentric1: FloatX, barycentric2: FloatX) {
+        init(primId: PrimId, tValue: Real, barycentric0: Real, barycentric1: Real, barycentric2: Real) {
                 self.primId = primId
                 self.tValue = tValue
                 self.barycentric0 = barycentric0
@@ -154,10 +154,10 @@ struct TriangleIntersection {
                 self.barycentric2 = barycentric2
         }
         let primId: PrimId
-        let tValue: FloatX
-        let barycentric0: FloatX
-        let barycentric1: FloatX
-        let barycentric2: FloatX
+        let tValue: Real
+        let barycentric0: Real
+        let barycentric1: Real
+        let barycentric2: Real
 }
 
 struct Triangle: Shape {
@@ -238,7 +238,7 @@ extension Triangle {
         }
 
         func computeUVHit(
-                barycentric0: FloatX, barycentric1: FloatX, barycentric2: FloatX,
+                barycentric0: Real, barycentric1: Real, barycentric2: Real,
                 uvCoordinates: (Vector2F, Vector2F, Vector2F)
         ) -> Point2f {
                 let uvHit0: Point2f = barycentric0 * Point2f(from: uvCoordinates.0)
@@ -251,7 +251,7 @@ extension Triangle {
         func getIntersectionData(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 data: inout TriangleIntersection
         ) throws -> Bool {
 
@@ -272,9 +272,9 @@ extension Triangle {
                 p1t = permute(point: p1t, x: axisX, y: axisY, z: axisZ)
                 p2t = permute(point: p2t, x: axisX, y: axisY, z: axisZ)
 
-                let shearX: FloatX = -directionVector.x / directionVector.z
-                let shearY: FloatX = -directionVector.y / directionVector.z
-                let shearZ: FloatX = 1.0 / directionVector.z
+                let shearX: Real = -directionVector.x / directionVector.z
+                let shearY: Real = -directionVector.y / directionVector.z
+                let shearZ: Real = 1.0 / directionVector.z
 
                 // Shearing transformation
                 p0t.x += shearX * p0t.z
@@ -285,15 +285,15 @@ extension Triangle {
                 p2t.y += shearY * p2t.z
 
                 // Compute edge functions edge0, edge1, edge2
-                let edge0: FloatX = p1t.x * p2t.y - p1t.y * p2t.x
-                let edge1: FloatX = p2t.x * p0t.y - p2t.y * p0t.x
-                let edge2: FloatX = p0t.x * p1t.y - p0t.y * p1t.x
+                let edge0: Real = p1t.x * p2t.y - p1t.y * p2t.x
+                let edge1: Real = p2t.x * p0t.y - p2t.y * p0t.x
+                let edge2: Real = p0t.x * p1t.y - p0t.y * p1t.x
 
                 // Check edge functions for hit (same sign)
                 if (edge0 < 0 || edge1 < 0 || edge2 < 0) && (edge0 > 0 || edge1 > 0 || edge2 > 0) {
                         return false
                 }
-                let det: FloatX = edge0 + edge1 + edge2
+                let det: Real = edge0 + edge1 + edge2
                 if det == 0 {
                         return false  // Degenerate triangle or ray parallel to plane
                 }
@@ -303,7 +303,7 @@ extension Triangle {
                 p0t.z *= shearZ
                 p1t.z *= shearZ
                 p2t.z *= shearZ
-                let tScaled: FloatX = edge0 * p0t.z + edge1 * p1t.z + edge2 * p2t.z
+                let tScaled: Real = edge0 * p0t.z + edge1 * p1t.z + edge2 * p2t.z
 
                 // Ray t range test against tHit and ray segment limits (0)
                 let hitCondition = det > 0
@@ -314,11 +314,11 @@ extension Triangle {
 
                 // --- Intersection found ---
 
-                let invDet: FloatX = 1 / det
-                let barycentric0: FloatX = edge0 * invDet
-                let barycentric1: FloatX = edge1 * invDet
-                let barycentric2: FloatX = edge2 * invDet
-                let tValue: FloatX = tScaled * invDet
+                let invDet: Real = 1 / det
+                let barycentric0: Real = edge0 * invDet
+                let barycentric1: Real = edge1 * invDet
+                let barycentric2: Real = edge2 * invDet
+                let tValue: Real = tScaled * invDet
 
                 tHit = tValue  // Update closest hit distance
 
@@ -335,7 +335,7 @@ extension Triangle {
         func intersect(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> Bool {
                 var notUsed = TriangleIntersection()
                 return try getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &notUsed)
@@ -378,7 +378,7 @@ extension Triangle {
 
                 let duv02: Vector2F = uvCoordinates.0 - uvCoordinates.2
                 let duv12: Vector2F = uvCoordinates.1 - uvCoordinates.2
-                let determinantUV: FloatX = duv02[0] * duv12[1] - duv02[1] * duv12[0]
+                let determinantUV: Real = duv02[0] * duv12[1] - duv02[1] * duv12[0]
                 let degenerateUV: Bool = abs(determinantUV) < 1e-8
                 var dpdu = upVector  // Assuming 'upVector' is a predefined Vector (e.g., Vector(0,0,0) or local Y axis)
                 var dpdv = upVector
@@ -459,7 +459,7 @@ extension Triangle {
         func intersect(
                 scene: Scene,
                 ray worldRay: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> SurfaceInteraction? {
                 var data = TriangleIntersection()
                 if try !getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data) {
@@ -502,13 +502,13 @@ extension Triangle {
                 return Point2f(x: 1 - su0, y: samples.1 * su0)
         }
 
-        func area(scene: Scene) -> FloatX {
+        func area(scene: Scene) -> Real {
                 let (point0, point1, point2) = getLocalPoints(scene: scene)
                 return 0.5 * length(cross(Vector(vector: (point1 - point0)), point2 - point0))
         }
 
         func sample(samples: TwoRandomVariables, scene: Scene) -> (
-                interaction: SurfaceInteraction, pdf: FloatX
+                interaction: SurfaceInteraction, pdf: Real
         ) {
                 let barycentric = uniformSampleTriangle(samples: samples)
                 let (point0, point1, point2) = getLocalPoints(scene: scene)
@@ -549,10 +549,10 @@ extension Triangle {
         }
         let points = try parameters.findPoints(name: "P")
         let normals = try parameters.findNormals(name: "N")
-        let uvFloatXs = try parameters.findFloatXs(called: "uv")
+        let uvReals = try parameters.findReals(called: "uv")
         var uvs = [Vector2F]()
-        for index in 0..<uvFloatXs.count / 2 {
-                uvs.append(Vector2F(x: uvFloatXs[2 * index], y: uvFloatXs[2 * index + 1]))
+        for index in 0..<uvReals.count / 2 {
+                uvs.append(Vector2F(x: uvReals[2 * index], y: uvReals[2 * index + 1]))
         }
         let faceIndices = try parameters.findInts(name: "faceIndices")
 

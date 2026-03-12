@@ -14,10 +14,10 @@ typealias FourPoints = (Point, Point, Point, Point)
 // swiftlint:disable:next large_tuple
 typealias SevenPoints = (Point, Point, Point, Point, Point, Point, Point)
 
-typealias TwoFloats = (FloatX, FloatX)
-typealias ThreeFloats = (FloatX, FloatX, FloatX)
+typealias TwoFloats = (Real, Real)
+typealias ThreeFloats = (Real, Real, Real)
 
-private func lerp(with factor: FloatX, between first: Point, and second: Point) -> Point {
+private func lerp(with factor: Real, between first: Point, and second: Point) -> Point {
         return (1.0 - factor) * first + factor * second
 }
 
@@ -41,14 +41,14 @@ func blossomBezier(points: FourPoints, uSamples: TwoFloats) -> FourPoints {
         return pPoints
 }
 
-extension Point2 where T == FloatX {
+extension Point2 where T == Real {
         init(_ point: Point3) {
                 self.x = point.x
                 self.y = point.y
         }
 }
 
-extension Vector2 where T == FloatX {
+extension Vector2 where T == Real {
         init(_ point: Point3) {
                 self.x = point.x
                 self.y = point.y
@@ -97,12 +97,12 @@ struct Curve: Shape {
                 return splitPoints
         }
 
-        func evalBezier(points: [Point], uSample: FloatX) -> (Point, Vector) {
+        func evalBezier(points: [Point], uSample: Real) -> (Point, Vector) {
                 let pPoints = (points[0], points[1], points[2], points[3])
                 return evalBezier(points: pPoints, uSample: uSample)
         }
 
-        func evalBezier(points: FourPoints, uSample: FloatX) -> (Point, Vector) {
+        func evalBezier(points: FourPoints, uSample: Real) -> (Point, Vector) {
                 let cp1 = ThreePoints(
                         lerp(with: uSample, between: points.0, and: points.1),
                         lerp(with: uSample, between: points.1, and: points.2),
@@ -124,22 +124,22 @@ struct Curve: Shape {
         // swiftlint:disable:next function_body_length
         private func recursiveIntersect(
                 ray: Ray,
-                tHit: inout FloatX,
+                tHit: inout Real,
                 rayToObject: Transform,
                 state: CurveIntersectionState
-        ) throws -> (SurfaceInteraction?, FloatX) {
+        ) throws -> (SurfaceInteraction?, Real) {
                 let points = state.points
                 let uRange = state.uRange
                 let depth = state.depth
                 // let index = state.index
 
-                let nothing: (SurfaceInteraction?, FloatX) = (nil, FloatX.infinity)
+                let nothing: (SurfaceInteraction?, Real) = (nil, Real.infinity)
 
                 let rayLength = length(ray.direction)
                 if depth > 0 {
                         let splitPoints = subdivideBezier(points: points)
                         let uSamples = [uRange.0, (uRange.0 + uRange.1) / 2, uRange.1]
-                        typealias InteractionAndT = (SurfaceInteraction?, FloatX)
+                        typealias InteractionAndT = (SurfaceInteraction?, Real)
                         var hits: [InteractionAndT] = [
                                 (nil, 0),
                                 (nil, 0),
@@ -221,7 +221,7 @@ struct Curve: Shape {
                         if pointOnCurve.z < 0 || pointOnCurve.z > zMax { return nothing }
                         let ptCurveDist = sqrt(ptCurveDist2)
                         let edgeFunc = dpcdw.x * -pointOnCurve.y + pointOnCurve.x * dpcdw.y
-                        var vCoord: FloatX
+                        var vCoord: Real
                         if edgeFunc > 0 {
                                 vCoord = 0.5 + ptCurveDist / hitWidth
                         } else {
@@ -251,13 +251,13 @@ struct Curve: Shape {
                 }
         }
 
-        private func computeMaxWidth(uRange: TwoFloats, width: TwoFloats) -> FloatX {
+        private func computeMaxWidth(uRange: TwoFloats, width: TwoFloats) -> Real {
                 let width = computeWidth(uRange: uRange, width: width)
                 let result = max(width.0, width.1)
                 return result
         }
 
-        private func computeWidth(uRange: TwoFloats, width: TwoFloats) -> (FloatX, FloatX) {
+        private func computeWidth(uRange: TwoFloats, width: TwoFloats) -> (Real, Real) {
                 let result = (
                         lerp(with: uRange.0, between: width.0, and: width.1),
                         lerp(with: uRange.1, between: width.0, and: width.1)
@@ -266,7 +266,7 @@ struct Curve: Shape {
         }
 
         private func overlap(
-                points: [Point], index: Int = 0, xyz: Int, width: FloatX, limits: TwoFloats = (0, 0)
+                points: [Point], index: Int = 0, xyz: Int, width: Real, limits: TwoFloats = (0, 0)
         ) -> Bool {
                 let pMax = max(
                         max(points[index + 0][xyz], points[index + 1][xyz]),
@@ -286,7 +286,7 @@ struct Curve: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX
+                tHit _: inout Real
         ) throws -> Bool {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
@@ -294,16 +294,16 @@ struct Curve: Shape {
         func intersect(
                 scene _: Scene,
                 ray _: Ray,
-                tHit _: inout FloatX
+                tHit _: inout Real
         ) throws -> SurfaceInteraction? {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func area(scene _: Scene) throws -> FloatX {
+        func area(scene _: Scene) throws -> Real {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
-        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) throws -> (interaction: I, pdf: FloatX) {
+        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) throws -> (interaction: I, pdf: Real) {
                 throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
         }
 
@@ -334,9 +334,9 @@ extension Curve {
         let numberOfSegments = 4
         var segments = [ShapeType]()
         for index in 0..<numberOfSegments {
-                let numSegments = FloatX(numberOfSegments)
-                let uMin = FloatX(index) / numSegments
-                let uMax = (FloatX(index) + 1) / numSegments
+                let numSegments = Real(numberOfSegments)
+                let uMin = Real(index) / numSegments
+                let uMax = (Real(index) + 1) / numSegments
                 let curve = Curve(objectToWorld: objectToWorld, common: common, uRange: (uMin, uMax))
                 let shape = ShapeType.curve(curve)
                 segments.append(shape)
@@ -369,10 +369,10 @@ extension Curve {
                 bezierPoints.2 = p233
                 bezierPoints.3 = p333
                 let width0 = lerp(
-                        with: FloatX(segment) / FloatX(numberOfSegments), between: widths.0,
+                        with: Real(segment) / Real(numberOfSegments), between: widths.0,
                         and: widths.1)
                 let width1 = lerp(
-                        with: FloatX(segment + 1) / FloatX(numberOfSegments), between: widths.0,
+                        with: Real(segment + 1) / Real(numberOfSegments), between: widths.0,
                         and: widths.1)
                 let curve = Curve.create(
                         objectToWorld: objectToWorld,
@@ -391,9 +391,9 @@ extension Curve {
         ) throws -> [ShapeType] {
         let degree = 3
         let controlPoints = try parameters.findPoints(name: "P")
-        let width = try parameters.findOneFloatX(called: "width", else: 0.5)
-        let width0 = try parameters.findOneFloatX(called: "width0", else: width)
-        let width1 = try parameters.findOneFloatX(called: "width1", else: width)
+        let width = try parameters.findOneReal(called: "width", else: 0.5)
+        let width0 = try parameters.findOneReal(called: "width0", else: width)
+        let width1 = try parameters.findOneReal(called: "width1", else: width)
         guard controlPoints.count >= degree + 1 else {
                 throw CurveError.numberControlPoints
         }

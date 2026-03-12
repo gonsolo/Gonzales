@@ -5,7 +5,7 @@ struct TransformedPrimitive: Boundable, Intersectable {
         func intersect(
                 scene: Scene,
                 ray: Ray,
-                tHit: inout FloatX
+                tHit: inout Real
         ) throws -> SurfaceInteraction? {
                 let localRay = transform.inverse * ray
                 var interaction = try accelerator.intersect(

@@ -127,7 +127,7 @@ import Testing
 
         @Test func isNaNDetectsNaN() {
                 let normal = Vector(x: 1, y: 2, z: 3)
-                let nanVec = Vector(x: FloatX.nan, y: 0, z: 0)
+                let nanVec = Vector(x: Real.nan, y: 0, z: 0)
                 #expect(!normal.isNaN)
                 #expect(nanVec.isNaN)
         }

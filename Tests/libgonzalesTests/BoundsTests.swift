@@ -17,8 +17,8 @@ import Testing
         @Test func defaultConstructionIsInvalid() {
                 let bounds = Bounds3f()
                 // Default bounds has pMin = +inf, pMax = -inf (empty/invalid)
-                #expect(bounds.pMin.x == FloatX.infinity)
-                #expect(bounds.pMax.x == -FloatX.infinity)
+                #expect(bounds.pMin.x == Real.infinity)
+                #expect(bounds.pMax.x == -Real.infinity)
         }
 
         // MARK: - Surface Area
@@ -124,7 +124,7 @@ import Testing
                 let ray = Ray(
                         origin: Point(x: 0, y: 0, z: 5),
                         direction: Vector(x: 0, y: 0, z: -1))
-                #expect(bounds.intersects(ray: ray, tHit: FloatX.infinity))
+                #expect(bounds.intersects(ray: ray, tHit: Real.infinity))
         }
 
         @Test func rayMissesBox() {
@@ -134,7 +134,7 @@ import Testing
                 let ray = Ray(
                         origin: Point(x: 0, y: 5, z: 0),
                         direction: normalized(Vector(x: 0.01, y: 1, z: 0.01)))
-                #expect(!bounds.intersects(ray: ray, tHit: FloatX.infinity))
+                #expect(!bounds.intersects(ray: ray, tHit: Real.infinity))
         }
 
         @Test func rayBehindBoxMisses() {
@@ -144,7 +144,7 @@ import Testing
                 let ray = Ray(
                         origin: Point(x: 0, y: 0, z: 5),
                         direction: normalized(Vector(x: 0.001, y: 0.001, z: 1)))
-                #expect(!bounds.intersects(ray: ray, tHit: FloatX.infinity))
+                #expect(!bounds.intersects(ray: ray, tHit: Real.infinity))
         }
 
         @Test func rayHitsWithTHitLimit() {
@@ -165,7 +165,7 @@ import Testing
                 let ray = Ray(
                         origin: Point(x: 0, y: 0, z: 0),
                         direction: Vector(x: 1, y: 0, z: 0))
-                #expect(bounds.intersects(ray: ray, tHit: FloatX.infinity))
+                #expect(bounds.intersects(ray: ray, tHit: Real.infinity))
         }
 
         @Test func diagonalRayHitsBox() {
@@ -176,7 +176,7 @@ import Testing
                 let ray = Ray(
                         origin: Point(x: -5, y: -5, z: -5),
                         direction: direction)
-                #expect(bounds.intersects(ray: ray, tHit: FloatX.infinity))
+                #expect(bounds.intersects(ray: ray, tHit: Real.infinity))
         }
 
         // MARK: - Subscript

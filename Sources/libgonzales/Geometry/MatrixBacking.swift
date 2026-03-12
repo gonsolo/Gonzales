@@ -11,10 +11,10 @@ struct MatrixBacking {
                 return 4 * row + column
         }
 
-        subscript(row: Int, column: Int) -> FloatX {
+        subscript(row: Int, column: Int) -> Real {
                 get { return matrixValues[index(row, column)] }
                 set { matrixValues[index(row, column)] = newValue }
         }
 
-        var matrixValues: [16 of FloatX] = .init(repeating: 0)
+        var matrixValues: [16 of Real] = .init(repeating: 0)
 }
