@@ -1,4 +1,4 @@
-name: Build
+name: Test
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}:latest
@@ -32,19 +32,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      - name: Check Versions
-        run: |
-          swift --version
-          swiftlint --version
-
-      - name: Lint
-        run: |
-             SWIFT_LIB_PATH=$(find /usr -name libsourcekitdInProc.so | head -n 1 | xargs dirname)
-             echo "Found Swift lib path: $SWIFT_LIB_PATH"
-             export LD_LIBRARY_PATH=$SWIFT_LIB_PATH:$LD_LIBRARY_PATH
-             swiftlint
-
-      - name: Compile debug
-        run: |
-          mkdir -p .build
-          make debug
+      - name: Run tests
+        run: swift test
