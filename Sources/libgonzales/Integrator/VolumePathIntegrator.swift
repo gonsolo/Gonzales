@@ -33,7 +33,7 @@ extension VolumePathIntegrator {
         ) throws -> RayTraceSample {
 
                 // Path throughput weight
-                // The product of all GlobalBsdfs and cosines divided by the pdf
+                // The product of all FramedBsdfs and cosines divided by the pdf
                 // Π f |cosθ| / pdf
                 var bounceState = BounceState(
                         ray: ray,
@@ -198,7 +198,7 @@ extension VolumePathIntegrator {
                 }
         }
 
-        private func sampleGlobalBsdf<I: Interaction, D: DistributionModel>(
+        private func sampleFramedBsdf<I: Interaction, D: DistributionModel>(
                 light: Light,
                 interaction: I,
                 distributionModel: D,
@@ -277,7 +277,7 @@ extension VolumePathIntegrator {
                 //        light: light,
                 //        interaction: interaction,
                 //        sampler: sampler)
-                // return try sampleGlobalBsdf(
+                // return try sampleFramedBsdf(
                 //        light: light,
                 //        interaction: interaction,
                 //        sampler: sampler)
@@ -390,7 +390,7 @@ extension VolumePathIntegrator {
                                 lightSampler: &context.lightSampler,
                                 scene: context.scene)
                 state.estimate += lightEstimate
-                let (bsdfSample, _) = bsdf.sampleWorld(
+                let (bsdfSample, _) = bsdf.sampleWorldSpace(
                         outgoing: surfaceInteraction.outgoing, uSample: context.sampler.get3D())
                 guard
                         bsdfSample.probabilityDensity != 0

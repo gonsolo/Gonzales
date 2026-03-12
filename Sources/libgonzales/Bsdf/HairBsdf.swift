@@ -1,6 +1,6 @@
 import Foundation  // atan2
 
-struct HairBsdf: GlobalBsdf {
+struct HairBsdf: FramedBsdf {
 
         let pMax = 3
         var absorption: RgbSpectrum
@@ -199,7 +199,7 @@ extension HairBsdf {
                 return (longitudinalScattering, azimuthalScattering)
         }
 
-        func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+        func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
 
                 let sinThetaO = outgoing.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
@@ -275,7 +275,7 @@ extension HairBsdf {
                 return attenuation.map { $0.average() / sumY }
         }
 
-        func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+        func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
                 let sinThetaO = outgoing.x
                 let cosThetaO = (1 - square(sinThetaO)).squareRoot()
                 let phiO = atan2(outgoing.z, outgoing.y)
@@ -333,7 +333,7 @@ extension HairBsdf {
                 return clamp(value: xValue, low: lower, high: upper)
         }
 
-        // func sampleLocal(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector)
+        // func sample(wo: Vector, samples: FourRandomVariables, evaluate: (Vector, Vector)
         //  -> RgbSpectrum) async -> (
         //        RgbSpectrum, Vector, FloatX
         // ) {

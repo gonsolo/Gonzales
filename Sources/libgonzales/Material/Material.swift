@@ -11,7 +11,7 @@ enum Material {
         case interface(Interface)
         case measured(Measured)
 
-        func getBsdf(interaction: SurfaceInteraction) throws -> GlobalBsdfType {
+        func getBsdf(interaction: SurfaceInteraction) throws -> BsdfVariant {
                 switch self {
                 case .areaLight(let areaLight):
                         let bsdf = areaLight.getBsdf(interaction: interaction)

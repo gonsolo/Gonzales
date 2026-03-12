@@ -1,4 +1,4 @@
-public struct DielectricBsdf: GlobalBsdf {
+public struct DielectricBsdf: FramedBsdf {
 
         public let distribution: any MicrofacetDistribution
         public let refractiveIndexVacuum: FloatX = 1
@@ -22,7 +22,7 @@ extension DielectricBsdf {
                 return dot(half, incident) * cosTheta(incident) < 0 || dot(half, outgoing) * cosTheta(outgoing) < 0
         }
 
-        public func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+        public func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return black
                 }
@@ -188,7 +188,7 @@ extension DielectricBsdf {
                 }
         }
 
-        public func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+        public func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
                         return sampleSpecular(outgoing: outgoing, uSample: uSample)
                 } else {
@@ -196,7 +196,7 @@ extension DielectricBsdf {
                 }
         }
 
-        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
                 if refractiveIndex == refractiveIndexVacuum || isSpecular {
                         return 0
                 }

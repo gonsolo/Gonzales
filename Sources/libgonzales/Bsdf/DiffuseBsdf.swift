@@ -1,4 +1,4 @@
-public struct DiffuseBsdf: GlobalBsdf {
+public struct DiffuseBsdf: FramedBsdf {
 
         var reflectance: RgbSpectrum = white
         public let bsdfFrame: BsdfFrame
@@ -11,7 +11,7 @@ public struct DiffuseBsdf: GlobalBsdf {
 
 extension DiffuseBsdf {
 
-        public func evaluateLocal(outgoing _: Vector, incident _: Vector) -> RgbSpectrum {
+        public func evaluate(outgoing _: Vector, incident _: Vector) -> RgbSpectrum {
                 return reflectance / FloatX.pi
         }
 

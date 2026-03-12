@@ -1,6 +1,6 @@
-struct MicrofacetReflection: GlobalBsdf {
+struct MicrofacetReflection: FramedBsdf {
 
-        func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+        func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
                 let cosThetaO = absCosTheta(outgoing)
                 let cosThetaI = absCosTheta(incident)
                 var half = outgoing + incident
@@ -13,18 +13,18 @@ struct MicrofacetReflection: GlobalBsdf {
                 return reflectance * area * visible * fresnelValue / (4 * cosThetaI * cosThetaO)
         }
 
-        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+        func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
                 guard !outgoing.z.isZero else {
                         return BsdfSample()
                 }
                 let half = distribution.sampleHalfVector(outgoing: outgoing, uSample: (uSample.0, uSample.1))
                 let incident = reflect(vector: outgoing, by: half)
-                let radiance = evaluateLocal(outgoing: outgoing, incident: incident)
-                let density = probabilityDensityLocal(outgoing: outgoing, incident: incident)
+                let radiance = evaluate(outgoing: outgoing, incident: incident)
+                let density = probabilityDensity(outgoing: outgoing, incident: incident)
                 return BsdfSample(radiance, incident, density)
         }
 
-        func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+        func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
                 guard sameHemisphere(outgoing, incident) else { return 0 }
                 let half = normalized(outgoing + incident)
                 return distribution.probabilityDensity(outgoing: outgoing, half: half) / (4 * dot(outgoing, half))

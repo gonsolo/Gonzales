@@ -1,6 +1,6 @@
 import Foundation
 
-public struct CoatedDiffuseBsdf: GlobalBsdf {
+public struct CoatedDiffuseBsdf: FramedBsdf {
 
         private let layered: LayeredBsdf<DielectricBsdf, DiffuseBsdf>
         public let bsdfFrame: BsdfFrame
@@ -32,17 +32,17 @@ public struct CoatedDiffuseBsdf: GlobalBsdf {
                 self.bsdfFrame = bsdfFrame
         }
 
-        public func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
-                let value = layered.evaluateLocal(outgoing: outgoing, incident: incident)
+        public func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+                let value = layered.evaluate(outgoing: outgoing, incident: incident)
                 return value
         }
 
-        public func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
-                return layered.sampleLocal(outgoing: outgoing, uSample: uSample)
+        public func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+                return layered.sample(outgoing: outgoing, uSample: uSample)
         }
 
-        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
-                return layered.probabilityDensityLocal(outgoing: outgoing, incident: incident)
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
+                return layered.probabilityDensity(outgoing: outgoing, incident: incident)
         }
 
         public func albedo() -> RgbSpectrum {

@@ -1,6 +1,6 @@
 import Foundation
 
-struct LayeredBsdf<Top: LocalBsdf & Sendable, Bottom: LocalBsdf & Sendable>: GlobalBsdf {
+struct LayeredBsdf<Top: Bsdf & Sendable, Bottom: Bsdf & Sendable>: FramedBsdf {
 
         let top: Top
         let bottom: Bottom
@@ -52,7 +52,7 @@ extension LayeredBsdf {
                 return self._albedo
         }
 
-        func evaluateLocal(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+        func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
 
                 var scatteredRadiance = RgbSpectrum(intensity: 0.0)
 
@@ -71,9 +71,9 @@ extension LayeredBsdf {
                 if isSameHemisphere {
                         let entranceEval: RgbSpectrum
                         if enteredTop {
-                                entranceEval = top.evaluateLocal(outgoing: localOutgoing, incident: localIncident)
+                                entranceEval = top.evaluate(outgoing: localOutgoing, incident: localIncident)
                         } else {
-                                entranceEval = bottom.evaluateLocal(outgoing: localOutgoing, incident: localIncident)
+                                entranceEval = bottom.evaluate(outgoing: localOutgoing, incident: localIncident)
                         }
                         scatteredRadiance += FloatX(nSamples) * entranceEval
                 }
@@ -96,7 +96,7 @@ extension LayeredBsdf {
                 return result
         }
 
-        func sampleLocal(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+        func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
                 var localOutgoing = outgoing
                 var flipIncident = false
 
@@ -109,9 +109,9 @@ extension LayeredBsdf {
 
                 let bsStart: BsdfSample
                 if enteredTop {
-                        bsStart = top.sampleLocal(outgoing: localOutgoing, uSample: uSample)
+                        bsStart = top.sample(outgoing: localOutgoing, uSample: uSample)
                 } else {
-                        bsStart = bottom.sampleLocal(outgoing: localOutgoing, uSample: uSample)
+                        bsStart = bottom.sample(outgoing: localOutgoing, uSample: uSample)
                 }
 
                 if !bsStart.isValid || bsStart.probabilityDensity == 0 || bsStart.incoming.z == 0 {
@@ -169,9 +169,9 @@ extension LayeredBsdf {
 
                         var bsdfSample: BsdfSample
                         if zCurrent == 0 {
-                                bsdfSample = bottom.sampleLocal(outgoing: -sampledDirection, uSample: sampler.get3D())
+                                bsdfSample = bottom.sample(outgoing: -sampledDirection, uSample: sampler.get3D())
                         } else {
-                                bsdfSample = top.sampleLocal(outgoing: -sampledDirection, uSample: sampler.get3D())
+                                bsdfSample = top.sample(outgoing: -sampledDirection, uSample: sampler.get3D())
                         }
 
                         if !bsdfSample.isValid || bsdfSample.probabilityDensity == 0 || bsdfSample.incoming.z == 0 {
@@ -193,7 +193,7 @@ extension LayeredBsdf {
                 return invalidBsdfSample
         }
 
-        public func probabilityDensityLocal(outgoing: Vector, incident: Vector) -> FloatX {
+        public func probabilityDensity(outgoing: Vector, incident: Vector) -> FloatX {
                 var localOutgoing = outgoing
                 var localIncident = incident
                 if twoSided && localOutgoing.z < 0 {
@@ -208,9 +208,9 @@ extension LayeredBsdf {
                 if sameHemisphere(localOutgoing, localIncident) {
                         let rPdf: FloatX
                         if enteredTop {
-                                rPdf = top.probabilityDensityLocal(outgoing: localOutgoing, incident: localIncident)
+                                rPdf = top.probabilityDensity(outgoing: localOutgoing, incident: localIncident)
                         } else {
-                                rPdf = bottom.probabilityDensityLocal(outgoing: localOutgoing, incident: localIncident)
+                                rPdf = bottom.probabilityDensity(outgoing: localOutgoing, incident: localIncident)
                         }
                         pdfSum += FloatX(nSamples) * rPdf
                 }
@@ -222,31 +222,31 @@ extension LayeredBsdf {
                                 let rInterfacePdf: FloatX
 
                                 if enteredTop {
-                                        outgoingSample = top.sampleLocal(
+                                        outgoingSample = top.sample(
                                                 outgoing: localOutgoing, uSample: sampler.get3D())
-                                        incidentSample = top.sampleLocal(
+                                        incidentSample = top.sample(
                                                 outgoing: localIncident, uSample: sampler.get3D())
 
                                         if outgoingSample.isValid
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
                                                 && incidentSample.isTransmission(outgoing: localIncident) {
-                                                rInterfacePdf = bottom.probabilityDensityLocal(
+                                                rInterfacePdf = bottom.probabilityDensity(
                                                         outgoing: -outgoingSample.incoming,
                                                         incident: -incidentSample.incoming)
                                                 pdfSum += rInterfacePdf
                                         }
                                 } else {
-                                        outgoingSample = bottom.sampleLocal(
+                                        outgoingSample = bottom.sample(
                                                 outgoing: localOutgoing, uSample: sampler.get3D())
-                                        incidentSample = bottom.sampleLocal(
+                                        incidentSample = bottom.sample(
                                                 outgoing: localIncident, uSample: sampler.get3D())
 
                                         if outgoingSample.isValid
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
                                                 && incidentSample.isTransmission(outgoing: localIncident) {
-                                                rInterfacePdf = top.probabilityDensityLocal(
+                                                rInterfacePdf = top.probabilityDensity(
                                                         outgoing: -outgoingSample.incoming,
                                                         incident: -incidentSample.incoming)
                                                 pdfSum += rInterfacePdf
@@ -254,34 +254,34 @@ extension LayeredBsdf {
                                 }
                         } else {
                                 if enteredTop {
-                                        let outgoingSample = top.sampleLocal(
+                                        let outgoingSample = top.sample(
                                                 outgoing: localOutgoing, uSample: sampler.get3D())
-                                        let incidentSample = bottom.sampleLocal(
+                                        let incidentSample = bottom.sample(
                                                 outgoing: localIncident, uSample: sampler.get3D())
 
                                         if outgoingSample.isValid
                                                 && !outgoingSample.isReflection(outgoing: localOutgoing)
                                                 && incidentSample.isValid
                                                 && !incidentSample.isReflection(outgoing: localIncident) {
-                                                let probability1 = top.probabilityDensityLocal(
+                                                let probability1 = top.probabilityDensity(
                                                         outgoing: localOutgoing, incident: -incidentSample.incoming)
-                                                let probability2 = bottom.probabilityDensityLocal(
+                                                let probability2 = bottom.probabilityDensity(
                                                         outgoing: -outgoingSample.incoming, incident: localIncident)
                                                 pdfSum += (probability1 + probability2) / 2
                                         }
                                 } else {
-                                        let outgoingSample = bottom.sampleLocal(
+                                        let outgoingSample = bottom.sample(
                                                 outgoing: localOutgoing, uSample: sampler.get3D())
-                                        let incidentSample = top.sampleLocal(
+                                        let incidentSample = top.sample(
                                                 outgoing: localIncident, uSample: sampler.get3D())
 
                                         if outgoingSample.isValid
                                                 && !outgoingSample.isReflection(outgoing: localOutgoing)
                                                 && incidentSample.isValid
                                                 && !incidentSample.isReflection(outgoing: localIncident) {
-                                                let probability1 = bottom.probabilityDensityLocal(
+                                                let probability1 = bottom.probabilityDensity(
                                                         outgoing: localOutgoing, incident: -incidentSample.incoming)
-                                                let probability2 = top.probabilityDensityLocal(
+                                                let probability2 = top.probabilityDensity(
                                                         outgoing: -outgoingSample.incoming, incident: localIncident)
                                                 pdfSum += (probability1 + probability2) / 2
                                         }
@@ -320,9 +320,9 @@ extension LayeredBsdf {
 
                 let outgoingSample: BsdfSample
                 if enteredTop {
-                        outgoingSample = top.sampleLocal(outgoing: localOutgoing, uSample: uSample)
+                        outgoingSample = top.sample(outgoing: localOutgoing, uSample: uSample)
                 } else {
-                        outgoingSample = bottom.sampleLocal(outgoing: localOutgoing, uSample: uSample)
+                        outgoingSample = bottom.sample(outgoing: localOutgoing, uSample: uSample)
                 }
 
                 if !outgoingSample.isValid || outgoingSample.isReflection(outgoing: localOutgoing)
@@ -334,9 +334,9 @@ extension LayeredBsdf {
                 let incidentSample: BsdfSample
 
                 if isSameHemisphere != enteredTop {
-                        incidentSample = bottom.sampleLocal(outgoing: localIncident, uSample: exitSample)
+                        incidentSample = bottom.sample(outgoing: localIncident, uSample: exitSample)
                 } else {
-                        incidentSample = top.sampleLocal(outgoing: localIncident, uSample: exitSample)
+                        incidentSample = top.sample(outgoing: localIncident, uSample: exitSample)
                 }
 
                 if !incidentSample.isValid || incidentSample.isReflection(outgoing: localIncident)
@@ -441,10 +441,10 @@ extension LayeredBsdf {
         ) -> Bool? {
                 let exitSample: BsdfSample
                 if zCurrent == 0 {
-                        exitSample = bottom.sampleLocal(
+                        exitSample = bottom.sample(
                                 outgoing: -sampledDirection, uSample: sampler.get3D())
                 } else {
-                        exitSample = top.sampleLocal(
+                        exitSample = top.sample(
                                 outgoing: -sampledDirection, uSample: sampler.get3D())
                 }
 
@@ -481,10 +481,10 @@ extension LayeredBsdf {
                 if !nonExitIsSpecular {
                         let neVal: RgbSpectrum
                         if isBottom {
-                                neVal = bottom.evaluateLocal(
+                                neVal = bottom.evaluate(
                                         outgoing: -sampledDirection, incident: -incidentSample.incoming)
                         } else {
-                                neVal = top.evaluateLocal(
+                                neVal = top.evaluate(
                                         outgoing: -sampledDirection, incident: -incidentSample.incoming)
                         }
 
@@ -501,10 +501,10 @@ extension LayeredBsdf {
 
                 let sample: BsdfSample
                 if isBottom {
-                        sample = bottom.sampleLocal(
+                        sample = bottom.sample(
                                 outgoing: -sampledDirection, uSample: sampler.get3D())
                 } else {
-                        sample = top.sampleLocal(
+                        sample = top.sample(
                                 outgoing: -sampledDirection, uSample: sampler.get3D())
                 }
 
