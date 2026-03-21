@@ -17,4 +17,6 @@ extension DiffuseBsdf {
 
         public func albedo() -> RgbSpectrum { return reflectance }
 
+        public var isSpecular: Bool { return false }
+
 }

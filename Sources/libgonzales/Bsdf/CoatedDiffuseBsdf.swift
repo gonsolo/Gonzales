@@ -13,14 +13,14 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
                 let thickness: Real = 0.01
                 let asymmetryFactor: Real = 0.0
                 let maxDepth = 10
-                let nSamples = 32
+                let nSamples = 1
                 let mediumAlbedo = RgbSpectrum(intensity: 0.0)
 
                 self.layered = LayeredBsdf(
                         top: dielectric,
                         bottom: diffuse,
-                        topIsSpecular: true,
-                        bottomIsSpecular: false,
+                        topIsSpecular: dielectric.isSpecular,
+                        bottomIsSpecular: diffuse.isSpecular,
                         thickness: thickness,
                         albedo: mediumAlbedo,
                         geometricTerm: asymmetryFactor,

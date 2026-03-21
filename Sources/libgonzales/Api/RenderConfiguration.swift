@@ -8,7 +8,7 @@ class RenderConfiguration {
         var cameraName = "perspective"
         var cameraParameters = ParameterDictionary()
         var cameraToWorld = Transform()
-        var filmName = "image"
+        var filmName = "rgb"
         var filmParameters = ParameterDictionary()
         var integratorName = "path"
         var integratorParameters = ParameterDictionary()
@@ -36,12 +36,15 @@ class RenderConfiguration {
                         cropWindow.pMin = Point2f(x: crop[0], y: crop[2])
                         cropWindow.pMax = Point2f(x: crop[1], y: crop[3])
                 }
+                let isoValues = try filmParameters.findReals(called: "iso")
+                let iso = isoValues.isEmpty ? 100.0 : isoValues[0]
                 return Film(
                         name: fileName,
                         resolution: resolution,
                         fileName: fileName,
                         filter: filter,
-                        crop: cropWindow
+                        crop: cropWindow,
+                        iso: iso
                 )
         }
 

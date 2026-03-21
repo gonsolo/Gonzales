@@ -48,7 +48,7 @@ extension DielectricBsdf {
                 if reflect {
                         let differentialArea = distribution.differentialArea(withNormal: half)
                         let visibleFraction = distribution.visibleFraction(from: outgoing, and: incident)
-                        let enumerator = differentialArea * visibleFraction
+                        let enumerator = differentialArea * visibleFraction * fresnelReflected
                         let denominator = abs(4 * cosThetaI * cosThetaO)
                         let estimate = RgbSpectrum(intensity: enumerator / denominator)
                         return estimate

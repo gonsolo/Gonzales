@@ -4,7 +4,7 @@ struct Film {
                 case unknownFileType(name: String)
         }
 
-        init(name: String, resolution: Point2i, fileName: String, filter: any Filter, crop: Bounds2f) {
+        init(name: String, resolution: Point2i, fileName: String, filter: any Filter, crop: Bounds2f, iso: Real = 100.0) {
 
                 func upperPoint2i(_ point: Point2f) -> Point2i {
                         return Point2i(x: Int(point.x.rounded(.up)), y: Int(point.y.rounded(.up)))
@@ -17,6 +17,7 @@ struct Film {
                 self.crop = Bounds2i(
                         pMin: upperPoint2i(resolution * crop.pMin),
                         pMax: upperPoint2i(resolution * crop.pMax))
+                self.iso = iso
         }
 
         func getSampleBounds() -> Bounds2i {
@@ -106,8 +107,9 @@ struct Film {
 
         func add(sample: Sample, image: inout Image) {
                 if isWithin(location: sample.pixel, resolution: image.getResolution()) {
+                        let scaledLight = sample.light * RgbSpectrum(intensity: iso / 100.0)
                         image.addPixel(
-                                withColor: sample.light, withWeight: sample.weight, atLocation: sample.pixel)
+                                withColor: scaledLight, withWeight: sample.weight, atLocation: sample.pixel)
                 }
         }
 
@@ -135,4 +137,5 @@ struct Film {
         let filter: any Filter
         let resolution: Point2i
         var crop: Bounds2i
+        let iso: Real
 }
