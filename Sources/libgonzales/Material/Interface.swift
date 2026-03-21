@@ -2,7 +2,7 @@ struct Interface {
 
         func getBsdf() throws -> BsdfVariant {
                 // Unimplemented by design
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
         }
 }
 

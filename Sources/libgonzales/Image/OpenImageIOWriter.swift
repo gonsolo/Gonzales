@@ -45,10 +45,16 @@ actor OpenImageIOWriter {
                 let tileHeight = Int32(tileSize.1)
                 let channels: Int32 = 4
 
+                let fullWidth = Int32(image.getResolution().x)
+                let fullHeight = Int32(image.getResolution().y)
+                let xOffset = Int32(finalCrop.pMin.x)
+                let yOffset = Int32(finalCrop.pMin.y)
+
                 // Open the file
                 guard
                         let outputPointer = openImageForTiledWriting(
-                                fileName, xres, yres, tileWidth, tileHeight, channels)
+                                fileName, xres, yres, tileWidth, tileHeight, channels,
+                                fullWidth, fullHeight, xOffset, yOffset)
                 else {
                         return
                 }
@@ -77,7 +83,7 @@ actor OpenImageIOWriter {
                                                 outputPointer,
                                                 pixels,
                                                 xres, channels,
-                                                Int32(tileX), Int32(tileY), tileWidth, tileHeight,
+                                                Int32(tileX), Int32(tileY), xOffset, yOffset, tileWidth, tileHeight,
                                                 channelStride, xStride, yStride
                                         )
 

@@ -141,5 +141,5 @@ extension InfiniteLight {
 }
 
 extension InfiniteLight {
-        var isDelta: Bool { true }
+        var isDelta: Bool { false }
 }

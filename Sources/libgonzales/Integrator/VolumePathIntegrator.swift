@@ -101,24 +101,7 @@ extension VolumePathIntegrator {
                 return try lightSampler.chooseLight(scene: scene)
         }
 
-        private func intersectOrInfiniteLights(
-                ray: Ray,
-                tHit: inout Real,
-                bounce: Int,
-                estimate: inout RgbSpectrum,
-                interaction: inout SurfaceInteraction?
-        ) throws {
-                interaction = try accelerator.intersect(
-                        scene: scene,
-                        ray: ray,
-                        tHit: &tHit)
-                let radiance = scene.infiniteLights.reduce(
-                        black,
-                        { accumulated, light in accumulated + light.radianceFromInfinity(for: ray)
-                        }
-                )
-                if bounce == 0 { estimate += radiance }
-        }
+
 
         private func sampleLightSource<I: Interaction, D: DistributionModel>(
                 light: Light,
@@ -418,13 +401,19 @@ extension VolumePathIntegrator {
                 context: inout IntegratorContext
         ) throws -> Bool {
 
-                try intersectOrInfiniteLights(
+                state.interaction = try accelerator.intersect(
+                        scene: scene,
                         ray: state.ray,
-                        tHit: &state.tHit,
-                        bounce: state.bounce,
-                        estimate: &state.estimate,
-                        interaction: &state.interaction)
+                        tHit: &state.tHit)
+                
                 if state.interaction == nil {
+                        if state.bounce == 0 || state.specularBounce {
+                                let radiance = scene.infiniteLights.reduce(
+                                        black,
+                                        { accumulated, light in accumulated + light.radianceFromInfinity(for: state.ray) }
+                                )
+                                state.estimate += state.throughput * radiance
+                        }
                         return false  // No surface hit, so stop this bounce
                 }
                 let (transmittance, mediumInteraction): (RgbSpectrum, MediumInteraction?) = (white, nil)

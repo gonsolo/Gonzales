@@ -23,8 +23,8 @@ PTEXMEM = --ptexmem 1 # GB
 
 # Render 27/27 scenes
 PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
-#SCENE_DIR = barcelona-pavilion 		 1/27
-#SCENE_NAME = pavilion-day.pbrt
+SCENE_DIR = barcelona-pavilion 		 # 1/27
+SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
 #SCENE_NAME = bistro_boulangerie.pbrt
 #SCENE_DIR = dambreak
@@ -34,7 +34,7 @@ PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = bunny-cloud
 #SCENE_DIR = bunny-fur
 #SCENE_DIR = clouds
-SCENE_DIR = contemporary-bathroom
+#SCENE_DIR = contemporary-bathroom
 #SCENE_DIR = crown
 #SCENE_DIR = disney-cloud 			10/27
 #IMAGE = disney-cloud-720p.exr
@@ -69,8 +69,8 @@ SCENE_DIR = contemporary-bathroom
 #SCENE_NAME = camera-1.pbrt
 #SCENE_DIR = zero-day 				27/27
 #SCENE_NAME = frame120.pbrt
-SCENE_NAME ?= $(SCENE_DIR).pbrt
-SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
+#SCENE_NAME ?= $(SCENE_DIR).pbrt
+SCENE = $(PBRT_SCENES_DIR)/$(strip $(SCENE_DIR))/$(SCENE_NAME)
 IMAGE =  $(SCENE_NAME:.pbrt=.exr)
 IMAGE_PBRT = $(IMAGE)
 
@@ -117,7 +117,7 @@ endif
 	#SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
 	SWIFT_OPTIMIZE_FLAG     = -Xcc -Xclang -Xcc -target-feature -Xcc -Xclang -Xcc +avx2
 	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
-	SWIFT_LTO 		= --experimental-lto-mode full
+	#SWIFT_LTO 		= --experimental-lto-mode full
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
@@ -283,3 +283,23 @@ lldb_coated: debug
 
 testsuite:
 	swift test
+
+WALL_SCENE = wall.pbrt
+WALL_IMAGE = pavilion-wall.exr
+WALL_IMAGE_GONZALES = wall-gonzales.exr
+WALL_IMAGE_PBRT = wall-pbrt.exr
+
+tw: test_wall
+test_wall: debug
+	@ $(GONZALES_DEBUG) $(OPTIONS) $(WALL_SCENE)
+	@mv $(WALL_IMAGE) $(WALL_IMAGE_GONZALES)
+
+twp: test_wall_pbrt
+test_wall_pbrt:
+	$(PBRT) $(PBRT_OPTIONS) $(WALL_SCENE)
+	@mv $(WALL_IMAGE) $(WALL_IMAGE_PBRT)
+
+cw: compare_wall
+compare_wall: test_wall test_wall_pbrt
+	python3 Scripts/compare_exr.py $(WALL_IMAGE_GONZALES) $(WALL_IMAGE_PBRT)
+

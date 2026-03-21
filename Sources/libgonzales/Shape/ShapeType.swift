@@ -54,7 +54,7 @@ enum ShapeType: Shape {
                         return try triangle.getIntersectionData(
                                 scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 default:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                 }
         }
 
@@ -70,7 +70,7 @@ enum ShapeType: Shape {
                                 data: data,
                                 worldRay: worldRay)
                 default:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                 }
         }
 

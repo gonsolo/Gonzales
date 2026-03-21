@@ -71,7 +71,7 @@ class RenderConfiguration {
                         let support = try makeSupport(withDefault: (2, 2))
                         filter = TriangleFilter(support: support)
                 default:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Unknown pixel filter: \(name)")
+                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Unknown pixel filter: \(name)")
                 }
                 return filter
         }
@@ -168,6 +168,7 @@ class RenderConfiguration {
                 geometricPrimitives: [GeometricPrimitive],
                 areaLights: [AreaLight],
                 materials: [Material],
+                transformedPrimitives: [TransformedPrimitive],
                 acceleratorName: String,
                 immutableState: ImmutableState,
                 renderOptions: RenderOptions,
@@ -180,7 +181,8 @@ class RenderConfiguration {
                         materials: materials,
                         meshes: meshes,
                         geometricPrimitives: geometricPrimitives,
-                        areaLights: areaLights)
+                        areaLights: areaLights,
+                        transformedPrimitives: transformedPrimitives)
                 let acceleratorTimer = Timer("Build accelerator...", newline: false)
                 let accelerator = try makeAccelerator(
                         scene: scene, primitives: primitives,

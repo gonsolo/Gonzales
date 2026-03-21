@@ -45,9 +45,12 @@ extension ParameterDictionary {
         )
                 throws -> RgbSpectrumTexture {
                 let textureName = try findTexture(name: name)
+
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Could not find texture")
+                                print("Warning: Could not find texture \"\(textureName)\", using default spectrum.")
+                                let constantTexture = ConstantTexture(value: spectrum)
+                                return RgbSpectrumTexture.constantTexture(constantTexture)
                         }
                         switch texture {
                         case .floatTexture:
@@ -60,10 +63,10 @@ extension ParameterDictionary {
                         }
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Missing spectrum")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Missing spectrum")
                         }
                         guard let rgbSpectrum = spectrum as? RgbSpectrum else {
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "Expected RgbSpectrum")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Expected RgbSpectrum")
                         }
                         let constantTexture = ConstantTexture(value: rgbSpectrum)
                         return RgbSpectrumTexture.constantTexture(constantTexture)
@@ -77,15 +80,15 @@ extension ParameterDictionary {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
-                                print("No named texture \"\(textureName)\"")
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "No named texture \"\(textureName)\"")
+                                print("Warning: No named texture \"\(textureName)\" found, using default value.")
+                                return FloatTexture.constantTexture(ConstantTexture<Real>(value: value))
                         }
                         switch texture {
                         case .floatTexture(let floatTexture):
                                 return floatTexture
                         case .rgbSpectrumTexture:
                                 print("No named float texture \"\(textureName)\"")
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "No named float texture \"\(textureName)\"")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "No named float texture \"\(textureName)\"")
                         }
                 } else {
                         let value = try findOneReal(called: name, else: value)

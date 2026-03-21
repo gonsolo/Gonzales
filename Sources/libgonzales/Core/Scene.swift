@@ -5,7 +5,8 @@ struct Scene {
                 materials: [Material],
                 meshes: TriangleMeshes,
                 geometricPrimitives: [GeometricPrimitive],
-                areaLights: [AreaLight]
+                areaLights: [AreaLight],
+                transformedPrimitives: [TransformedPrimitive]
         ) {
                 self.lights = lights
                 self.infiniteLights = lights.compactMap {
@@ -20,6 +21,7 @@ struct Scene {
                 self.meshes = meshes
                 self.geometricPrimitives = geometricPrimitives
                 self.areaLights = areaLights
+                self.transformedPrimitives = transformedPrimitives
         }
 
         func intersect(primId: PrimId, ray: Ray, tHit: inout Real) throws -> Bool {
@@ -33,7 +35,8 @@ struct Scene {
                         let geometricPrimitive = geometricPrimitives[primId.id1]
                         return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 case .transformedPrimitive:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        let transformedPrimitive = transformedPrimitives[primId.id1]
+                        return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit) != nil
@@ -59,7 +62,9 @@ struct Scene {
                         return try geometricPrimitive.getIntersectionData(
                                 scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .transformedPrimitive:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        let transformedPrimitive = transformedPrimitives[primId.id1]
+                        return try transformedPrimitive.getIntersectionData(
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.getIntersectionData(
@@ -84,7 +89,9 @@ struct Scene {
                         return try geometricPrimitive.computeSurfaceInteraction(
                                 scene: self, data: data, worldRay: worldRay)
                 case .transformedPrimitive:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        let transformedPrimitive = transformedPrimitives[primId.id1]
+                        return try transformedPrimitive.computeSurfaceInteraction(
+                                scene: self, data: data, worldRay: worldRay)
                 case .areaLight:
                         let areaLight = areaLights[primId.id1]
                         return try areaLight.computeSurfaceInteraction(
@@ -98,4 +105,5 @@ struct Scene {
         var meshes: TriangleMeshes
         var geometricPrimitives: [GeometricPrimitive]
         var areaLights: [AreaLight]
+        var transformedPrimitives: [TransformedPrimitive]
 }

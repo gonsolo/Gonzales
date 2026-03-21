@@ -1,5 +1,6 @@
 ///        Bidirectional Scattering Distribution Function
 ///        Describes how light is scattered by a surface.
+
 public protocol FramedBsdf: BsdfFrameProtocol, DistributionModel, Bsdf, Sendable {
         func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
         func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real

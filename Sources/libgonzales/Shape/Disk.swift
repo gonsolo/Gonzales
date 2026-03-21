@@ -10,7 +10,7 @@ struct Disk: Shape {
         }
 
         func objectBound(scene _: Scene) throws -> Bounds3f {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
         }
 
         func intersect(
@@ -18,7 +18,7 @@ struct Disk: Shape {
                 ray _: Ray,
                 tHit _: inout Real
         ) throws -> Bool {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
         }
 
         func intersect(
@@ -26,17 +26,17 @@ struct Disk: Shape {
                 ray _: Ray,
                 tHit _: inout Real
         ) throws -> SurfaceInteraction? {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
         }
 
         func area(scene _: Scene) throws -> Area {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
         }
 
         func sample<I: Interaction>(samples _: TwoRandomVariables, scene _: Scene) throws -> (
                 interaction: I, pdf: Real
         ) {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
         }
 
         public var description: String {

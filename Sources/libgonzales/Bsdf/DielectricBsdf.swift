@@ -37,7 +37,7 @@ extension DielectricBsdf {
                 if cosThetaI == 0 || cosThetaO == 0 || lengthSquared(half) == 0 {
                         return black
                 }
-                half = faceforward(vector: normalized(half), comparedTo: Normal(x: 0, y: 0, z: 1))
+                half = faceForward(vector: normalized(half), comparedTo: Normal(x: 0, y: 0, z: 1))
                 if backfacing(incident: incident, outgoing: outgoing, half: half) {
                         return black
                 }
@@ -223,7 +223,7 @@ extension DielectricBsdf {
                 if cosThetaO.isZero || cosThetaI.isZero || lengthSquared(halfVector).isZero {
                         return 0
                 }
-                halfVector = faceforward(vector: normalized(halfVector), comparedTo: Normal(x: 0, y: 0, z: 1))
+                halfVector = faceForward(vector: normalized(halfVector), comparedTo: Normal(x: 0, y: 0, z: 1))
                 if dot(halfVector, incident) * cosThetaI < 0 || dot(halfVector, outgoing) * cosThetaO < 0 {
                         return 0
                 }

@@ -256,7 +256,7 @@ extension Triangle {
         ) throws -> Bool {
 
                 // Transform the ray to object space
-                let ray = getObjectToWorld(scene: scene) * worldRay
+                let ray = getObjectToWorld(scene: scene).inverse * worldRay
 
                 // --- Setup and Plane Projection ---
 
@@ -444,7 +444,7 @@ extension Triangle {
                 }
 
                 // --- Finalize SurfaceInteraction ---
-                let rayObjectSpace = getObjectToWorld(scene: scene) * worldRay
+                let rayObjectSpace = getObjectToWorld(scene: scene).inverse * worldRay
 
                 interaction.position = getObjectToWorld(scene: scene) * pHitValue
                 interaction.normal = normalized(getObjectToWorld(scene: scene) * normal)

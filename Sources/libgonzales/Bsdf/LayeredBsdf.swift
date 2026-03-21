@@ -135,9 +135,13 @@ extension LayeredBsdf {
                                         if z == zp { continue }
                                         if zp > 0 && zp < thickness {
                                                 // Medium scattering event
-                                                let wt: Real = 1  // MIS weight (simplified)
+                                                var wt: Real = 1
                                                 let phaseVal = phaseFunction.evaluate(
                                                         outgoing: -w, incident: -wis.incoming)
+                                                let exitIsSpecular = (exitZ == 0) ? bottomIsSpecular : topIsSpecular
+                                                if !exitIsSpecular {
+                                                        wt = powerHeuristic(pdfF: wis.probabilityDensity, pdfG: phaseVal)
+                                                }
                                                 f += beta * _albedo * phaseVal * wt
                                                         * transmittance(deltaZ: zp - exitZ, direction: wis.incoming)
                                                         * wis.estimate / wis.probabilityDensity
@@ -387,10 +391,32 @@ extension LayeredBsdf {
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
                                                 && incidentSample.isTransmission(outgoing: localIncident) {
-                                                rInterfacePdf = bottom.probabilityDensity(
-                                                        outgoing: -outgoingSample.incoming,
-                                                        incident: -incidentSample.incoming)
-                                                pdfSum += rInterfacePdf
+                                                
+                                                let topIsNonSpecular = !topIsSpecular
+                                                if !topIsNonSpecular {
+                                                        rInterfacePdf = bottom.probabilityDensity(
+                                                                outgoing: -outgoingSample.incoming,
+                                                                incident: -incidentSample.incoming)
+                                                        pdfSum += rInterfacePdf
+                                                } else {
+                                                        let rs = bottom.sample(outgoing: -outgoingSample.incoming, uSample: sampler.get3D())
+                                                        if rs.isValid && rs.probabilityDensity > 0 {
+                                                                let bottomIsNonSpecular = !bottomIsSpecular
+                                                                if !bottomIsNonSpecular {
+                                                                        pdfSum += top.probabilityDensity(outgoing: -rs.incoming, incident: localIncident)
+                                                                } else {
+                                                                        let rPDF = bottom.probabilityDensity(
+                                                                                outgoing: -outgoingSample.incoming,
+                                                                                incident: -incidentSample.incoming)
+                                                                        var wt = powerHeuristic(pdfF: incidentSample.probabilityDensity, pdfG: rPDF)
+                                                                        pdfSum += wt * rPDF
+                                                                        
+                                                                        let tPDF = top.probabilityDensity(outgoing: -rs.incoming, incident: localIncident)
+                                                                        wt = powerHeuristic(pdfF: rs.probabilityDensity, pdfG: tPDF)
+                                                                        pdfSum += wt * tPDF
+                                                                }
+                                                        }
+                                                }
                                         }
                                 } else {
                                         outgoingSample = bottom.sample(
@@ -402,10 +428,32 @@ extension LayeredBsdf {
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
                                                 && incidentSample.isTransmission(outgoing: localIncident) {
-                                                rInterfacePdf = top.probabilityDensity(
-                                                        outgoing: -outgoingSample.incoming,
-                                                        incident: -incidentSample.incoming)
-                                                pdfSum += rInterfacePdf
+                                                
+                                                let bottomIsNonSpecular = !bottomIsSpecular
+                                                if !bottomIsNonSpecular {
+                                                        rInterfacePdf = top.probabilityDensity(
+                                                                outgoing: -outgoingSample.incoming,
+                                                                incident: -incidentSample.incoming)
+                                                        pdfSum += rInterfacePdf
+                                                } else {
+                                                        let rs = top.sample(outgoing: -outgoingSample.incoming, uSample: sampler.get3D())
+                                                        if rs.isValid && rs.probabilityDensity > 0 {
+                                                                let topIsNonSpecular = !topIsSpecular
+                                                                if !topIsNonSpecular {
+                                                                        pdfSum += bottom.probabilityDensity(outgoing: -rs.incoming, incident: localIncident)
+                                                                } else {
+                                                                        let rPDF = top.probabilityDensity(
+                                                                                outgoing: -outgoingSample.incoming,
+                                                                                incident: -incidentSample.incoming)
+                                                                        var wt = powerHeuristic(pdfF: incidentSample.probabilityDensity, pdfG: rPDF)
+                                                                        pdfSum += wt * rPDF
+                                                                        
+                                                                        let tPDF = bottom.probabilityDensity(outgoing: -rs.incoming, incident: localIncident)
+                                                                        wt = powerHeuristic(pdfF: rs.probabilityDensity, pdfG: tPDF)
+                                                                        pdfSum += wt * tPDF
+                                                                }
+                                                        }
+                                                }
                                         }
                                 }
                         } else {
@@ -645,10 +693,24 @@ extension LayeredBsdf {
                         }
 
                         if !neVal.isBlack {
+                                let exitIsSpecular = (params.zCurrent == 0) ? topIsSpecular : bottomIsSpecular
+                                var wt: Real = 1
+                                if !exitIsSpecular {
+                                                let nonExitPdf: Real
+                                                if isBottom {
+                                                        nonExitPdf = bottom.probabilityDensity(
+                                                                outgoing: -sampledDirection, incident: -incidentSample.incoming)
+                                                } else {
+                                                        nonExitPdf = top.probabilityDensity(
+                                                                outgoing: -sampledDirection, incident: -incidentSample.incoming)
+                                                }
+                                                wt = powerHeuristic(
+                                                        pdfF: incidentSample.probabilityDensity, pdfG: nonExitPdf)
+                                }
                                 let transmittanceValue = transmittance(
                                         deltaZ: thickness,
                                         direction: incidentSample.incoming)
-                                let term1 = throughput * neVal * absCosTheta(incidentSample.incoming)
+                                let term1 = throughput * neVal * absCosTheta(incidentSample.incoming) * wt
                                 let term2 = transmittanceValue * incidentSample.estimate
                                         / incidentSample.probabilityDensity
                                 sampleF += term1 * term2

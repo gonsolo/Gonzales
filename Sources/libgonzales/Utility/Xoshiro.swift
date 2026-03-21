@@ -11,6 +11,11 @@ struct Xoshiro: RandomNumberGenerator {
                 ]
         }
 
+        init(seed: [UInt64]) {
+                precondition(seed.count == 4)
+                state = [seed[0], seed[1], seed[2], seed[3]]
+        }
+
         public mutating func next() -> UInt64 {
                 // Derived from public domain implementation of xoshiro256** here:
                 // http://xoshiro.di.unimi.it

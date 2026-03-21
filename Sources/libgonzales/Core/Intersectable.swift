@@ -45,7 +45,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 				tHit: &tHit,
 				data: &data)
 		case .transformedPrimitive:
-			throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+			throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
 		}
 
 	}
@@ -67,7 +67,7 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 				data: data,
 				worldRay: worldRay)
 		case .transformedPrimitive:
-			throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+			throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
 		case .areaLight(let areaLight):
 			return try areaLight.computeSurfaceInteraction(
 				scene: scene,

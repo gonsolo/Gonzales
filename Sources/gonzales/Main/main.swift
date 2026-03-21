@@ -38,7 +38,13 @@ func handle(_ error: any Error) {
 }
 
 func usage() {
-        print("Usage: gonzales scene.pbrt")
+        print("Usage: gonzales [options] scene.pbrt")
+        print("Options:")
+        print("  --quick             Quick render mode")
+        print("  --single X Y        Trace a single ray at pixel (X, Y)")
+        print("  --parse             Just parse the scene without rendering")
+        print("  --ptexmem MEM       Set Ptex memory limit (in MB/GB depending on implementation)")
+        print("  --help              Show this help message")
 }
 
 @MainActor

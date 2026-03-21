@@ -31,7 +31,7 @@ struct State {
                 return Material.diffuse(diffuse)
         }
 
-        func makeMaterial(type: String, parameters: ParameterDictionary) throws -> Material {
+        func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture]) throws -> Material {
 
                 var material: Material
                 switch type {
@@ -73,7 +73,8 @@ struct State {
         func createMaterial(
                 parameters: ParameterDictionary,
                 currentMaterial: UninstancedMaterial?,
-                currentNamedMaterial: String
+                currentNamedMaterial: String,
+                textures: [String: Texture]? = nil
         ) throws -> Material {
                 var material: UninstancedMaterial!
                 if let paramMaterial = currentMaterial {
@@ -92,7 +93,7 @@ struct State {
                 }
                 var merged = parameters
                 merged.merge(material.parameters) { (current, _) in current }
-                return try makeMaterial(type: material.type, parameters: merged)
+                return try makeMaterial(type: material.type, parameters: merged, textures: textures ?? self.textures)
         }
 
         func getImmutable() -> ImmutableState {

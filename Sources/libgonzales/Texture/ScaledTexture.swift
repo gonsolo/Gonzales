@@ -1,17 +1,17 @@
-// import Foundation
-//
-// struct ScaledTexture {
-//
-//        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
-//                guard let scale = scale.evaluate(at: interaction) as? Real else {
-//                        return black
-//                }
-//                guard let spectrum = texture.evaluate(at: interaction) as? RgbSpectrum else {
-//                        return black
-//                }
-//                return scale * spectrum
-//        }
-//
-//        let scale: Texture
-//        let texture: Texture
-// }
+struct ScaledTextureRgb: Sendable {
+        let tex: RgbSpectrumTexture
+        let scale: FloatTexture
+
+        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
+                return scale.evaluateFloat(at: interaction) * tex.evaluateRgbSpectrum(at: interaction)
+        }
+}
+
+struct ScaledTextureFloat: Sendable {
+        let tex: FloatTexture
+        let scale: FloatTexture
+
+        func evaluateFloat(at interaction: any Interaction) -> Real {
+                return scale.evaluateFloat(at: interaction) * tex.evaluateFloat(at: interaction)
+        }
+}

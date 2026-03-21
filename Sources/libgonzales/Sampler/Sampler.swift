@@ -80,8 +80,9 @@ public enum Sampler: Sendable {
 
         mutating func startPixelSample(pixel: Point2i, index: Int, dim: Int = 0) {
                 switch self {
-                case .random:
-                        break
+                case .random(var randomSampler):
+                        randomSampler.startPixelSample(pixel: pixel, index: index)
+                        self = .random(randomSampler)
                 case .sobol(var zSobolSampler):
                         zSobolSampler.startPixelSample(pixel: pixel, index: index, dim: dim)
                         self = .sobol(zSobolSampler)

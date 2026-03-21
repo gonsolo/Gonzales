@@ -44,6 +44,10 @@ struct OpenImageIOTexture {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 let value: RgbSpectrum = OpenImageIOTextureSystem.shared.evaluate(
                         filename: filename, s: s, t: t)
+                let lower = filename.lowercased()
+                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".tga") {
+                        return gammaSrgbToLinear(light: value)
+                }
                 return value
         }
 

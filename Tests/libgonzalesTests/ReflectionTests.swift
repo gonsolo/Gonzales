@@ -115,4 +115,66 @@ import Testing
                 #expect(absCosTheta(v) >= 0)
                 #expect(abs(absCosTheta(v) - 1.0) <= 1e-6)
         }
+
+        // MARK: - Refract normalization (fixed in 7d830fb)
+
+        @Test func refractProducesUnitLengthVector() {
+                // The old refract() bug used eta*-incident instead of -incident/eta,
+                // producing vectors with length ≈ eta instead of 1.0
+                let incident = normalized(Vector(x: 0.3, y: 0, z: 1))
+                let normal = Normal(x: 0, y: 0, z: 1)
+                let eta: Real = 1.5
+                guard let (transmitted, _) = refract(incident: incident, normal: normal, eta: eta) else {
+                        Issue.record("refract should not return nil for this case")
+                        return
+                }
+                let len = length(transmitted)
+                #expect(abs(len - 1.0) <= 1e-5, "Refracted vector length \(len) != 1.0")
+        }
+
+        @Test func refractProducesUnitLengthForGlassToAir() {
+                // From glass (eta=1.5) to air — incident from below
+                let incident = normalized(Vector(x: 0.2, y: 0, z: -0.8))
+                let normal = Normal(x: 0, y: 0, z: 1)
+                let eta: Real = 1.5
+                guard let (transmitted, _) = refract(incident: incident, normal: normal, eta: eta) else {
+                        Issue.record("refract should not return nil for this case")
+                        return
+                }
+                let len = length(transmitted)
+                #expect(abs(len - 1.0) <= 1e-5, "Refracted vector length \(len) != 1.0")
+        }
+
+        @Test func refractObeysSnellsLaw() {
+                // Snell's law: eta_i * sin(theta_i) = eta_t * sin(theta_t)
+                let incident = normalized(Vector(x: 0.5, y: 0, z: 0.8660254)) // ~30° from normal
+                let normal = Normal(x: 0, y: 0, z: 1)
+                let eta: Real = 1.5  // entering glass
+                guard let (transmitted, etap) = refract(incident: incident, normal: normal, eta: eta) else {
+                        Issue.record("refract should not return nil")
+                        return
+                }
+                let sinThetaI = sinTheta(incident)
+                let sinThetaT = sinTheta(transmitted)
+                // eta_i * sin(theta_i) should equal eta_t * sin(theta_t)
+                // etap is the effective eta ratio used
+                let lhs = sinThetaI
+                let rhs = sinThetaT * etap
+                #expect(abs(lhs - rhs) <= 1e-4, "Snell's law violated: \(lhs) != \(rhs)")
+        }
+
+        @Test func refractNormalIncidenceGoesStraightThrough() {
+                // At normal incidence, refracted ray should continue straight
+                let incident = Vector(x: 0, y: 0, z: 1)
+                let normal = Normal(x: 0, y: 0, z: 1)
+                guard let (transmitted, _) = refract(incident: incident, normal: normal, eta: 1.5) else {
+                        Issue.record("refract should not return nil at normal incidence")
+                        return
+                }
+                #expect(abs(transmitted.x) <= 1e-6)
+                #expect(abs(transmitted.y) <= 1e-6)
+                // z should be negative (transmitted goes through)
+                #expect(transmitted.z < 0)
+                #expect(abs(length(transmitted) - 1.0) <= 1e-5)
+        }
 }

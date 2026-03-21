@@ -4,20 +4,41 @@ struct CoatedDiffuse {
                 roughness: (Real, Real),
                 reflectance: RgbSpectrumTexture,
                 refractiveIndex: FloatTexture,
+                thickness: FloatTexture,
+                albedo: RgbSpectrumTexture,
+                g: FloatTexture,
+                maxDepth: Int,
+                nSamples: Int,
                 remapRoughness: Bool
         ) {
                 self.roughness = roughness
                 self.reflectance = reflectance
                 self.refractiveIndex = refractiveIndex
+                self.thickness = thickness
+                self.albedo = albedo
+                self.g = g
+                self.maxDepth = maxDepth
+                self.nSamples = nSamples
                 self.remapRoughness = remapRoughness
         }
 
         func getBsdf(interaction: any Interaction) -> CoatedDiffuseBsdf {
                 let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
+                let thicknessAtInteraction = self.thickness.evaluateFloat(at: interaction)
+                let albedoAtInteraction = self.albedo.evaluateRgbSpectrum(at: interaction)
+                let gAtInteraction = self.g.evaluateFloat(at: interaction)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
 
-                let alpha: (Real, Real) = (0.001, 0.001)
+                var alpha: (Real, Real) = roughness
+                if remapRoughness {
+                        alpha = TrowbridgeReitzDistribution.getAlpha(from: roughness)
+                }
+                
+                // Ensure alpha is at least 0.001 to avoid NaN or division by zero in microfacet math
+                alpha.0 = max(alpha.0, 0.001)
+                alpha.1 = max(alpha.1, 0.001)
+                
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let dielectric = DielectricBsdf(
                         distribution: distribution, refractiveIndex: refractiveIndex, bsdfFrame: bsdfFrame)
@@ -26,6 +47,11 @@ struct CoatedDiffuse {
                 let coatedDiffuseBsdf = CoatedDiffuseBsdf(
                         dielectric: dielectric,
                         diffuse: diffuse,
+                        thickness: Real(thicknessAtInteraction),
+                        albedo: albedoAtInteraction,
+                        g: Real(gAtInteraction),
+                        maxDepth: maxDepth,
+                        nSamples: nSamples,
                         bsdfFrame: bsdfFrame)
                 return coatedDiffuseBsdf
         }
@@ -33,6 +59,11 @@ struct CoatedDiffuse {
         var reflectance: RgbSpectrumTexture
         var refractiveIndex: FloatTexture
         var roughness: (Real, Real)
+        var thickness: FloatTexture
+        var albedo: RgbSpectrumTexture
+        var g: FloatTexture
+        var maxDepth: Int
+        var nSamples: Int
         var remapRoughness: Bool
 }
 
@@ -47,10 +78,26 @@ extension CoatedDiffuse {
         let roughness = (uRoughness, vRoughness)
         let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures)
         let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, else: 1.5)
+        
+        let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, else: 0.01)
+        let g = try parameters.findRealTexture(name: "g", textures: textures, else: 0.0)
+        let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
+        let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
+        
+
+
+        // PBRT defaults albedo to 0.0 (black)
+        let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, else: RgbSpectrum(intensity: 0.0))
+
         return CoatedDiffuse(
                 roughness: roughness,
                 reflectance: reflectance,
                 refractiveIndex: refractiveIndex,
+                thickness: thickness,
+                albedo: albedo,
+                g: g,
+                maxDepth: maxDepth,
+                nSamples: nSamples,
                 remapRoughness: remapRoughness)
 }
 }

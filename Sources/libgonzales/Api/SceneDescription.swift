@@ -66,8 +66,16 @@ public class SceneDescription {
                 let areaLight: String
                 let areaLightParameters: ParameterDictionary
                 let objectName: String?
+                let textures: [String: Texture]
         }
         private var uninstantiatedShapes = [ShapeCreationDesc]()
+
+        struct InstanceCreationDesc {
+                let name: String
+                let currentTransform: Transform
+        }
+        private var uninstantiatedInstances = [InstanceCreationDesc]()
+        var transformedPrimitives = [TransformedPrimitive]()
 
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
@@ -266,8 +274,9 @@ extension SceneDescription {
                 state.objectName = nil
         }
 
-        func objectInstance(name _: String) throws {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+        func objectInstance(name: String) throws {
+                let desc = InstanceCreationDesc(name: name, currentTransform: currentTransform)
+                uninstantiatedInstances.append(desc)
         }
 
         func sampler(name: String, parameters: ParameterDictionary) {
@@ -298,7 +307,8 @@ extension SceneDescription {
                         alpha: alpha,
                         areaLight: state.areaLight,
                         areaLightParameters: state.areaLightParameters,
-                        objectName: state.objectName
+                        objectName: state.objectName,
+                        textures: state.textures
                 )
                 uninstantiatedShapes.append(desc)
         }
@@ -311,7 +321,8 @@ extension SceneDescription {
                         let material = try state.createMaterial(
                                 parameters: desc.parameters,
                                 currentMaterial: desc.currentMaterial,
-                                currentNamedMaterial: desc.currentNamedMaterial
+                                currentNamedMaterial: desc.currentNamedMaterial,
+                                textures: desc.textures
                         )
 
                         if !desc.areaLight.isEmpty {
@@ -365,6 +376,43 @@ extension SceneDescription {
                                 options.primitives.append(contentsOf: prims)
                                 options.lights.append(contentsOf: areaLightsBatch)
                         }
+                }
+
+                // Now resolve Object Instances using a dummy Scene for accelerator building bounds
+                let tempScene = Scene(
+                        lights: [Light](),
+                        materials: materials,
+                        meshes: triangleMeshBuilder.getMeshes(),
+                        geometricPrimitives: apiGeometricPrimitives,
+                        areaLights: areaLights,
+                        transformedPrimitives: transformedPrimitives)
+
+                var instancedAccelerators = [String: Accelerator]()
+
+                for instanceDesc in uninstantiatedInstances {
+                        guard let prims = options.objects[instanceDesc.name] else {
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line,
+                                        message: "Missing object instance \(instanceDesc.name)")
+                        }
+                        
+                        let accelerator: Accelerator
+                        if let cached = instancedAccelerators[instanceDesc.name] {
+                                accelerator = cached
+                        } else {
+                                accelerator = try makeAccelerator(
+                                        scene: tempScene,
+                                        primitives: prims,
+                                        acceleratorName: acceleratorName)
+                                instancedAccelerators[instanceDesc.name] = accelerator
+                        }
+                        
+                        let transformedPrimitive = TransformedPrimitive(
+                                accelerator: accelerator,
+                                transform: instanceDesc.currentTransform,
+                                idx: transformedPrimitives.count)
+                        options.primitives.append(transformedPrimitive)
+                        transformedPrimitives.append(transformedPrimitive)
                 }
         }
 
@@ -439,7 +487,7 @@ extension SceneDescription {
                 var texture: Texture
                 switch textureClass {
                 case "checkerboard":
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                 case "constant":
                         switch type {
                         case "spectrum", "color":
@@ -451,7 +499,7 @@ extension SceneDescription {
                                         name: "value", textures: state.textures)
                                 texture = Texture.floatTexture(floatTexture)
                         default:
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                         }
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
@@ -461,11 +509,11 @@ extension SceneDescription {
                 case "mix":
                         switch type {
                         case "color", "spectrum":
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                         case "float":
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                         default:
-                                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                         }
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
@@ -473,8 +521,24 @@ extension SceneDescription {
                                 name: fileName, type: type,
                                 sceneDirectory: renderOptions.sceneDirectory)
                 case "scale":
-                        print("Warning: Scale texture not implemented, ignoring texture \(name)!")
-                        return
+                        let scale = try parameters.findRealTexture(
+                                name: "scale", textures: state.textures)
+                        switch type {
+                        case "spectrum", "color":
+                                let tex = try parameters.findRgbSpectrumTexture(
+                                        name: "tex", textures: state.textures)
+                                let scaledTexture = ScaledTextureRgb(
+                                        tex: tex, scale: scale)
+                                texture = Texture.rgbSpectrumTexture(.scaledTexture(scaledTexture))
+                        case "float":
+                                let tex = try parameters.findRealTexture(
+                                        name: "tex", textures: state.textures)
+                                let scaledTexture = ScaledTextureFloat(
+                                        tex: tex, scale: scale)
+                                texture = Texture.floatTexture(.scaledTexture(scaledTexture))
+                        default:
+                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Unknown scale type")
+                        }
                 default:
                         print("Warning: Unimplemented texture class: \(textureClass)")
                         return
@@ -502,7 +566,8 @@ extension SceneDescription {
                 if renderOptions.justParse { return }
                 let renderer = try options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
-                        materials: materials, acceleratorName: acceleratorName,
+                        materials: materials, transformedPrimitives: transformedPrimitives,
+                        acceleratorName: acceleratorName,
                         immutableState: state.getImmutable(),
                         renderOptions: renderOptions,
                         meshes: triangleMeshBuilder.getMeshes())
@@ -610,7 +675,7 @@ func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -
                                 FloatTexture.openImageIoTexture(
                                         try OpenImageIOTexture(path: absoluteFileName, type: type)))
                 default:
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                 }
         default:
                 throw SceneDescriptionError.unknownTextureFormat(suffix: String(suffix))

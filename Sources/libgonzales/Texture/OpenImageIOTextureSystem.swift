@@ -33,6 +33,7 @@ final class OpenImageIOTextureSystem: Sendable {
                 var pointer = UnsafeMutablePointer<Float>.allocate(capacity: 3)
                 evaluate(filename: filename, s: s, t: t, pointer: &pointer)
                 let result = RgbSpectrum(red: pointer[0], green: pointer[1], blue: pointer[2])
+
                 return result
         }
 
