@@ -249,7 +249,12 @@ vr: release
 			*)    echo "Invalid choice."; exit 1 ;; \
 		esac; \
 	fi; \
-	$(GONZALES_RELEASE) $(OPTIONS) "$$SCENE"; \
+	read -p "Run with Gonzales or PBRT? (g/p) [g]: " engine; \
+	if [ "$$engine" = "p" ] || [ "$$engine" = "P" ]; then \
+		$(PBRT) $(PBRT_OPTIONS) "$$SCENE"; \
+	else \
+		$(GONZALES_RELEASE) $(OPTIONS) "$$SCENE"; \
+	fi; \
 	$(VIEWER) "$$IMAGE"
 
 view_release: test_release
