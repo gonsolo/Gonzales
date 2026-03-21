@@ -1,0 +1,3 @@
+Include "/home/gonsolo/src/pbrt-v4-scenes/barcelona-pavilion/pavilion-day.pbrt"
+Sampler "halton" "integer pixelsamples" [ 4 ]
+Film "rgb" "string filename" "gonzales-test.exr"

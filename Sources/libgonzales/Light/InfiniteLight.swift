@@ -12,29 +12,47 @@ struct InfiniteLight: LightSource {
                 self.brightness = brightness
                 self.lightToWorld = lightToWorld
                 self.texture = texture
+
+                let width = 1024
+                let height = 1024
+                var data = [Real]()
+                data.reserveCapacity(width * height)
+
+                for v in 0..<height {
+                        for u in 0..<width {
+                                let uvCoordinates = Point2f(x: (Real(u) + 0.5) / Real(width), y: (Real(v) + 0.5) / Real(height))
+                                let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
+                                if let color = texture.evaluate(at: interaction) as? RgbSpectrum {
+                                        data.append(color.y)
+                                } else {
+                                        data.append(0)
+                                }
+                        }
+                }
+                self.distribution = PiecewiseConstant2D(data: data, width: width, height: height)
         }
 
         func sample(
                 point: Point, samples: TwoRandomVariables,
                 accelerator _: Accelerator, scene _: Scene
         ) -> LightSample {
-                let theta = samples.1 * Real.pi
-                let phi = samples.0 * 2 * Real.pi
-                let lightDirection = Vector(
-                        x: sin(theta) * cos(phi),
-                        y: sin(theta) * sin(phi),
-                        z: cos(theta))
+                let (uv, mapPdf) = distribution.sampleContinuous(u: Point2f(x: samples.0, y: samples.1))
+                if mapPdf == 0 {
+                        return LightSample(radiance: black, direction: Vector(), pdf: 0, visibility: Visibility(from: point, target: point))
+                }
+
+                let lightDirection = equalAreaSquareToSphere(uv: uv)
                 let direction = lightToWorld * lightDirection
-                let pdf = theta < machineEpsilon ? 0 : 1 / (2 * Real.pi * Real.pi * sin(theta))
+                
+                let pdf = mapPdf / (4 * Real.pi)
                 let distantPoint = point + direction * sceneDiameter
                 let visibility = Visibility(from: point, target: distantPoint)
-                let uvCoordinates = directionToUV(direction: -direction)
-                let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
+                
+                let interaction = SurfaceInteraction(uvCoordinates: uv)
                 guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
-                        print("Unsupported texture type!")
-                        return LightSample(
-                                radiance: black, direction: direction, pdf: pdf, visibility: visibility)
+                        return LightSample(radiance: black, direction: direction, pdf: pdf, visibility: visibility)
                 }
+
                 return LightSample(radiance: color, direction: direction, pdf: pdf, visibility: visibility)
         }
 
@@ -43,25 +61,9 @@ struct InfiniteLight: LightSource {
         )
                 throws -> Real {
                 let incoming = worldToLight * direction
-                let (theta, _) = sphericalCoordinatesFrom(vector: incoming)
-                guard theta > machineEpsilon else { return 0 }
-                let pdf: Real = 1 / (2 * Real.pi * Real.pi * sin(theta))
-                return pdf
-        }
-
-        let inv2Pi: Real = 1.0 / (2.0 * Real.pi)
-
-        private func sphericalPhi(_ vector: Vector) -> Real {
-                let phi = atan2(vector.y, vector.x)
-                if phi < 0.0 {
-                        return phi + 2.0 * Real.pi
-                } else {
-                        return phi
-                }
-        }
-
-        private func sphericalTheta(_ vector: Vector) -> Real {
-                return acos(clamp(value: vector.z, low: -1, high: 1))
+                let uv = equalAreaSphereToSquare(direction: incoming)
+                let pdf = distribution.pdf(uv: uv)
+                return pdf / (4 * Real.pi)
         }
 
         private func directionToUV(direction: Vector) -> Point2f {
@@ -74,7 +76,7 @@ struct InfiniteLight: LightSource {
                 let x = abs(direction.x)
                 let y = abs(direction.y)
                 let z = abs(direction.z)
-                let radius = sqrt(1 - z)
+                let radius = sqrt(max(0, 1 - z))
                 let coeffA = max(x, y)
                 var coeffB = min(x, y)
                 if coeffA == 0 {
@@ -98,11 +100,27 @@ struct InfiniteLight: LightSource {
                 return Point2f(x: 0.5 * (uCoord + 1), y: 0.5 * (vCoord + 1))
         }
 
+        private func equalAreaSquareToSphere(uv: Point2f) -> Vector {
+                let u = 2 * uv.x - 1
+                let v = 2 * uv.y - 1
+                let up = abs(u)
+                let vp = abs(v)
+                let signedDistance = 1 - (up + vp)
+                let d = abs(signedDistance)
+                let r = 1 - d
+                let phi = (r == 0 ? 1 : (vp - up) / r + 1) * (Real.pi / 4)
+                let z = copysign(max(0, 1 - square(r)), signedDistance)
+                let cosPhi = cos(phi)
+                let sinPhi = sin(phi)
+                let x = copysign(r * cosPhi, u)
+                let y = copysign(r * sinPhi, v)
+                return Vector(x: x, y: y, z: z)
+        }
+
         func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
                 let uvCoordinates = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
                 guard let radiance = texture.evaluate(at: interaction) as? RgbSpectrum else {
-                        print("Unsupported texture type!")
                         return black
                 }
                 return radiance
@@ -120,6 +138,7 @@ struct InfiniteLight: LightSource {
         let brightness: RgbSpectrum
         let lightToWorld: Transform
         let texture: Texture
+        let distribution: PiecewiseConstant2D
 }
 
 extension InfiniteLight {
