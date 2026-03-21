@@ -200,7 +200,24 @@ view_denoised:
 	gimp denoised.pfm
 
 v: view
-vr: view_release
+
+vr: release
+	@read -p "Render Scenes/cornell-box.pbrt? [Y/n] " ans; \
+	if [ -z "$$ans" ] || [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
+		SCENE="Scenes/cornell-box.pbrt"; \
+		IMAGE="cornell-box.exr"; \
+	else \
+		read -p "Render one of the pbrt-v4-scenes files (default: barcelona pavillon)? [Y/n] " ans2; \
+		if [ -z "$$ans2" ] || [ "$$ans2" = "y" ] || [ "$$ans2" = "Y" ]; then \
+			SCENE="$(PBRT_SCENES_DIR)/barcelona-pavilion/pavilion-day.pbrt"; \
+			IMAGE="pavilion-day.exr"; \
+		else \
+			echo "Canceled."; exit 1; \
+		fi; \
+	fi; \
+	$(GONZALES_RELEASE) $(OPTIONS) $$SCENE; \
+	$(VIEWER) $$IMAGE
+
 view_release: test_release
 	@$(VIEWER) $(IMAGE)
 vd: view_debug
