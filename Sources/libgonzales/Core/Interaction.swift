@@ -14,30 +14,41 @@ protocol Interaction: Sendable {
 
 func offsetRayOrigin(point: Point, direction: Vector) -> Point {
         let epsilon: Real = 0.0001
-        return Point(point + epsilon * direction)
+        return point + epsilon * direction
 }
 
 func spawnRay(from: Point, target: Point) -> (ray: Ray, tHit: Real) {
         let origin = offsetRayOrigin(point: from, direction: target - from)
         let direction: Vector = target - origin
-        return (Ray(origin: origin, direction: direction), Real(1.0) - shadowEpsilon)
+        return (Ray(origin: origin, direction: direction), 1.0 - shadowEpsilon)
+}
+
+func offsetRayOrigin(point: Point, normal: Normal, direction: Vector) -> Point {
+        let epsilon: Real = 0.0001
+        let offset = epsilon * Vector(normal: normal)
+        if dot(direction, normal) > 0 {
+                return point + offset
+        } else {
+                return point + (-offset)
+        }
+}
+
+func spawnRay(from: Point, normal: Normal, target: Point) -> (ray: Ray, tHit: Real) {
+        let direction: Vector = target - from
+        let origin = offsetRayOrigin(point: from, normal: normal, direction: direction)
+        return (Ray(origin: origin, direction: direction), 1.0 - shadowEpsilon)
 }
 
 extension Interaction {
 
         func spawnRay(inDirection direction: Vector) -> Ray {
-                let origin = offsetRayOrigin(point: position, direction: direction)
+                let origin = offsetRayOrigin(point: position, normal: normal, direction: direction)
                 return Ray(origin: origin, direction: direction)
         }
 
         func spawnRay(target: Point) -> (ray: Ray, tHit: Real) {
-                let origin = offsetRayOrigin(point: position, direction: target - position)
-                let direction: Vector = target - origin
-                return (Ray(origin: origin, direction: direction), Real(1.0) - shadowEpsilon)
-        }
-
-        func offsetRayOrigin(point: Point, direction: Vector) -> Point {
-                let epsilon: Real = 0.0001
-                return Point(point + epsilon * direction)
+                let direction: Vector = target - position
+                let origin = offsetRayOrigin(point: position, normal: normal, direction: direction)
+                return (Ray(origin: origin, direction: direction), 1.0 - shadowEpsilon)
         }
 }

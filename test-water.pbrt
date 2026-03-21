@@ -1,0 +1,21 @@
+LookAt 0 2 5 0 0 0 0 1 0
+Camera "perspective" "float fov" [ 30 ]
+Film "rgb" "string filename" [ "test-water.exr" ] "integer xresolution" [ 128 ] "integer yresolution" [ 128 ]
+Sampler "halton" "integer pixelsamples" [ 16 ]
+Integrator "volpath" "integer maxdepth" [ 4 ]
+
+WorldBegin
+LightSource "infinite" "rgb L" [ 2 2 2 ]
+
+AttributeBegin
+MakeNamedMaterial "water" "string type" [ "dielectric" ]
+Material "water"
+Shape "sphere" "float radius" [ 1 ]
+AttributeEnd
+
+AttributeBegin
+Translate 0 -1 0
+Material "diffuse" "rgb reflectance" [ 0.8 0.2 0.2 ]
+Shape "trianglemesh" "integer indices" [ 0 1 2 0 2 3 ] "point3 P" [ -10 0 -10 10 0 -10 10 0 10 -10 0 10 ]
+AttributeEnd
+WorldEnd
