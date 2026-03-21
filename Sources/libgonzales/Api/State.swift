@@ -113,6 +113,7 @@ struct State {
         var objectName: String?
 
         var textures: [String: Texture]
+        var reverseOrientation = false
 
         let ptexCache: PtexCache
 }

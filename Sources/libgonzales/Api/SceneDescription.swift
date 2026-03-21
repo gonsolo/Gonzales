@@ -67,6 +67,7 @@ public class SceneDescription {
                 let areaLightParameters: ParameterDictionary
                 let objectName: String?
                 let textures: [String: Texture]
+                let reverseOrientation: Bool
         }
         private var uninstantiatedShapes = [ShapeCreationDesc]()
 
@@ -308,7 +309,8 @@ extension SceneDescription {
                         areaLight: state.areaLight,
                         areaLightParameters: state.areaLightParameters,
                         objectName: state.objectName,
-                        textures: state.textures
+                        textures: state.textures,
+                        reverseOrientation: state.reverseOrientation
                 )
                 uninstantiatedShapes.append(desc)
         }
@@ -345,6 +347,7 @@ extension SceneDescription {
                                                 brightness: scaledBrightness,
                                                 shape: shape,
                                                 alpha: desc.alpha,
+                                                reverseOrientation: desc.reverseOrientation,
                                                 idx: areaLights.count)
                                         let light = Light.area(areaLight)
                                         areaLightsBatch.append(light)
@@ -360,6 +363,7 @@ extension SceneDescription {
                                                 materialIndex: materialIndex,
                                                 mediumInterface: desc.currentMediumInterface,
                                                 alpha: desc.alpha,
+                                                reverseOrientation: desc.reverseOrientation,
                                                 idx: apiGeometricPrimitives.count)
                                         prims.append(geometricPrimitive)
                                         apiGeometricPrimitives.append(geometricPrimitive)
@@ -558,6 +562,10 @@ extension SceneDescription {
 
         public func worldBegin() {
                 currentTransform = Transform()
+        }
+
+        public func reverseOrientation() {
+                state.reverseOrientation.toggle()
         }
 
         func worldEnd() async throws {

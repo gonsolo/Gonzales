@@ -24,10 +24,15 @@ struct GeometricPrimitive: Boundable, Intersectable {
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
-                if interaction != nil {
-                        interaction?.materialIndex = materialIndex
+                if var unwrapped = interaction {
+                        unwrapped.materialIndex = materialIndex
+                        if reverseOrientation {
+                                unwrapped.normal = -unwrapped.normal
+                                unwrapped.shadingNormal = -unwrapped.shadingNormal
+                        }
+                        return unwrapped
                 }
-                return interaction
+                return nil
         }
 
         func intersect(
@@ -40,10 +45,15 @@ struct GeometricPrimitive: Boundable, Intersectable {
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-                if interaction != nil {
-                        interaction?.materialIndex = materialIndex
+                if var unwrapped = interaction {
+                        unwrapped.materialIndex = materialIndex
+                        if reverseOrientation {
+                                unwrapped.normal = -unwrapped.normal
+                                unwrapped.shadingNormal = -unwrapped.shadingNormal
+                        }
+                        return unwrapped
                 }
-                return interaction
+                return nil
         }
 
         func worldBound(scene: Scene) throws -> Bounds3f {
@@ -58,6 +68,7 @@ struct GeometricPrimitive: Boundable, Intersectable {
         var materialIndex: Int
         var mediumInterface: MediumInterface?
         var alpha: Real
+        var reverseOrientation: Bool
         var idx: Int
 }
 

@@ -514,6 +514,7 @@ extension Parser {
         }
 
         private func parseReverseOrientation() {
+                sceneDescription.reverseOrientation()
         }
 
         private func parseFilm() throws {

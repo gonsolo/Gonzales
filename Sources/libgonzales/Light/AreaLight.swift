@@ -2,10 +2,11 @@ import Foundation
 
 struct AreaLight: Boundable, Intersectable, LightSource {
 
-        init(brightness: RgbSpectrum, shape: ShapeType, alpha: Real, idx: Int) {
+        init(brightness: RgbSpectrum, shape: ShapeType, alpha: Real, reverseOrientation: Bool, idx: Int) {
                 self.brightness = brightness
                 self.shape = shape
                 self.alpha = alpha
+                self.reverseOrientation = reverseOrientation
                 self.idx = idx
         }
 
@@ -68,8 +69,15 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
-                interaction?.areaLight = self
-                return interaction
+                if var unwrapped = interaction {
+                        unwrapped.areaLight = self
+                        if reverseOrientation {
+                                unwrapped.normal = -unwrapped.normal
+                                unwrapped.shadingNormal = -unwrapped.shadingNormal
+                        }
+                        return unwrapped
+                }
+                return nil
         }
 
         func intersect(
@@ -82,8 +90,15 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-                interaction?.areaLight = self
-                return interaction
+                if var unwrapped = interaction {
+                        unwrapped.areaLight = self
+                        if reverseOrientation {
+                                unwrapped.normal = -unwrapped.normal
+                                unwrapped.shadingNormal = -unwrapped.shadingNormal
+                        }
+                        return unwrapped
+                }
+                return nil
         }
 
         func getBsdf(interaction: SurfaceInteraction) -> DiffuseBsdf {
@@ -96,6 +111,7 @@ struct AreaLight: Boundable, Intersectable, LightSource {
         let shape: ShapeType
         let brightness: RgbSpectrum
         let alpha: Real
+        let reverseOrientation: Bool
         let idx: Int
 }
 
