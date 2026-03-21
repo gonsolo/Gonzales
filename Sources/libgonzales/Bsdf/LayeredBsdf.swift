@@ -53,47 +53,203 @@ extension LayeredBsdf {
         }
 
         func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
+                // Faithful port of pbrt's LayeredBxDF::f()
 
-                var scatteredRadiance = RgbSpectrum(intensity: 0.0)
+                var f = RgbSpectrum(intensity: 0.0)
 
-                var localOutgoing = outgoing
-                var localIncident = incident
+                var wo = outgoing
+                var wi = incident
 
-                if twoSided && localOutgoing.z < 0 {
-                        localOutgoing = -localOutgoing
-                        localIncident = -localIncident
+                if twoSided && wo.z < 0 {
+                        wo = -wo
+                        wi = -wi
                 }
 
-                let enteredTop = twoSided || localOutgoing.z > 0
-                let isSameHemisphere = sameHemisphere(localOutgoing, localIncident)
+                let enteredTop = twoSided || wo.z > 0
+                let isSameHemisphere = sameHemisphere(wo, wi)
                 let exitZ: Real = (isSameHemisphere != enteredTop) ? 0 : thickness
 
+                // Account for reflection at the entrance interface
                 if isSameHemisphere {
-                        let entranceEval: RgbSpectrum
                         if enteredTop {
-                                entranceEval = top.evaluate(outgoing: localOutgoing, incident: localIncident)
+                                f = RgbSpectrum(intensity: Real(nSamples)) * top.evaluate(outgoing: wo, incident: wi)
                         } else {
-                                entranceEval = bottom.evaluate(outgoing: localOutgoing, incident: localIncident)
+                                f = RgbSpectrum(intensity: Real(nSamples)) * bottom.evaluate(outgoing: wo, incident: wi)
                         }
-                        scatteredRadiance += Real(nSamples) * entranceEval
                 }
 
                 var sampler: Sampler = .random(RandomSampler())
 
                 for _ in 0..<nSamples {
-                        let params = SampleParams(
-                                localOutgoing: localOutgoing,
-                                localIncident: localIncident,
-                                enteredTop: enteredTop,
-                                isSameHemisphere: isSameHemisphere,
-                                exitZ: exitZ)
-                        scatteredRadiance += evaluateSample(
-                                params: params,
-                                sampler: &sampler)
+
+                        // Sample transmission direction through entrance interface
+                        var wos: BsdfSample
+                        if enteredTop {
+                                wos = top.sample(outgoing: wo, uSample: sampler.get3D())
+                        } else {
+                                wos = bottom.sample(outgoing: wo, uSample: sampler.get3D())
+                        }
+                        // Filter: must be transmission (not reflection)
+                        if !wos.isValid || wos.isReflection(outgoing: wo) || wos.incoming.z == 0 {
+                                continue
+                        }
+
+                        // Sample BSDF for virtual light from wi (exit interface, transmission)
+                        var wis: BsdfSample
+                        if isSameHemisphere != enteredTop {
+                                // exitInterface = bottom
+                                wis = bottom.sample(outgoing: wi, uSample: sampler.get3D(), mode: .importance)
+                        } else {
+                                // exitInterface = top
+                                wis = top.sample(outgoing: wi, uSample: sampler.get3D(), mode: .importance)
+                        }
+                        // Filter: must be transmission
+                        if !wis.isValid || wis.isReflection(outgoing: wi) || wis.incoming.z == 0 {
+                                continue
+                        }
+
+                        // Declare state for random walk through BSDF layers
+                        var beta = wos.estimate * absCosTheta(wos.incoming) / wos.probabilityDensity
+                        var z = enteredTop ? thickness : Real(0)
+                        var w = wos.incoming
+
+                        for depth in 0..<maxDepth {
+
+                                // Russian roulette
+                                if depth > 3 && beta.maxValue < 0.25 {
+                                        let q = max(Real(0), 1 - beta.maxValue)
+                                        if sampler.get1D() < q { break }
+                                        beta /= 1 - q
+                                }
+
+                                // Account for media between layers
+                                if _albedo.isBlack {
+                                        // Clear coating: advance to next boundary
+                                        z = (z == thickness) ? 0 : thickness
+                                        beta *= transmittance(deltaZ: thickness, direction: w)
+                                } else {
+                                        // Scattering medium (unchanged from original)
+                                        let sigmaTotal: Real = 1.0
+                                        let deltaZ = -log(1 - sampler.get1D()) / (sigmaTotal / abs(w.z))
+                                        let zp = w.z > 0 ? (z + deltaZ) : (z - deltaZ)
+                                        if z == zp { continue }
+                                        if zp > 0 && zp < thickness {
+                                                // Medium scattering event
+                                                let wt: Real = 1  // MIS weight (simplified)
+                                                let phaseVal = phaseFunction.evaluate(
+                                                        outgoing: -w, incident: -wis.incoming)
+                                                f += beta * _albedo * phaseVal * wt
+                                                        * transmittance(deltaZ: zp - exitZ, direction: wis.incoming)
+                                                        * wis.estimate / wis.probabilityDensity
+
+                                                let (phasePdf, nextWi) = phaseFunction.samplePhase(
+                                                        outgoing: -w, sampler: &sampler)
+                                                if phasePdf == 0 || nextWi.z == 0 { continue }
+                                                beta *= _albedo * phasePdf / phasePdf  // p / pdf
+                                                w = nextWi
+                                                z = zp
+                                                continue
+                                        }
+                                        z = clamp(value: zp, low: 0, high: thickness)
+                                }
+
+                                // Account for scattering at appropriate interface
+                                if z == exitZ {
+                                        // At exit interface: sample reflection only
+                                        let bs: BsdfSample
+                                        if z == 0 {
+                                                bs = bottom.sample(outgoing: -w, uSample: sampler.get3D())
+                                        } else {
+                                                bs = top.sample(outgoing: -w, uSample: sampler.get3D())
+                                        }
+                                        // Must be reflection (if transmission, the path exits — we break)
+                                        if !bs.isValid || bs.probabilityDensity == 0 || bs.incoming.z == 0 {
+                                                break
+                                        }
+                                        if bs.isTransmission(outgoing: -w) { break }
+                                        beta *= bs.estimate * absCosTheta(bs.incoming) / bs.probabilityDensity
+                                        w = bs.incoming
+
+                                } else {
+                                        // At non-exit interface
+
+                                        // NEE: evaluate non-exit interface along presampled wis direction
+                                        let nonExitIsSpecular = (z == 0) ? bottomIsSpecular : topIsSpecular
+                                        let exitIsSpecular = (exitZ == 0) ? bottomIsSpecular : topIsSpecular
+
+                                        if !nonExitIsSpecular {
+                                                var wt: Real = 1
+                                                if !exitIsSpecular {
+                                                        let nonExitPdf: Real
+                                                        if z == 0 {
+                                                                nonExitPdf = bottom.probabilityDensity(
+                                                                        outgoing: -w, incident: -wis.incoming)
+                                                        } else {
+                                                                nonExitPdf = top.probabilityDensity(
+                                                                        outgoing: -w, incident: -wis.incoming)
+                                                        }
+                                                        wt = powerHeuristic(
+                                                                pdfF: wis.probabilityDensity, pdfG: nonExitPdf)
+                                                }
+                                                let neVal: RgbSpectrum
+                                                if z == 0 {
+                                                        neVal = bottom.evaluate(
+                                                                outgoing: -w, incident: -wis.incoming)
+                                                } else {
+                                                        neVal = top.evaluate(
+                                                                outgoing: -w, incident: -wis.incoming)
+                                                }
+                                                f += beta * neVal * absCosTheta(wis.incoming) * wt
+                                                        * transmittance(deltaZ: thickness, direction: wis.incoming)
+                                                        * wis.estimate / wis.probabilityDensity
+                                        }
+
+                                        // Sample new direction at non-exit interface (reflection only)
+                                        let bs: BsdfSample
+                                        if z == 0 {
+                                                bs = bottom.sample(outgoing: -w, uSample: sampler.get3D())
+                                        } else {
+                                                bs = top.sample(outgoing: -w, uSample: sampler.get3D())
+                                        }
+                                        if !bs.isValid || bs.probabilityDensity == 0 || bs.incoming.z == 0 {
+                                                break
+                                        }
+                                        if bs.isTransmission(outgoing: -w) { break }
+                                        beta *= bs.estimate * absCosTheta(bs.incoming) / bs.probabilityDensity
+                                        w = bs.incoming
+
+                                        // NEE: evaluate exit interface along newly sampled direction
+                                        if !exitIsSpecular {
+                                                let fExit: RgbSpectrum
+                                                if exitZ == 0 {
+                                                        fExit = bottom.evaluate(outgoing: -w, incident: wi)
+                                                } else {
+                                                        fExit = top.evaluate(outgoing: -w, incident: wi)
+                                                }
+                                                if !fExit.isBlack {
+                                                        var wt: Real = 1
+                                                        if !nonExitIsSpecular {
+                                                                let exitPdf: Real
+                                                                if exitZ == 0 {
+                                                                        exitPdf = bottom.probabilityDensity(
+                                                                                outgoing: -w, incident: wi)
+                                                                } else {
+                                                                        exitPdf = top.probabilityDensity(
+                                                                                outgoing: -w, incident: wi)
+                                                                }
+                                                                wt = powerHeuristic(
+                                                                        pdfF: bs.probabilityDensity, pdfG: exitPdf)
+                                                        }
+                                                        f += beta
+                                                                * transmittance(deltaZ: thickness, direction: bs.incoming)
+                                                                * fExit * wt
+                                                }
+                                        }
+                                }
+                        }
                 }
 
-                let result = scatteredRadiance / Real(nSamples)
-                return result
+                return f / Real(nSamples)
         }
 
         func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {

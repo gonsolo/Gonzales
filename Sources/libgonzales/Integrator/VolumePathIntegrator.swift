@@ -73,6 +73,7 @@ extension VolumePathIntegrator {
                 var albedo: RgbSpectrum
                 var firstNormal: Normal
                 var interaction: SurfaceInteraction?
+                var specularBounce: Bool = false
         }
 
         private struct IntegratorContext {
@@ -162,7 +163,14 @@ extension VolumePathIntegrator {
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
-                if brdfInteraction != nil {
+                if let brdfInteraction {
+                        if let areaLight = brdfInteraction.areaLight {
+                                let radiance = areaLight.emittedRadiance(
+                                        from: brdfInteraction,
+                                        inDirection: bsdfSample.incoming)
+                                bsdfSample.estimate *= radiance
+                                return bsdfSample
+                        }
                         return zero
                 }
                 for light in scene.lights {
@@ -364,7 +372,7 @@ extension VolumePathIntegrator {
                 context: inout IntegratorContext
         ) throws -> Bool {
                 guard let surfaceInteraction = state.interaction else { return false }
-                if state.bounce == 0 {
+                if state.bounce == 0 || state.specularBounce {
                         if let areaLight = surfaceInteraction.areaLight {
                                 state.estimate +=
                                         state.throughput
@@ -398,6 +406,7 @@ extension VolumePathIntegrator {
                 else {
                         return false
                 }
+                state.specularBounce = bsdf.isSpecular
                 state.throughput *= bsdfSample.throughputWeight(normal: surfaceInteraction.normal)
                 let spawnedRay = surfaceInteraction.spawnRay(inDirection: bsdfSample.incoming)
                 state.ray = spawnedRay

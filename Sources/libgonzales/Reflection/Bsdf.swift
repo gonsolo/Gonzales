@@ -1,3 +1,8 @@
+public enum TransportMode {
+        case radiance
+        case importance
+}
+
 ///        A type that is a generalization of BRDFs (Bidirectional Reflection
 ///        Distribution Functions) and BTDFs (Bidirectional Transmission
 ///        Distribution Functions).
@@ -7,6 +12,7 @@ public protocol Bsdf {
         func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum
         func probabilityDensity(outgoing: Vector, incident: Vector) -> Real
         func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample
+        func sample(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample
 
         var isReflective: Bool { get }
         var isTransmissive: Bool { get }
@@ -28,6 +34,10 @@ extension Bsdf {
 
         public func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
                 return sample(outgoing: outgoing, uSample: uSample, evaluate: self.evaluate)
+        }
+
+        public func sample(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
+                return sample(outgoing: outgoing, uSample: uSample)
         }
 
         public func probabilityDensity(outgoing: Vector, incident: Vector) -> Real {

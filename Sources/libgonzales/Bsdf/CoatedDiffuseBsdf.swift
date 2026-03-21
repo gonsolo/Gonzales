@@ -33,8 +33,7 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
         }
 
         public func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
-                let value = layered.evaluate(outgoing: outgoing, incident: incident)
-                return value
+                return layered.evaluate(outgoing: outgoing, incident: incident)
         }
 
         public func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
@@ -50,6 +49,6 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
         }
 
         var isSpecular: Bool {
-                return true
+                return false
         }
 }

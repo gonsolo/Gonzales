@@ -95,4 +95,19 @@ enum BsdfVariant: FramedBsdf {
                         return bsdf.bsdfFrame
                 }
         }
+
+        var isSpecular: Bool {
+                switch self {
+                case .coatedDiffuseBsdf(let bsdf):
+                        return bsdf.isSpecular
+                case .dielectricBsdf(let bsdf):
+                        return bsdf.isSpecular
+                case .diffuseBsdf:
+                        return false
+                case .hairBsdf:
+                        return false
+                case .microfacetReflection:
+                        return false
+                }
+        }
 }

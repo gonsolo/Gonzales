@@ -291,8 +291,11 @@ extension SceneDescription {
                                 else {
                                         throw ParameterError.missing(parameter: "L", function: #function)
                                 }
+                                let scale = try state.areaLightParameters.findOneReal(
+                                        called: "scale", else: 1)
+                                let scaledBrightness = brightness * scale
                                 let areaLight = AreaLight(
-                                        brightness: brightness,
+                                        brightness: scaledBrightness,
                                         shape: shape,
                                         alpha: alpha,
                                         idx: areaLights.count)
@@ -432,7 +435,8 @@ extension SceneDescription {
                                 name: fileName, type: type,
                                 sceneDirectory: renderOptions.sceneDirectory)
                 case "scale":
-                        throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+                        print("Warning: Scale texture not implemented, ignoring texture \(name)!")
+                        return
                 default:
                         print("Warning: Unimplemented texture class: \(textureClass)")
                         return

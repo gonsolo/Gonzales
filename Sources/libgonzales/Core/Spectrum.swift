@@ -357,3 +357,38 @@ func gammaSrgbToLinear(light: RgbSpectrum) -> RgbSpectrum {
         converted.blue = gammaSrgbToLinear(value: light.blue)
         return converted
 }
+
+/// Approximate blackbody radiation as RGB using Tanner Helland's algorithm.
+/// Returns normalized [0,1] RGB values for the given color temperature in Kelvin.
+func blackBodyToRgb(kelvin: Real) -> RgbSpectrum {
+        let temp = kelvin / 100
+
+        let red: Real
+        if temp <= 66 {
+                red = 1.0
+        } else {
+                let x = temp - 60
+                red = min(1.0, max(0.0, Real(1.29293618606 * pow(Double(x), -0.1332047592))))
+        }
+
+        let green: Real
+        if temp <= 66 {
+                let x = temp
+                green = min(1.0, max(0.0, Real(0.39008157876 * log(Double(x)) - 0.63184144378)))
+        } else {
+                let x = temp - 60
+                green = min(1.0, max(0.0, Real(1.12989086090 * pow(Double(x), -0.0755148492))))
+        }
+
+        let blue: Real
+        if temp >= 66 {
+                blue = 1.0
+        } else if temp <= 19 {
+                blue = 0.0
+        } else {
+                let x = temp - 10
+                blue = min(1.0, max(0.0, Real(0.54320678911 * log(Double(x)) - 1.19625408914)))
+        }
+
+        return RgbSpectrum(rgb: (red, green, blue))
+}

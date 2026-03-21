@@ -12,17 +12,17 @@ PTEXMEM = --ptexmem 1 # GB
 # dining-room glass-of-water car2 car coffee lamp hair-curl curly-hair straight-hair house spaceship
 # classroom dragon teapot-full teapot cornell-box volumetric-caustic water-caustic veach-ajar
 # veach-bidir veach-mis material-testball furball
-BITTERLI = ~/src/bitterli
-SCENE_NAME = cornell-box
+#BITTERLI = ~/src/bitterli
+#SCENE_NAME = cornell-box
 #SCENE_NAME = layered-cornell-box
 #SCENE_NAME = bathroom
 #SCENE = $(BITTERLI)/$(SCENE_NAME)/pbrt/scene-v4.pbrt
-SCENE = Scenes/$(SCENE_NAME).pbrt
-IMAGE =  $(SCENE_NAME).exr
-IMAGE_PBRT = $(IMAGE)
+#SCENE = Scenes/$(SCENE_NAME).pbrt
+#IMAGE =  $(SCENE_NAME).exr
+#IMAGE_PBRT = $(IMAGE)
 
 # Render 27/27 scenes
-#PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
+PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
 #SCENE_DIR = barcelona-pavilion 		 1/27
 #SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
@@ -34,7 +34,7 @@ IMAGE_PBRT = $(IMAGE)
 #SCENE_DIR = bunny-cloud
 #SCENE_DIR = bunny-fur
 #SCENE_DIR = clouds
-#SCENE_DIR = contemporary-bathroom
+SCENE_DIR = contemporary-bathroom
 #SCENE_DIR = crown
 #SCENE_DIR = disney-cloud 			10/27
 #IMAGE = disney-cloud-720p.exr
@@ -45,7 +45,6 @@ IMAGE_PBRT = $(IMAGE)
 #SCENE_DIR = head
 #SCENE_DIR = killeroos
 #SCENE_NAME  = killeroo-simple.pbrt
-#SCENE_NAME  = $(SCENE_DIR).pbrt
 #SCENE_DIR = kroken
 #SCENE_NAME  = camera-1.pbrt
 #SCENE_DIR = landscape
@@ -70,9 +69,10 @@ IMAGE_PBRT = $(IMAGE)
 #SCENE_NAME = camera-1.pbrt
 #SCENE_DIR = zero-day 				27/27
 #SCENE_NAME = frame120.pbrt
-#SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
-#IMAGE =  $(SCENE_NAME:.pbrt=.exr)
-#IMAGE_PBRT = $(IMAGE)
+SCENE_NAME ?= $(SCENE_DIR).pbrt
+SCENE = $(PBRT_SCENES_DIR)/$(SCENE_DIR)/$(SCENE_NAME)
+IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+IMAGE_PBRT = $(IMAGE)
 
 #SCENE = ~/src/moana/island/pbrt-v4/island.pbrt
 #IMAGE = gonzales.exr
@@ -157,13 +157,13 @@ view: view_debug
 
 e: edit
 edit:
-	@vi
+	@vim
 es: editScene
 editScene:
-	@vi $(SCENE)
+	@vim $(SCENE)
 em: editMakefile
 editMakefile:
-	@vi Makefile
+	@vim Makefile
 
 r: release
 release:

@@ -4,8 +4,11 @@ enum MeasuredError: Error {
 
 struct Measured {
 
-        func getBsdf(_: any Interaction) throws -> DiffuseBsdf {
-                throw RenderError.unimplemented(function: #function, file: #file, line: #line, message: "")
+        // TODO: Not properly implemented. Should load and evaluate measured BRDF data.
+        // Falls back to white diffuse for now.
+        func getBsdf(_ interaction: any Interaction) -> DiffuseBsdf {
+                let bsdfFrame = BsdfFrame(interaction: interaction)
+                return DiffuseBsdf(reflectance: white, bsdfFrame: bsdfFrame)
         }
 }
 

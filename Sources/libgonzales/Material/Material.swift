@@ -37,7 +37,7 @@ enum Material {
                 case .interface(let interface):
                         return try interface.getBsdf()
                 case .measured(let measured):
-                        let bsdf = try measured.getBsdf(interaction)
+                        let bsdf = measured.getBsdf(interaction)
                         return .diffuseBsdf(bsdf)
                 }
         }

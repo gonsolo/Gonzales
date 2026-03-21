@@ -54,7 +54,7 @@ extension DielectricBsdf {
                         return estimate
                 } else {
                         let denominator = square(dot(incident, half) + dot(outgoing, half) / etap)
-                                * cosThetaI * cosThetaO
+                                * absCosTheta(incident) * absCosTheta(outgoing)
                         let differentialArea = distribution.differentialArea(withNormal: half)
                         let visibleFraction = distribution.visibleFraction(from: outgoing, and: incident)
                         let fresnelTransmitted = 1 - fresnelReflected
@@ -79,19 +79,22 @@ extension DielectricBsdf {
         private func sampleSpecularTransmission(
                 outgoing: Vector,
                 transmitted: Real,
-                probabilityTransmitted: Probability
+                probabilityTransmitted: Probability,
+                mode: TransportMode
         ) -> BsdfSample {
                 let upNormal = Normal(x: 0, y: 0, z: 1)
                 guard let (incident, etap) = refract(incident: outgoing, normal: upNormal, eta: refractiveIndex) else {
                         return BsdfSample()
                 }
                 var estimate = RgbSpectrum(intensity: transmitted / absCosTheta(incident))
-                // transport mode radiance
-                estimate /= square(etap)
+                if mode == .radiance {
+                        // transport mode radiance
+                        estimate /= square(etap)
+                }
                 return BsdfSample(estimate, incident, probabilityTransmitted)
         }
 
-        private func sampleSpecular(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+        private func sampleSpecular(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: cosTheta(outgoing),
                         refractiveIndex: refractiveIndex)
@@ -107,7 +110,8 @@ extension DielectricBsdf {
                         return sampleSpecularTransmission(
                                 outgoing: outgoing,
                                 transmitted: transmitted,
-                                probabilityTransmitted: probabilityTransmitted)
+                                probabilityTransmitted: probabilityTransmitted,
+                                mode: mode)
                 }
         }
 
@@ -137,7 +141,8 @@ extension DielectricBsdf {
                 outgoing: Vector,
                 halfVector: Vector,
                 transmitted: Real,
-                probabilityTransmitted: Probability
+                probabilityTransmitted: Probability,
+                mode: TransportMode
         ) -> BsdfSample {
                 guard let (incident, etap) = refract(
                         incident: outgoing, normal: Normal(halfVector), eta: refractiveIndex)
@@ -158,14 +163,16 @@ extension DielectricBsdf {
                         intensity:
                                 transmitted * differentialArea * visibleFraction
                                 * abs(
-                                        dot(incident, halfVector) * dot(outgoing, halfVector) / cosTheta(incident)
-                                                * cosTheta(outgoing) * denom))
-                // transport mode radiance
-                estimate /= square(etap)
+                                        dot(incident, halfVector) * dot(outgoing, halfVector) / (absCosTheta(incident)
+                                                * absCosTheta(outgoing) * denom)))
+                if mode == .radiance {
+                        // transport mode radiance
+                        estimate /= square(etap)
+                }
                 return BsdfSample(estimate, incident, probabilityDensity)
         }
 
-        private func sampleRough(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+        private func sampleRough(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
                 let halfVector = distribution.sampleHalfVector(outgoing: outgoing, uSample: (uSample.0, uSample.1))
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: dot(outgoing, halfVector),
@@ -184,15 +191,20 @@ extension DielectricBsdf {
                                 outgoing: outgoing,
                                 halfVector: halfVector,
                                 transmitted: transmitted,
-                                probabilityTransmitted: probabilityTransmitted)
+                                probabilityTransmitted: probabilityTransmitted,
+                                mode: mode)
                 }
         }
 
         public func sample(outgoing: Vector, uSample: ThreeRandomVariables) -> BsdfSample {
+                return sample(outgoing: outgoing, uSample: uSample, mode: .radiance)
+        }
+
+        public func sample(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
                 if refractiveIndex == refractiveIndexVacuum || distribution.isSmooth {
-                        return sampleSpecular(outgoing: outgoing, uSample: uSample)
+                        return sampleSpecular(outgoing: outgoing, uSample: uSample, mode: mode)
                 } else {
-                        return sampleRough(outgoing: outgoing, uSample: uSample)
+                        return sampleRough(outgoing: outgoing, uSample: uSample, mode: mode)
                 }
         }
 

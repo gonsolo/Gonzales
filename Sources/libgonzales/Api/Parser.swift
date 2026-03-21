@@ -316,7 +316,7 @@ extension Parser {
                         guard let value = try parseReal() else {
                                 try bail(message: "Blackbody expected")
                         }
-                        return blackBodyDummy(value: value)
+                        return [blackBodyToRgb(kelvin: value)]
                 case "bool":
                         return try parseBool()
                 case "float":
@@ -367,17 +367,12 @@ extension Parser {
                 }
         }
 
-        private func blackBodyDummy(value _: Real) -> [RgbSpectrum] {
-                print("Warning: Blackbody emission is not implemented!")
-                return [gray]
-        }
-
         // swiftlint:disable:next cyclomatic_complexity
         private func parseValues(type: String) throws -> any Parameter {
                 switch type {
                 case "blackbody":
                         let value = try parseReals()
-                        return blackBodyDummy(value: value[0])
+                        return [blackBodyToRgb(kelvin: value[0])]
                 case "bool":
                         return try parseBool()
                 case "float":
