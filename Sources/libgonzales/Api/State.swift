@@ -70,10 +70,14 @@ struct State {
                 return material
         }
 
-        func createMaterial(parameters: ParameterDictionary) throws -> Material {
+        func createMaterial(
+                parameters: ParameterDictionary,
+                currentMaterial: UninstancedMaterial?,
+                currentNamedMaterial: String
+        ) throws -> Material {
                 var material: UninstancedMaterial!
-                if currentMaterial != nil {
-                        material = currentMaterial!
+                if let paramMaterial = currentMaterial {
+                        material = paramMaterial
                 } else {
                         assert(currentNamedMaterial != "")
                         guard let named = namedMaterials[currentNamedMaterial] else {
