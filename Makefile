@@ -207,22 +207,50 @@ vr: release
 		SCENE="Scenes/cornell-box.pbrt"; \
 		IMAGE="cornell-box.exr"; \
 	else \
-		read -p "Render pbrt-v4-scene contemporary-bathroom? [Y/n] " ans2; \
-		if [ -z "$$ans2" ] || [ "$$ans2" = "y" ] || [ "$$ans2" = "Y" ]; then \
-			SCENE="$(PBRT_SCENES_DIR)/contemporary-bathroom/contemporary-bathroom.pbrt"; \
-			IMAGE="contemporary-bathroom.exr"; \
-		else \
-			read -p "Render pbrt-v4-scene barcelona-pavilion? [Y/n] " ans3; \
-			if [ -z "$$ans3" ] || [ "$$ans3" = "y" ] || [ "$$ans3" = "Y" ]; then \
-				SCENE="$(PBRT_SCENES_DIR)/barcelona-pavilion/pavilion-day.pbrt"; \
-				IMAGE="pavilion-day.exr"; \
-			else \
-				echo "Canceled."; exit 1; \
-			fi; \
-		fi; \
+		echo "Select pbrt-v4 scene:"; \
+		echo " 1) barcelona-pavilion (default)"; \
+		echo " 2) bistro"; \
+		echo " 3) contemporary-bathroom"; \
+		echo " 4) crown"; \
+		echo " 5) hair"; \
+		echo " 6) killeroos"; \
+		echo " 7) kroken"; \
+		echo " 8) landscape"; \
+		echo " 9) lte-orb"; \
+		echo "10) pbrt-book"; \
+		echo "11) sanmiguel"; \
+		echo "12) smoke-plume"; \
+		echo "13) sportscar"; \
+		echo "14) sssdragon"; \
+		echo "15) transparent-machines"; \
+		echo "16) villa"; \
+		echo "17) watercolor"; \
+		echo "18) zero-day"; \
+		read -p "Enter number [1]: " choice; \
+		case "$$choice" in \
+			""|1) SCENE="$(PBRT_SCENES_DIR)/barcelona-pavilion/pavilion-day.pbrt"; IMAGE="pavilion-day.exr" ;; \
+			2)    SCENE="$(PBRT_SCENES_DIR)/bistro/bistro_boulangerie.pbrt"; IMAGE="bistro_boulangerie.exr" ;; \
+			3)    SCENE="$(PBRT_SCENES_DIR)/contemporary-bathroom/contemporary-bathroom.pbrt"; IMAGE="contemporary-bathroom.exr" ;; \
+			4)    SCENE="$(PBRT_SCENES_DIR)/crown/crown.pbrt"; IMAGE="crown.exr" ;; \
+			5)    SCENE="$(PBRT_SCENES_DIR)/hair/hair-actual-bsdf.pbrt"; IMAGE="hair-actual-bsdf.exr" ;; \
+			6)    SCENE="$(PBRT_SCENES_DIR)/killeroos/killeroo-simple.pbrt"; IMAGE="killeroo-simple.exr" ;; \
+			7)    SCENE="$(PBRT_SCENES_DIR)/kroken/camera-1.pbrt"; IMAGE="camera-1.exr" ;; \
+			8)    SCENE="$(PBRT_SCENES_DIR)/landscape/view-0.pbrt"; IMAGE="view-0.exr" ;; \
+			9)    SCENE="$(PBRT_SCENES_DIR)/lte-orb/lte-orb-silver.pbrt"; IMAGE="lte-orb-silver.exr" ;; \
+			10)   SCENE="$(PBRT_SCENES_DIR)/pbrt-book/book.pbrt"; IMAGE="book.exr" ;; \
+			11)   SCENE="$(PBRT_SCENES_DIR)/sanmiguel/sanmiguel-courtyard-second.pbrt"; IMAGE="sanmiguel-courtyard-second.exr" ;; \
+			12)   SCENE="$(PBRT_SCENES_DIR)/smoke-plume/plume.pbrt"; IMAGE="plume.exr" ;; \
+			13)   SCENE="$(PBRT_SCENES_DIR)/sportscar/sportscar-area-lights.pbrt"; IMAGE="sportscar-area-lights.exr" ;; \
+			14)   SCENE="$(PBRT_SCENES_DIR)/sssdragon/dragon_10.pbrt"; IMAGE="dragon_10.exr" ;; \
+			15)   SCENE="$(PBRT_SCENES_DIR)/transparent-machines/frame1266.pbrt"; IMAGE="frame1266.exr" ;; \
+			16)   SCENE="$(PBRT_SCENES_DIR)/villa/villa-daylight.pbrt"; IMAGE="villa-daylight.exr" ;; \
+			17)   SCENE="$(PBRT_SCENES_DIR)/watercolor/camera-1.pbrt"; IMAGE="camera-1.exr" ;; \
+			18)   SCENE="$(PBRT_SCENES_DIR)/zero-day/frame120.pbrt"; IMAGE="frame120.exr" ;; \
+			*)    echo "Invalid choice."; exit 1 ;; \
+		esac; \
 	fi; \
-	$(GONZALES_RELEASE) $(OPTIONS) $$SCENE; \
-	$(VIEWER) $$IMAGE
+	$(GONZALES_RELEASE) $(OPTIONS) "$$SCENE"; \
+	$(VIEWER) "$$IMAGE"
 
 view_release: test_release
 	@$(VIEWER) $(IMAGE)
