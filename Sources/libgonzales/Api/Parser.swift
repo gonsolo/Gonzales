@@ -514,7 +514,6 @@ extension Parser {
         }
 
         private func parseReverseOrientation() {
-                print("Warning: Ignoring reverseOrientation!")
         }
 
         private func parseFilm() throws {
