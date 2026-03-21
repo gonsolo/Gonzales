@@ -207,12 +207,18 @@ vr: release
 		SCENE="Scenes/cornell-box.pbrt"; \
 		IMAGE="cornell-box.exr"; \
 	else \
-		read -p "Render one of the pbrt-v4-scenes files (default: barcelona pavillon)? [Y/n] " ans2; \
+		read -p "Render pbrt-v4-scene contemporary-bathroom? [Y/n] " ans2; \
 		if [ -z "$$ans2" ] || [ "$$ans2" = "y" ] || [ "$$ans2" = "Y" ]; then \
-			SCENE="$(PBRT_SCENES_DIR)/barcelona-pavilion/pavilion-day.pbrt"; \
-			IMAGE="pavilion-day.exr"; \
+			SCENE="$(PBRT_SCENES_DIR)/contemporary-bathroom/contemporary-bathroom.pbrt"; \
+			IMAGE="contemporary-bathroom.exr"; \
 		else \
-			echo "Canceled."; exit 1; \
+			read -p "Render pbrt-v4-scene barcelona-pavilion? [Y/n] " ans3; \
+			if [ -z "$$ans3" ] || [ "$$ans3" = "y" ] || [ "$$ans3" = "Y" ]; then \
+				SCENE="$(PBRT_SCENES_DIR)/barcelona-pavilion/pavilion-day.pbrt"; \
+				IMAGE="pavilion-day.exr"; \
+			else \
+				echo "Canceled."; exit 1; \
+			fi; \
 		fi; \
 	fi; \
 	$(GONZALES_RELEASE) $(OPTIONS) $$SCENE; \
