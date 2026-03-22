@@ -40,11 +40,15 @@ struct PlyMesh {
         var endianness = Endianness.little
 
         init(from data: Data) throws {
-                try readPlyHeader(from: data)
-                try readVertices(from: data)
-                try readFaces(from: data)
+                self.init()
+                try data.withUnsafeBytes { buffer in
+                        try self.readPlyHeader(from: buffer)
+                        try self.readVertices(from: buffer)
+                        try self.readFaces(from: buffer)
+                }
         }
 
+        private init() {}
 }
 
 extension PlyMesh {
@@ -63,50 +67,52 @@ extension PlyMesh {
         }
 
         private func convert<T: DefaultInitializable>(
-                data: Data,
-                at index: inout Data.Index,
+                buffer: UnsafeRawBufferPointer,
+                at index: inout Int,
                 peek: Bool = false
         ) -> T {
                 let size = MemoryLayout<T>.size
-                var bytes = data.subdata(in: index..<(index + size))
+                var value = buffer.load(fromByteOffset: index, as: T.self)
                 if endianness == .big {
-                        bytes.reverse()
+                        withUnsafeMutableBytes(of: &value) { ptr in
+                                var p = ptr
+                                p.reverse()
+                        }
                 }
-                let value = bytes.withUnsafeBytes { $0.load(as: T.self) }
                 if !peek {
                         index += size
                 }
                 return value
         }
 
-        private func readValue<T: DefaultInitializable>(in data: Data, at index: inout Data.Index) -> T {
-                return convert(data: data, at: &index)
+        private func readValue<T: DefaultInitializable>(in buffer: UnsafeRawBufferPointer, at index: inout Int) -> T {
+                return convert(buffer: buffer, at: &index)
         }
 
-        private func peekValue<T: DefaultInitializable>(in data: Data, at index: inout Data.Index) -> T {
-                return convert(data: data, at: &index, peek: true)
+        private func peekValue<T: DefaultInitializable>(in buffer: UnsafeRawBufferPointer, at index: inout Int) -> T {
+                return convert(buffer: buffer, at: &index, peek: true)
         }
 
-        private func readCharacter(in data: Data, at index: inout Data.Index) -> Character {
-                let char = Character(UnicodeScalar(data[index]))
+        private func readCharacter(in buffer: UnsafeRawBufferPointer, at index: inout Int) -> Character {
+                let char = Character(UnicodeScalar(buffer[index]))
                 index += 1
                 return char
         }
 
-        private func peekCharacter(in data: Data, at index: inout Data.Index) -> Character {
-                return Character(UnicodeScalar(data[index]))
+        private func peekCharacter(in buffer: UnsafeRawBufferPointer, at index: inout Int) -> Character {
+                return Character(UnicodeScalar(buffer[index]))
         }
 
         // swiftlint:disable:next cyclomatic_complexity function_body_length
-        mutating func readPlyHeader(from data: Data) throws {
+        mutating func readPlyHeader(from buffer: UnsafeRawBufferPointer) throws {
                 enum HeaderState { case vertex, face, none }
                 var headerState = HeaderState.none
 
-                guard readLine(in: data) == "ply" else {
+                guard readLine(in: buffer) == "ply" else {
                         throw SceneDescriptionError.ply(message: "First line must be ply")
                 }
                 while true {
-                        let line = readLine(in: data)
+                        let line = readLine(in: buffer)
                         let words = line.components(separatedBy: " ")
                         switch words[0] {
                         case "comment":
@@ -214,28 +220,31 @@ extension PlyMesh {
                 }
         }
 
-        mutating func appendPoint(from data: Data) {
-                let x: Real = readValue(in: data, at: &dataIndex)
-                let y: Real = readValue(in: data, at: &dataIndex)
-                let z: Real = readValue(in: data, at: &dataIndex)
+        mutating func appendPoint(from buffer: UnsafeRawBufferPointer) {
+                let x: Real = readValue(in: buffer, at: &dataIndex)
+                let y: Real = readValue(in: buffer, at: &dataIndex)
+                let z: Real = readValue(in: buffer, at: &dataIndex)
                 points.append(Point(x: Real(x), y: Real(y), z: Real(z)))
         }
 
-        mutating func appendNormal(from data: Data) {
-                let normalX: Real = readValue(in: data, at: &dataIndex)
-                let normalY: Real = readValue(in: data, at: &dataIndex)
-                let normalZ: Real = readValue(in: data, at: &dataIndex)
+        mutating func appendNormal(from buffer: UnsafeRawBufferPointer) {
+                let normalX: Real = readValue(in: buffer, at: &dataIndex)
+                let normalY: Real = readValue(in: buffer, at: &dataIndex)
+                let normalZ: Real = readValue(in: buffer, at: &dataIndex)
                 normals.append(Normal(x: Real(normalX), y: Real(normalY), z: Real(normalZ)))
         }
 
-        mutating func appendUV(from data: Data) {
-                let uCoord: Real = readValue(in: data, at: &dataIndex)
-                let vCoord: Real = readValue(in: data, at: &dataIndex)
+        mutating func appendUV(from buffer: UnsafeRawBufferPointer) {
+                let uCoord: Real = readValue(in: buffer, at: &dataIndex)
+                let vCoord: Real = readValue(in: buffer, at: &dataIndex)
                 uvs.append(Vector2F(x: Real(uCoord), y: Real(vCoord)))
         }
 
-        mutating func readVertices(from data: Data) throws {
+        mutating func readVertices(from buffer: UnsafeRawBufferPointer) throws {
                 let properties = plyHeader.vertexProperties
+                
+                points.reserveCapacity(plyHeader.vertexCount)
+                
                 for _ in 0..<plyHeader.vertexCount {
 
                         if plyHeader.vertexProperties.count == 3 {
@@ -244,7 +253,7 @@ extension PlyMesh {
                                                 && properties[1].name == PropertyName.y
                                                 && properties[2].name == PropertyName.z
                                 else { throw PlyError.unsupported }
-                                appendPoint(from: data)
+                                appendPoint(from: buffer)
                         } else if plyHeader.vertexProperties.count == 5 {
                                 guard
                                         properties[0].name == PropertyName.x
@@ -253,8 +262,8 @@ extension PlyMesh {
                                                 && properties[3].name == PropertyName.uProperty
                                                 && properties[4].name == PropertyName.vProperty
                                 else { throw PlyError.unsupported }
-                                appendPoint(from: data)
-                                appendUV(from: data)
+                                appendPoint(from: buffer)
+                                appendUV(from: buffer)
                         } else if plyHeader.vertexProperties.count == 6 {
                                 guard
                                         properties[0].name == PropertyName.x
@@ -264,8 +273,8 @@ extension PlyMesh {
                                                 && properties[4].name == PropertyName.normalY
                                                 && properties[5].name == PropertyName.normalZ
                                 else { throw PlyError.unsupported }
-                                appendPoint(from: data)
-                                appendNormal(from: data)
+                                appendPoint(from: buffer)
+                                appendNormal(from: buffer)
                         } else if plyHeader.vertexProperties.count == 8 {
                                 if properties[0].name == PropertyName.x
                                         && properties[1].name == PropertyName.y
@@ -277,9 +286,9 @@ extension PlyMesh {
                                                 || properties[6].name == PropertyName.s)
                                         && (properties[7].name == PropertyName.vProperty
                                                 || properties[7].name == PropertyName.t) {
-                                        appendPoint(from: data)
-                                        appendNormal(from: data)
-                                        appendUV(from: data)
+                                        appendPoint(from: buffer)
+                                        appendNormal(from: buffer)
+                                        appendUV(from: buffer)
                                 } else if properties[0].name == PropertyName.x
                                         && properties[1].name == PropertyName.y
                                         && properties[2].name == PropertyName.z
@@ -288,9 +297,9 @@ extension PlyMesh {
                                         && properties[5].name == PropertyName.normalX
                                         && properties[6].name == PropertyName.normalY
                                         && properties[7].name == PropertyName.normalZ {
-                                        appendPoint(from: data)
-                                        appendUV(from: data)
-                                        appendNormal(from: data)
+                                        appendPoint(from: buffer)
+                                        appendUV(from: buffer)
+                                        appendNormal(from: buffer)
                                 } else {
                                         throw PlyError.unsupported
                                 }
@@ -300,44 +309,41 @@ extension PlyMesh {
                 }
         }
 
-        mutating func readFaces(from data: Data) throws {
+        mutating func readFaces(from buffer: UnsafeRawBufferPointer) throws {
+                indices.reserveCapacity(plyHeader.faceCount * 3)
                 for _ in 0..<plyHeader.faceCount {
                         var numberIndices: UInt32 = 0
                         switch listBits {
                         case 8:
-                                let value: UInt8 = readValue(in: data, at: &dataIndex)
+                                let value: UInt8 = readValue(in: buffer, at: &dataIndex)
                                 numberIndices = UInt32(value)
                         case 32:
-                                let value: UInt32 = readValue(in: data, at: &dataIndex)
+                                let value: UInt32 = readValue(in: buffer, at: &dataIndex)
                                 numberIndices = value
                         default:
                                 throw SceneDescriptionError.ply(message: "Only 8 and 32 bits supported")
                         }
                         if numberIndices != 3 {
                                 print("Warning: Number of indices is not 3 but \(numberIndices)")
-                                // throw SceneDescriptionError.ply(
-                                //        message:
-                                //                "Number of indices must be 3 but is \(numberIndices)"
-                                // )
                         }
                         for _ in 0..<numberIndices {
-                                let index: Int32 = readValue(in: data, at: &dataIndex)
+                                let index: Int32 = readValue(in: buffer, at: &dataIndex)
                                 indices.append(Int(index))
                         }
 
                         if hasFaceIndices {
-                                let faceIndex: Int32 = readValue(in: data, at: &dataIndex)
+                                let faceIndex: Int32 = readValue(in: buffer, at: &dataIndex)
                                 faceIndices.append(Int(faceIndex))
                         }
                 }
         }
 
-        mutating func readLine(in data: Data) -> String {
+        mutating func readLine(in buffer: UnsafeRawBufferPointer) -> String {
                 var line = ""
-                var char = readCharacter(in: data, at: &dataIndex)
+                var char = readCharacter(in: buffer, at: &dataIndex)
                 while !char.isNewline {
                         line.append(char)
-                        char = readCharacter(in: data, at: &dataIndex)
+                        char = readCharacter(in: buffer, at: &dataIndex)
                 }
                 return line
         }

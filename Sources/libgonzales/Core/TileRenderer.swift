@@ -63,71 +63,9 @@ struct TileRenderer: Renderer {
                 return samples
         }
 
-        func runProgressReporter(reporter: ProgressReporter) async {
-                let reportInterval: Duration = .milliseconds(500)
-
-                // Helper function using only basic types and math
-                func formatTime(_ interval: TimeInterval) -> String {
-                        let interval = Int(interval.rounded())
-                        let seconds = interval % 60
-                        let minutes = (interval / 60) % 60
-                        let hours = interval / 3600
-
-                        if hours > 0 {
-                                return String(format: "%dh %dm %ds", hours, minutes, seconds)
-                        } else if minutes > 0 {
-                                return String(format: "%dm %ds", minutes, seconds)
-                        } else {
-                                return String(format: "%.1fs", Double(seconds))
-                        }
-                }
-
-                while !Task.isCancelled {
-                        do {
-                                try await Task.sleep(for: reportInterval)
-
-                                let metrics = await reporter.getProgressMetrics()
-
-                                // Calculate Estimated Total Time (ETT)
-                                let predictedTotalTime = metrics.averageTimePerTile * Double(metrics.total)
-
-                                let percentage = (Double(metrics.completed) / Double(metrics.total)) * 100.0
-
-                                let progressString = String(
-                                        format:
-                                                "Progress: %d / %d (%.1f%%) | Elapsed: %@ | Total Est.: %@",
-                                        metrics.completed,
-                                        metrics.total,
-                                        percentage,
-                                        formatTime(metrics.timeElapsed),
-                                        formatTime(max(0, predictedTotalTime))  // Display ETT
-                                )
-
-                                // Periodic Update
-                                FileHandle.standardOutput.write(Data((progressString + "\r").utf8))
-
-                                if metrics.completed >= metrics.total {
-                                        break
-                                }
-                        } catch {
-                                break
-                        }
-                }
-
-                // Final output cleanup
-                let finalMetrics = await reporter.getProgressMetrics()
-                if finalMetrics.completed == finalMetrics.total {
-                        let finalString =
-                                "Progress: \(finalMetrics.total) / \(finalMetrics.total) (100.0%) - "
-                                + "Rendering Complete. Total Time: \(formatTime(finalMetrics.timeElapsed))\n"
-
-                        FileHandle.standardOutput.write(Data(finalString.utf8))
-                }
-        }
-
         private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {
                 let tiles = generateTiles(from: bounds)
-                let reporter = ProgressReporter(total: tiles.count)
+                let reporter = ProgressReporter(title: "Rendering", total: tiles.count)
 
                 async let progressTask: Void = runProgressReporter(reporter: reporter)
 

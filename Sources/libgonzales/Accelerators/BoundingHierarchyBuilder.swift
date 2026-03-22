@@ -16,11 +16,11 @@ final class BoundingHierarchyBuilder {
         private var totalNodes = 0
         private var offsetCounter = 0
         private var cachedPrimitives: [CachedPrimitive]
-        private var primitives: [any Boundable]
+        private var primitives: [IntersectablePrimitive]
 
         var nodes = [BoundingHierarchyNode]()
 
-        internal init(scene: Scene, primitives: [any Boundable]) throws {
+        internal init(scene: Scene, primitives: [IntersectablePrimitive]) throws {
                 self.cachedPrimitives = try primitives.enumerated().map { index, primitive in
                         let bound = try primitive.worldBound(scene: scene)
                         return CachedPrimitive(index: index, bound: bound, center: bound.center)
@@ -35,23 +35,7 @@ extension BoundingHierarchyBuilder {
         internal func getSortedPrimitivesAndNodes() throws -> (
                 [IntersectablePrimitive], [BoundingHierarchyNode]
         ) {
-
-                let sortedPrimitives = try cachedPrimitives.map {
-                        if let triangle = primitives[$0.index] as? Triangle {
-                                return IntersectablePrimitive.triangle(triangle)
-                        }
-                        if let geometricPrimitive = primitives[$0.index] as? GeometricPrimitive {
-                                return IntersectablePrimitive.geometricPrimitive(geometricPrimitive)
-                        }
-                        if let areaLight = primitives[$0.index] as? AreaLight {
-                                return IntersectablePrimitive.areaLight(areaLight)
-                        }
-                        if let transformedPrimitive = primitives[$0.index] as? TransformedPrimitive {
-                                return IntersectablePrimitive.transformedPrimitive(transformedPrimitive)
-                        }
-                        print("Unknown primitive \(primitives[$0.index])")
-                        throw BoundingHierarchyBuilderError.unknown
-                }
+                let sortedPrimitives = cachedPrimitives.map { primitives[$0.index] }
                 return (sortedPrimitives, nodes)
         }
 

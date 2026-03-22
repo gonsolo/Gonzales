@@ -13,7 +13,7 @@ protocol Intersectable {
 //        case triangle(TriangleIntersection?)
 // }
 
-enum IntersectablePrimitive: Intersectable, Sendable {
+enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
 	case geometricPrimitive(GeometricPrimitive)
 	case triangle(Triangle)
 	case transformedPrimitive(TransformedPrimitive)
@@ -102,6 +102,32 @@ enum IntersectablePrimitive: Intersectable, Sendable {
 				scene: scene,
 				ray: ray,
 				tHit: &tHit)
+		}
+	}
+
+	func worldBound(scene: Scene) throws -> Bounds3f {
+		switch self {
+		case .areaLight(let areaLight):
+			return try areaLight.worldBound(scene: scene)
+		case .geometricPrimitive(let geometricPrimitive):
+			return try geometricPrimitive.worldBound(scene: scene)
+		case .triangle(let triangle):
+			return triangle.worldBound(scene: scene)
+		case .transformedPrimitive(let transformedPrimitive):
+			return transformedPrimitive.worldBound(scene: scene)
+		}
+	}
+
+	func objectBound(scene: Scene) throws -> Bounds3f {
+		switch self {
+		case .areaLight(let areaLight):
+			return try areaLight.objectBound(scene: scene)
+		case .geometricPrimitive(let geometricPrimitive):
+			return try geometricPrimitive.objectBound(scene: scene)
+		case .triangle(let triangle):
+			return triangle.objectBound(scene: scene)
+		case .transformedPrimitive(let transformedPrimitive):
+			return try transformedPrimitive.objectBound(scene: scene)
 		}
 	}
 }

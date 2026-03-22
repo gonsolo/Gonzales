@@ -12,5 +12,5 @@ struct MediumInteraction: Interaction {
         var uvCoordinates = Point2f()
         var outgoing = Vector()
 
-        var phase: any PhaseFunction = HenyeyGreenstein()
+        var phase: HenyeyGreenstein = HenyeyGreenstein()
 }

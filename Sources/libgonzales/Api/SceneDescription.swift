@@ -2,7 +2,7 @@ import Foundation
 
 func makeAccelerator(
         scene: Scene,
-        primitives: [any Boundable & Intersectable],
+        primitives: [IntersectablePrimitive],
         acceleratorName: String
 ) throws -> Accelerator {
         switch acceleratorName {
@@ -56,24 +56,16 @@ public enum SceneDescriptionError: Error {
 
 public class SceneDescription {
 
-        struct ShapeCreationDesc {
-                let shapes: [ShapeType]
-                let parameters: ParameterDictionary
-                let currentMaterial: UninstancedMaterial?
-                let currentNamedMaterial: String
-                let currentMediumInterface: MediumInterface?
-                let alpha: Real
-                let areaLight: String
-                let areaLightParameters: ParameterDictionary
-                let objectName: String?
-                let textures: [String: Texture]
-                let reverseOrientation: Bool
-        }
-        private var uninstantiatedShapes = [ShapeCreationDesc]()
 
-        struct InstanceCreationDesc {
+
+        final class InstanceCreationDesc {
                 let name: String
                 let currentTransform: Transform
+
+                init(name: String, currentTransform: Transform) {
+                        self.name = name
+                        self.currentTransform = currentTransform
+                }
         }
         private var uninstantiatedInstances = [InstanceCreationDesc]()
         var transformedPrimitives = [TransformedPrimitive]()
@@ -85,7 +77,8 @@ public class SceneDescription {
         var materials = [Material]()
         var namedCoordinateSystems = [String: Transform]()
         var options: RenderConfiguration
-        var readTimer: Timer?
+        var readReporter: ProgressReporter?
+        var readProgressTask: Task<Void, Never>?
         var renderOptions: RenderOptions
         var state: State
         var states = [State]()
@@ -165,7 +158,7 @@ extension SceneDescription {
         }
 
         public func include(file sceneName: String, render: Bool) async throws {
-                print(sceneName)
+                // print(sceneName)
                 do {
                         let fileManager = FileManager.default
                         let absoluteSceneName = renderOptions.sceneDirectory + "/" + sceneName
@@ -299,88 +292,76 @@ extension SceneDescription {
                         return
                 }
                 let alpha = try parameters.findOneReal(called: "alpha", else: 1)
-                let desc = ShapeCreationDesc(
-                        shapes: shapes,
+                
+                var areaLightsBatch = [Light]()
+                var prims = [IntersectablePrimitive]()
+
+                let material = try state.createMaterial(
                         parameters: parameters,
                         currentMaterial: state.currentMaterial,
                         currentNamedMaterial: state.currentNamedMaterial,
-                        currentMediumInterface: state.currentMediumInterface,
-                        alpha: alpha,
-                        areaLight: state.areaLight,
-                        areaLightParameters: state.areaLightParameters,
-                        objectName: state.objectName,
-                        textures: state.textures,
-                        reverseOrientation: state.reverseOrientation
+                        textures: state.textures
                 )
-                uninstantiatedShapes.append(desc)
-        }
 
-        private func resolveDeferredShapes() throws {
-                for desc in uninstantiatedShapes {
-                        var areaLightsBatch = [Light]()
-                        var prims = [any Boundable & Intersectable]()
-
-                        let material = try state.createMaterial(
-                                parameters: desc.parameters,
-                                currentMaterial: desc.currentMaterial,
-                                currentNamedMaterial: desc.currentNamedMaterial,
-                                textures: desc.textures
-                        )
-
-                        if !desc.areaLight.isEmpty {
-                                for shape in desc.shapes {
-                                        guard desc.areaLight == "area" || desc.areaLight == "diffuse"
-                                        else {
-                                                throw SceneDescriptionError.areaLight
-                                        }
-                                        guard
-                                                let brightness =
-                                                        try desc.areaLightParameters.findSpectrum(
-                                                                name: "L") as? RgbSpectrum
-                                        else {
-                                                throw ParameterError.missing(parameter: "L", function: #function)
-                                        }
-                                        let scale = try desc.areaLightParameters.findOneReal(
-                                                called: "scale", else: 1)
-                                        let scaledBrightness = brightness * scale
-                                        let areaLight = AreaLight(
-                                                brightness: scaledBrightness,
-                                                shape: shape,
-                                                alpha: desc.alpha,
-                                                reverseOrientation: desc.reverseOrientation,
-                                                idx: areaLights.count)
-                                        let light = Light.area(areaLight)
-                                        areaLightsBatch.append(light)
-                                        prims.append(areaLight)
-                                        self.areaLights.append(areaLight)
+                if !state.areaLight.isEmpty {
+                        for shape in shapes {
+                                guard state.areaLight == "area" || state.areaLight == "diffuse"
+                                else {
+                                        throw SceneDescriptionError.areaLight
                                 }
-                        } else {
-                                let materialIndex = materials.count
-                                materials.append(material)
-                                for shape in desc.shapes {
-                                        let geometricPrimitive = GeometricPrimitive(
-                                                shape: shape,
-                                                materialIndex: materialIndex,
-                                                mediumInterface: desc.currentMediumInterface,
-                                                alpha: desc.alpha,
-                                                reverseOrientation: desc.reverseOrientation,
-                                                idx: apiGeometricPrimitives.count)
-                                        prims.append(geometricPrimitive)
-                                        apiGeometricPrimitives.append(geometricPrimitive)
+                                guard
+                                        let brightness =
+                                                try state.areaLightParameters.findSpectrum(
+                                                        name: "L") as? RgbSpectrum
+                                else {
+                                        throw ParameterError.missing(parameter: "L", function: #function)
                                 }
+                                let scale = try state.areaLightParameters.findOneReal(
+                                        called: "scale", else: 1)
+                                let scaledBrightness = brightness * scale
+                                let areaLight = AreaLight(
+                                        brightness: scaledBrightness,
+                                        shape: shape,
+                                        alpha: alpha,
+                                        reverseOrientation: state.reverseOrientation,
+                                        idx: areaLights.count)
+                                let light = Light.area(areaLight)
+                                areaLightsBatch.append(light)
+                                prims.append(.areaLight(areaLight))
+                                self.areaLights.append(areaLight)
                         }
-
-                        if let objectName = desc.objectName {
-                                if options.objects[objectName] == nil {
-                                        options.objects[objectName] = prims
-                                } else {
-                                        options.objects[objectName]!.append(contentsOf: prims)
-                                }
-                        } else {
-                                options.primitives.append(contentsOf: prims)
-                                options.lights.append(contentsOf: areaLightsBatch)
+                } else {
+                        let materialIndex = materials.count
+                        materials.append(material)
+                        
+                        prims.reserveCapacity(shapes.count)
+                        
+                        for shape in shapes {
+                                let geometricPrimitive = GeometricPrimitive(
+                                        shape: shape,
+                                        materialIndex: materialIndex,
+                                        mediumInterface: state.currentMediumInterface,
+                                        alpha: alpha,
+                                        reverseOrientation: state.reverseOrientation,
+                                        idx: apiGeometricPrimitives.count)
+                                prims.append(.geometricPrimitive(geometricPrimitive))
+                                apiGeometricPrimitives.append(geometricPrimitive)
                         }
                 }
+
+                if let objectName = state.objectName {
+                        if options.objects[objectName] == nil {
+                                options.objects[objectName] = prims
+                        } else {
+                                options.objects[objectName]!.append(contentsOf: prims)
+                        }
+                } else {
+                        options.primitives.append(contentsOf: prims)
+                        options.lights.append(contentsOf: areaLightsBatch)
+                }
+        }
+
+        private func resolveInstances() throws {
 
                 // Now resolve Object Instances using a dummy Scene for accelerator building bounds
                 let tempScene = Scene(
@@ -415,7 +396,7 @@ extension SceneDescription {
                                 accelerator: accelerator,
                                 transform: instanceDesc.currentTransform,
                                 idx: transformedPrimitives.count)
-                        options.primitives.append(transformedPrimitive)
+                        options.primitives.append(.transformedPrimitive(transformedPrimitive))
                         transformedPrimitives.append(transformedPrimitive)
                 }
         }
@@ -452,7 +433,9 @@ extension SceneDescription {
         // Not really part of PBRT API
 
         public func start() {
-                readTimer = Timer("Reading...", newline: false)
+                let reporter = ProgressReporter(title: "Reading")
+                self.readReporter = reporter
+                self.readProgressTask = Task { await runProgressReporter(reporter: reporter) }
         }
 
         func rotate(by angle: Angle, around axis: Vector) throws {
@@ -569,10 +552,13 @@ extension SceneDescription {
         }
 
         func worldEnd() async throws {
-                print("Reading: \(readTimer?.elapsed ?? "unknown")")
-                try resolveDeferredShapes()
+                try resolveInstances()
+                
+                readProgressTask?.cancel()
+                _ = await readProgressTask?.value
+                
                 if renderOptions.justParse { return }
-                let renderer = try options.makeRenderer(
+                let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
                         materials: materials, transformedPrimitives: transformedPrimitives,
                         acceleratorName: acceleratorName,

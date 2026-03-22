@@ -17,8 +17,8 @@ class RenderConfiguration {
         var filterName = "gaussian"
         var filterParameters = ParameterDictionary()
         var lights = [Light]()
-        var primitives = [any Boundable & Intersectable]()
-        var objects = ["": [any Boundable & Intersectable]()]
+        var primitives = [IntersectablePrimitive]()
+        var objects = [String: [IntersectablePrimitive]]()
 
         func makeFilm(filter: any Filter, quick: Bool) throws -> Film {
                 var x = try filmParameters.findOneInt(called: "xresolution", else: 32)
@@ -173,7 +173,7 @@ class RenderConfiguration {
                 immutableState: ImmutableState,
                 renderOptions: RenderOptions,
                 meshes: TriangleMeshes
-        ) throws -> some Renderer {
+        ) async throws -> some Renderer {
                 let camera = try makeCamera(quick: renderOptions.quick)
                 let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
                 let scene = Scene(
@@ -183,12 +183,19 @@ class RenderConfiguration {
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights,
                         transformedPrimitives: transformedPrimitives)
-                let acceleratorTimer = Timer("Build accelerator...", newline: false)
+
+                let reporter = ProgressReporter(title: "Building accelerator")
+                let progressTask = Task { await runProgressReporter(reporter: reporter) }
+
                 let accelerator = try makeAccelerator(
                         scene: scene, primitives: primitives,
                         acceleratorName: acceleratorName)
+                
+                progressTask.cancel()
+                _ = await progressTask.value
+                
                 cleanUp()
-                print("Building accelerator: \(acceleratorTimer.elapsed)")
+
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
                 let powerLightSampler = try PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
