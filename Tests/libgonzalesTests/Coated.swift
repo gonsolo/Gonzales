@@ -16,6 +16,11 @@ import Testing
                 let coated = CoatedDiffuseBsdf(
                         dielectric: dielectric,
                         diffuse: diffuse,
+                        thickness: 0.0,
+                        albedo: RgbSpectrum(intensity: 0.0),
+                        g: 0.0,
+                        maxDepth: 10,
+                        nSamples: 1,
                         bsdfFrame: bsdfFrame)
 
                 let outgoing = Vector(x: 0.0, y: 0.0, z: 1.0)

@@ -40,7 +40,7 @@ import Testing
         @Test func faceforwardNormalFlips() {
                 let normal = Normal(x: 0, y: 0, z: -1)
                 let reference = Vector(x: 0, y: 0, z: 1)
-                let result = faceforward(normal: normal, comparedTo: reference)
+                let result = faceForward(normal: normal, comparedTo: reference)
                 // dot(normal, reference) < 0, so should flip
                 #expect(abs(result.z - 1.0) <= 1e-6)
         }
@@ -48,14 +48,14 @@ import Testing
         @Test func faceforwardNormalNoFlip() {
                 let normal = Normal(x: 0, y: 0, z: 1)
                 let reference = Vector(x: 0, y: 0, z: 1)
-                let result = faceforward(normal: normal, comparedTo: reference)
+                let result = faceForward(normal: normal, comparedTo: reference)
                 #expect(abs(result.z - 1.0) <= 1e-6)
         }
 
         @Test func faceforwardVectorFlips() {
                 let vector = Vector(x: 0, y: 0, z: -1)
                 let normal = Normal(x: 0, y: 0, z: 1)
-                let result = faceforward(vector: vector, comparedTo: normal)
+                let result = faceForward(vector: vector, comparedTo: normal)
                 #expect(abs(result.z - 1.0) <= 1e-6)
         }
 
