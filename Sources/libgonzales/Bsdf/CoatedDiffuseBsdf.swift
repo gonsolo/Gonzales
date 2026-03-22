@@ -10,7 +10,7 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
                 diffuse: DiffuseBsdf,
                 thickness: Real,
                 albedo: RgbSpectrum,
-                g: Real,
+                asymmetry: Real,
                 maxDepth: Int,
                 nSamples: Int,
                 bsdfFrame: BsdfFrame
@@ -22,7 +22,7 @@ public struct CoatedDiffuseBsdf: FramedBsdf {
                         bottomIsSpecular: diffuse.isSpecular,
                         thickness: thickness,
                         albedo: albedo,
-                        geometricTerm: g,
+                        asymmetry: asymmetry,
                         maxDepth: maxDepth,
                         nSamples: nSamples,
                         bsdfFrame: bsdfFrame,

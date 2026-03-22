@@ -1,26 +1,26 @@
 struct HenyeyGreenstein: PhaseFunction {
 
-        init(geometricTerm: Real = 0) {
-                self.geometricTerm = geometricTerm
+        init(asymmetry: Real = 0) {
+                self.asymmetry = asymmetry
         }
 
         private let inv4Pi: Real = 1.0 / (4.0 * Real.pi)
 
-        func phase(cosTheta: Real, geometricTerm: Real) -> Real {
-                let denom = 1 + geometricTerm * geometricTerm + 2 * geometricTerm * cosTheta
-                return inv4Pi * (1 - geometricTerm * geometricTerm) / (denom * (denom).squareRoot())
+        func phase(cosTheta: Real, asymmetry: Real) -> Real {
+                let denom = 1 + asymmetry * asymmetry + 2 * asymmetry * cosTheta
+                return inv4Pi * (1 - asymmetry * asymmetry) / (denom * (denom).squareRoot())
         }
 
         func samplePhase(outgoing: Vector, sampler: inout Sampler) -> (value: Real, incident: Vector) {
                 let uSample = sampler.get2D()
                 var cosTheta: Real
-                if abs(geometricTerm) < 1e-3 {
+                if abs(asymmetry) < 1e-3 {
                         cosTheta = 1 - 2 * uSample.0
                 } else {
-                        let sqrTerm = (1 - geometricTerm * geometricTerm)
-                                / (1 + geometricTerm - 2 * geometricTerm * uSample.0)
-                        cosTheta = -(1 + geometricTerm * geometricTerm - sqrTerm * sqrTerm)
-                                / (2 * geometricTerm)
+                        let sqrTerm = (1 - asymmetry * asymmetry)
+                                / (1 + asymmetry - 2 * asymmetry * uSample.0)
+                        cosTheta = -(1 + asymmetry * asymmetry - sqrTerm * sqrTerm)
+                                / (2 * asymmetry)
                 }
                 let sinTheta = (max(0.0, 1 - cosTheta * cosTheta)).squareRoot()
                 let phi = 2 * Real.pi * uSample.1
@@ -32,13 +32,13 @@ struct HenyeyGreenstein: PhaseFunction {
                         phi: phi,
                         frame: frame)
 
-                let value = phase(cosTheta: cosTheta, geometricTerm: geometricTerm)
+                let value = phase(cosTheta: cosTheta, asymmetry: asymmetry)
                 return (value, incident)
         }
 
         func evaluate(outgoing: Vector, incident: Vector) -> Real {
-                return phase(cosTheta: dot(outgoing, incident), geometricTerm: geometricTerm)
+                return phase(cosTheta: dot(outgoing, incident), asymmetry: asymmetry)
         }
 
-        let geometricTerm: Real
+        let asymmetry: Real
 }

@@ -18,7 +18,7 @@ import Testing
                         diffuse: diffuse,
                         thickness: 0.0,
                         albedo: RgbSpectrum(intensity: 0.0),
-                        g: 0.0,
+                        asymmetry: 0.0,
                         maxDepth: 10,
                         nSamples: 1,
                         bsdfFrame: bsdfFrame)

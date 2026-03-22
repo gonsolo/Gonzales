@@ -6,7 +6,7 @@ struct CoatedDiffuse {
                 refractiveIndex: FloatTexture,
                 thickness: FloatTexture,
                 albedo: RgbSpectrumTexture,
-                g: FloatTexture,
+                asymmetry: FloatTexture,
                 maxDepth: Int,
                 nSamples: Int,
                 remapRoughness: Bool
@@ -16,7 +16,7 @@ struct CoatedDiffuse {
                 self.refractiveIndex = refractiveIndex
                 self.thickness = thickness
                 self.albedo = albedo
-                self.g = g
+                self.asymmetry = asymmetry
                 self.maxDepth = maxDepth
                 self.nSamples = nSamples
                 self.remapRoughness = remapRoughness
@@ -27,7 +27,7 @@ struct CoatedDiffuse {
                 let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
                 let thicknessAtInteraction = self.thickness.evaluateFloat(at: interaction)
                 let albedoAtInteraction = self.albedo.evaluateRgbSpectrum(at: interaction)
-                let gAtInteraction = self.g.evaluateFloat(at: interaction)
+                let asymmetryAtInteraction = self.asymmetry.evaluateFloat(at: interaction)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
 
                 var alpha: (Real, Real) = roughness
@@ -49,7 +49,7 @@ struct CoatedDiffuse {
                         diffuse: diffuse,
                         thickness: Real(thicknessAtInteraction),
                         albedo: albedoAtInteraction,
-                        g: Real(gAtInteraction),
+                        asymmetry: Real(asymmetryAtInteraction),
                         maxDepth: maxDepth,
                         nSamples: nSamples,
                         bsdfFrame: bsdfFrame)
@@ -61,7 +61,7 @@ struct CoatedDiffuse {
         var roughness: (Real, Real)
         var thickness: FloatTexture
         var albedo: RgbSpectrumTexture
-        var g: FloatTexture
+        var asymmetry: FloatTexture
         var maxDepth: Int
         var nSamples: Int
         var remapRoughness: Bool
@@ -80,7 +80,7 @@ extension CoatedDiffuse {
         let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, else: 1.5)
         
         let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, else: 0.01)
-        let g = try parameters.findRealTexture(name: "g", textures: textures, else: 0.0)
+        let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, else: 0.0)
         let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
         let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
         
@@ -95,7 +95,7 @@ extension CoatedDiffuse {
                 refractiveIndex: refractiveIndex,
                 thickness: thickness,
                 albedo: albedo,
-                g: g,
+                asymmetry: asymmetry,
                 maxDepth: maxDepth,
                 nSamples: nSamples,
                 remapRoughness: remapRoughness)

@@ -27,7 +27,7 @@ func coatedDiffuseEvaluate() throws {
         diffuse: bottom,
         thickness: 0.1,
         albedo: RgbSpectrum(intensity: 1.0),
-        g: 0.0,
+        asymmetry: 0.0,
         maxDepth: 10,
         nSamples: 1,
         bsdfFrame: bsdfFrame

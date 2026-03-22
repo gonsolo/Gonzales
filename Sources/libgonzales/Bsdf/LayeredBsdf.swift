@@ -29,7 +29,7 @@ extension LayeredBsdf {
                 bottomIsSpecular: Bool,
                 thickness: Real,
                 albedo: RgbSpectrum,
-                geometricTerm: Real,
+                asymmetry: Real,
                 maxDepth: Int,
                 nSamples: Int,
                 bsdfFrame: BsdfFrame,
@@ -41,7 +41,7 @@ extension LayeredBsdf {
                 self.bottomIsSpecular = bottomIsSpecular
                 self.thickness = max(thickness, Real.leastNormalMagnitude)
                 self._albedo = albedo
-                self.phaseFunction = HenyeyGreenstein(geometricTerm: geometricTerm)
+                self.phaseFunction = HenyeyGreenstein(asymmetry: asymmetry)
                 self.maxDepth = maxDepth
                 self.nSamples = nSamples
                 self.bsdfFrame = bsdfFrame
