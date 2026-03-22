@@ -63,7 +63,9 @@ struct State {
                 case "measured":
                         let measured = try Measured.create(parameters: parameters)
                         material = Material.measured(measured)
-                // mix missing
+                case "mix":
+                        let mix = try MixMaterial.create(parameters: parameters, textures: textures, namedMaterials: self.namedMaterials, state: self)
+                        material = Material.mix(mix)
                 // subsurface missing
                 // thindielectric missing
                 default:

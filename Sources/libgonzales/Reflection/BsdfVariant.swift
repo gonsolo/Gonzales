@@ -5,6 +5,7 @@ enum BsdfVariant: FramedBsdf {
         case diffuseBsdf(DiffuseBsdf)
         case hairBsdf(HairBsdf)
         case microfacetReflection(MicrofacetReflection)
+        case mixBsdf(MixBsdf)
 
         func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum {
                 switch self {
@@ -19,6 +20,8 @@ enum BsdfVariant: FramedBsdf {
                 case .hairBsdf(let bsdf):
                         return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
                 case .microfacetReflection(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .mixBsdf(let bsdf):
                         return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
                 }
         }
@@ -36,6 +39,8 @@ enum BsdfVariant: FramedBsdf {
                 case .hairBsdf(let bsdf):
                         return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
                 case .microfacetReflection(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .mixBsdf(let bsdf):
                         return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
                 }
         }
@@ -55,6 +60,8 @@ enum BsdfVariant: FramedBsdf {
                         return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
                 case .microfacetReflection(let bsdf):
                         return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .mixBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
                 }
         }
 
@@ -71,6 +78,8 @@ enum BsdfVariant: FramedBsdf {
                 case .hairBsdf(let bsdf):
                         return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 case .microfacetReflection(let bsdf):
+                        return bsdf.evaluate(outgoing: outgoing, incident: incident)
+                case .mixBsdf(let bsdf):
                         return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 }
         }
@@ -89,6 +98,8 @@ enum BsdfVariant: FramedBsdf {
                         return bsdf.albedo()
                 case .microfacetReflection(let bsdf):
                         return bsdf.albedo()
+                case .mixBsdf(let bsdf):
+                        return bsdf.albedo()
                 }
         }
 
@@ -105,6 +116,8 @@ enum BsdfVariant: FramedBsdf {
                 case .hairBsdf(let bsdf):
                         return bsdf.bsdfFrame
                 case .microfacetReflection(let bsdf):
+                        return bsdf.bsdfFrame
+                case .mixBsdf(let bsdf):
                         return bsdf.bsdfFrame
                 }
         }
@@ -123,6 +136,8 @@ enum BsdfVariant: FramedBsdf {
                         return false
                 case .microfacetReflection:
                         return false
+                case .mixBsdf(let bsdf):
+                        return bsdf.isSpecular
                 }
         }
 }

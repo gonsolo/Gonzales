@@ -53,8 +53,15 @@ enum ShapeType: Shape {
                 case .triangle(let triangle):
                         return try triangle.getIntersectionData(
                                 scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                default:
-                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                case .sphere(let sphere):
+                        return try sphere.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                case .disk(let disk):
+                        return try disk.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                case .curve(let curve):
+                        return try curve.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 
@@ -69,8 +76,21 @@ enum ShapeType: Shape {
                                 scene: scene,
                                 data: data,
                                 worldRay: worldRay)
-                default:
-                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                case .sphere(let sphere):
+                        return try sphere.computeSurfaceInteraction(
+                                scene: scene,
+                                data: data,
+                                worldRay: worldRay)
+                case .disk(let disk):
+                        return try disk.computeSurfaceInteraction(
+                                scene: scene,
+                                data: data,
+                                worldRay: worldRay)
+                case .curve(let curve):
+                        return try curve.computeSurfaceInteraction(
+                                scene: scene,
+                                data: data,
+                                worldRay: worldRay)
                 }
         }
 

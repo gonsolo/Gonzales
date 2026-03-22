@@ -1,6 +1,6 @@
 ///        A material provides the look of a surface.
 
-enum Material {
+enum Material: Sendable {
         case areaLight(AreaLight)
         case coatedDiffuse(CoatedDiffuse)
         case conductor(Conductor)
@@ -11,6 +11,7 @@ enum Material {
         case hair(Hair)
         case interface(Interface)
         case measured(Measured)
+        case mix(MixMaterial)
 
         func getBsdf(interaction: SurfaceInteraction) throws -> BsdfVariant {
                 switch self {
@@ -43,6 +44,9 @@ enum Material {
                 case .measured(let measured):
                         let bsdf = measured.getBsdf(interaction)
                         return .diffuseBsdf(bsdf)
+                case .mix(let mixMaterial):
+                        let bsdf = try mixMaterial.getBsdf(interaction: interaction)
+                        return .mixBsdf(bsdf)
                 }
         }
 
