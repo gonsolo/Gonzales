@@ -38,13 +38,16 @@ class RenderConfiguration {
                 }
                 let isoValues = try filmParameters.findReals(called: "iso")
                 let iso = isoValues.isEmpty ? 100.0 : isoValues[0]
+                let maxComponentValues = try filmParameters.findReals(called: "maxcomponentvalue")
+                let maxComponentValue = maxComponentValues.isEmpty ? 0.0 : maxComponentValues[0]
                 return Film(
                         name: fileName,
                         resolution: resolution,
                         fileName: fileName,
                         filter: filter,
                         crop: cropWindow,
-                        iso: iso
+                        iso: iso,
+                        maxComponentValue: maxComponentValue
                 )
         }
 

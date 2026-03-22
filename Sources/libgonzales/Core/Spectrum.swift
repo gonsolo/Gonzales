@@ -132,6 +132,36 @@ let copperExtinctionCoefficients = PiecewiseLinearSpectrum(
                 4.430000, 4.619563, 4.817000, 5.034125, 5.260000, 5.485625, 5.717000,
         ])
 
+let brassWavelengths: [Real] = [
+        290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420,
+        430, 440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560,
+        570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700,
+        710, 720, 730, 740, 750, 760, 770, 780, 790, 800, 810, 820, 830, 840,
+        850, 860, 870, 880, 890
+]
+
+let brassRefractiveIndices = PiecewiseLinearSpectrum(
+        lambdas: brassWavelengths,
+        values: [
+                1.358, 1.388, 1.419, 1.446, 1.473, 1.494, 1.504, 1.503, 1.497, 1.487, 1.471, 1.445, 1.405, 1.350,
+                1.278, 1.191, 1.094, 0.994, 0.900, 0.816, 0.745, 0.686, 0.639, 0.602, 0.573, 0.549, 0.527, 0.505,
+                0.484, 0.468, 0.460, 0.450, 0.452, 0.449, 0.445, 0.444, 0.444, 0.445, 0.444, 0.444, 0.445, 0.446,
+                0.448, 0.450, 0.452, 0.455, 0.457, 0.458, 0.460, 0.464, 0.469, 0.473, 0.478, 0.481, 0.483, 0.486,
+                0.490, 0.494, 0.500, 0.507, 0.515
+        ]
+)
+
+let brassExtinctionCoefficients = PiecewiseLinearSpectrum(
+        lambdas: brassWavelengths,
+        values: [
+                1.688, 1.731, 1.764, 1.789, 1.807, 1.815, 1.815, 1.815, 1.818, 1.818, 1.813, 1.805, 1.794, 1.786,
+                1.784, 1.797, 1.829, 1.883, 1.957, 2.046, 2.145, 2.250, 2.358, 2.464, 2.568, 2.668, 2.765, 2.860,
+                2.958, 3.059, 3.159, 3.253, 3.345, 3.434, 3.522, 3.609, 3.695, 3.778, 3.860, 3.943, 4.025, 4.106,
+                4.186, 4.266, 4.346, 4.424, 4.501, 4.579, 4.657, 4.737, 4.814, 4.890, 4.965, 5.039, 5.115, 5.192,
+                5.269, 5.346, 5.423, 5.500, 5.575
+        ]
+)
+
 let namedSpectra: [String: any Spectrum] = [
         "metal-Ag-eta": silverRefractiveIndices,
         "metal-Ag-k": silverExtinctionCoefficients,
@@ -139,6 +169,8 @@ let namedSpectra: [String: any Spectrum] = [
         "metal-Al-k": aluminiumExtinctionCoefficients,
         "metal-Cu-eta": copperRefractiveIndices,
         "metal-Cu-k": copperExtinctionCoefficients,
+        "metal-CuZn-eta": brassRefractiveIndices,
+        "metal-CuZn-k": brassExtinctionCoefficients,
 ]
 
 public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {

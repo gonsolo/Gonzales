@@ -23,10 +23,10 @@ PTEXMEM = --ptexmem 1 # GB
 
 # Render 27/27 scenes
 PBRT_SCENES_DIR = Scenes/pbrt-v4-scenes
-SCENE_DIR = barcelona-pavilion 		 # 1/27
-SCENE_NAME = pavilion-day.pbrt
-#SCENE_DIR = bistro
-#SCENE_NAME = bistro_boulangerie.pbrt
+#SCENE_DIR = barcelona-pavilion 		 # 1/27
+#SCENE_NAME = pavilion-day.pbrt
+SCENE_DIR = bistro
+SCENE_NAME = bistro_boulangerie.pbrt
 #SCENE_DIR = dambreak
 #SCENE_NAME = dambreak0.pbrt
 #SCENE_NAME = dambreak1.pbrt

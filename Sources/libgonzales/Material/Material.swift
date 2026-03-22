@@ -4,6 +4,7 @@ enum Material {
         case areaLight(AreaLight)
         case coatedDiffuse(CoatedDiffuse)
         case conductor(Conductor)
+        case coatedConductor(CoatedConductor)
         case dielectric(Dielectric)
         case diffuse(Diffuse)
         case diffuseTransmission(DiffuseTransmission)
@@ -22,6 +23,9 @@ enum Material {
                 case .conductor(let conductor):
                         let bsdf = conductor.getBsdf(interaction: interaction)
                         return .microfacetReflection(bsdf)
+                case .coatedConductor(let coatedConductor):
+                        let bsdf = coatedConductor.getBsdf(interaction: interaction)
+                        return .coatedConductorBsdf(bsdf)
                 case .dielectric(let dielectric):
                         let bsdf = dielectric.getBsdf(interaction: interaction)
                         return .dielectricBsdf(bsdf)

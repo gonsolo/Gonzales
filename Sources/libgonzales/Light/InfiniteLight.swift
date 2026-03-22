@@ -154,8 +154,9 @@ extension InfiniteLight {
                         brightness: brightness,
                         texture: texture)
         }
+        let scale = try parameters.findOneReal(called: "scale", else: 1)
         let texture = try getTextureFrom(name: mapname, type: "color", sceneDirectory: sceneDirectory)
-        return InfiniteLight(lightToWorld: lightToWorld, brightness: white, texture: texture)
+        return InfiniteLight(lightToWorld: lightToWorld, brightness: RgbSpectrum(intensity: scale), texture: texture)
 }
 }
 

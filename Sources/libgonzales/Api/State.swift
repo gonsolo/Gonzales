@@ -38,7 +38,9 @@ struct State {
                 case "coateddiffuse":
                         let coatedDiffuse = try CoatedDiffuse.create(parameters: parameters, textures: textures)
                         material = Material.coatedDiffuse(coatedDiffuse)
-                // coatedconductor missing
+                case "coatedconductor":
+                        let coatedConductor = try CoatedConductor.create(parameters: parameters, textures: textures)
+                        material = Material.coatedConductor(coatedConductor)
                 case "conductor":
                         let conductor = try Conductor.create(parameters: parameters)
                         material = Material.conductor(conductor)
