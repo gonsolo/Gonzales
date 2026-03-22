@@ -22,7 +22,7 @@ PTEXMEM = --ptexmem 1 # GB
 #IMAGE_PBRT = $(IMAGE)
 
 # Render 27/27 scenes
-PBRT_SCENES_DIR = /home/gonsolo/src/pbrt-v4-scenes
+PBRT_SCENES_DIR = Scenes/pbrt-v4-scenes
 SCENE_DIR = barcelona-pavilion 		 # 1/27
 SCENE_NAME = pavilion-day.pbrt
 #SCENE_DIR = bistro
