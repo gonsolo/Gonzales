@@ -65,7 +65,7 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                 worldRay: Ray
         ) throws -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                var interaction = try shape.computeSurfaceInteraction(
+                let interaction = try shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
@@ -86,7 +86,7 @@ struct AreaLight: Boundable, Intersectable, LightSource {
                 tHit: inout Real
         ) throws -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                var interaction = try shape.intersect(
+                let interaction = try shape.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
