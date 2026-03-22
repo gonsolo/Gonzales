@@ -11,15 +11,12 @@ public struct BsdfFrame: Sendable {
         }
 
         init(interaction: any Interaction) {
-                let ns = faceForward(
-                        normal: interaction.shadingNormal,
-                        comparedTo: interaction.outgoing)
+                let ns = interaction.shadingNormal
                 let shadingFrame = ShadingFrame(
                         y: normalized(interaction.dpdu),
                         z: Vector(normal: ns)
                 )
-                self.geometricNormal = faceForward(
-                        normal: interaction.normal, comparedTo: interaction.outgoing)
+                self.geometricNormal = interaction.normal
                 self.shadingFrame = shadingFrame
         }
 

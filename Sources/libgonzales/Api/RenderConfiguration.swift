@@ -134,7 +134,7 @@ class RenderConfiguration {
                 }
                 let maxDepth = try self.integratorParameters.findOneInt(
                         called: "maxdepth",
-                        else: 1
+                        else: 5
                 )
                 return VolumePathIntegrator(maxDepth: maxDepth, accelerator: accelerator, scene: scene)
         }

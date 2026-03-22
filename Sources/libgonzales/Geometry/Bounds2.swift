@@ -57,10 +57,11 @@ extension Bounds2i: Sequence {
                         guard times < deltaX * deltaY else {
                                 return nil
                         }
-                        times += 1
-                        return Point2i(
+                        let point = Point2i(
                                 x: bounds.pMin.x + times % deltaX,
                                 y: bounds.pMin.y + times / deltaX)
+                        times += 1
+                        return point
                 }
 
                 let bounds: Bounds2i
