@@ -21,11 +21,14 @@ final class BoundingHierarchyBuilder {
         var nodes = [BoundingHierarchyNode]()
 
         internal init(scene: Scene, primitives: [IntersectablePrimitive]) throws {
-                self.cachedPrimitives = try primitives.enumerated().map { index, primitive in
+                self.cachedPrimitives = [CachedPrimitive]()
+                self.cachedPrimitives.reserveCapacity(primitives.count)
+                for (index, primitive) in primitives.enumerated() {
                         let bound = try primitive.worldBound(scene: scene)
-                        return CachedPrimitive(index: index, bound: bound, center: bound.center)
+                        self.cachedPrimitives.append(CachedPrimitive(index: index, bound: bound, center: bound.center))
                 }
                 self.primitives = primitives
+                self.nodes.reserveCapacity(primitives.count * 2)
                 buildHierarchy()
         }
 }
@@ -76,14 +79,6 @@ extension BoundingHierarchyBuilder {
                 // printNodes()
         }
 
-        private func growNodes(counter: Int) {
-                let missing = counter - nodes.count + 1
-                if missing > 0 {
-                        let bounds = Bounds3()
-                        nodes += Array(repeating: BoundingHierarchyNode(bounds: bounds), count: missing)
-                }
-        }
-
         private func addLeafNode(
                 offset: Int,
                 bounds: Bounds3f,
@@ -91,7 +86,6 @@ extension BoundingHierarchyBuilder {
                 counter: Int,
                 dimension _: Int
         ) {
-                growNodes(counter: counter)
                 assert(range.count > 0)
                 nodes[counter] = BoundingHierarchyNode(
                         bounds: bounds,
@@ -229,19 +223,20 @@ extension BoundingHierarchyBuilder {
         private func build(range: Range<Int>) -> Bounds3f {
                 let counter = totalNodes
                 totalNodes += 1
+                nodes.append(BoundingHierarchyNode(bounds: Bounds3f()))
+                
                 if range.isEmpty { return Bounds3f() }
-                let bounds = cachedPrimitives[range].reduce(
-                        Bounds3f(),
-                        {
-                                union(first: $0, second: $1.bound)
-                        })
-                let centroidBounds = cachedPrimitives[range].reduce(
-                        Bounds3f(),
-                        {
-                                union(
-                                        bound: $0,
-                                        point: $1.center)
-                        })
+                
+                var bounds = Bounds3f()
+                for prim in cachedPrimitives[range] {
+                        bounds = union(first: bounds, second: prim.bound)
+                }
+                
+                var centroidBounds = Bounds3f()
+                for prim in cachedPrimitives[range] {
+                        centroidBounds = union(bound: centroidBounds, point: prim.center)
+                }
+                
                 let dim = centroidBounds.maximumExtent()
 
                 if bounds.surfaceArea() == 0
@@ -297,7 +292,6 @@ extension BoundingHierarchyBuilder {
         }
 
         func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
-                growNodes(counter: counter)
                 nodes[counter] = BoundingHierarchyNode(bounds: combinedBounds, offset: beforeRight, axis: dim)
 
         }

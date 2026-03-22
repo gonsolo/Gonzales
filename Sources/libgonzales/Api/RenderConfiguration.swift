@@ -184,15 +184,9 @@ class RenderConfiguration {
                         areaLights: areaLights,
                         transformedPrimitives: transformedPrimitives)
 
-                let reporter = ProgressReporter(title: "Building accelerator")
-                let progressTask = Task { await runProgressReporter(reporter: reporter) }
-
                 let accelerator = try makeAccelerator(
                         scene: scene, primitives: primitives,
                         acceleratorName: acceleratorName)
-                
-                progressTask.cancel()
-                _ = await progressTask.value
                 
                 cleanUp()
 
