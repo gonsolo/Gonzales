@@ -184,7 +184,7 @@ class RenderConfiguration {
                         areaLights: areaLights,
                         transformedPrimitives: transformedPrimitives)
 
-                let accelerator = try makeAccelerator(
+                let accelerator = try await makeAccelerator(
                         scene: scene, primitives: primitives,
                         acceleratorName: acceleratorName)
                 

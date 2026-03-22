@@ -9,36 +9,101 @@ enum BoundingHierarchyBuilderError: Error {
         case unknown
 }
 
-final class BoundingHierarchyBuilder {
+final class BVHBuildNode: @unchecked Sendable {
+        var bounds: Bounds3f
+        var left: BVHBuildNode?
+        var right: BVHBuildNode?
+        var splitAxis: Int
+        var firstPrimOffset: Int
+        var nPrimitives: Int
+        
+        init(offset: Int, nPrimitives: Int, bounds: Bounds3f) {
+                self.firstPrimOffset = offset
+                self.nPrimitives = nPrimitives
+                self.bounds = bounds
+                self.splitAxis = 0
+        }
+        
+        init(axis: Int, left: BVHBuildNode, right: BVHBuildNode) {
+                self.splitAxis = axis
+                self.left = left
+                self.right = right
+                self.bounds = union(first: left.bounds, second: right.bounds)
+                self.nPrimitives = 0
+                self.firstPrimOffset = 0
+        }
+}
+
+private struct CachedPrimitive {
+        let index: Int
+        let bound: Bounds3f
+        let center: Point
+
+        func centroid() -> Point {
+                return 0.5 * bound.pMin + 0.5 * bound.pMax
+        }
+}
+
+fileprivate struct UnsafePrimitiveBuffer: @unchecked Sendable {
+        let buffer: UnsafeMutableBufferPointer<CachedPrimitive>
+}
+
+struct BVHSplitBucket {
+        var count = 0
+        var bounds = Bounds3f()
+}
+
+final class BoundingHierarchyBuilder: @unchecked Sendable {
 
         private let primitivesPerNode = 4
 
         private var totalNodes = 0
-        private var offsetCounter = 0
-        private var cachedPrimitives: [CachedPrimitive]
+        private var bufferWrapper: UnsafePrimitiveBuffer?
         private var primitives: [IntersectablePrimitive]
 
         var nodes = [BoundingHierarchyNode]()
 
-        internal init(scene: Scene, primitives: [IntersectablePrimitive]) throws {
-                self.cachedPrimitives = [CachedPrimitive]()
-                self.cachedPrimitives.reserveCapacity(primitives.count)
-                for (index, primitive) in primitives.enumerated() {
-                        let bound = try primitive.worldBound(scene: scene)
-                        self.cachedPrimitives.append(CachedPrimitive(index: index, bound: bound, center: bound.center))
-                }
+        internal init(scene: Scene, primitives: [IntersectablePrimitive]) async throws {
                 self.primitives = primitives
                 self.nodes.reserveCapacity(primitives.count * 2)
-                buildHierarchy()
+                
+                let pointer = UnsafeMutablePointer<CachedPrimitive>.allocate(capacity: primitives.count)
+                let buffer = UnsafeMutableBufferPointer(start: pointer, count: primitives.count)
+                
+                let primitiveBufferWrapper = UnsafePrimitiveBuffer(buffer: buffer)
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                        let chunkSize = 32768
+                        var startIndex = 0
+                        while startIndex < primitives.count {
+                                let endIndex = min(startIndex + chunkSize, primitives.count)
+                                group.addTask { [startIndex, endIndex, scene] in
+                                        for index in startIndex..<endIndex {
+                                                let primitive = primitives[index]
+                                                let bound = try primitive.worldBound(scene: scene)
+                                                primitiveBufferWrapper.buffer[index] = CachedPrimitive(index: index, bound: bound, center: bound.center)
+                                        }
+                                }
+                                startIndex += chunkSize
+                        }
+                        for try await _ in group {}
+                }
+                
+                self.bufferWrapper = UnsafePrimitiveBuffer(buffer: buffer)
+                
+                try await buildHierarchy()
         }
-}
-
-extension BoundingHierarchyBuilder {
+        
+        deinit {
+                if let wrapper = bufferWrapper {
+                        wrapper.buffer.baseAddress?.deallocate()
+                }
+        }
 
         internal func getSortedPrimitivesAndNodes() throws -> (
                 [IntersectablePrimitive], [BoundingHierarchyNode]
         ) {
-                let sortedPrimitives = cachedPrimitives.map { primitives[$0.index] }
+                guard let wrapper = bufferWrapper else { return ([], nodes) }
+                let sortedPrimitives = wrapper.buffer.map { primitives[$0.index] }
                 return (sortedPrimitives, nodes)
         }
 
@@ -46,126 +111,83 @@ extension BoundingHierarchyBuilder {
                 let (sortedPrimitives, nodes) = try getSortedPrimitivesAndNodes()
                 return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
         }
-
-        private struct CachedPrimitive {
-                let index: Int
-                let bound: Bounds3f
-                let center: Point
-
-                func centroid() -> Point {
-                        return 0.5 * bound.pMin + 0.5 * bound.pMax
+        
+        private func buildHierarchy() async throws {
+                guard let wrapper = bufferWrapper, wrapper.buffer.count > 0 else { return }
+                let rootNode = try await Self.build(range: 0..<wrapper.buffer.count, ptr: wrapper, primitivesPerNode: self.primitivesPerNode)
+                _ = flatten(node: rootNode)
+        }
+        
+        private func flatten(node: BVHBuildNode) -> Int {
+                let linearOffset = totalNodes
+                totalNodes += 1
+                
+                if node.nPrimitives > 0 { // Leaf
+                        nodes.append(BoundingHierarchyNode(bounds: node.bounds, count: node.nPrimitives, offset: node.firstPrimOffset, axis: 0))
+                        return linearOffset
+                } else { // Interior
+                        nodes.append(BoundingHierarchyNode(bounds: node.bounds, count: 0, offset: 0, axis: node.splitAxis))
+                        _ = flatten(node: node.left!)
+                        let secondChildOffset = flatten(node: node.right!)
+                        nodes[linearOffset] = BoundingHierarchyNode(bounds: node.bounds, count: 0, offset: secondChildOffset, axis: node.splitAxis)
+                        return linearOffset
                 }
         }
-
-        private func printNodes() {
-                var nodeIndex = 0
-                for node in nodes {
-                        print(nodeIndex)
-                        if node.count == 0 {
-                                print("  interior")
-                                print("  offset: ", node.offset)
-                        } else {
-                                print(" leaf")
-                                print(" count: ", node.count)
-                                print(" offset: ", node.offset)
-                        }
-                        nodeIndex += 1
-                }
-        }
-
-        private func buildHierarchy() {
-                if cachedPrimitives.isEmpty { return }
-                _ = build(range: 0..<cachedPrimitives.count)
-                // printNodes()
-        }
-
-        private func addLeafNode(
-                offset: Int,
-                bounds: Bounds3f,
-                range: Range<Int>,
-                counter: Int,
-                dimension _: Int
-        ) {
-                assert(range.count > 0)
-                nodes[counter] = BoundingHierarchyNode(
-                        bounds: bounds,
-                        count: range.count,
-                        offset: offset,
-                        axis: 0)
-
-                offsetCounter += range.count
-
-        }
-
-        private func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool {
+        
+        // --- Static Helper functions ---
+        
+        private static func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool {
                 return primitive.center[dimension] < pivot
         }
 
-        private func isSmaller(
-                _ first: CachedPrimitive, _ second: CachedPrimitive, in dimension: Int
-        ) -> Bool {
+        private static func isSmaller(_ first: CachedPrimitive, _ second: CachedPrimitive, in dimension: Int) -> Bool {
                 return isSmaller(first, second.center[dimension], in: dimension)
         }
-
-        private func splitEqual(bounds _: Bounds3f, dimension: Int, range: Range<Int>)
+        
+        private static func splitEqual(bounds _: Bounds3f, dimension: Int, range: Range<Int>, ptr: UnsafePrimitiveBuffer)
                 -> (start: Int, middle: Int, end: Int) {
-                // There is no nth_element so let's sort for now
-                cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
-                let start = range.first!
+                ptr.buffer[range].sort(by: { isSmaller($0, $1, in: dimension) })
+                let start = range.lowerBound
                 let mid = start + range.count / 2
-                let end = range.last! + 1
+                let end = range.upperBound
                 return (start, mid, end)
         }
 
-        private func splitMiddle(bounds: Bounds3f, dimension: Int, range: Range<Int>)
+        private static func splitMiddle(bounds: Bounds3f, dimension: Int, range: Range<Int>, ptr: UnsafePrimitiveBuffer)
                 -> (start: Int, middle: Int, end: Int) {
                 let pivot = (bounds.pMin[dimension] + bounds.pMax[dimension]) / 2
-                let mid = cachedPrimitives[range].partition(by: {
-                        isSmaller($0, pivot, in: dimension)
-                })
-                let start = range.first!
-                let end = range.last! + 1
+                let mid = ptr.buffer[range].partition(by: { isSmaller($0, pivot, in: dimension) })
+                let start = range.lowerBound
+                let end = range.upperBound
                 guard mid != start && mid != end else {
-                        return splitEqual(bounds: bounds, dimension: dimension, range: range)
+                        return splitEqual(bounds: bounds, dimension: dimension, range: range, ptr: ptr)
                 }
                 return (start, mid, end)
         }
-
-        struct BVHSplitBucket {
-                var count = 0
-                var bounds = Bounds3f()
-        }
-
-        private func splitSurfaceAreaHeuristic(
+        
+        private static func splitSurfaceAreaHeuristic(
                 bounds: Bounds3f,
                 centroidBounds: Bounds3f,
                 dimension: Int,
                 range: Range<Int>,
-                counter: Int
-        )
-                // swiftlint:disable:next large_tuple
-                -> (start: Int, middle: Int, end: Int, bounds: Bounds3f) {
+                ptr: UnsafePrimitiveBuffer,
+                primitivesPerNode: Int
+        ) -> (start: Int, middle: Int, end: Int, bounds: Bounds3f) {
                 var start = 0
                 var mid = 0
                 var end = 0
                 if range.count <= 2 {
-                        mid = range.first! + range.count / 2
-                        cachedPrimitives[range].sort(by: { isSmaller($0, $1, in: dimension) })
+                        mid = range.lowerBound + range.count / 2
+                        ptr.buffer[range].sort(by: { isSmaller($0, $1, in: dimension) })
                 } else {
                         let nBuckets = 12
                         var buckets = Array(repeating: BVHSplitBucket(), count: nBuckets)
-                        for prim in cachedPrimitives[range] {
+                        for prim in ptr.buffer[range] {
                                 let offset: Vector = centroidBounds.offset(point: prim.centroid())
                                 var bucketIndex = Int(Float(nBuckets) * offset[dimension])
-                                if bucketIndex == nBuckets {
-                                        bucketIndex = nBuckets - 1
-                                }
-                                assert(bucketIndex >= 0)
-                                assert(bucketIndex < nBuckets)
+                                if bucketIndex == nBuckets { bucketIndex = nBuckets - 1 }
                                 buckets[bucketIndex].count += 1
-                                buckets[bucketIndex].bounds = union(
-                                        first: buckets[bucketIndex].bounds,
-                                        second: prim.bound)
+                                buckets[bucketIndex].bounds = union(first: buckets[bucketIndex].bounds, second: prim.bound)
                         }
                         let nSplits = nBuckets - 1
                         var costs = Array(repeating: Real(0.0), count: nSplits)
@@ -190,110 +212,77 @@ extension BoundingHierarchyBuilder {
                                 minCostSplitBucket = index
                         }
                         let leafCost = Real(range.count)
-
                         minCost = 1.0 / 2.0 + minCost / bounds.surfaceArea()
 
                         if range.count > primitivesPerNode || minCost < leafCost {
-
-                                mid = cachedPrimitives[range].partition(by: {
-                                        let offsetPoint = centroidBounds.offset(
-                                                point: $0.centroid())
+                                mid = ptr.buffer[range].partition(by: {
+                                        let offsetPoint = centroidBounds.offset(point: $0.centroid())
                                         let offset = offsetPoint[dimension]
                                         var bucketIndex = Int(Real(nBuckets) * offset)
-                                        if bucketIndex == nBuckets {
-                                                bucketIndex = nBuckets - 1
-                                        }
+                                        if bucketIndex == nBuckets { bucketIndex = nBuckets - 1 }
                                         return bucketIndex > minCostSplitBucket
                                 })
                         } else {
-                                addLeafNode(
-                                        offset: offsetCounter,
-                                        bounds: bounds,
-                                        range: range,
-                                        counter: counter,
-                                        dimension: dimension)
                                 return (0, 0, 0, bounds)
                         }
                 }
-                start = range.first!
-                end = range.last! + 1
+                start = range.lowerBound
+                end = range.upperBound
                 return (start, mid, end, Bounds3f())
         }
 
-        private func build(range: Range<Int>) -> Bounds3f {
-                let counter = totalNodes
-                totalNodes += 1
-                nodes.append(BoundingHierarchyNode(bounds: Bounds3f()))
-                
-                if range.isEmpty { return Bounds3f() }
+        private static func build(range: Range<Int>, ptr: UnsafePrimitiveBuffer, primitivesPerNode: Int) async throws -> BVHBuildNode {
+                if range.isEmpty { return BVHBuildNode(offset: 0, nPrimitives: 0, bounds: Bounds3f()) }
                 
                 var bounds = Bounds3f()
-                for prim in cachedPrimitives[range] {
-                        bounds = union(first: bounds, second: prim.bound)
-                }
+                for prim in ptr.buffer[range] { bounds = union(first: bounds, second: prim.bound) }
                 
                 var centroidBounds = Bounds3f()
-                for prim in cachedPrimitives[range] {
-                        centroidBounds = union(bound: centroidBounds, point: prim.center)
-                }
+                for prim in ptr.buffer[range] { centroidBounds = union(bound: centroidBounds, point: prim.center) }
                 
                 let dim = centroidBounds.maximumExtent()
 
-                if bounds.surfaceArea() == 0
-                        || range.count == 1
-                        || centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
-                        addLeafNode(
-                                offset: offsetCounter,
-                                bounds: bounds,
-                                range: range,
-                                counter: counter,
-                                dimension: dim)
-                        return bounds
+                if bounds.surfaceArea() == 0 || range.count == 1 || centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
+                        return BVHBuildNode(offset: range.lowerBound, nPrimitives: range.count, bounds: bounds)
                 }
 
                 var start = 0
                 var mid = 0
                 var end = 0
                 var sahLeafBounds = Bounds3f()
+                
                 switch splitStrategy {
                 case .equal:
-                        (start, mid, end) = splitEqual(
-                                bounds: centroidBounds,
-                                dimension: dim,
-                                range: range)
+                        (start, mid, end) = splitEqual(bounds: centroidBounds, dimension: dim, range: range, ptr: ptr)
                 case .middle:
-                        (start, mid, end) = splitMiddle(
-                                bounds: centroidBounds,
-                                dimension: dim,
-                                range: range)
+                        (start, mid, end) = splitMiddle(bounds: centroidBounds, dimension: dim, range: range, ptr: ptr)
                 case .surfaceArea:
                         (start, mid, end, sahLeafBounds) = splitSurfaceAreaHeuristic(
-                                bounds: bounds,
-                                centroidBounds: centroidBounds,
-                                dimension: dim,
-                                range: range,
-                                counter: counter)
+                                bounds: bounds, centroidBounds: centroidBounds, dimension: dim,
+                                range: range, ptr: ptr, primitivesPerNode: primitivesPerNode)
                 }
+                
                 if start == 0 && mid == 0 && end == 0 {
-                        return sahLeafBounds
+                        return BVHBuildNode(offset: range.lowerBound, nPrimitives: range.count, bounds: sahLeafBounds)
                 }
 
-                let leftBounds = build(range: start..<mid)
-                let beforeRight = totalNodes
-                let rightBounds = build(range: mid..<end)
-                let combinedBounds = union(first: leftBounds, second: rightBounds)
-
-                addInteriorNode(
-                        counter: counter,
-                        combinedBounds: combinedBounds,
-                        dim: dim,
-                        beforeRight: beforeRight)
-                return combinedBounds
+                if range.count > 100_000 {
+                        let immutableStart = start
+                        let immutableMid = mid
+                        let immutableEnd = end
+                        return try await withThrowingTaskGroup(of: BVHBuildNode.self) { group in
+                                let immutablePtr = ptr
+                                group.addTask {
+                                        return try await build(range: immutableStart..<immutableMid, ptr: immutablePtr, primitivesPerNode: primitivesPerNode)
+                                }
+                                let rightNode = try await build(range: immutableMid..<immutableEnd, ptr: ptr, primitivesPerNode: primitivesPerNode)
+                                let leftNode = try await group.next() ?? BVHBuildNode(offset: 0, nPrimitives: 0, bounds: Bounds3f())
+                                return BVHBuildNode(axis: dim, left: leftNode, right: rightNode)
+                        }
+                } else {
+                        let leftNode = try await build(range: start..<mid, ptr: ptr, primitivesPerNode: primitivesPerNode)
+                        let rightNode = try await build(range: mid..<end, ptr: ptr, primitivesPerNode: primitivesPerNode)
+                        return BVHBuildNode(axis: dim, left: leftNode, right: rightNode)
+                }
         }
-
-        func addInteriorNode(counter: Int, combinedBounds: Bounds3f, dim: Int, beforeRight: Int) {
-                nodes[counter] = BoundingHierarchyNode(bounds: combinedBounds, offset: beforeRight, axis: dim)
-
-        }
-
 }

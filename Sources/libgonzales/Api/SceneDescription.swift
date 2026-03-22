@@ -4,10 +4,10 @@ func makeAccelerator(
         scene: Scene,
         primitives: [IntersectablePrimitive],
         acceleratorName: String
-) throws -> Accelerator {
+) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
-                let builder = try BoundingHierarchyBuilder(scene: scene, primitives: primitives)
+                let builder = try await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
                 return accelerator
@@ -72,6 +72,20 @@ public class SceneDescription {
 
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
+        
+        struct DeferredShapeBatch {
+                let job: @Sendable () throws -> [ShapeType]
+                let isAreaLight: Bool
+                let areaLightName: String
+                let areaLightParameters: ParameterDictionary
+                let alpha: Real
+                let reverseOrientation: Bool
+                let currentMediumInterface: MediumInterface?
+                let objectName: String?
+                let materialIndex: Int
+        }
+        var shapeBatches = [DeferredShapeBatch]()
+
         var acceleratorName = "bvh"
         var currentTransform = Transform()
         var materials = [Material]()
@@ -284,84 +298,90 @@ extension SceneDescription {
         }
 
         func shape(name: String, parameters: ParameterDictionary) throws {
-                let shapes = try makeShapes(
-                        name: name,
-                        objectToWorld: currentTransform,
-                        parameters: parameters)
-                if shapes.isEmpty {
-                        return
-                }
-                let alpha = try parameters.findOneReal(called: "alpha", else: 1)
+                let currentTransform = self.currentTransform
+                let sceneDirectory = self.renderOptions.sceneDirectory
+                let builder = self.triangleMeshBuilder
+                let acceleratorNameForShapes = self.acceleratorName
                 
-                var areaLightsBatch = [Light]()
-                var prims = [IntersectablePrimitive]()
-
+                let alpha = try parameters.findOneReal(called: "alpha", else: 1)
                 let material = try state.createMaterial(
                         parameters: parameters,
                         currentMaterial: state.currentMaterial,
                         currentNamedMaterial: state.currentNamedMaterial,
                         textures: state.textures
                 )
-
-                if !state.areaLight.isEmpty {
-                        for shape in shapes {
-                                guard state.areaLight == "area" || state.areaLight == "diffuse"
-                                else {
-                                        throw SceneDescriptionError.areaLight
-                                }
-                                guard
-                                        let brightness =
-                                                try state.areaLightParameters.findSpectrum(
-                                                        name: "L") as? RgbSpectrum
-                                else {
-                                        throw ParameterError.missing(parameter: "L", function: #function)
-                                }
-                                let scale = try state.areaLightParameters.findOneReal(
-                                        called: "scale", else: 1)
-                                let scaledBrightness = brightness * scale
-                                let areaLight = AreaLight(
-                                        brightness: scaledBrightness,
-                                        shape: shape,
-                                        alpha: alpha,
-                                        reverseOrientation: state.reverseOrientation,
-                                        idx: areaLights.count)
-                                let light = Light.area(areaLight)
-                                areaLightsBatch.append(light)
-                                prims.append(.areaLight(areaLight))
-                                self.areaLights.append(areaLight)
-                        }
-                } else {
-                        let materialIndex = materials.count
+                
+                let isAreaLight = !state.areaLight.isEmpty
+                let areaLightName = state.areaLight
+                let areaLightParameters = state.areaLightParameters
+                let reverseOrientation = state.reverseOrientation
+                let currentMediumInterface = state.currentMediumInterface
+                let objectName = state.objectName
+                
+                var materialIndex = noMaterial
+                if !isAreaLight {
+                        materialIndex = materials.count
                         materials.append(material)
-                        
-                        prims.reserveCapacity(shapes.count)
-                        
-                        for shape in shapes {
-                                let geometricPrimitive = GeometricPrimitive(
-                                        shape: shape,
-                                        materialIndex: materialIndex,
-                                        mediumInterface: state.currentMediumInterface,
-                                        alpha: alpha,
-                                        reverseOrientation: state.reverseOrientation,
-                                        idx: apiGeometricPrimitives.count)
-                                prims.append(.geometricPrimitive(geometricPrimitive))
-                                apiGeometricPrimitives.append(geometricPrimitive)
+                }
+                
+                let job: @Sendable () throws -> [ShapeType] = {
+                        switch name {
+                        case "bilinearmesh":
+                                return []  // Ignore for now
+                        case "curve":
+                                return try Curve.createShape(
+                                        objectToWorld: currentTransform,
+                                        parameters: parameters,
+                                        acceleratorName: acceleratorNameForShapes)
+                        case "cylinder":
+                                return []  // Ignore for now
+                        case "disk":
+                                return try Disk.create(
+                                        objectToWorld: currentTransform,
+                                        parameters: parameters)
+                        case "loopsubdiv":
+                                return try Triangle.createFromParameters(
+                                        objectToWorld: currentTransform,
+                                        parameters: parameters,
+                                        triangleMeshBuilder: builder)
+                        case "plymesh":
+                                return try PlyMesh.create(
+                                        objectToWorld: currentTransform,
+                                        parameters: parameters,
+                                        sceneDirectory: sceneDirectory,
+                                        triangleMeshBuilder: builder)
+                        case "sphere":
+                                return [
+                                        try Sphere.create(
+                                                objectToWorld: currentTransform,
+                                                parameters: parameters)
+                                ]
+                        case "trianglemesh":
+                                return try Triangle.createFromParameters(
+                                        objectToWorld: currentTransform,
+                                        parameters: parameters,
+                                        triangleMeshBuilder: builder)
+                        default:
+                                throw SceneDescriptionError.makeShapes(message: name)
                         }
                 }
-
-                if let objectName = state.objectName {
-                        if options.objects[objectName] == nil {
-                                options.objects[objectName] = prims
-                        } else {
-                                options.objects[objectName]!.append(contentsOf: prims)
-                        }
-                } else {
-                        options.primitives.append(contentsOf: prims)
-                        options.lights.append(contentsOf: areaLightsBatch)
-                }
+                
+                let batch = DeferredShapeBatch(
+                        job: job,
+                        isAreaLight: isAreaLight,
+                        areaLightName: areaLightName,
+                        areaLightParameters: areaLightParameters,
+                        alpha: alpha,
+                        reverseOrientation: reverseOrientation,
+                        currentMediumInterface: currentMediumInterface,
+                        objectName: objectName,
+                        materialIndex: materialIndex
+                )
+                
+                shapeBatches.append(batch)
         }
 
-        private func resolveInstances() throws {
+        private func resolveInstances() async throws {
 
                 // Now resolve Object Instances using a dummy Scene for accelerator building bounds
                 let tempScene = Scene(
@@ -373,25 +393,71 @@ extension SceneDescription {
                         transformedPrimitives: transformedPrimitives)
 
                 var instancedAccelerators = [String: Accelerator]()
-
+                
+                // 1. Identify unique objects that need an accelerator
+                var uniqueNamesSet = Set<String>()
+                var uniqueNames = [String]()
                 for instanceDesc in uninstantiatedInstances {
-                        guard let prims = options.objects[instanceDesc.name] else {
+                        if !uniqueNamesSet.contains(instanceDesc.name) {
+                                uniqueNamesSet.insert(instanceDesc.name)
+                                uniqueNames.append(instanceDesc.name)
+                        }
+                }
+                
+                // 2. Build them concurrently
+                final class LocalInstancedAccelerators: @unchecked Sendable {
+                        var results: [Accelerator?]
+                        let lock = NSLock()
+                        init(count: Int) { self.results = [Accelerator?](repeating: nil, count: count) }
+                        func set(index: Int, accelerator: Accelerator) {
+                                lock.lock()
+                                self.results[index] = accelerator
+                                lock.unlock()
+                        }
+                }
+                
+                let localInstancedAccelerators = LocalInstancedAccelerators(count: uniqueNames.count)
+                let immutableUniqueNames = uniqueNames
+                let localAcceleratorName = self.acceleratorName
+                let immutableObjects = options.objects // Value-type copy for Sendable closure capture
+                
+                await withTaskGroup(of: Void.self) { group in
+                        for i in 0..<immutableUniqueNames.count {
+                                group.addTask {
+                                        let name = immutableUniqueNames[i]
+                                        guard let prims = immutableObjects[name] else { return }
+                                        do {
+                                                let accelerator = try await makeAccelerator(
+                                                        scene: tempScene,
+                                                        primitives: prims,
+                                                        acceleratorName: localAcceleratorName)
+                                                localInstancedAccelerators.set(index: i, accelerator: accelerator)
+                                        } catch {
+                                                print("Error building instanced local BVH: \(error)")
+                                        }
+                                }
+                        }
+                }
+                
+                // 3. Populate cache dictionary
+                for (i, name) in immutableUniqueNames.enumerated() {
+                        if let acc = localInstancedAccelerators.results[i] {
+                                instancedAccelerators[name] = acc
+                        }
+                }
+
+                // 4. Resolve instances sequentially to preserve idx order
+                for instanceDesc in uninstantiatedInstances {
+                        guard options.objects[instanceDesc.name] != nil else {
                                 throw RenderError.unimplemented(
                                         function: #function, file: #filePath, line: #line,
                                         message: "Missing object instance \(instanceDesc.name)")
                         }
                         
-                        let accelerator: Accelerator
-                        if let cached = instancedAccelerators[instanceDesc.name] {
-                                accelerator = cached
-                        } else {
-                                accelerator = try makeAccelerator(
-                                        scene: tempScene,
-                                        primitives: prims,
-                                        acceleratorName: acceleratorName)
-                                instancedAccelerators[instanceDesc.name] = accelerator
+                        guard let accelerator = instancedAccelerators[instanceDesc.name] else {
+                                continue
                         }
-                        
+
                         let transformedPrimitive = TransformedPrimitive(
                                 accelerator: accelerator,
                                 transform: instanceDesc.currentTransform,
@@ -552,7 +618,145 @@ extension SceneDescription {
         }
 
         func worldEnd() async throws {
-                try resolveInstances()
+                // PASS 1: Execute shape batches concurrently to parse PLY meshes across 12 cores
+                final class JobResults: @unchecked Sendable {
+                        var results: [[ShapeType]?]
+                        let lock = NSLock()
+                        init(count: Int) { self.results = [[ShapeType]?](repeating: nil, count: count) }
+                        func set(index: Int, shapes: [ShapeType]) {
+                                lock.lock()
+                                self.results[index] = shapes
+                                lock.unlock()
+                        }
+                }
+                
+                let jobResults = JobResults(count: shapeBatches.count)
+                let jobs = shapeBatches.map { $0.job }
+                
+                await withTaskGroup(of: Void.self) { group in
+                        for i in 0..<jobs.count {
+                                group.addTask {
+                                        do {
+                                                let shapes = try jobs[i]()
+                                                jobResults.set(index: i, shapes: shapes)
+                                        } catch {
+                                                print("Error in concurrent shape building: \(error)")
+                                        }
+                                }
+                        }
+                }
+
+                // Pre-allocate geometric arrays to prevent existential O(N) reallocation traps
+                var totalShapesCount = 0
+                for shapes in jobResults.results {
+                        totalShapesCount += shapes?.count ?? 0
+                }
+                apiGeometricPrimitives.reserveCapacity(totalShapesCount)
+                options.primitives.reserveCapacity(totalShapesCount) // over-estimated but absolutely safe and prevents reallocation
+
+                // Track large meshes that need their own local BVH
+                var meshBvhPrims = [[GeometricPrimitive]]()
+                
+                for (index, batch) in shapeBatches.enumerated() {
+                        guard let shapes = jobResults.results[index], !shapes.isEmpty else { continue }
+                        var areaLightsBatch = [Light]()
+                        var prims = [IntersectablePrimitive]()
+                        
+                        if batch.isAreaLight {
+                                for shape in shapes {
+                                        guard batch.areaLightName == "area" || batch.areaLightName == "diffuse" else { throw SceneDescriptionError.areaLight }
+                                        guard let brightness = try batch.areaLightParameters.findSpectrum(name: "L") as? RgbSpectrum else { throw ParameterError.missing(parameter: "L", function: #function) }
+                                        let scale = try batch.areaLightParameters.findOneReal(called: "scale", else: 1)
+                                        let scaledBrightness = brightness * scale
+                                        let areaLight = AreaLight(
+                                                brightness: scaledBrightness, shape: shape, alpha: batch.alpha,
+                                                reverseOrientation: batch.reverseOrientation, idx: self.areaLights.count)
+                                        let light = Light.area(areaLight)
+                                        areaLightsBatch.append(light)
+                                        prims.append(.areaLight(areaLight))
+                                        self.areaLights.append(areaLight)
+                                }
+                                
+                                if let objectName = batch.objectName {
+                                        if options.objects[objectName] == nil { options.objects[objectName] = prims } 
+                                        else { options.objects[objectName]!.append(contentsOf: prims) }
+                                } else {
+                                        options.primitives.append(contentsOf: prims)
+                                        options.lights.append(contentsOf: areaLightsBatch)
+                                }
+                        } else {
+                                var currentPrims = [GeometricPrimitive]()
+                                currentPrims.reserveCapacity(shapes.count)
+                                for shape in shapes {
+                                        let geometricPrimitive = GeometricPrimitive(
+                                                shape: shape, materialIndex: batch.materialIndex,
+                                                mediumInterface: batch.currentMediumInterface, alpha: batch.alpha,
+                                                reverseOrientation: batch.reverseOrientation, idx: apiGeometricPrimitives.count)
+                                        currentPrims.append(geometricPrimitive)
+                                        apiGeometricPrimitives.append(geometricPrimitive)
+                                }
+                                
+                                if let objectName = batch.objectName {
+                                        let primitivesList: [IntersectablePrimitive] = currentPrims.map { .geometricPrimitive($0) }
+                                        if options.objects[objectName] == nil { options.objects[objectName] = primitivesList } 
+                                        else { options.objects[objectName]!.append(contentsOf: primitivesList) }
+                                } else {
+                                        if currentPrims.count > 16 {
+                                                // It's a large top-level mesh. Buffer it for Pass 2 (Local BVH)
+                                                meshBvhPrims.append(currentPrims)
+                                        } else {
+                                                options.primitives.append(contentsOf: currentPrims.map { .geometricPrimitive($0) })
+                                        }
+                                }
+                        }
+                }
+                shapeBatches.removeAll()
+
+                // PASS 3: Build local Per-Mesh BVHs concurrently for massive performance
+                if !meshBvhPrims.isEmpty {
+                        final class LocalAccelerators: @unchecked Sendable {
+                                var results: [Accelerator?]
+                                let lock = NSLock()
+                                init(count: Int) { self.results = [Accelerator?](repeating: nil, count: count) }
+                                func set(index: Int, accelerator: Accelerator) {
+                                        lock.lock()
+                                        self.results[index] = accelerator
+                                        lock.unlock()
+                                }
+                        }
+                        
+                        let localAccelerators = LocalAccelerators(count: meshBvhPrims.count)
+                        let immutableMeshBvhPrims = meshBvhPrims
+                        let localAcceleratorName = self.acceleratorName
+                        
+                        let tempScene = Scene(
+                                lights: [], materials: materials, meshes: triangleMeshBuilder.getMeshes(),
+                                geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights, transformedPrimitives: [])
+                                
+                        await withTaskGroup(of: Void.self) { group in
+                                for i in 0..<immutableMeshBvhPrims.count {
+                                        group.addTask {
+                                                do {
+                                                        let primsArray: [IntersectablePrimitive] = immutableMeshBvhPrims[i].map { .geometricPrimitive($0) }
+                                                        let accelerator = try await makeAccelerator(scene: tempScene, primitives: primsArray, acceleratorName: localAcceleratorName)
+                                                        localAccelerators.set(index: i, accelerator: accelerator)
+                                                } catch {
+                                                        print("Error building local BVH: \(error)")
+                                                }
+                                        }
+                                }
+                        }
+                        
+                        let identityTransform = Transform()
+                        for accelerator in localAccelerators.results {
+                                guard let acc = accelerator else { continue }
+                                let tpFinal = TransformedPrimitive(accelerator: acc, transform: identityTransform, idx: transformedPrimitives.count)
+                                transformedPrimitives.append(tpFinal)
+                                options.primitives.append(.transformedPrimitive(tpFinal))
+                        }
+                }
+                
+                try await resolveInstances()
                 
                 readProgressTask?.cancel()
                 _ = await readProgressTask?.value
@@ -598,52 +802,7 @@ extension SceneDescription {
                 }
         }
 
-        private func makeShapes(
-                name: String,
-                objectToWorld: Transform,
-                parameters: ParameterDictionary
-        )
-                throws -> [ShapeType] {
-                switch name {
-                case "bilinearmesh":
-                        return []  // Ignore for now
-                case "curve":
-                        return try Curve.createShape(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters,
-                                acceleratorName: acceleratorName)
-                case "cylinder":
-                        return []  // Ignore for now
-                case "disk":
-                        return try Disk.create(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters)
-                case "loopsubdiv":
-                        return try Triangle.createFromParameters(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters,
-                                triangleMeshBuilder: triangleMeshBuilder)
-                case "plymesh":
-                        return try PlyMesh.create(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters,
-                                sceneDirectory: renderOptions.sceneDirectory,
-                                triangleMeshBuilder: triangleMeshBuilder)
-                case "sphere":
-                        return [
-                                try Sphere.create(
-                                        objectToWorld: objectToWorld,
-                                        parameters: parameters)
-                        ]
-                case "trianglemesh":
-                        return try Triangle.createFromParameters(
-                                objectToWorld: objectToWorld,
-                                parameters: parameters,
-                                triangleMeshBuilder: triangleMeshBuilder)
-                default:
-                        throw SceneDescriptionError.makeShapes(message: name)
-                }
-        }
+
 }
 
 func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -> Texture {

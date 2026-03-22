@@ -1,3 +1,5 @@
+import Foundation
+
 struct TriangleMesh {
 
         init() {
@@ -77,15 +79,20 @@ extension Array {
         }
 }
 
-final class TriangleMeshBuilder {
+final class TriangleMeshBuilder: @unchecked Sendable {
+        private let lock = NSLock()
 
         func appendMesh(mesh: TriangleMesh) -> Int {
+                lock.lock()
+                defer { lock.unlock() }
                 let meshIndex = meshes.count
                 meshes.append(mesh)
                 return meshIndex
         }
 
         func getMeshes() -> TriangleMeshes {
+                lock.lock()
+                defer { lock.unlock() }
                 return TriangleMeshes(meshes: meshes)
         }
 
