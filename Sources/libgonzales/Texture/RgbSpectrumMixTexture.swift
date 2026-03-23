@@ -1,11 +1,11 @@
-struct RgbSpectrumMixTexture {
+struct RgbSpectrumMixTexture: Sendable {
 
-        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
-                let value0 = textures.0.evaluateRgbSpectrum(at: interaction)
-                let value1 = textures.1.evaluateRgbSpectrum(at: interaction)
+        func evaluateRgbSpectrum(at interaction: any Interaction, arena: TextureArena) -> RgbSpectrum {
+                let value0 = arena.rgbTextures[textures.0].evaluateRgbSpectrum(at: interaction, arena: arena)
+                let value1 = arena.rgbTextures[textures.1].evaluateRgbSpectrum(at: interaction, arena: arena)
                 return lerp(with: amount, between: value0, and: value1)
         }
 
-        let textures: (RgbSpectrumTexture, RgbSpectrumTexture)
+        let textures: (Int, Int)
         let amount: Real
 }

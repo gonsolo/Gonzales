@@ -1,6 +1,7 @@
 import Foundation  // atan2
 
 struct HairBsdf: FramedBsdf {
+        var isSpecular: Bool { return false }
 
         let pMax = 3
         var absorption: RgbSpectrum

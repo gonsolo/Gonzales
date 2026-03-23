@@ -13,31 +13,31 @@ enum Material: Sendable {
         case measured(Measured)
         case mix(MixMaterial)
 
-        func getBsdf(interaction: SurfaceInteraction) throws -> BsdfVariant {
+        func getBsdf(interaction: SurfaceInteraction, arena: TextureArena) throws -> BsdfVariant {
                 switch self {
                 case .areaLight(let areaLight):
-                        let bsdf = areaLight.getBsdf(interaction: interaction)
+                        let bsdf = areaLight.getBsdf(interaction: interaction, arena: arena)
                         return .diffuseBsdf(bsdf)
                 case .coatedDiffuse(let coatedDiffuse):
-                        let bsdf = coatedDiffuse.getBsdf(interaction: interaction)
+                        let bsdf = coatedDiffuse.getBsdf(interaction: interaction, arena: arena)
                         return .coatedDiffuseBsdf(bsdf)
                 case .conductor(let conductor):
-                        let bsdf = conductor.getBsdf(interaction: interaction)
+                        let bsdf = conductor.getBsdf(interaction: interaction, arena: arena)
                         return .microfacetReflection(bsdf)
                 case .coatedConductor(let coatedConductor):
-                        let bsdf = coatedConductor.getBsdf(interaction: interaction)
+                        let bsdf = coatedConductor.getBsdf(interaction: interaction, arena: arena)
                         return .coatedConductorBsdf(bsdf)
                 case .dielectric(let dielectric):
-                        let bsdf = dielectric.getBsdf(interaction: interaction)
+                        let bsdf = dielectric.getBsdf(interaction: interaction, arena: arena)
                         return .dielectricBsdf(bsdf)
                 case .diffuse(let diffuse):
-                        let bsdf = diffuse.getBsdf(interaction: interaction)
+                        let bsdf = diffuse.getBsdf(interaction: interaction, arena: arena)
                         return .diffuseBsdf(bsdf)
                 case .diffuseTransmission(let diffuseTransmission):
-                        let bsdf = diffuseTransmission.getBsdf(interaction: interaction)
+                        let bsdf = diffuseTransmission.getBsdf(interaction: interaction, arena: arena)
                         return .diffuseBsdf(bsdf)
                 case .hair(let hair):
-                        let bsdf = hair.getBsdf(interaction: interaction)
+                        let bsdf = hair.getBsdf(interaction: interaction, arena: arena)
                         return .hairBsdf(bsdf)
                 case .interface(let interface):
                         return try interface.getBsdf()
@@ -45,7 +45,7 @@ enum Material: Sendable {
                         let bsdf = measured.getBsdf(interaction)
                         return .diffuseBsdf(bsdf)
                 case .mix(let mixMaterial):
-                        let bsdf = try mixMaterial.getBsdf(interaction: interaction)
+                        let bsdf = try mixMaterial.getBsdf(interaction: interaction, arena: arena)
                         return .mixBsdf(bsdf)
                 }
         }

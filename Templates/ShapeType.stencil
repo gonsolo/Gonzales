@@ -1,0 +1,98 @@
+extension ShapeType {
+    func getObjectToWorld(scene: Scene) -> Transform {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return value.getObjectToWorld(scene: scene)
+        {% endfor %}
+        }
+    }
+
+    func objectBound(scene: Scene) throws -> Bounds3f {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.objectBound(scene: scene)
+        {% endfor %}
+        }
+    }
+
+    func worldBound(scene: Scene) throws -> Bounds3f {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.worldBound(scene: scene)
+        {% endfor %}
+        }
+    }
+
+    func getIntersectionData(
+            scene: Scene,
+            ray worldRay: Ray,
+            tHit: inout Real,
+            data: inout TriangleIntersection
+    ) throws -> Bool {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+        {% endfor %}
+        }
+    }
+
+    func computeSurfaceInteraction(
+            scene: Scene,
+            data: TriangleIntersection,
+            worldRay: Ray
+    ) throws -> SurfaceInteraction? {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+        {% endfor %}
+        }
+    }
+
+    func intersect(
+            scene: Scene,
+            ray: Ray,
+            tHit: inout Real
+    ) throws -> SurfaceInteraction? {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.intersect(scene: scene, ray: ray, tHit: &tHit)
+        {% endfor %}
+        }
+    }
+
+    func sample(samples: TwoRandomVariables, scene: Scene) throws -> (interaction: SurfaceInteraction, pdf: Real) {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.sample(samples: samples, scene: scene)
+        {% endfor %}
+        }
+    }
+
+    func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real) {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.sample(point: point, samples: samples, scene: scene)
+        {% endfor %}
+        }
+    }
+
+    func area(scene: Scene) throws -> Area {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.area(scene: scene)
+        {% endfor %}
+        }
+    }
+
+    func probabilityDensityFor<I: Interaction>(
+            scene: Scene,
+            samplingDirection direction: Vector,
+            from interaction: I
+    ) throws -> Real {
+        switch self {
+        {% for case in type.ShapeType.cases %}
+        case .{{ case.name }}(let value): return try value.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
+        {% endfor %}
+        }
+    }
+}

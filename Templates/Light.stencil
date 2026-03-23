@@ -1,0 +1,49 @@
+extension Light {
+    func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene) throws -> LightSample {
+        switch self {
+        {% for case in type.Light.cases %}
+        {% if case.name == "area" %}
+        case .{{ case.name }}(let value): return try value.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
+        {% else %}
+        case .{{ case.name }}(let value): return value.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
+        {% endif %}
+        {% endfor %}
+        }
+    }
+
+    func probabilityDensityFor<I: Interaction>(scene: Scene, samplingDirection direction: Vector, from reference: I) throws -> Real {
+        switch self {
+        {% for case in type.Light.cases %}
+        case .{{ case.name }}(let value): return try value.probabilityDensityFor(scene: scene, samplingDirection: direction, from: reference)
+        {% endfor %}
+        }
+    }
+
+    func radianceFromInfinity(for ray: Ray, arena: TextureArena) -> RgbSpectrum {
+        switch self {
+        {% for case in type.Light.cases %}
+        case .{{ case.name }}(let value): return value.radianceFromInfinity(for: ray, arena: arena)
+        {% endfor %}
+        }
+    }
+
+    func power(scene: Scene) throws -> Real {
+        switch self {
+        {% for case in type.Light.cases %}
+        {% if case.name == "area" %}
+        case .{{ case.name }}(let value): return try value.power(scene: scene)
+        {% else %}
+        case .{{ case.name }}(let value): return value.power(scene: scene)
+        {% endif %}
+        {% endfor %}
+        }
+    }
+
+    var isDelta: Bool {
+        switch self {
+        {% for case in type.Light.cases %}
+        case .{{ case.name }}(let value): return value.isDelta
+        {% endfor %}
+        }
+    }
+}

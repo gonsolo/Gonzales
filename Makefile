@@ -167,10 +167,10 @@ editMakefile:
 	@vim Makefile
 
 r: release
-release:
+release: generate
 	@$(BUILD_RELEASE)
 d: debug
-debug:
+debug: generate
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug
@@ -181,6 +181,20 @@ test_release: release
 	@$(RUN_RELEASE)
 tags:
 	ctags -R Sources
+	
+g: generate
+GENERATED = .build/generated
+generate:
+	@mkdir -p $(GENERATED)
+	@sourcery --sources Sources/libgonzales/Reflection/BsdfVariant.swift --templates Templates/BsdfVariant.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Shape/ShapeType.swift --templates Templates/ShapeType.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Light/Light.swift --templates Templates/Light.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Texture/Texture.swift --templates Templates/Texture.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Texture/FloatTexture.swift --templates Templates/FloatTexture.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Texture/RgbSpectrumTexture.swift --templates Templates/RgbSpectrumTexture.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Core/Intersectable.swift --templates Templates/IntersectablePrimitive.stencil --output $(GENERATED)/ > /dev/null
+	@sourcery --sources Sources/libgonzales/Sampler/Sampler.swift --templates Templates/Sampler.stencil --output $(GENERATED)/ > /dev/null
+
 c: clean
 clean:
 	@$(SWIFT) package clean
@@ -260,9 +274,61 @@ vr: release
 
 view_release: test_release
 	@$(VIEWER) $(IMAGE)
-vd: view_debug
-view_debug: test_debug
-	@$(VIEWER) $(IMAGE)
+vd: debug
+	@read -p "Render Scenes/cornell-box.pbrt? [Y/n] " ans; \
+	if [ -z "$$ans" ] || [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
+		SCENE="Scenes/cornell-box.pbrt"; \
+		IMAGE="cornell-box.exr"; \
+	else \
+		echo "Select pbrt-v4 scene:"; \
+		echo " 1) barcelona-pavilion (default)"; \
+		echo " 2) bistro"; \
+		echo " 3) contemporary-bathroom"; \
+		echo " 4) crown"; \
+		echo " 5) hair"; \
+		echo " 6) killeroos"; \
+		echo " 7) kroken"; \
+		echo " 8) landscape"; \
+		echo " 9) lte-orb"; \
+		echo "10) pbrt-book"; \
+		echo "11) sanmiguel"; \
+		echo "12) smoke-plume"; \
+		echo "13) sportscar"; \
+		echo "14) sssdragon"; \
+		echo "15) transparent-machines"; \
+		echo "16) villa"; \
+		echo "17) watercolor"; \
+		echo "18) zero-day"; \
+		read -p "Enter number [1]: " choice; \
+		case "$$choice" in \
+			""|1) SCENE="$(PBRT_SCENES_DIR)/barcelona-pavilion/pavilion-day.pbrt"; IMAGE="pavilion-day.exr" ;; \
+			2)    SCENE="$(PBRT_SCENES_DIR)/bistro/bistro_boulangerie.pbrt"; IMAGE="bistro_boulangerie.exr" ;; \
+			3)    SCENE="$(PBRT_SCENES_DIR)/contemporary-bathroom/contemporary-bathroom.pbrt"; IMAGE="contemporary-bathroom.exr" ;; \
+			4)    SCENE="$(PBRT_SCENES_DIR)/crown/crown.pbrt"; IMAGE="crown.exr" ;; \
+			5)    SCENE="$(PBRT_SCENES_DIR)/hair/hair-actual-bsdf.pbrt"; IMAGE="hair-actual-bsdf.exr" ;; \
+			6)    SCENE="$(PBRT_SCENES_DIR)/killeroos/killeroo-simple.pbrt"; IMAGE="killeroo-simple.exr" ;; \
+			7)    SCENE="$(PBRT_SCENES_DIR)/kroken/camera-1.pbrt"; IMAGE="camera-1.exr" ;; \
+			8)    SCENE="$(PBRT_SCENES_DIR)/landscape/view-0.pbrt"; IMAGE="view-0.exr" ;; \
+			9)    SCENE="$(PBRT_SCENES_DIR)/lte-orb/lte-orb-silver.pbrt"; IMAGE="lte-orb-silver.exr" ;; \
+			10)   SCENE="$(PBRT_SCENES_DIR)/pbrt-book/book.pbrt"; IMAGE="book.exr" ;; \
+			11)   SCENE="$(PBRT_SCENES_DIR)/sanmiguel/sanmiguel-courtyard-second.pbrt"; IMAGE="sanmiguel-courtyard-second.exr" ;; \
+			12)   SCENE="$(PBRT_SCENES_DIR)/smoke-plume/plume.pbrt"; IMAGE="plume.exr" ;; \
+			13)   SCENE="$(PBRT_SCENES_DIR)/sportscar/sportscar-area-lights.pbrt"; IMAGE="sportscar-area-lights.exr" ;; \
+			14)   SCENE="$(PBRT_SCENES_DIR)/sssdragon/dragon_10.pbrt"; IMAGE="dragon_10.exr" ;; \
+			15)   SCENE="$(PBRT_SCENES_DIR)/transparent-machines/frame1266.pbrt"; IMAGE="frame1266.exr" ;; \
+			16)   SCENE="$(PBRT_SCENES_DIR)/villa/villa-daylight.pbrt"; IMAGE="villa-daylight.exr" ;; \
+			17)   SCENE="$(PBRT_SCENES_DIR)/watercolor/camera-1.pbrt"; IMAGE="camera-1.exr" ;; \
+			18)   SCENE="$(PBRT_SCENES_DIR)/zero-day/frame120.pbrt"; IMAGE="frame120.exr" ;; \
+			*)    echo "Invalid choice."; exit 1 ;; \
+		esac; \
+	fi; \
+	read -p "Run with Gonzales or PBRT? (g/p) [g]: " engine; \
+	if [ "$$engine" = "p" ] || [ "$$engine" = "P" ]; then \
+		$(PBRT) $(PBRT_OPTIONS) "$$SCENE"; \
+	else \
+		$(GONZALES_DEBUG) $(OPTIONS) "$$SCENE"; \
+	fi; \
+	$(VIEWER) "$$IMAGE"
 vp: view_pbrt
 view_pbrt: test_pbrt
 	@$(VIEWER) $(IMAGE_PBRT)

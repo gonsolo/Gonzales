@@ -2,11 +2,11 @@ struct CoatedDiffuse {
 
         init(
                 roughness: (Real, Real),
-                reflectance: RgbSpectrumTexture,
-                refractiveIndex: FloatTexture,
-                thickness: FloatTexture,
-                albedo: RgbSpectrumTexture,
-                asymmetry: FloatTexture,
+                reflectance: Texture,
+                refractiveIndex: Texture,
+                thickness: Texture,
+                albedo: Texture,
+                asymmetry: Texture,
                 maxDepth: Int,
                 nSamples: Int,
                 remapRoughness: Bool
@@ -22,12 +22,12 @@ struct CoatedDiffuse {
                 self.remapRoughness = remapRoughness
         }
 
-        func getBsdf(interaction: any Interaction) -> CoatedDiffuseBsdf {
-                let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
-                let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction)
-                let thicknessAtInteraction = self.thickness.evaluateFloat(at: interaction)
-                let albedoAtInteraction = self.albedo.evaluateRgbSpectrum(at: interaction)
-                let asymmetryAtInteraction = self.asymmetry.evaluateFloat(at: interaction)
+        func getBsdf(interaction: SurfaceInteraction, arena: TextureArena) -> CoatedDiffuseBsdf {
+                let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction, arena: arena)
+                let reflectanceAtInteraction = reflectance.evaluateRgbSpectrum(at: interaction, arena: arena)
+                let thicknessAtInteraction = self.thickness.evaluateFloat(at: interaction, arena: arena)
+                let albedoAtInteraction = self.albedo.evaluateRgbSpectrum(at: interaction, arena: arena)
+                let asymmetryAtInteraction = self.asymmetry.evaluateFloat(at: interaction, arena: arena)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
 
                 var alpha: (Real, Real) = roughness
@@ -56,19 +56,19 @@ struct CoatedDiffuse {
                 return coatedDiffuseBsdf
         }
 
-        var reflectance: RgbSpectrumTexture
-        var refractiveIndex: FloatTexture
+        var reflectance: Texture
+        var refractiveIndex: Texture
         var roughness: (Real, Real)
-        var thickness: FloatTexture
-        var albedo: RgbSpectrumTexture
-        var asymmetry: FloatTexture
+        var thickness: Texture
+        var albedo: Texture
+        var asymmetry: Texture
         var maxDepth: Int
         var nSamples: Int
         var remapRoughness: Bool
 }
 
 extension CoatedDiffuse {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedDiffuse {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> CoatedDiffuse {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
         let uRoughness =
@@ -76,18 +76,18 @@ extension CoatedDiffuse {
         let vRoughness =
                 try roughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
         let roughness = (uRoughness, vRoughness)
-        let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures)
-        let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, else: 1.5)
+        let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures, arena: &arena)
+        let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, arena: &arena, else: 1.5)
         
-        let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, else: 0.01)
-        let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, else: 0.0)
+        let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, arena: &arena, else: 0.01)
+        let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, arena: &arena, else: 0.0)
         let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
         let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
         
 
 
         // PBRT defaults albedo to 0.0 (black)
-        let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, else: RgbSpectrum(intensity: 0.0))
+        let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, arena: &arena, else: RgbSpectrum(intensity: 0.0))
 
         return CoatedDiffuse(
                 roughness: roughness,

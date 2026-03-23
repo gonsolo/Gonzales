@@ -1,4 +1,5 @@
 struct MicrofacetReflection: FramedBsdf {
+        var isSpecular: Bool { return false }
 
         func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
                 let cosThetaO = absCosTheta(outgoing)

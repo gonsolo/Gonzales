@@ -159,7 +159,7 @@ extension VolumePathIntegrator {
                 for light in scene.lights {
                         switch light {
                         case .infinite(let infiniteLight):
-                                let radiance = infiniteLight.radianceFromInfinity(for: ray)
+                                let radiance = infiniteLight.radianceFromInfinity(for: ray, arena: scene.arena)
                                 bsdfSample.estimate *= radiance
                                 return bsdfSample
                         default:
@@ -366,7 +366,7 @@ extension VolumePathIntegrator {
                 }
                 assert(surfaceInteraction.materialIndex >= 0)
                 let bsdf = try scene.materials[surfaceInteraction.materialIndex].getBsdf(
-                        interaction: surfaceInteraction)
+                        interaction: surfaceInteraction, arena: scene.arena)
 
                 if state.bounce == 0 {
                         state.albedo = bsdf.albedo()
@@ -410,7 +410,7 @@ extension VolumePathIntegrator {
                         if state.bounce == 0 || state.specularBounce {
                                 let radiance = scene.infiniteLights.reduce(
                                         black,
-                                        { accumulated, light in accumulated + light.radianceFromInfinity(for: state.ray) }
+                                        { accumulated, light in accumulated + light.radianceFromInfinity(for: state.ray, arena: scene.arena) }
                                 )
                                 state.estimate += state.throughput * radiance
                         }

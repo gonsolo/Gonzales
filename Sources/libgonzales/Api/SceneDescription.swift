@@ -99,16 +99,14 @@ public class SceneDescription {
         var transforms = [Transform]()
         var triangleMeshBuilder = TriangleMeshBuilder()
 
-        static let defaultMaterial = Material.diffuse(
-                Diffuse(
-                        reflectance: Texture.rgbSpectrumTexture(
-                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))))
+
 
         public init(renderOptions: RenderOptions) {
                 self.options = RenderConfiguration()
                 self.renderOptions = renderOptions
                 self.state = State(ptexMemory: renderOptions.ptexMemory)
-                self.materials.append(SceneDescription.defaultMaterial)
+                let idx = self.state.arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))
+                self.materials.append(Material.diffuse(Diffuse(reflectance: Texture.rgbSpectrumTexture(idx))))
         }
 }
 
@@ -121,9 +119,12 @@ extension SceneDescription {
 
         func attributeEnd() throws {
                 try transformEnd()
-                guard let last = states.popLast() else {
+                guard var last = states.popLast() else {
                         throw SceneDescriptionError.parseAttributeEnd
                 }
+                // Preserve the current arena — textures added inside this scope
+                // must remain valid since materials may reference their indices.
+                last.arena = state.arena
                 state = last
         }
 
@@ -390,7 +391,7 @@ extension SceneDescription {
                         meshes: triangleMeshBuilder.getMeshes(),
                         geometricPrimitives: apiGeometricPrimitives,
                         areaLights: areaLights,
-                        transformedPrimitives: transformedPrimitives)
+                        transformedPrimitives: transformedPrimitives, arena: state.arena)
 
                 var instancedAccelerators = [String: Accelerator]()
                 
@@ -544,13 +545,11 @@ extension SceneDescription {
                 case "constant":
                         switch type {
                         case "spectrum", "color":
-                                let rgbSpectrumTexture = try parameters.findRgbSpectrumTexture(
-                                        name: "value", textures: state.textures)
-                                texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                                texture = try parameters.findRgbSpectrumTexture(
+                                        name: "value", textures: state.textures, arena: &state.arena)
                         case "float":
-                                let floatTexture = try parameters.findRealTexture(
-                                        name: "value", textures: state.textures)
-                                texture = Texture.floatTexture(floatTexture)
+                                texture = try parameters.findRealTexture(
+                                        name: "value", textures: state.textures, arena: &state.arena)
                         default:
                                 throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                         }
@@ -558,7 +557,7 @@ extension SceneDescription {
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(
                                 name: fileName, type: type,
-                                sceneDirectory: renderOptions.sceneDirectory)
+                                sceneDirectory: renderOptions.sceneDirectory, arena: &state.arena)
                 case "mix":
                         switch type {
                         case "color", "spectrum":
@@ -572,23 +571,25 @@ extension SceneDescription {
                         let fileName = try parameters.findString(called: "filename") ?? ""
                         texture = try getTextureFrom(
                                 name: fileName, type: type,
-                                sceneDirectory: renderOptions.sceneDirectory)
+                                sceneDirectory: renderOptions.sceneDirectory, arena: &state.arena)
                 case "scale":
                         let scale = try parameters.findRealTexture(
-                                name: "scale", textures: state.textures)
+                                name: "scale", textures: state.textures, arena: &state.arena)
                         switch type {
                         case "spectrum", "color":
                                 let tex = try parameters.findRgbSpectrumTexture(
-                                        name: "tex", textures: state.textures)
+                                        name: "tex", textures: state.textures, arena: &state.arena)
                                 let scaledTexture = ScaledTextureRgb(
-                                        tex: tex, scale: scale)
-                                texture = Texture.rgbSpectrumTexture(.scaledTexture(scaledTexture))
+                                        tex: tex.index, scale: scale.index)
+                                let idx = state.arena.appendRgb(RgbSpectrumTexture.scaledTexture(scaledTexture))
+				texture = Texture.rgbSpectrumTexture(idx)
                         case "float":
                                 let tex = try parameters.findRealTexture(
-                                        name: "tex", textures: state.textures)
+                                        name: "tex", textures: state.textures, arena: &state.arena)
                                 let scaledTexture = ScaledTextureFloat(
-                                        tex: tex, scale: scale)
-                                texture = Texture.floatTexture(.scaledTexture(scaledTexture))
+                                        tex: tex.index, scale: scale.index)
+                                let idx = state.arena.appendFloat(FloatTexture.scaledTexture(scaledTexture))
+				texture = Texture.floatTexture(idx)
                         default:
                                 throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Unknown scale type")
                         }
@@ -731,7 +732,7 @@ extension SceneDescription {
                         
                         let tempScene = Scene(
                                 lights: [], materials: materials, meshes: triangleMeshBuilder.getMeshes(),
-                                geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights, transformedPrimitives: [])
+                                geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights, transformedPrimitives: [], arena: state.arena)
                                 
                         await withTaskGroup(of: Void.self) { group in
                                 for i in 0..<immutableMeshBvhPrims.count {
@@ -768,7 +769,8 @@ extension SceneDescription {
                         acceleratorName: acceleratorName,
                         immutableState: state.getImmutable(),
                         renderOptions: renderOptions,
-                        meshes: triangleMeshBuilder.getMeshes())
+                        meshes: triangleMeshBuilder.getMeshes(),
+                        arena: state.arena)
                 try await renderer.render()
                 self.options = RenderConfiguration()
         }
@@ -789,7 +791,7 @@ extension SceneDescription {
                         let infiniteLight = try InfiniteLight.create(
                                 lightToWorld: lightToWorld,
                                 parameters: parameters,
-                                sceneDirectory: renderOptions.sceneDirectory)
+                                sceneDirectory: renderOptions.sceneDirectory, arena: &state.arena)
                         // immortalize(infiniteLight)
                         return Light.infinite(infiniteLight)
                 case "point":
@@ -805,28 +807,27 @@ extension SceneDescription {
 
 }
 
-func getTextureFrom(name: String, type: String, sceneDirectory: String) throws -> Texture {
+func getTextureFrom(name: String, type: String, sceneDirectory: String, arena: inout TextureArena) throws -> Texture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
                 print("Warning: Can't find texture file: \(absoluteFileName)")
-                return Texture.rgbSpectrumTexture(
-                        RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
+                let idx = arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
+				return Texture.rgbSpectrumTexture(idx)
         }
         let suffix = absoluteFileName.suffix(4)
         switch suffix {
         case ".ptx":
-                return Texture.rgbSpectrumTexture(RgbSpectrumTexture.ptex(Ptex(path: absoluteFileName)))
+                let idx = arena.appendRgb(RgbSpectrumTexture.ptex(Ptex(path: absoluteFileName)))
+				return Texture.rgbSpectrumTexture(idx)
         case ".exr", ".pfm", ".png", ".tga":
                 switch type {
                 case "spectrum", "color":
-                        return Texture.rgbSpectrumTexture(
-                                RgbSpectrumTexture.openImageIoTexture(
-                                        try OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        let idx = arena.appendRgb(RgbSpectrumTexture.openImageIoTexture(try OpenImageIOTexture(path: absoluteFileName, type: type)))
+						return Texture.rgbSpectrumTexture(idx)
                 case "float":
-                        return Texture.floatTexture(
-                                FloatTexture.openImageIoTexture(
-                                        try OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        let idx = arena.appendFloat(FloatTexture.openImageIoTexture(try OpenImageIOTexture(path: absoluteFileName, type: type)))
+						return Texture.floatTexture(idx)
                 default:
                         throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
                 }

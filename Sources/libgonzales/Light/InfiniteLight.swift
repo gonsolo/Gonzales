@@ -7,7 +7,8 @@ struct InfiniteLight: LightSource {
         init(
                 lightToWorld: Transform,
                 brightness: RgbSpectrum,
-                texture: Texture
+                texture: Texture,
+                arena: TextureArena
         ) {
                 self.brightness = brightness
                 self.lightToWorld = lightToWorld
@@ -22,7 +23,8 @@ struct InfiniteLight: LightSource {
                         for u in 0..<width {
                                 let uvCoordinates = Point2f(x: (Real(u) + 0.5) / Real(width), y: (Real(v) + 0.5) / Real(height))
                                 let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
-                                if let color = texture.evaluate(at: interaction) as? RgbSpectrum {
+                                let color = texture.evaluateRgbSpectrum(at: interaction, arena: arena)
+									if true {
                                         data.append(color.y)
                                 } else {
                                         data.append(0)
@@ -34,7 +36,7 @@ struct InfiniteLight: LightSource {
 
         func sample(
                 point: Point, samples: TwoRandomVariables,
-                accelerator _: Accelerator, scene _: Scene
+                accelerator _: Accelerator, scene: Scene
         ) -> LightSample {
                 let (uv, mapPdf) = distribution.sampleContinuous(u: Point2f(x: samples.0, y: samples.1))
                 if mapPdf == 0 {
@@ -49,7 +51,7 @@ struct InfiniteLight: LightSource {
                 let visibility = Visibility(from: point, target: distantPoint)
                 
                 let interaction = SurfaceInteraction(uvCoordinates: uv)
-                guard let color = texture.evaluate(at: interaction) as? RgbSpectrum else {
+                guard let color = texture.evaluate(at: interaction, arena: scene.arena) as? RgbSpectrum else {
                         return LightSample(radiance: black, direction: direction, pdf: pdf, visibility: visibility)
                 }
 
@@ -117,13 +119,10 @@ struct InfiniteLight: LightSource {
                 return Vector(x: x, y: y, z: z)
         }
 
-        func radianceFromInfinity(for ray: Ray) -> RgbSpectrum {
+        func radianceFromInfinity(for ray: Ray, arena: TextureArena) -> RgbSpectrum {
                 let uvCoordinates = directionToUV(direction: ray.direction)
                 let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
-                guard let radiance = texture.evaluate(at: interaction) as? RgbSpectrum else {
-                        return black
-                }
-                return radiance
+                return texture.evaluateRgbSpectrum(at: interaction, arena: arena)
         }
 
         func power(scene _: Scene) -> Real {
@@ -142,21 +141,23 @@ struct InfiniteLight: LightSource {
 }
 
 extension InfiniteLight {
-        static func create(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String) throws
+        static func create(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String, arena: inout TextureArena) throws
         -> InfiniteLight {
         guard let mapname = try parameters.findString(called: "filename") else {
                 let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
                 let constantTexture = ConstantTexture(value: brightness)
                 let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
-                let texture = Texture.rgbSpectrumTexture(rgbSpectrumTexture)
+                let index = arena.appendRgb(rgbSpectrumTexture)
+                let texture = Texture.rgbSpectrumTexture(index)
                 return InfiniteLight(
                         lightToWorld: lightToWorld,
                         brightness: brightness,
-                        texture: texture)
+                        texture: texture,
+                        arena: arena)
         }
         let scale = try parameters.findOneReal(called: "scale", else: 1)
-        let texture = try getTextureFrom(name: mapname, type: "color", sceneDirectory: sceneDirectory)
-        return InfiniteLight(lightToWorld: lightToWorld, brightness: RgbSpectrum(intensity: scale), texture: texture)
+        let texture = try getTextureFrom(name: mapname, type: "color", sceneDirectory: sceneDirectory, arena: &arena)
+        return InfiniteLight(lightToWorld: lightToWorld, brightness: RgbSpectrum(intensity: scale), texture: texture, arena: arena)
 }
 }
 

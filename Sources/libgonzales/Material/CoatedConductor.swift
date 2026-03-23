@@ -3,11 +3,11 @@ struct CoatedConductor {
         init(
                 interfaceRoughness: (Real, Real),
                 conductorRoughness: (Real, Real),
-                reflectance: RgbSpectrumTexture,
-                refractiveIndex: FloatTexture,
-                thickness: FloatTexture,
-                albedo: RgbSpectrumTexture,
-                asymmetry: FloatTexture,
+                reflectance: Texture,
+                refractiveIndex: Texture,
+                thickness: Texture,
+                albedo: Texture,
+                asymmetry: Texture,
                 eta: RgbSpectrum,
                 extinction: RgbSpectrum,
                 maxDepth: Int,
@@ -28,12 +28,12 @@ struct CoatedConductor {
                 self.remapRoughness = remapRoughness
         }
 
-        func getBsdf(interaction: any Interaction) -> CoatedConductorBsdf {
-                let refractiveIndexValue = self.refractiveIndex.evaluateFloat(at: interaction)
-                let reflectanceValue = self.reflectance.evaluateRgbSpectrum(at: interaction)
-                let thicknessValue = self.thickness.evaluateFloat(at: interaction)
-                let albedoValue = self.albedo.evaluateRgbSpectrum(at: interaction)
-                let asymmetryValue = self.asymmetry.evaluateFloat(at: interaction)
+        func getBsdf(interaction: SurfaceInteraction, arena: TextureArena) -> CoatedConductorBsdf {
+                let refractiveIndexValue = self.refractiveIndex.evaluateFloat(at: interaction, arena: arena)
+                let reflectanceValue = self.reflectance.evaluateRgbSpectrum(at: interaction, arena: arena)
+                let thicknessValue = self.thickness.evaluateFloat(at: interaction, arena: arena)
+                let albedoValue = self.albedo.evaluateRgbSpectrum(at: interaction, arena: arena)
+                let asymmetryValue = self.asymmetry.evaluateFloat(at: interaction, arena: arena)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
 
                 var alphaInterface: (Real, Real) = interfaceRoughness
@@ -73,13 +73,13 @@ struct CoatedConductor {
                 return coatedConductorBsdf
         }
 
-        var reflectance: RgbSpectrumTexture
-        var refractiveIndex: FloatTexture
+        var reflectance: Texture
+        var refractiveIndex: Texture
         var interfaceRoughness: (Real, Real)
         var conductorRoughness: (Real, Real)
-        var thickness: FloatTexture
-        var albedo: RgbSpectrumTexture
-        var asymmetry: FloatTexture
+        var thickness: Texture
+        var albedo: Texture
+        var asymmetry: Texture
         var eta: RgbSpectrum
         var extinction: RgbSpectrum
         var maxDepth: Int
@@ -88,7 +88,7 @@ struct CoatedConductor {
 }
 
 extension CoatedConductor {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> CoatedConductor {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> CoatedConductor {
                 let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
                 
                 // Default interface roughness mapping
@@ -105,15 +105,15 @@ extension CoatedConductor {
                 let vConductor = try conductorRoughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
                 let conductorRoughness = (uConductor, vConductor)
 
-                let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures)
-                let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, else: 1.5)
+                let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures, arena: &arena)
+                let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, arena: &arena, else: 1.5)
                 
-                let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, else: 0.01)
-                let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, else: 0.0)
+                let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, arena: &arena, else: 0.01)
+                let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, arena: &arena, else: 0.0)
                 let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
                 let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
                 
-                let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, else: RgbSpectrum(intensity: 0.0))
+                let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, arena: &arena, else: RgbSpectrum(intensity: 0.0))
                 let eta = try parameters.findSpectrum(name: "conductor.eta") ?? namedSpectra["metal-Cu-eta"]!
                 let extinctionParameter = try parameters.findSpectrum(name: "conductor.k") ?? namedSpectra["metal-Cu-k"]!
 

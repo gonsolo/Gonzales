@@ -35,12 +35,12 @@ struct OpenImageIOTexture {
                 return (s, t)
         }
 
-        func evaluateFloat(at interaction: any Interaction) -> Real {
+        func evaluateFloat(at interaction: any Interaction, arena: TextureArena) -> Real {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
 
-        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
+        func evaluateRgbSpectrum(at interaction: any Interaction, arena: TextureArena) -> RgbSpectrum {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 let value: RgbSpectrum = OpenImageIOTextureSystem.shared.evaluate(
                         filename: filename, s: s, t: t)
@@ -51,12 +51,12 @@ struct OpenImageIOTexture {
                 return value
         }
 
-        func evaluate(at interaction: any Interaction) -> any TextureEvaluation {
+        func evaluate(at interaction: any Interaction, arena: TextureArena) -> any TextureEvaluation {
                 switch textureType {
                 case .float:
-                        return evaluateFloat(at: interaction)
+                        return evaluateFloat(at: interaction, arena: arena)
                 case .rgb:
-                        return evaluateRgbSpectrum(at: interaction)
+                        return evaluateRgbSpectrum(at: interaction, arena: arena)
                 }
         }
 

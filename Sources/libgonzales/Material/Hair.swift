@@ -11,8 +11,8 @@ struct Hair {
                 return eumelaninAbsorption + pheomelaninAbsorption
         }
 
-        func getBsdf(interaction: any Interaction) -> HairBsdf {
-                let eumelanin = self.eumelanin.evaluateFloat(at: interaction)
+        func getBsdf(interaction: SurfaceInteraction, arena: TextureArena) -> HairBsdf {
+                let eumelanin = self.eumelanin.evaluateFloat(at: interaction, arena: arena)
                 let absorption = absorptionFrom(eumelaninConcentration: eumelanin)
                 let hOffsetValue = interaction.uvCoordinates[1]
                 let alpha: Real = 2
@@ -25,12 +25,12 @@ struct Hair {
                 return hairBsdf
         }
 
-        var eumelanin: FloatTexture
+        var eumelanin: Texture
 }
 
 extension Hair {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Hair {
-        let eumelanin = try parameters.findRealTexture(name: "eumelanin", textures: textures, else: 1.3)
+        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> Hair {
+        let eumelanin = try parameters.findRealTexture(name: "eumelanin", textures: textures, arena: &arena, else: 1.3)
         return Hair(eumelanin: eumelanin)
 }
 }

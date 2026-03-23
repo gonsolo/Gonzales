@@ -175,7 +175,8 @@ class RenderConfiguration {
                 acceleratorName: String,
                 immutableState: ImmutableState,
                 renderOptions: RenderOptions,
-                meshes: TriangleMeshes
+                meshes: TriangleMeshes,
+                arena: TextureArena
         ) async throws -> some Renderer {
                 let camera = try makeCamera(quick: renderOptions.quick)
                 let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
@@ -185,7 +186,8 @@ class RenderConfiguration {
                         meshes: meshes,
                         geometricPrimitives: geometricPrimitives,
                         areaLights: areaLights,
-                        transformedPrimitives: transformedPrimitives)
+                        transformedPrimitives: transformedPrimitives,
+                        arena: arena)
 
                 let accelerator = try await makeAccelerator(
                         scene: scene, primitives: primitives,

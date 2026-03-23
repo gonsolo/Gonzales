@@ -1,8 +1,7 @@
 struct Dielectric {
 
         init(
-                refractiveIndex: FloatTexture = FloatTexture.constantTexture(
-                        ConstantTexture<Real>(value: Real(1))),
+                refractiveIndex: Texture,
                 roughness: (Real, Real),
                 remapRoughness: Bool
         ) {
@@ -11,8 +10,8 @@ struct Dielectric {
                 self.remapRoughness = remapRoughness
         }
 
-        func getBsdf(interaction: any Interaction) -> DielectricBsdf {
-                let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction)
+        func getBsdf(interaction: SurfaceInteraction, arena: TextureArena) -> DielectricBsdf {
+                let refractiveIndex = self.refractiveIndex.evaluateFloat(at: interaction, arena: arena)
                 let alpha = remapRoughness ? TrowbridgeReitzDistribution.getAlpha(from: roughness) : roughness
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let bsdfFrame = BsdfFrame(interaction: interaction)
@@ -23,13 +22,13 @@ struct Dielectric {
                 return dielectricBsdf
         }
 
-        let refractiveIndex: FloatTexture
+        let refractiveIndex: Texture
         let roughness: (Real, Real)
         let remapRoughness: Bool
 }
 
 extension Dielectric {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture]) throws -> Dielectric {
+        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> Dielectric {
         let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
         let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
         let uRoughness =
@@ -37,7 +36,7 @@ extension Dielectric {
         let vRoughness =
                 try roughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.0)
         let roughness = (uRoughness, vRoughness)
-        let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, else: 1.5)
+        let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, arena: &arena, else: 1.5)
         return Dielectric(
                 refractiveIndex: refractiveIndex,
                 roughness: roughness,

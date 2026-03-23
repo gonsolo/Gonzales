@@ -41,25 +41,27 @@ extension ParameterDictionary {
         func findRgbSpectrumTexture(
                 name: String,
                 textures: [String: Texture],
+                arena: inout TextureArena,
                 else spectrum: RgbSpectrum = RgbSpectrum(intensity: 1)
         )
-                throws -> RgbSpectrumTexture {
+                throws -> Texture {
                 let textureName = try findTexture(name: name)
 
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
                                 print("Warning: Could not find texture \"\(textureName)\", using default spectrum.")
                                 let constantTexture = ConstantTexture(value: spectrum)
-                                return RgbSpectrumTexture.constantTexture(constantTexture)
+                                let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(constantTexture))
+                                return Texture.rgbSpectrumTexture(index)
                         }
                         switch texture {
                         case .floatTexture:
                                 print("Warning: Could not find texture \(textureName)")
                                 let constantTexture = ConstantTexture<RgbSpectrum>(value: red)
-                                let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
-                                return rgbSpectrumTexture
-                        case .rgbSpectrumTexture(let rgbSpectrumTexture):
-                                return rgbSpectrumTexture
+                                let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(constantTexture))
+				return Texture.rgbSpectrumTexture(index)
+                        case .rgbSpectrumTexture:
+				return texture
                         }
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
@@ -69,30 +71,33 @@ extension ParameterDictionary {
                                 throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Expected RgbSpectrum")
                         }
                         let constantTexture = ConstantTexture(value: rgbSpectrum)
-                        return RgbSpectrumTexture.constantTexture(constantTexture)
+                        let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(constantTexture))
+                        return Texture.rgbSpectrumTexture(index)
                 }
         }
 
         func findRealTexture(
-                name: String, textures: [String: Texture],
+                name: String, textures: [String: Texture], arena: inout TextureArena,
                 else value: Real = 1.0
-        ) throws -> FloatTexture {
+        ) throws -> Texture {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
                                 print("Warning: No named texture \"\(textureName)\" found, using default value.")
-                                return FloatTexture.constantTexture(ConstantTexture<Real>(value: value))
+                                let index = arena.appendFloat(FloatTexture.constantTexture(ConstantTexture<Real>(value: value)))
+				return Texture.floatTexture(index)
                         }
                         switch texture {
-                        case .floatTexture(let floatTexture):
-                                return floatTexture
+                        case .floatTexture:
+				return texture
                         case .rgbSpectrumTexture:
                                 print("No named float texture \"\(textureName)\"")
                                 throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "No named float texture \"\(textureName)\"")
                         }
                 } else {
                         let value = try findOneReal(called: name, else: value)
-                        return FloatTexture.constantTexture(ConstantTexture<Real>(value: value))
+                        let index = arena.appendFloat(FloatTexture.constantTexture(ConstantTexture<Real>(value: value)))
+				return Texture.floatTexture(index)
                 }
         }
 

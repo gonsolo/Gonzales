@@ -20,42 +20,43 @@ struct State {
                 )
                 namedMedia = [String: any Medium]()
                 textures = [String: Texture]()
+                arena = TextureArena()
                 ptexCache = PtexCache(ptexMemory: ptexMemory)
         }
 
-        private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
+        mutating private func makeDefaultMaterial(insteadOf material: String) throws -> Material {
                 print("Unknown material \"\(material)\". Creating default.")
                 var parameters = ParameterDictionary()
                 parameters["reflectance"] = [gray]
-                let diffuse = try Diffuse.create(parameters: parameters, textures: textures)
+                let diffuse = try Diffuse.create(parameters: parameters, textures: textures, arena: &arena)
                 return Material.diffuse(diffuse)
         }
 
-        func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture]) throws -> Material {
+        mutating func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture]) throws -> Material {
 
                 var material: Material
                 switch type {
                 case "coateddiffuse":
-                        let coatedDiffuse = try CoatedDiffuse.create(parameters: parameters, textures: textures)
+                        let coatedDiffuse = try CoatedDiffuse.create(parameters: parameters, textures: textures, arena: &arena)
                         material = Material.coatedDiffuse(coatedDiffuse)
                 case "coatedconductor":
-                        let coatedConductor = try CoatedConductor.create(parameters: parameters, textures: textures)
+                        let coatedConductor = try CoatedConductor.create(parameters: parameters, textures: textures, arena: &arena)
                         material = Material.coatedConductor(coatedConductor)
                 case "conductor":
-                        let conductor = try Conductor.create(parameters: parameters)
+                        let conductor = try Conductor.create(parameters: parameters, arena: &arena)
                         material = Material.conductor(conductor)
                 case "dielectric":
-                        let dielectric = try Dielectric.create(parameters: parameters, textures: textures)
+                        let dielectric = try Dielectric.create(parameters: parameters, textures: textures, arena: &arena)
                         material = Material.dielectric(dielectric)
                 case "diffuse":
-                        let diffuse = try Diffuse.create(parameters: parameters, textures: textures)
+                        let diffuse = try Diffuse.create(parameters: parameters, textures: textures, arena: &arena)
                         material = Material.diffuse(diffuse)
                 case "diffusetransmission":
                         let diffuseTransmission = try DiffuseTransmission.create(
-                                parameters: parameters, textures: textures)
+                                parameters: parameters, textures: textures, arena: &arena)
                         material = Material.diffuseTransmission(diffuseTransmission)
                 case "hair":
-                        let hair = try Hair.create(parameters: parameters, textures: textures)
+                        let hair = try Hair.create(parameters: parameters, textures: textures, arena: &arena)
                         material = Material.hair(hair)
                 case "interface":
                         let interface = try Interface.create(parameters: parameters)
@@ -64,7 +65,7 @@ struct State {
                         let measured = try Measured.create(parameters: parameters)
                         material = Material.measured(measured)
                 case "mix":
-                        let mix = try MixMaterial.create(parameters: parameters, textures: textures, namedMaterials: self.namedMaterials, state: self)
+                        let mix = try MixMaterial.create(parameters: parameters, textures: textures, namedMaterials: self.namedMaterials, state: &self)
                         material = Material.mix(mix)
                 // subsurface missing
                 // thindielectric missing
@@ -74,7 +75,7 @@ struct State {
                 return material
         }
 
-        func createMaterial(
+        mutating func createMaterial(
                 parameters: ParameterDictionary,
                 currentMaterial: UninstancedMaterial?,
                 currentNamedMaterial: String,
@@ -87,10 +88,8 @@ struct State {
                         assert(currentNamedMaterial != "")
                         guard let named = namedMaterials[currentNamedMaterial] else {
                                 print("Warning: The material \(currentNamedMaterial) was not defined!")
-                                let diffuse = Diffuse(
-                                        reflectance: Texture.rgbSpectrumTexture(
-                                                RgbSpectrumTexture.constantTexture(
-                                                        ConstantTexture(value: gray))))
+                                let idx = arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
+				let diffuse = Diffuse(reflectance: Texture.rgbSpectrumTexture(idx))
                                 return Material.diffuse(diffuse)
                         }
                         material = named
@@ -120,4 +119,5 @@ struct State {
         var reverseOrientation = false
 
         let ptexCache: PtexCache
+	var arena: TextureArena
 }

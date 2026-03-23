@@ -1,17 +1,17 @@
 struct ScaledTextureRgb: Sendable {
-        let tex: RgbSpectrumTexture
-        let scale: FloatTexture
+        let tex: Int
+        let scale: Int
 
-        func evaluateRgbSpectrum(at interaction: any Interaction) -> RgbSpectrum {
-                return scale.evaluateFloat(at: interaction) * tex.evaluateRgbSpectrum(at: interaction)
+        func evaluateRgbSpectrum(at interaction: any Interaction, arena: TextureArena) -> RgbSpectrum {
+                return arena.floatTextures[scale].evaluateFloat(at: interaction, arena: arena) * arena.rgbTextures[tex].evaluateRgbSpectrum(at: interaction, arena: arena)
         }
 }
 
 struct ScaledTextureFloat: Sendable {
-        let tex: FloatTexture
-        let scale: FloatTexture
+        let tex: Int
+        let scale: Int
 
-        func evaluateFloat(at interaction: any Interaction) -> Real {
-                return scale.evaluateFloat(at: interaction) * tex.evaluateFloat(at: interaction)
+        func evaluateFloat(at interaction: any Interaction, arena: TextureArena) -> Real {
+                return arena.floatTextures[scale].evaluateFloat(at: interaction, arena: arena) * arena.floatTextures[tex].evaluateFloat(at: interaction, arena: arena)
         }
 }

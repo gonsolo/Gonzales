@@ -35,7 +35,7 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                         scene: scene, samplingDirection: direction, from: reference)
         }
 
-        func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
+        func radianceFromInfinity(for _: Ray, arena: TextureArena) -> RgbSpectrum { return black }
 
         func power(scene: Scene) throws -> Real {
                 return try brightness.average() * shape.area(scene: scene) * Real.pi
@@ -101,11 +101,8 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                 return nil
         }
 
-        func getBsdf(interaction: SurfaceInteraction) -> DiffuseBsdf {
-                let diffuse = Diffuse(
-                        reflectance: Texture.rgbSpectrumTexture(
-                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: white))))
-                return diffuse.getBsdf(interaction: interaction)
+        func getBsdf(interaction: SurfaceInteraction, arena: TextureArena) -> DiffuseBsdf {
+                return DiffuseBsdf(reflectance: white, bsdfFrame: BsdfFrame(interaction: interaction))
         }
 
         let shape: ShapeType

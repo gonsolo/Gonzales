@@ -26,7 +26,7 @@ struct PointLight: LightSource {
                 return 0
         }
 
-        func radianceFromInfinity(for _: Ray) -> RgbSpectrum { return black }
+        func radianceFromInfinity(for _: Ray, arena: TextureArena) -> RgbSpectrum { return black }
 
         func power(scene _: Scene) -> Real {
                 return intensity.average() * 4 * Real.pi

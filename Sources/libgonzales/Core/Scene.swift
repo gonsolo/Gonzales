@@ -6,7 +6,8 @@ struct Scene {
                 meshes: TriangleMeshes,
                 geometricPrimitives: [GeometricPrimitive],
                 areaLights: [AreaLight],
-                transformedPrimitives: [TransformedPrimitive]
+                transformedPrimitives: [TransformedPrimitive],
+                arena: TextureArena
         ) {
                 self.lights = lights
                 self.infiniteLights = lights.compactMap {
@@ -22,6 +23,7 @@ struct Scene {
                 self.geometricPrimitives = geometricPrimitives
                 self.areaLights = areaLights
                 self.transformedPrimitives = transformedPrimitives
+                self.arena = arena
         }
 
         func intersect(primId: PrimId, ray: Ray, tHit: inout Real) throws -> Bool {
@@ -106,4 +108,5 @@ struct Scene {
         var geometricPrimitives: [GeometricPrimitive]
         var areaLights: [AreaLight]
         var transformedPrimitives: [TransformedPrimitive]
+        var arena: TextureArena
 }

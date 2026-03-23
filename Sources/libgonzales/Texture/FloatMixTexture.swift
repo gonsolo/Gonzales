@@ -1,11 +1,11 @@
-struct FloatMixTexture {
+struct FloatMixTexture: Sendable {
 
-        func evaluateFloat(at interaction: any Interaction) -> Float {
-                let value0 = textures.0.evaluateFloat(at: interaction)
-                let value1 = textures.1.evaluateFloat(at: interaction)
+        func evaluateFloat(at interaction: any Interaction, arena: TextureArena) -> Float {
+                let value0 = arena.floatTextures[textures.0].evaluateFloat(at: interaction, arena: arena)
+                let value1 = arena.floatTextures[textures.1].evaluateFloat(at: interaction, arena: arena)
                 return lerp(with: amount, between: value0, and: value1)
         }
 
-        let textures: (FloatTexture, FloatTexture)
+        let textures: (Int, Int)
         let amount: Real
 }
