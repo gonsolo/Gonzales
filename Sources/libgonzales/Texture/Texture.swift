@@ -26,4 +26,13 @@ enum Texture: Sendable {
         }
     }
         case rgbSpectrumTexture(Int)
+
+    func evaluate(at interaction: any Interaction, arena: TextureArena) -> any TextureEvaluation {
+        switch self {
+        case .floatTexture(let index):
+            return arena.floatTextures[index].evaluate(at: interaction, arena: arena)
+        case .rgbSpectrumTexture(let index):
+            return arena.rgbTextures[index].evaluate(at: interaction, arena: arena)
+        }
+    }
 }

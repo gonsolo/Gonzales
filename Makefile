@@ -167,10 +167,10 @@ editMakefile:
 	@vim Makefile
 
 r: release
-release: generate
+release:
 	@$(BUILD_RELEASE)
 d: debug
-debug: generate
+debug:
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug
@@ -182,18 +182,7 @@ test_release: release
 tags:
 	ctags -R Sources
 	
-g: generate
-GENERATED = .build/generated
-generate:
-	@mkdir -p $(GENERATED)
-	@sourcery --sources Sources/libgonzales/Reflection/BsdfVariant.swift --templates Templates/BsdfVariant.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Shape/ShapeType.swift --templates Templates/ShapeType.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Light/Light.swift --templates Templates/Light.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Texture/Texture.swift --templates Templates/Texture.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Texture/FloatTexture.swift --templates Templates/FloatTexture.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Texture/RgbSpectrumTexture.swift --templates Templates/RgbSpectrumTexture.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Core/Intersectable.swift --templates Templates/IntersectablePrimitive.stencil --output $(GENERATED)/ > /dev/null
-	@sourcery --sources Sources/libgonzales/Sampler/Sampler.swift --templates Templates/Sampler.stencil --output $(GENERATED)/ > /dev/null
+
 
 c: clean
 clean:
