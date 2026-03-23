@@ -35,17 +35,18 @@ struct OpenImageIOTexture {
                 return (s, t)
         }
 
-        func evaluateFloat(at interaction: any Interaction, arena: TextureArena) -> Real {
+        func evaluateFloat(at interaction: any Interaction, arena _: TextureArena) -> Real {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 return OpenImageIOTextureSystem.shared.evaluate(filename: filename, s: s, t: t)
         }
 
-        func evaluateRgbSpectrum(at interaction: any Interaction, arena: TextureArena) -> RgbSpectrum {
+        func evaluateRgbSpectrum(at interaction: any Interaction, arena _: TextureArena) -> RgbSpectrum {
                 let (s, t) = getTextureCoordinates(at: interaction)
                 let value: RgbSpectrum = OpenImageIOTextureSystem.shared.evaluate(
                         filename: filename, s: s, t: t)
                 let lower = filename.lowercased()
-                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".tga") {
+                if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg")
+                        || lower.hasSuffix(".tga") {
                         return gammaSrgbToLinear(light: value)
                 }
                 return value

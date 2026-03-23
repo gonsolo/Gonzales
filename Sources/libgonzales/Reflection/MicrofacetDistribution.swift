@@ -33,7 +33,8 @@ extension MicrofacetDistribution {
         }
 
         public func probabilityDensity(outgoing: Vector, half: Vector) -> Real {
-                return differentialArea(withNormal: half) * maskingShadowing(outgoing) * absDot(outgoing, half)
+                return differentialArea(withNormal: half) * maskingShadowing(outgoing)
+                        * absDot(outgoing, half)
                         / absCosTheta(outgoing)
         }
 }

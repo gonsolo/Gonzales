@@ -44,39 +44,39 @@ public struct Point3: Sendable, ThreeComponent {
         }
 
         public static func * (mul: Real, point: Point3) -> Point3 {
-                var p = Point3()
-                p.xyz = point.xyz * mul
-                return p
+                var result = Point3()
+                result.xyz = point.xyz * mul
+                return result
         }
 
         public static func / (point: Point3, divisor: Real) -> Point3 {
-                var p = Point3()
-                p.xyz = point.xyz / divisor
-                return p
+                var result = Point3()
+                result.xyz = point.xyz / divisor
+                return result
         }
 
         public static func + (left: Point3, right: Point3) -> Point3 {
-                var p = Point3()
-                p.xyz = left.xyz + right.xyz
-                return p
+                var result = Point3()
+                result.xyz = left.xyz + right.xyz
+                return result
         }
 
         public static func + (left: Point3, right: Vector3) -> Point3 {
-                var p = Point3()
-                p.xyz = left.xyz + right.xyz
-                return p
+                var result = Point3()
+                result.xyz = left.xyz + right.xyz
+                return result
         }
 
         public static func - (left: Point3, right: Point3) -> Point3 {
-                var p = Point3()
-                p.xyz = left.xyz - right.xyz
-                return p
+                var result = Point3()
+                result.xyz = left.xyz - right.xyz
+                return result
         }
 
         public static func - (left: Point3, right: Point3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz - right.xyz
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz - right.xyz
+                return result
         }
 
         var xyz: SIMD4<Real>

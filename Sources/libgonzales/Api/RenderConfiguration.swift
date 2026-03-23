@@ -74,7 +74,9 @@ class RenderConfiguration {
                         let support = try makeSupport(withDefault: (2, 2))
                         filter = TriangleFilter(support: support)
                 default:
-                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Unknown pixel filter: \(name)")
+                        throw RenderError.unimplemented(
+                                function: #function, file: #filePath, line: #line,
+                                message: "Unknown pixel filter: \(name)")
                 }
                 return filter
         }
@@ -192,7 +194,7 @@ class RenderConfiguration {
                 let accelerator = try await makeAccelerator(
                         scene: scene, primitives: primitives,
                         acceleratorName: acceleratorName)
-                
+
                 cleanUp()
 
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)

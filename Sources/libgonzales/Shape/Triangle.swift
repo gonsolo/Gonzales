@@ -181,10 +181,13 @@ struct Triangle: Shape {
 
                 let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 guard
-                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 0) < pointCount
-                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 1)
+                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 0)
+                                < pointCount
+                                && triangleMeshes.getVertexIndexFor(
+                                        meshIndex: meshIndex, at: triangleIndex + 1)
                                         < pointCount
-                                && triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 2)
+                                && triangleMeshes.getVertexIndexFor(
+                                        meshIndex: meshIndex, at: triangleIndex + 2)
                                         < pointCount
                 else {
                         throw TriangleError.index
@@ -209,15 +212,18 @@ extension Triangle {
         }
 
         func getVertexIndex0(scene: Scene) -> Int {
-                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 0)
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(
+                        meshIndex: meshIndex, at: triangleIndex + 0)
         }
 
         func getVertexIndex1(scene: Scene) -> Int {
-                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 1)
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(
+                        meshIndex: meshIndex, at: triangleIndex + 1)
         }
 
         func getVertexIndex2(scene: Scene) -> Int {
-                return getTriangleMeshes(scene: scene).getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 2)
+                return getTriangleMeshes(scene: scene).getVertexIndexFor(
+                        meshIndex: meshIndex, at: triangleIndex + 2)
         }
 
         func getPoint0(scene: Scene) -> Point {
@@ -405,7 +411,7 @@ extension Triangle {
                                 getPoint2(scene: scene) - getPoint0(scene: scene),
                                 getPoint1(scene: scene) - getPoint0(scene: scene))
                         if lengthSquared(geometricNormal) == 0 {
-                                return nil // Cannot compute valid normal/tangent space
+                                return nil  // Cannot compute valid normal/tangent space
                         }
                         (dpdu, dpdv) = makeCoordinateSystem(from: normalized(geometricNormal))
                 }
@@ -546,35 +552,35 @@ extension Triangle {
 
 extension Triangle {
         static func createFromParameters(
-        objectToWorld: Transform,
-        parameters: ParameterDictionary,
-        triangleMeshBuilder: TriangleMeshBuilder
-) throws -> [ShapeType] {
-        let indices = try parameters.findInts(name: "indices")
-        guard indices.count % 3 == 0 else {
-                throw SceneDescriptionError.input(message: "Triangle indices must be multiplies of 3")
-        }
-        let points = try parameters.findPoints(name: "P")
-        let normals = try parameters.findNormals(name: "N")
-        let uvReals = try parameters.findReals(called: "uv")
-        var uvs = [Vector2F]()
-        for index in 0..<uvReals.count / 2 {
-                uvs.append(Vector2F(x: uvReals[2 * index], y: uvReals[2 * index + 1]))
-        }
-        let faceIndices = try parameters.findInts(name: "faceIndices")
+                objectToWorld: Transform,
+                parameters: ParameterDictionary,
+                triangleMeshBuilder: TriangleMeshBuilder
+        ) throws -> [ShapeType] {
+                let indices = try parameters.findInts(name: "indices")
+                guard indices.count % 3 == 0 else {
+                        throw SceneDescriptionError.input(message: "Triangle indices must be multiplies of 3")
+                }
+                let points = try parameters.findPoints(name: "P")
+                let normals = try parameters.findNormals(name: "N")
+                let uvReals = try parameters.findReals(called: "uv")
+                var uvs = [Vector2F]()
+                for index in 0..<uvReals.count / 2 {
+                        uvs.append(Vector2F(x: uvReals[2 * index], y: uvReals[2 * index + 1]))
+                }
+                let faceIndices = try parameters.findInts(name: "faceIndices")
 
-        let meshData = MeshData(
-                indices: indices,
-                points: points,
-                normals: normals,
-                uvs: uvs,
-                faceIndices: faceIndices)
+                let meshData = MeshData(
+                        indices: indices,
+                        points: points,
+                        normals: normals,
+                        uvs: uvs,
+                        faceIndices: faceIndices)
 
-        return try createMesh(
-                objectToWorld: objectToWorld,
-                meshData: meshData,
-                triangleMeshBuilder: triangleMeshBuilder)
-}
+                return try createMesh(
+                        objectToWorld: objectToWorld,
+                        meshData: meshData,
+                        triangleMeshBuilder: triangleMeshBuilder)
+        }
 
 }
 
@@ -588,36 +594,36 @@ struct MeshData {
 
 extension Triangle {
         static func createMesh(
-        objectToWorld: Transform,
-        meshData: MeshData,
-        triangleMeshBuilder: TriangleMeshBuilder
-) throws -> [ShapeType] {
-        let numberTriangles = meshData.indices.count / 3
-        let trianglePoints = meshData.points
-        let triangleNormals = meshData.normals
-        let triangleUvs = meshData.uvs
-        var triangles = [ShapeType]()
+                objectToWorld: Transform,
+                meshData: MeshData,
+                triangleMeshBuilder: TriangleMeshBuilder
+        ) throws -> [ShapeType] {
+                let numberTriangles = meshData.indices.count / 3
+                let trianglePoints = meshData.points
+                let triangleNormals = meshData.normals
+                let triangleUvs = meshData.uvs
+                var triangles = [ShapeType]()
 
-        let mesh = TriangleMesh(
-                objectToWorld: objectToWorld,
-                numberTriangles: numberTriangles,
-                vertexIndices: meshData.indices,
-                points: trianglePoints,
-                normals: triangleNormals,
-                uvs: triangleUvs,
-                faceIndices: meshData.faceIndices)
+                let mesh = TriangleMesh(
+                        objectToWorld: objectToWorld,
+                        numberTriangles: numberTriangles,
+                        vertexIndices: meshData.indices,
+                        points: trianglePoints,
+                        normals: triangleNormals,
+                        uvs: triangleUvs,
+                        faceIndices: meshData.faceIndices)
 
-        let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
-        let triangleMeshes = triangleMeshBuilder.getMeshes()
+                let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
+                let triangleMeshes = triangleMeshBuilder.getMeshes()
 
-        for triangleIndexLoop in 0..<numberTriangles {
-                triangles.append(
-                        try .triangle(
-                                Triangle(
-                                        meshIndex: meshIndex,
-                                        number: triangleIndexLoop,
-                                        triangleMeshes: triangleMeshes)))
+                for triangleIndexLoop in 0..<numberTriangles {
+                        triangles.append(
+                                try .triangle(
+                                        Triangle(
+                                                meshIndex: meshIndex,
+                                                number: triangleIndexLoop,
+                                                triangleMeshes: triangleMeshes)))
+                }
+                return triangles
         }
-        return triangles
-}
 }

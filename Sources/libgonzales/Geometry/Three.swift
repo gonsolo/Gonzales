@@ -37,7 +37,8 @@ func / <T: ThreeComponent>(vector: T, divisor: T.FloatType) -> T {
 }
 
 func / <T: ThreeComponent>(vector: T, divisorVector: T) -> T {
-        return T.init(x: vector.x / divisorVector.x, y: vector.y / divisorVector.y, z: vector.z / divisorVector.z)
+        return T.init(
+                x: vector.x / divisorVector.x, y: vector.y / divisorVector.y, z: vector.z / divisorVector.z)
 }
 
 func * <T: ThreeComponent>(left: T, right: T) -> T {

@@ -25,25 +25,28 @@ struct Diffuse {
 }
 
 extension Diffuse {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> Diffuse {
-        let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
+        static func create(
+                parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena
+        ) throws -> Diffuse {
+                let reflectanceTextureName = try parameters.findTexture(name: "reflectance")
 
-        if !reflectanceTextureName.isEmpty {
+                if !reflectanceTextureName.isEmpty {
 
-                let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: black)))
-                let texture: Texture =
-                        textures[reflectanceTextureName]
-                        ?? Texture.rgbSpectrumTexture(index)
-                return Diffuse(reflectance: texture)
+                        let index = arena.appendRgb(
+                                RgbSpectrumTexture.constantTexture(ConstantTexture(value: black)))
+                        let texture: Texture =
+                                textures[reflectanceTextureName]
+                                ?? Texture.rgbSpectrumTexture(index)
+                        return Diffuse(reflectance: texture)
+                }
+                if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: gray)
+                        as? RgbSpectrum {
+                        let constantTexture = ConstantTexture<RgbSpectrum>(value: reflectanceSpectrum)
+                        let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
+                        let index = arena.appendRgb(rgbSpectrumTexture)
+                        let texture = Texture.rgbSpectrumTexture(index)
+                        return Diffuse(reflectance: texture)
+                }
+                throw DiffuseError.noReflectance
         }
-        if let reflectanceSpectrum = try parameters.findSpectrum(name: "reflectance", else: gray)
-                as? RgbSpectrum {
-                let constantTexture = ConstantTexture<RgbSpectrum>(value: reflectanceSpectrum)
-                let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
-                let index = arena.appendRgb(rgbSpectrumTexture)
-                let texture = Texture.rgbSpectrumTexture(index)
-                return Diffuse(reflectance: texture)
-        }
-        throw DiffuseError.noReflectance
-}
 }

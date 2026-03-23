@@ -56,8 +56,6 @@ public enum SceneDescriptionError: Error {
 
 public class SceneDescription {
 
-
-
         final class InstanceCreationDesc {
                 let name: String
                 let currentTransform: Transform
@@ -72,7 +70,7 @@ public class SceneDescription {
 
         var apiGeometricPrimitives = [GeometricPrimitive]()
         var areaLights = [AreaLight]()
-        
+
         struct DeferredShapeBatch {
                 let job: @Sendable () throws -> [ShapeType]
                 let isAreaLight: Bool
@@ -99,13 +97,12 @@ public class SceneDescription {
         var transforms = [Transform]()
         var triangleMeshBuilder = TriangleMeshBuilder()
 
-
-
         public init(renderOptions: RenderOptions) {
                 self.options = RenderConfiguration()
                 self.renderOptions = renderOptions
                 self.state = State(ptexMemory: renderOptions.ptexMemory)
-                let idx = self.state.arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))
+                let idx = self.state.arena.appendRgb(
+                        RgbSpectrumTexture.constantTexture(ConstantTexture(value: white)))
                 self.materials.append(Material.diffuse(Diffuse(reflectance: Texture.rgbSpectrumTexture(idx))))
         }
 }
@@ -303,7 +300,7 @@ extension SceneDescription {
                 let sceneDirectory = self.renderOptions.sceneDirectory
                 let builder = self.triangleMeshBuilder
                 let acceleratorNameForShapes = self.acceleratorName
-                
+
                 let alpha = try parameters.findOneReal(called: "alpha", else: 1)
                 let material = try state.createMaterial(
                         parameters: parameters,
@@ -311,20 +308,20 @@ extension SceneDescription {
                         currentNamedMaterial: state.currentNamedMaterial,
                         textures: state.textures
                 )
-                
+
                 let isAreaLight = !state.areaLight.isEmpty
                 let areaLightName = state.areaLight
                 let areaLightParameters = state.areaLightParameters
                 let reverseOrientation = state.reverseOrientation
                 let currentMediumInterface = state.currentMediumInterface
                 let objectName = state.objectName
-                
+
                 var materialIndex = noMaterial
                 if !isAreaLight {
                         materialIndex = materials.count
                         materials.append(material)
                 }
-                
+
                 let job: @Sendable () throws -> [ShapeType] = {
                         switch name {
                         case "bilinearmesh":
@@ -366,7 +363,7 @@ extension SceneDescription {
                                 throw SceneDescriptionError.makeShapes(message: name)
                         }
                 }
-                
+
                 let batch = DeferredShapeBatch(
                         job: job,
                         isAreaLight: isAreaLight,
@@ -378,7 +375,7 @@ extension SceneDescription {
                         objectName: objectName,
                         materialIndex: materialIndex
                 )
-                
+
                 shapeBatches.append(batch)
         }
 
@@ -394,17 +391,15 @@ extension SceneDescription {
                         transformedPrimitives: transformedPrimitives, arena: state.arena)
 
                 var instancedAccelerators = [String: Accelerator]()
-                
+
                 // 1. Identify unique objects that need an accelerator
                 var uniqueNamesSet = Set<String>()
                 var uniqueNames = [String]()
-                for instanceDesc in uninstantiatedInstances {
-                        if !uniqueNamesSet.contains(instanceDesc.name) {
-                                uniqueNamesSet.insert(instanceDesc.name)
-                                uniqueNames.append(instanceDesc.name)
-                        }
+                for instanceDesc in uninstantiatedInstances where !uniqueNamesSet.contains(instanceDesc.name) {
+                        uniqueNamesSet.insert(instanceDesc.name)
+                        uniqueNames.append(instanceDesc.name)
                 }
-                
+
                 // 2. Build them concurrently
                 final class LocalInstancedAccelerators: @unchecked Sendable {
                         var results: [Accelerator?]
@@ -416,33 +411,34 @@ extension SceneDescription {
                                 lock.unlock()
                         }
                 }
-                
+
                 let localInstancedAccelerators = LocalInstancedAccelerators(count: uniqueNames.count)
                 let immutableUniqueNames = uniqueNames
                 let localAcceleratorName = self.acceleratorName
-                let immutableObjects = options.objects // Value-type copy for Sendable closure capture
-                
+                let immutableObjects = options.objects  // Value-type copy for Sendable closure capture
+
                 await withTaskGroup(of: Void.self) { group in
-                        for i in 0..<immutableUniqueNames.count {
+                        for index in 0..<immutableUniqueNames.count {
                                 group.addTask {
-                                        let name = immutableUniqueNames[i]
+                                        let name = immutableUniqueNames[index]
                                         guard let prims = immutableObjects[name] else { return }
                                         do {
                                                 let accelerator = try await makeAccelerator(
                                                         scene: tempScene,
                                                         primitives: prims,
                                                         acceleratorName: localAcceleratorName)
-                                                localInstancedAccelerators.set(index: i, accelerator: accelerator)
+                                                localInstancedAccelerators.set(
+                                                        index: index, accelerator: accelerator)
                                         } catch {
                                                 print("Error building instanced local BVH: \(error)")
                                         }
                                 }
                         }
                 }
-                
+
                 // 3. Populate cache dictionary
-                for (i, name) in immutableUniqueNames.enumerated() {
-                        if let acc = localInstancedAccelerators.results[i] {
+                for (index, name) in immutableUniqueNames.enumerated() {
+                        if let acc = localInstancedAccelerators.results[index] {
                                 instancedAccelerators[name] = acc
                         }
                 }
@@ -454,7 +450,7 @@ extension SceneDescription {
                                         function: #function, file: #filePath, line: #line,
                                         message: "Missing object instance \(instanceDesc.name)")
                         }
-                        
+
                         guard let accelerator = instancedAccelerators[instanceDesc.name] else {
                                 continue
                         }
@@ -510,15 +506,21 @@ extension SceneDescription {
                 let theta = radians(deg: angle)
                 let sinTheta = sin(theta)
                 let cosTheta = cos(theta)
-                let t00 = normalizedAxis.x * normalizedAxis.x + (1 - normalizedAxis.x * normalizedAxis.x) * cosTheta
+                let t00 =
+                        normalizedAxis.x * normalizedAxis.x + (1 - normalizedAxis.x * normalizedAxis.x)
+                        * cosTheta
                 let t01 = normalizedAxis.x * normalizedAxis.y * (1 - cosTheta) - normalizedAxis.z * sinTheta
                 let t02 = normalizedAxis.x * normalizedAxis.z * (1 - cosTheta) + normalizedAxis.y * sinTheta
                 let t10 = normalizedAxis.x * normalizedAxis.y * (1 - cosTheta) + normalizedAxis.z * sinTheta
-                let t11 = normalizedAxis.y * normalizedAxis.y + (1 - normalizedAxis.y * normalizedAxis.y) * cosTheta
+                let t11 =
+                        normalizedAxis.y * normalizedAxis.y + (1 - normalizedAxis.y * normalizedAxis.y)
+                        * cosTheta
                 let t12 = normalizedAxis.y * normalizedAxis.z * (1 - cosTheta) - normalizedAxis.x * sinTheta
                 let t20 = normalizedAxis.x * normalizedAxis.z * (1 - cosTheta) - normalizedAxis.y * sinTheta
                 let t21 = normalizedAxis.y * normalizedAxis.z * (1 - cosTheta) + normalizedAxis.x * sinTheta
-                let t22 = normalizedAxis.z * normalizedAxis.z + (1 - normalizedAxis.z * normalizedAxis.z) * cosTheta
+                let t22 =
+                        normalizedAxis.z * normalizedAxis.z + (1 - normalizedAxis.z * normalizedAxis.z)
+                        * cosTheta
                 let matrix = Matrix(
                         t00: t00, t01: t01, t02: t02, t03: 0,
                         t10: t10, t11: t11, t12: t12, t13: 0,
@@ -541,7 +543,8 @@ extension SceneDescription {
                 var texture: Texture
                 switch textureClass {
                 case "checkerboard":
-                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                        throw RenderError.unimplemented(
+                                function: #function, file: #filePath, line: #line, message: "")
                 case "constant":
                         switch type {
                         case "spectrum", "color":
@@ -551,7 +554,8 @@ extension SceneDescription {
                                 texture = try parameters.findRealTexture(
                                         name: "value", textures: state.textures, arena: &state.arena)
                         default:
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line, message: "")
                         }
                 case "imagemap":
                         let fileName = try parameters.findString(called: "filename") ?? ""
@@ -561,11 +565,14 @@ extension SceneDescription {
                 case "mix":
                         switch type {
                         case "color", "spectrum":
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line, message: "")
                         case "float":
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line, message: "")
                         default:
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line, message: "")
                         }
                 case "ptex":
                         let fileName = try parameters.findString(called: "filename") ?? ""
@@ -581,17 +588,20 @@ extension SceneDescription {
                                         name: "tex", textures: state.textures, arena: &state.arena)
                                 let scaledTexture = ScaledTextureRgb(
                                         tex: tex.index, scale: scale.index)
-                                let idx = state.arena.appendRgb(RgbSpectrumTexture.scaledTexture(scaledTexture))
-				texture = Texture.rgbSpectrumTexture(idx)
+                                let idx = state.arena.appendRgb(
+                                        RgbSpectrumTexture.scaledTexture(scaledTexture))
+                                texture = Texture.rgbSpectrumTexture(idx)
                         case "float":
                                 let tex = try parameters.findRealTexture(
                                         name: "tex", textures: state.textures, arena: &state.arena)
                                 let scaledTexture = ScaledTextureFloat(
                                         tex: tex.index, scale: scale.index)
                                 let idx = state.arena.appendFloat(FloatTexture.scaledTexture(scaledTexture))
-				texture = Texture.floatTexture(idx)
+                                texture = Texture.floatTexture(idx)
                         default:
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Unknown scale type")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line,
+                                        message: "Unknown scale type")
                         }
                 default:
                         print("Warning: Unimplemented texture class: \(textureClass)")
@@ -630,16 +640,16 @@ extension SceneDescription {
                                 lock.unlock()
                         }
                 }
-                
+
                 let jobResults = JobResults(count: shapeBatches.count)
                 let jobs = shapeBatches.map { $0.job }
-                
+
                 await withTaskGroup(of: Void.self) { group in
-                        for i in 0..<jobs.count {
+                        for index in 0..<jobs.count {
                                 group.addTask {
                                         do {
-                                                let shapes = try jobs[i]()
-                                                jobResults.set(index: i, shapes: shapes)
+                                                let shapes = try jobs[index]()
+                                                jobResults.set(index: index, shapes: shapes)
                                         } catch {
                                                 print("Error in concurrent shape building: \(error)")
                                         }
@@ -653,34 +663,50 @@ extension SceneDescription {
                         totalShapesCount += shapes?.count ?? 0
                 }
                 apiGeometricPrimitives.reserveCapacity(totalShapesCount)
-                options.primitives.reserveCapacity(totalShapesCount) // over-estimated but absolutely safe and prevents reallocation
+                options.primitives.reserveCapacity(totalShapesCount)  // over-estimated but absolutely safe and prevents reallocation
 
                 // Track large meshes that need their own local BVH
                 var meshBvhPrims = [[GeometricPrimitive]]()
-                
+
                 for (index, batch) in shapeBatches.enumerated() {
                         guard let shapes = jobResults.results[index], !shapes.isEmpty else { continue }
                         var areaLightsBatch = [Light]()
                         var prims = [IntersectablePrimitive]()
-                        
+
                         if batch.isAreaLight {
                                 for shape in shapes {
-                                        guard batch.areaLightName == "area" || batch.areaLightName == "diffuse" else { throw SceneDescriptionError.areaLight }
-                                        guard let brightness = try batch.areaLightParameters.findSpectrum(name: "L") as? RgbSpectrum else { throw ParameterError.missing(parameter: "L", function: #function) }
-                                        let scale = try batch.areaLightParameters.findOneReal(called: "scale", else: 1)
+                                        guard
+                                                batch.areaLightName == "area"
+                                                        || batch.areaLightName == "diffuse"
+                                        else { throw SceneDescriptionError.areaLight }
+                                        guard
+                                                let brightness = try batch.areaLightParameters.findSpectrum(
+                                                        name: "L")
+                                                        as? RgbSpectrum
+                                        else {
+                                                throw ParameterError.missing(
+                                                        parameter: "L", function: #function)
+                                        }
+                                        let scale = try batch.areaLightParameters.findOneReal(
+                                                called: "scale", else: 1)
                                         let scaledBrightness = brightness * scale
                                         let areaLight = AreaLight(
-                                                brightness: scaledBrightness, shape: shape, alpha: batch.alpha,
-                                                reverseOrientation: batch.reverseOrientation, idx: self.areaLights.count)
+                                                brightness: scaledBrightness, shape: shape,
+                                                alpha: batch.alpha,
+                                                reverseOrientation: batch.reverseOrientation,
+                                                idx: self.areaLights.count)
                                         let light = Light.area(areaLight)
                                         areaLightsBatch.append(light)
                                         prims.append(.areaLight(areaLight))
                                         self.areaLights.append(areaLight)
                                 }
-                                
+
                                 if let objectName = batch.objectName {
-                                        if options.objects[objectName] == nil { options.objects[objectName] = prims } 
-                                        else { options.objects[objectName]!.append(contentsOf: prims) }
+                                        if options.objects[objectName] == nil {
+                                                options.objects[objectName] = prims
+                                        } else {
+                                                options.objects[objectName]!.append(contentsOf: prims)
+                                        }
                                 } else {
                                         options.primitives.append(contentsOf: prims)
                                         options.lights.append(contentsOf: areaLightsBatch)
@@ -691,22 +717,33 @@ extension SceneDescription {
                                 for shape in shapes {
                                         let geometricPrimitive = GeometricPrimitive(
                                                 shape: shape, materialIndex: batch.materialIndex,
-                                                mediumInterface: batch.currentMediumInterface, alpha: batch.alpha,
-                                                reverseOrientation: batch.reverseOrientation, idx: apiGeometricPrimitives.count)
+                                                mediumInterface: batch.currentMediumInterface,
+                                                alpha: batch.alpha,
+                                                reverseOrientation: batch.reverseOrientation,
+                                                idx: apiGeometricPrimitives.count)
                                         currentPrims.append(geometricPrimitive)
                                         apiGeometricPrimitives.append(geometricPrimitive)
                                 }
-                                
+
                                 if let objectName = batch.objectName {
-                                        let primitivesList: [IntersectablePrimitive] = currentPrims.map { .geometricPrimitive($0) }
-                                        if options.objects[objectName] == nil { options.objects[objectName] = primitivesList } 
-                                        else { options.objects[objectName]!.append(contentsOf: primitivesList) }
+                                        let primitivesList: [IntersectablePrimitive] = currentPrims.map {
+                                                .geometricPrimitive($0)
+                                        }
+                                        if options.objects[objectName] == nil {
+                                                options.objects[objectName] = primitivesList
+                                        } else {
+                                                options.objects[objectName]!.append(
+                                                        contentsOf: primitivesList)
+                                        }
                                 } else {
                                         if currentPrims.count > 16 {
                                                 // It's a large top-level mesh. Buffer it for Pass 2 (Local BVH)
                                                 meshBvhPrims.append(currentPrims)
                                         } else {
-                                                options.primitives.append(contentsOf: currentPrims.map { .geometricPrimitive($0) })
+                                                options.primitives.append(
+                                                        contentsOf: currentPrims.map {
+                                                                .geometricPrimitive($0)
+                                                        })
                                         }
                                 }
                         }
@@ -718,50 +755,61 @@ extension SceneDescription {
                         final class LocalAccelerators: @unchecked Sendable {
                                 var results: [Accelerator?]
                                 let lock = NSLock()
-                                init(count: Int) { self.results = [Accelerator?](repeating: nil, count: count) }
+                                init(count: Int) {
+                                        self.results = [Accelerator?](repeating: nil, count: count)
+                                }
                                 func set(index: Int, accelerator: Accelerator) {
                                         lock.lock()
                                         self.results[index] = accelerator
                                         lock.unlock()
                                 }
                         }
-                        
+
                         let localAccelerators = LocalAccelerators(count: meshBvhPrims.count)
                         let immutableMeshBvhPrims = meshBvhPrims
                         let localAcceleratorName = self.acceleratorName
-                        
+
                         let tempScene = Scene(
                                 lights: [], materials: materials, meshes: triangleMeshBuilder.getMeshes(),
-                                geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights, transformedPrimitives: [], arena: state.arena)
-                                
+                                geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
+                                transformedPrimitives: [], arena: state.arena)
+
                         await withTaskGroup(of: Void.self) { group in
-                                for i in 0..<immutableMeshBvhPrims.count {
+                                for index in 0..<immutableMeshBvhPrims.count {
                                         group.addTask {
                                                 do {
-                                                        let primsArray: [IntersectablePrimitive] = immutableMeshBvhPrims[i].map { .geometricPrimitive($0) }
-                                                        let accelerator = try await makeAccelerator(scene: tempScene, primitives: primsArray, acceleratorName: localAcceleratorName)
-                                                        localAccelerators.set(index: i, accelerator: accelerator)
+                                                        let primsArray: [IntersectablePrimitive] =
+                                                                immutableMeshBvhPrims[index].map {
+                                                                        .geometricPrimitive($0)
+                                                                }
+                                                        let accelerator = try await makeAccelerator(
+                                                                scene: tempScene, primitives: primsArray,
+                                                                acceleratorName: localAcceleratorName)
+                                                        localAccelerators.set(
+                                                                index: index, accelerator: accelerator)
                                                 } catch {
                                                         print("Error building local BVH: \(error)")
                                                 }
                                         }
                                 }
                         }
-                        
+
                         let identityTransform = Transform()
                         for accelerator in localAccelerators.results {
                                 guard let acc = accelerator else { continue }
-                                let tpFinal = TransformedPrimitive(accelerator: acc, transform: identityTransform, idx: transformedPrimitives.count)
+                                let tpFinal = TransformedPrimitive(
+                                        accelerator: acc, transform: identityTransform,
+                                        idx: transformedPrimitives.count)
                                 transformedPrimitives.append(tpFinal)
                                 options.primitives.append(.transformedPrimitive(tpFinal))
                         }
                 }
-                
+
                 try await resolveInstances()
-                
+
                 readProgressTask?.cancel()
                 _ = await readProgressTask?.value
-                
+
                 if renderOptions.justParse { return }
                 let renderer = try await options.makeRenderer(
                         geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
@@ -804,32 +852,37 @@ extension SceneDescription {
                 }
         }
 
-
 }
 
-func getTextureFrom(name: String, type: String, sceneDirectory: String, arena: inout TextureArena) throws -> Texture {
+func getTextureFrom(name: String, type: String, sceneDirectory: String, arena: inout TextureArena) throws
+        -> Texture {
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {
                 print("Warning: Can't find texture file: \(absoluteFileName)")
                 let idx = arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
-				return Texture.rgbSpectrumTexture(idx)
+                return Texture.rgbSpectrumTexture(idx)
         }
         let suffix = absoluteFileName.suffix(4)
         switch suffix {
         case ".ptx":
                 let idx = arena.appendRgb(RgbSpectrumTexture.ptex(Ptex(path: absoluteFileName)))
-				return Texture.rgbSpectrumTexture(idx)
+                return Texture.rgbSpectrumTexture(idx)
         case ".exr", ".pfm", ".png", ".tga":
                 switch type {
                 case "spectrum", "color":
-                        let idx = arena.appendRgb(RgbSpectrumTexture.openImageIoTexture(try OpenImageIOTexture(path: absoluteFileName, type: type)))
-						return Texture.rgbSpectrumTexture(idx)
+                        let idx = arena.appendRgb(
+                                RgbSpectrumTexture.openImageIoTexture(
+                                        try OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        return Texture.rgbSpectrumTexture(idx)
                 case "float":
-                        let idx = arena.appendFloat(FloatTexture.openImageIoTexture(try OpenImageIOTexture(path: absoluteFileName, type: type)))
-						return Texture.floatTexture(idx)
+                        let idx = arena.appendFloat(
+                                FloatTexture.openImageIoTexture(
+                                        try OpenImageIOTexture(path: absoluteFileName, type: type)))
+                        return Texture.floatTexture(idx)
                 default:
-                        throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                        throw RenderError.unimplemented(
+                                function: #function, file: #filePath, line: #line, message: "")
                 }
         default:
                 throw SceneDescriptionError.unknownTextureFormat(suffix: String(suffix))

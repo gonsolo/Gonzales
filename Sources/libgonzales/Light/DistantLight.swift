@@ -22,7 +22,7 @@ struct DistantLight: LightSource {
                 return 0
         }
 
-        func radianceFromInfinity(for _: Ray, arena: TextureArena) -> RgbSpectrum { return black }
+        func radianceFromInfinity(for _: Ray, arena _: TextureArena) -> RgbSpectrum { return black }
 
         func power(scene _: Scene) -> Real {
                 let value = square(worldRadius) * Real.pi * brightness.average()
@@ -36,16 +36,16 @@ struct DistantLight: LightSource {
 
 extension DistantLight {
         static func create(lightToWorld: Transform, parameters: ParameterDictionary) throws
-        -> DistantLight {
-        let from = try parameters.findOnePoint(name: "from", else: origin)
-        let target = try parameters.findOnePoint(name: "to", else: origin)
-        guard let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum else {
-                throw ParameterError.missing(parameter: "L", function: #function)
+                -> DistantLight {
+                let from = try parameters.findOnePoint(name: "from", else: origin)
+                let target = try parameters.findOnePoint(name: "to", else: origin)
+                guard let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum else {
+                        throw ParameterError.missing(parameter: "L", function: #function)
+                }
+                let direction: Vector = from - target
+                return DistantLight(
+                        lightToWorld: lightToWorld, brightness: brightness, direction: direction)
         }
-        let direction: Vector = from - target
-        return DistantLight(
-                lightToWorld: lightToWorld, brightness: brightness, direction: direction)
-}
 }
 
 extension DistantLight {

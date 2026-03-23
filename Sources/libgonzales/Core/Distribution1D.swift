@@ -9,17 +9,17 @@ struct PiecewiseConstant1D {
                 self.function = values
                 var cdf = [Real](repeating: 0, count: count + 1)
                 cdf[0] = 0
-                for i in 1...count {
-                        cdf[i] = cdf[i - 1] + function[i - 1] / Real(count)
+                for index in 1...count {
+                        cdf[index] = cdf[index - 1] + function[index - 1] / Real(count)
                 }
                 self.integral = cdf[count]
                 if self.integral == 0 {
-                        for i in 1...count {
-                                cdf[i] = Real(i) / Real(count)
+                        for index in 1...count {
+                                cdf[index] = Real(index) / Real(count)
                         }
                 } else {
-                        for i in 1...count {
-                                cdf[i] /= self.integral
+                        for index in 1...count {
+                                cdf[index] /= self.integral
                         }
                 }
                 self.cdf = cdf
@@ -29,12 +29,12 @@ struct PiecewiseConstant1D {
                 return count
         }
 
-        func findInterval(u: Real) -> Int {
+        func findInterval(sample: Real) -> Int {
                 var low = 0
                 var high = count
                 while low < high {
                         let mid = low + (high - low) / 2
-                        if cdf[mid] <= u {
+                        if cdf[mid] <= sample {
                                 low = mid + 1
                         } else {
                                 high = mid
@@ -43,25 +43,25 @@ struct PiecewiseConstant1D {
                 return clamp(value: low - 1, low: 0, high: count - 1)
         }
 
-        func sampleContinuous(u: Real) -> (value: Real, pdf: Real, offset: Int) {
-                let offset = findInterval(u: u)
-                var du = u - cdf[offset]
+        func sampleContinuous(sample: Real) -> (value: Real, pdf: Real, offset: Int) {
+                let offset = findInterval(sample: sample)
+                var delta = sample - cdf[offset]
                 let distance = cdf[offset + 1] - cdf[offset]
                 if distance > 0 {
-                        du /= distance
+                        delta /= distance
                 }
-                let value = (Real(offset) + du) / Real(count)
-                let p = pdf(value: value)
-                return (value, p, offset)
+                let value = (Real(offset) + delta) / Real(count)
+                let probabilityDensity = pdf(value: value)
+                return (value, probabilityDensity, offset)
         }
 
-        func sampleDiscrete(u: Real) -> (offset: Int, pdf: Real, uRemapped: Real) {
-                let offset = findInterval(u: u)
-                let p = function[offset] / (integral * Real(count))
+        func sampleDiscrete(sample: Real) -> (offset: Int, pdf: Real, uRemapped: Real) {
+                let offset = findInterval(sample: sample)
+                let probabilityDensity = function[offset] / (integral * Real(count))
                 let distance = cdf[offset + 1] - cdf[offset]
-                var uRemapped = (u - cdf[offset]) / distance
+                var uRemapped = (sample - cdf[offset]) / distance
                 if distance == 0 || uRemapped.isNaN { uRemapped = 0 }
-                return (offset, p, uRemapped)
+                return (offset, probabilityDensity, uRemapped)
         }
 
         func pdf(value: Real) -> Real {

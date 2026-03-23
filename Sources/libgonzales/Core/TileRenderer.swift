@@ -91,7 +91,8 @@ struct TileRenderer: Renderer {
                                 allSamples.append(contentsOf: samples)
                                 if let tile = tileIterator.next() {
                                         group.addTask {
-                                                let samples = try self.renderTile(tile: tile, state: immutableState)
+                                                let samples = try self.renderTile(
+                                                        tile: tile, state: immutableState)
                                                 await reporter.tileFinished()
                                                 return samples
                                         }

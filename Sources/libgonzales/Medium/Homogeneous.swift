@@ -2,12 +2,6 @@ import Foundation
 
 struct Homogeneous: Medium {
 
-        init(scale: Real, absorption: RgbSpectrum, scattering: RgbSpectrum) {
-                self.scale = scale
-                self.absorption = absorption
-                self.scattering = scattering
-        }
-
         func sample(ray: Ray, tHit: Real, sampler: inout RandomSampler) -> (RgbSpectrum, MediumInteraction?) {
                 let channel = Int(sampler.get1D() * 3)
                 let transmission = absorption + scattering

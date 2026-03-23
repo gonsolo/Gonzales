@@ -13,7 +13,8 @@ extern "C" {
 
 // Returns an OIIO::ImageOutput* (void* in Swift)
 OIIO::ImageOutput *openImageForTiledWriting(const char *filename_c, int xres, int yres, int tileWidth,
-                                            int tileHeight, int channels, int fullWidth, int fullHeight, int x, int y) {
+                                            int tileHeight, int channels, int fullWidth, int fullHeight,
+                                            int x, int y) {
 
         std::unique_ptr<OIIO::ImageOutput> out_uptr = OIIO::ImageOutput::create(filename_c);
 
@@ -39,9 +40,9 @@ OIIO::ImageOutput *openImageForTiledWriting(const char *filename_c, int xres, in
 }
 
 // Function to write a single tile (called inside the Swift loop)
-bool writeSingleTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty, int xOffset, int yOffset,
-                     int tileWidth, int tileHeight, ptrdiff_t channel_stride, ptrdiff_t x_stride,
-                     ptrdiff_t y_stride) {
+bool writeSingleTile(OIIO::ImageOutput *out, const float *pixels, int xres, int channels, int tx, int ty,
+                     int xOffset, int yOffset, int tileWidth, int tileHeight, ptrdiff_t channel_stride,
+                     ptrdiff_t x_stride, ptrdiff_t y_stride) {
 
         int buffer_x = tx * tileWidth;
         int buffer_y = ty * tileHeight;
@@ -56,8 +57,8 @@ bool writeSingleTile(OIIO::ImageOutput *out, const float *pixels, int xres, int 
         int target_y = buffer_y + yOffset;
 
         if (!out->write_tile(target_x, target_y, 0, tile_span)) {
-                std::cerr << "ERROR: Failed to write tile (" << target_x << "," << target_y << "): " << out->geterror()
-                          << std::endl;
+                std::cerr << "ERROR: Failed to write tile (" << target_x << "," << target_y
+                          << "): " << out->geterror() << std::endl;
                 return false;
         }
         return true;

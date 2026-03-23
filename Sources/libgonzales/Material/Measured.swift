@@ -14,6 +14,6 @@ struct Measured {
 
 extension Measured {
         static func create(parameters _: ParameterDictionary) throws -> Measured {
-        return Measured()
-}
+                return Measured()
+        }
 }

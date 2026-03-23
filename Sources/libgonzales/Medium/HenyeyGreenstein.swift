@@ -17,9 +17,11 @@ struct HenyeyGreenstein: PhaseFunction {
                 if abs(asymmetry) < 1e-3 {
                         cosTheta = 1 - 2 * uSample.0
                 } else {
-                        let sqrTerm = (1 - asymmetry * asymmetry)
+                        let sqrTerm =
+                                (1 - asymmetry * asymmetry)
                                 / (1 + asymmetry - 2 * asymmetry * uSample.0)
-                        cosTheta = -(1 + asymmetry * asymmetry - sqrTerm * sqrTerm)
+                        cosTheta =
+                                -(1 + asymmetry * asymmetry - sqrTerm * sqrTerm)
                                 / (2 * asymmetry)
                 }
                 let sinTheta = (max(0.0, 1 - cosTheta * cosTheta)).squareRoot()

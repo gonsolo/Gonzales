@@ -117,7 +117,8 @@ struct Sphere: Shape {
                 ray _: Ray,
                 tHit _: inout Real
         ) throws -> Bool {
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 
         func intersect(
@@ -179,7 +180,7 @@ struct Sphere: Shape {
 
 extension Sphere {
         static func create(objectToWorld: Transform, parameters: ParameterDictionary) throws -> ShapeType {
-        let radius = try parameters.findOneReal(called: "radius", else: 1.0)
-        return .sphere(Sphere(radius: radius, objectToWorld: objectToWorld))
-}
+                let radius = try parameters.findOneReal(called: "radius", else: 1.0)
+                return .sphere(Sphere(radius: radius, objectToWorld: objectToWorld))
+        }
 }

@@ -2,12 +2,13 @@ struct Interface {
 
         func getBsdf() throws -> BsdfVariant {
                 // Unimplemented by design
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 }
 
 extension Interface {
         static func create(parameters _: ParameterDictionary) throws -> Interface {
-        return Interface()
-}
+                return Interface()
+        }
 }

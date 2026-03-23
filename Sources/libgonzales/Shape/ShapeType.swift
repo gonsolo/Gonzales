@@ -38,10 +38,18 @@ enum ShapeType: Shape {
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 switch self {
-                case .triangle(let value): return try value.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                case .sphere(let value): return try value.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                case .disk(let value): return try value.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                case .curve(let value): return try value.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                case .triangle(let value):
+                        return try value.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                case .sphere(let value):
+                        return try value.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                case .disk(let value):
+                        return try value.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                case .curve(let value):
+                        return try value.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 
@@ -51,10 +59,17 @@ enum ShapeType: Shape {
                 worldRay: Ray
         ) throws -> SurfaceInteraction? {
                 switch self {
-                case .triangle(let value): return value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
-                case .sphere(let value): return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
-                case .disk(let value): return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
-                case .curve(let value): return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+                case .triangle(let value):
+                        return value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+                case .sphere(let value):
+                        return try value.computeSurfaceInteraction(
+                                scene: scene, data: data, worldRay: worldRay)
+                case .disk(let value):
+                        return try value.computeSurfaceInteraction(
+                                scene: scene, data: data, worldRay: worldRay)
+                case .curve(let value):
+                        return try value.computeSurfaceInteraction(
+                                scene: scene, data: data, worldRay: worldRay)
                 }
         }
 
@@ -71,7 +86,9 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(samples: TwoRandomVariables, scene: Scene) throws -> (interaction: SurfaceInteraction, pdf: Real) {
+        func sample(samples: TwoRandomVariables, scene: Scene) throws -> (
+                interaction: SurfaceInteraction, pdf: Real
+        ) {
                 switch self {
                 case .triangle(let value): return value.sample(samples: samples, scene: scene)
                 case .sphere(let value): return value.sample(samples: samples, scene: scene)
@@ -80,9 +97,12 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real) {
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (
+                SurfaceInteraction, Real
+        ) {
                 switch self {
-                case .triangle(let value): return try value.sample(point: point, samples: samples, scene: scene)
+                case .triangle(let value):
+                        return try value.sample(point: point, samples: samples, scene: scene)
                 case .sphere(let value): return try value.sample(point: point, samples: samples, scene: scene)
                 case .disk(let value): return try value.sample(point: point, samples: samples, scene: scene)
                 case .curve(let value): return try value.sample(point: point, samples: samples, scene: scene)
@@ -104,10 +124,18 @@ enum ShapeType: Shape {
                 from interaction: I
         ) throws -> Real {
                 switch self {
-                case .triangle(let value): return try value.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
-                case .sphere(let value): return try value.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
-                case .disk(let value): return try value.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
-                case .curve(let value): return try value.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
+                case .triangle(let value):
+                        return try value.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: interaction)
+                case .sphere(let value):
+                        return try value.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: interaction)
+                case .disk(let value):
+                        return try value.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: interaction)
+                case .curve(let value):
+                        return try value.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: interaction)
                 }
         }
 }

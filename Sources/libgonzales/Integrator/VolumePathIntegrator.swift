@@ -101,8 +101,6 @@ extension VolumePathIntegrator {
                 return try lightSampler.chooseLight(scene: scene)
         }
 
-
-
         private func sampleLightSource<I: Interaction, D: DistributionModel>(
                 light: Light,
                 interaction: I,
@@ -159,7 +157,8 @@ extension VolumePathIntegrator {
                 for light in scene.lights {
                         switch light {
                         case .infinite(let infiniteLight):
-                                let radiance = infiniteLight.radianceFromInfinity(for: ray, arena: scene.arena)
+                                let radiance = infiniteLight.radianceFromInfinity(
+                                        for: ray, arena: scene.arena)
                                 bsdfSample.estimate *= radiance
                                 return bsdfSample
                         default:
@@ -405,12 +404,16 @@ extension VolumePathIntegrator {
                         scene: scene,
                         ray: state.ray,
                         tHit: &state.tHit)
-                
+
                 if state.interaction == nil {
                         if state.bounce == 0 || state.specularBounce {
                                 let radiance = scene.infiniteLights.reduce(
                                         black,
-                                        { accumulated, light in accumulated + light.radianceFromInfinity(for: state.ray, arena: scene.arena) }
+                                        { accumulated, light in
+                                                accumulated
+                                                        + light.radianceFromInfinity(
+                                                                for: state.ray, arena: scene.arena)
+                                        }
                                 )
                                 state.estimate += state.throughput * radiance
                         }

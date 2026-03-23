@@ -3,10 +3,12 @@ import Foundation
 struct Checkerboard {
 
         func evaluateRgbSpectrum(at interaction: any Interaction, arena: TextureArena) -> RgbSpectrum {
-                guard let textureEven = textures.0.evaluate(at: interaction, arena: arena) as? RgbSpectrum else {
+                guard let textureEven = textures.0.evaluate(at: interaction, arena: arena) as? RgbSpectrum
+                else {
                         return black
                 }
-                guard let textureOdd = textures.1.evaluate(at: interaction, arena: arena) as? RgbSpectrum else {
+                guard let textureOdd = textures.1.evaluate(at: interaction, arena: arena) as? RgbSpectrum
+                else {
                         return black
                 }
                 let uIndex = Int(floor(interaction.uvCoordinates[0] * scale.0))

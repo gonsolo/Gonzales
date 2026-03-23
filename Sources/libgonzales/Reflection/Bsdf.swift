@@ -36,7 +36,7 @@ extension Bsdf {
                 return sample(outgoing: outgoing, uSample: uSample, evaluate: self.evaluate)
         }
 
-        public func sample(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
+        public func sample(outgoing: Vector, uSample: ThreeRandomVariables, mode _: TransportMode) -> BsdfSample {
                 return sample(outgoing: outgoing, uSample: uSample)
         }
 

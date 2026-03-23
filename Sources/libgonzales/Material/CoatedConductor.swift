@@ -38,21 +38,22 @@ struct CoatedConductor {
 
                 var alphaInterface: (Real, Real) = interfaceRoughness
                 var alphaConductor: (Real, Real) = conductorRoughness
-                
+
                 if remapRoughness {
                         alphaInterface = TrowbridgeReitzDistribution.getAlpha(from: interfaceRoughness)
                         alphaConductor = TrowbridgeReitzDistribution.getAlpha(from: conductorRoughness)
                 }
-                
+
                 alphaInterface.0 = max(alphaInterface.0, 0.001)
                 alphaInterface.1 = max(alphaInterface.1, 0.001)
                 alphaConductor.0 = max(alphaConductor.0, 0.001)
                 alphaConductor.1 = max(alphaConductor.1, 0.001)
-                
+
                 let distributionInterface = TrowbridgeReitzDistribution(alpha: alphaInterface)
                 let dielectric = DielectricBsdf(
-                        distribution: distributionInterface, refractiveIndex: refractiveIndexValue, bsdfFrame: bsdfFrame)
-                        
+                        distribution: distributionInterface, refractiveIndex: refractiveIndexValue,
+                        bsdfFrame: bsdfFrame)
+
                 let distributionConductor = TrowbridgeReitzDistribution(alpha: alphaConductor)
                 let fresnel = FresnelConductor(etaI: white, etaT: eta, extinction: extinction)
                 let conductorBsdf = MicrofacetReflection(
@@ -88,34 +89,52 @@ struct CoatedConductor {
 }
 
 extension CoatedConductor {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> CoatedConductor {
+        static func create(
+                parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena
+        ) throws -> CoatedConductor {
                 let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
-                
+
                 // Default interface roughness mapping
-                let interfaceRoughnessOptional = try parameters.findOneRealOptional(called: "interface.roughness")
+                let interfaceRoughnessOptional =
+                        try parameters.findOneRealOptional(called: "interface.roughness")
                         ?? parameters.findOneRealOptional(called: "roughness")
-                let uInterface = try interfaceRoughnessOptional ?? parameters.findOneReal(called: "uroughness", else: 0.5)
-                let vInterface = try interfaceRoughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
+                let uInterface =
+                        try interfaceRoughnessOptional
+                        ?? parameters.findOneReal(called: "uroughness", else: 0.5)
+                let vInterface =
+                        try interfaceRoughnessOptional
+                        ?? parameters.findOneReal(called: "vroughness", else: 0.5)
                 let interfaceRoughness = (uInterface, vInterface)
-                
+
                 // Conductor roughness mapping
-                let conductorRoughnessOptional = try parameters.findOneRealOptional(called: "conductor.roughness")
+                let conductorRoughnessOptional =
+                        try parameters.findOneRealOptional(called: "conductor.roughness")
                         ?? parameters.findOneRealOptional(called: "roughness")
-                let uConductor = try conductorRoughnessOptional ?? parameters.findOneReal(called: "uroughness", else: 0.5)
-                let vConductor = try conductorRoughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
+                let uConductor =
+                        try conductorRoughnessOptional
+                        ?? parameters.findOneReal(called: "uroughness", else: 0.5)
+                let vConductor =
+                        try conductorRoughnessOptional
+                        ?? parameters.findOneReal(called: "vroughness", else: 0.5)
                 let conductorRoughness = (uConductor, vConductor)
 
-                let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures, arena: &arena)
-                let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, arena: &arena, else: 1.5)
-                
-                let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, arena: &arena, else: 0.01)
-                let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, arena: &arena, else: 0.0)
+                let reflectance = try parameters.findRgbSpectrumTexture(
+                        name: "reflectance", textures: textures, arena: &arena)
+                let refractiveIndex = try parameters.findRealTexture(
+                        name: "eta", textures: textures, arena: &arena, else: 1.5)
+
+                let thickness = try parameters.findRealTexture(
+                        name: "thickness", textures: textures, arena: &arena, else: 0.01)
+                let asymmetry = try parameters.findRealTexture(
+                        name: "g", textures: textures, arena: &arena, else: 0.0)
                 let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
                 let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
-                
-                let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, arena: &arena, else: RgbSpectrum(intensity: 0.0))
+
+                let albedo = try parameters.findRgbSpectrumTexture(
+                        name: "albedo", textures: textures, arena: &arena, else: RgbSpectrum(intensity: 0.0))
                 let eta = try parameters.findSpectrum(name: "conductor.eta") ?? namedSpectra["metal-Cu-eta"]!
-                let extinctionParameter = try parameters.findSpectrum(name: "conductor.k") ?? namedSpectra["metal-Cu-k"]!
+                let extinctionParameter =
+                        try parameters.findSpectrum(name: "conductor.k") ?? namedSpectra["metal-Cu-k"]!
 
                 return CoatedConductor(
                         interfaceRoughness: interfaceRoughness,

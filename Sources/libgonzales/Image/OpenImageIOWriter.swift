@@ -83,7 +83,8 @@ actor OpenImageIOWriter {
                                                 outputPointer,
                                                 pixels,
                                                 xres, channels,
-                                                Int32(tileX), Int32(tileY), xOffset, yOffset, tileWidth, tileHeight,
+                                                Int32(tileX), Int32(tileY), xOffset, yOffset, tileWidth,
+                                                tileHeight,
                                                 channelStride, xStride, yStride
                                         )
 

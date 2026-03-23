@@ -11,7 +11,9 @@ protocol Sampleable {
                 interaction: SurfaceInteraction, pdf: Real
         )
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real)
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (
+                SurfaceInteraction, Real
+        )
 
         func probabilityDensityFor(
                 scene: Scene,
@@ -24,7 +26,9 @@ protocol Sampleable {
 
 extension Sampleable {
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (SurfaceInteraction, Real) {
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (
+                SurfaceInteraction, Real
+        ) {
                 var (intr, pdf) = try sample(samples: samples, scene: scene)
                 let incident: Vector = normalized(intr.position - point)
                 let squaredDistance = distanceSquared(point, intr.position)

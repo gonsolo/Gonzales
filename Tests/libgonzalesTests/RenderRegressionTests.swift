@@ -32,12 +32,16 @@ import Testing
                 #expect(fileManager.fileExists(atPath: outputPath), "Render did not produce output image")
 
                 // Verify reference exists
-                #expect(fileManager.fileExists(atPath: referencePath), "Reference image missing at \(referencePath)")
+                #expect(
+                        fileManager.fileExists(atPath: referencePath),
+                        "Reference image missing at \(referencePath)")
 
                 // Compare images using magick
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = ["magick", "compare", "-metric", "RMSE", outputPath, referencePath, "null:"]
+                process.arguments = [
+                        "magick", "compare", "-metric", "RMSE", outputPath, referencePath, "null:",
+                ]
                 let pipe = Pipe()
                 process.standardError = pipe  // magick writes metrics to stderr
                 process.standardOutput = FileHandle.nullDevice
@@ -50,7 +54,8 @@ import Testing
                 // Parse RMSE value from output like "123.45 (0.00123)"
                 // The normalized value is in parentheses
                 if let openParen = output.firstIndex(of: "("),
-                   let closeParen = output.firstIndex(of: ")") {
+                        let closeParen = output.firstIndex(of: ")")
+                {
                         let start = output.index(after: openParen)
                         let rmseString = String(output[start..<closeParen])
                         if let rmse = Double(rmseString) {

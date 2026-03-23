@@ -1,6 +1,6 @@
 struct Conductor {
 
-        func getBsdf(interaction: any Interaction, arena: TextureArena) -> MicrofacetReflection {
+        func getBsdf(interaction: any Interaction, arena _: TextureArena) -> MicrofacetReflection {
                 let alpha = (max(roughness.0, 1e-3), max(roughness.1, 1e-3))
                 let trowbridge = TrowbridgeReitzDistribution(alpha: alpha)
                 let fresnel = FresnelConductor(
@@ -22,9 +22,10 @@ struct Conductor {
 }
 
 extension Conductor {
-        static func create(parameters: ParameterDictionary, arena: inout TextureArena) throws -> Conductor {
+        static func create(parameters: ParameterDictionary, arena _: inout TextureArena) throws -> Conductor {
                 let eta = try parameters.findSpectrum(name: "eta") ?? namedSpectra["metal-Cu-eta"]!
-                let extinctionParameter = try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
+                let extinctionParameter =
+                        try parameters.findSpectrum(name: "k") ?? namedSpectra["metal-Cu-k"]!
                 // let remapRoughness = try findOneBool(called: "remaproughness", else: false)
                 let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
                 let uRoughness =
@@ -36,5 +37,5 @@ extension Conductor {
                 let etaRgb = eta.asRgb()
                 let extinctionRgb = extinctionParameter.asRgb()
                 return Conductor(eta: etaRgb, extinction: extinctionRgb, roughness: roughness)
-}
+        }
 }

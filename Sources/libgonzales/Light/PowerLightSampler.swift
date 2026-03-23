@@ -30,7 +30,8 @@ struct PowerLightSampler: Sendable {
                         if index == 0 {
                                 cumulativePowers.append(try light.power(scene: scene))
                         } else {
-                                cumulativePowers.append(try cumulativePowers.last! + light.power(scene: scene))
+                                cumulativePowers.append(
+                                        try cumulativePowers.last! + light.power(scene: scene))
                         }
                 }
 

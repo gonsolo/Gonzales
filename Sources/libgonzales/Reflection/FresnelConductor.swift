@@ -27,7 +27,8 @@ struct FresnelConductor: Fresnel {
         }
 
         func evaluate(cosTheta: Real) -> RgbSpectrum {
-                return fresnelConductor(cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, extinction: extinction)
+                return fresnelConductor(
+                        cosTheta: abs(cosTheta), etaI: etaI, etaT: etaT, extinction: extinction)
         }
 
         let etaI: RgbSpectrum

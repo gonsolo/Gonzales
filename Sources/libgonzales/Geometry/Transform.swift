@@ -52,10 +52,15 @@ extension Transform {
         public static func * (transform: Transform, point: Point) -> Point {
                 let matrix = transform.matrix
                 let pointLocal = Point(
-                        x: matrix[0, 0] * point.x + matrix[0, 1] * point.y + matrix[0, 2] * point.z + matrix[0, 3],
-                        y: matrix[1, 0] * point.x + matrix[1, 1] * point.y + matrix[1, 2] * point.z + matrix[1, 3],
-                        z: matrix[2, 0] * point.x + matrix[2, 1] * point.y + matrix[2, 2] * point.z + matrix[2, 3])
-                let weightP = matrix[3, 0] * point.x + matrix[3, 1] * point.y + matrix[3, 2] * point.z + matrix[3, 3]
+                        x: matrix[0, 0] * point.x + matrix[0, 1] * point.y + matrix[0, 2] * point.z
+                                + matrix[0, 3],
+                        y: matrix[1, 0] * point.x + matrix[1, 1] * point.y + matrix[1, 2] * point.z
+                                + matrix[1, 3],
+                        z: matrix[2, 0] * point.x + matrix[2, 1] * point.y + matrix[2, 2] * point.z
+                                + matrix[2, 3])
+                let weightP =
+                        matrix[3, 0] * point.x + matrix[3, 1] * point.y + matrix[3, 2] * point.z
+                        + matrix[3, 3]
                 return pointLocal / weightP
         }
 

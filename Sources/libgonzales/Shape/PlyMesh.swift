@@ -74,9 +74,9 @@ extension PlyMesh {
                 let size = MemoryLayout<T>.size
                 var value = buffer.load(fromByteOffset: index, as: T.self)
                 if endianness == .big {
-                        withUnsafeMutableBytes(of: &value) { ptr in
-                                var p = ptr
-                                p.reverse()
+                        withUnsafeMutableBytes(of: &value) { rawBuffer in
+                                var ptr = rawBuffer
+                                ptr.reverse()
                         }
                 }
                 if !peek {
@@ -85,11 +85,15 @@ extension PlyMesh {
                 return value
         }
 
-        private func readValue<T: DefaultInitializable>(in buffer: UnsafeRawBufferPointer, at index: inout Int) -> T {
+        private func readValue<T: DefaultInitializable>(
+                in buffer: UnsafeRawBufferPointer, at index: inout Int
+        ) -> T {
                 return convert(buffer: buffer, at: &index)
         }
 
-        private func peekValue<T: DefaultInitializable>(in buffer: UnsafeRawBufferPointer, at index: inout Int) -> T {
+        private func peekValue<T: DefaultInitializable>(
+                in buffer: UnsafeRawBufferPointer, at index: inout Int
+        ) -> T {
                 return convert(buffer: buffer, at: &index, peek: true)
         }
 
@@ -121,10 +125,14 @@ extension PlyMesh {
                                 switch words[1] {
                                 case "binary_little_endian":
                                         endianness = .little
-                                        guard words[2] == "1.0" else { throw SceneDescriptionError.ply(message: "1.0") }
+                                        guard words[2] == "1.0" else {
+                                                throw SceneDescriptionError.ply(message: "1.0")
+                                        }
                                 case "binary_big_endian":
                                         endianness = .big
-                                        guard words[2] == "1.0" else { throw SceneDescriptionError.ply(message: "1.0") }
+                                        guard words[2] == "1.0" else {
+                                                throw SceneDescriptionError.ply(message: "1.0")
+                                        }
                                 default:
                                         let message = "Unknown endian format in ply."
                                         throw SceneDescriptionError.ply(message: message)
@@ -144,7 +152,8 @@ extension PlyMesh {
                                         }
                                         plyHeader.faceCount = faceCount
                                 default:
-                                        throw SceneDescriptionError.ply(message: "Unknown element \(words[1])")
+                                        throw SceneDescriptionError.ply(
+                                                message: "Unknown element \(words[1])")
                                 }
                         case "property":
                                 switch words[1] {
@@ -210,7 +219,8 @@ extension PlyMesh {
                                                         message: "Unknown int property \(words[2])")
                                         }
                                 default:
-                                        throw SceneDescriptionError.ply(message: "Unknown property: \(words[1])")
+                                        throw SceneDescriptionError.ply(
+                                                message: "Unknown property: \(words[1])")
                                 }
                         case "end_header":
                                 return
@@ -242,9 +252,9 @@ extension PlyMesh {
 
         mutating func readVertices(from buffer: UnsafeRawBufferPointer) throws {
                 let properties = plyHeader.vertexProperties
-                
+
                 points.reserveCapacity(plyHeader.vertexCount)
-                
+
                 for _ in 0..<plyHeader.vertexCount {
 
                         if plyHeader.vertexProperties.count == 3 {
@@ -356,33 +366,33 @@ extension PlyMesh {
                 sceneDirectory: String,
                 triangleMeshBuilder: TriangleMeshBuilder
         ) throws -> [ShapeType] {
-        let relativeFileName = try parameters.findString(called: "filename") ?? ""
-        let absoluteFileName = sceneDirectory + "/" + relativeFileName
-        guard FileManager.default.fileExists(atPath: absoluteFileName) else {
-                print("Warning: Could not find ply file at: \(absoluteFileName)")
-                return []
-        }
-        guard let file = FileHandle(forReadingAtPath: absoluteFileName) else {
-                throw RenderError.noFileHandle
-        }
-        let uncompressedData = file.readDataToEndOfFile()
-        var data: Data
-        if absoluteFileName.hasSuffix(".gz") {
-                data = try Compression.get(data: uncompressedData)
-        } else {
-                data = uncompressedData
-        }
-        let plyMesh = try PlyMesh(from: data)
-        let meshData = MeshData(
-                indices: plyMesh.indices,
-                points: plyMesh.points,
-                normals: plyMesh.normals,
-                uvs: plyMesh.uvs,
-                faceIndices: plyMesh.faceIndices)
-        return try Triangle.createMesh(
-                objectToWorld: objectToWorld,
-                meshData: meshData,
-                triangleMeshBuilder: triangleMeshBuilder)
+                let relativeFileName = try parameters.findString(called: "filename") ?? ""
+                let absoluteFileName = sceneDirectory + "/" + relativeFileName
+                guard FileManager.default.fileExists(atPath: absoluteFileName) else {
+                        print("Warning: Could not find ply file at: \(absoluteFileName)")
+                        return []
+                }
+                guard let file = FileHandle(forReadingAtPath: absoluteFileName) else {
+                        throw RenderError.noFileHandle
+                }
+                let uncompressedData = file.readDataToEndOfFile()
+                var data: Data
+                if absoluteFileName.hasSuffix(".gz") {
+                        data = try Compression.get(data: uncompressedData)
+                } else {
+                        data = uncompressedData
+                }
+                let plyMesh = try PlyMesh(from: data)
+                let meshData = MeshData(
+                        indices: plyMesh.indices,
+                        points: plyMesh.points,
+                        normals: plyMesh.normals,
+                        uvs: plyMesh.uvs,
+                        faceIndices: plyMesh.faceIndices)
+                return try Triangle.createMesh(
+                        objectToWorld: objectToWorld,
+                        meshData: meshData,
+                        triangleMeshBuilder: triangleMeshBuilder)
 
-}
+        }
 }

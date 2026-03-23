@@ -84,7 +84,8 @@ extension HairBsdf {
                         longitudinalScattering = exp(
                                 logI0(termA) - termB - 1 / vParameter + 0.6931 + log(1 / (2 * vParameter)))
                 } else {
-                        longitudinalScattering = (exp(-termB) * i0(termA)) / (sinh(1 / vParameter) * 2 * vParameter)
+                        longitudinalScattering =
+                                (exp(-termB) * i0(termA)) / (sinh(1 / vParameter) * 2 * vParameter)
                 }
                 return longitudinalScattering
         }
@@ -239,7 +240,8 @@ extension HairBsdf {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        let (longitudinalScattering, azimuthalScattering) = computeScattering(context: context)
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
+                                context: context)
                         fsum += longitudinalScattering * attenuation[pIndex] * azimuthalScattering
                 }
                 let longitudinalScattering = computeLongitudinalScattering(
@@ -299,7 +301,8 @@ extension HairBsdf {
                                 cosThetaO: cosThetaO,
                                 phi: phi,
                                 gammaT: gammaT)
-                        let (longitudinalScattering, azimuthalScattering) = computeScattering(context: context)
+                        let (longitudinalScattering, azimuthalScattering) = computeScattering(
+                                context: context)
                         pdfValue += longitudinalScattering * attenuationPdf[pIndex] * azimuthalScattering
                 }
                 let longitudinalScattering = computeLongitudinalScattering(
@@ -324,7 +327,9 @@ extension HairBsdf {
 
         private func demux(_ fValue: Real) -> (Real, Real) {
                 let bitsValue = UInt(fValue * Real((UInt(1) << 32)))
-                let bits: (UInt32, UInt32) = (compact1by1(UInt32(bitsValue)), compact1by1(UInt32(bitsValue >> 1)))
+                let bits: (UInt32, UInt32) = (
+                        compact1by1(UInt32(bitsValue)), compact1by1(UInt32(bitsValue >> 1))
+                )
                 return (Real(bits.0) / Real(1 << 16), Real(bits.1) / Real(1 << 16))
         }
 

@@ -3,14 +3,16 @@
 
 public protocol FramedBsdf: BsdfFrameProtocol, DistributionModel, Bsdf, Sendable {
         func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
-        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real
+        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
+                -> Real
         func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
 extension FramedBsdf {
 
-        public func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum {
+        public func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
+                -> RgbSpectrum {
                 var totalLightScattered = black
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
                 let incidentLocal = worldToLocal(world: incidentWorld)
@@ -24,7 +26,9 @@ extension FramedBsdf {
                 return totalLightScattered
         }
 
-        public func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real {
+        public func probabilityDensityWorldSpace(
+                outgoing outgoingWorld: Vector, incident incidentWorld: Vector
+        ) -> Real {
                 let incidentLocal = worldToLocal(world: incidentWorld)
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
                 if outgoingLocal.z == 0 { return 0 }
@@ -42,7 +46,8 @@ extension FramedBsdf {
                 )
         }
 
-        public func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal: Normal) -> RgbSpectrum {
+        public func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal: Normal)
+                -> RgbSpectrum {
                 let reflected = evaluateWorldSpace(outgoing: outgoing, incident: incident)
                 let dotVal = absDot(incident, Vector(normal: normal))
                 let scatter = reflected * dotVal

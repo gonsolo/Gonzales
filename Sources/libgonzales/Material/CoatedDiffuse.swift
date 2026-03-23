@@ -34,11 +34,11 @@ struct CoatedDiffuse {
                 if remapRoughness {
                         alpha = TrowbridgeReitzDistribution.getAlpha(from: roughness)
                 }
-                
+
                 // Ensure alpha is at least 0.001 to avoid NaN or division by zero in microfacet math
                 alpha.0 = max(alpha.0, 0.001)
                 alpha.1 = max(alpha.1, 0.001)
-                
+
                 let distribution = TrowbridgeReitzDistribution(alpha: alpha)
                 let dielectric = DielectricBsdf(
                         distribution: distribution, refractiveIndex: refractiveIndex, bsdfFrame: bsdfFrame)
@@ -68,36 +68,41 @@ struct CoatedDiffuse {
 }
 
 extension CoatedDiffuse {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> CoatedDiffuse {
-        let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
-        let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
-        let uRoughness =
-                try roughnessOptional ?? parameters.findOneReal(called: "uroughness", else: 0.5)
-        let vRoughness =
-                try roughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
-        let roughness = (uRoughness, vRoughness)
-        let reflectance = try parameters.findRgbSpectrumTexture(name: "reflectance", textures: textures, arena: &arena)
-        let refractiveIndex = try parameters.findRealTexture(name: "eta", textures: textures, arena: &arena, else: 1.5)
-        
-        let thickness = try parameters.findRealTexture(name: "thickness", textures: textures, arena: &arena, else: 0.01)
-        let asymmetry = try parameters.findRealTexture(name: "g", textures: textures, arena: &arena, else: 0.0)
-        let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
-        let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
-        
+        static func create(
+                parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena
+        ) throws -> CoatedDiffuse {
+                let remapRoughness = try parameters.findOneBool(called: "remaproughness", else: true)
+                let roughnessOptional = try parameters.findOneRealOptional(called: "roughness")
+                let uRoughness =
+                        try roughnessOptional ?? parameters.findOneReal(called: "uroughness", else: 0.5)
+                let vRoughness =
+                        try roughnessOptional ?? parameters.findOneReal(called: "vroughness", else: 0.5)
+                let roughness = (uRoughness, vRoughness)
+                let reflectance = try parameters.findRgbSpectrumTexture(
+                        name: "reflectance", textures: textures, arena: &arena)
+                let refractiveIndex = try parameters.findRealTexture(
+                        name: "eta", textures: textures, arena: &arena, else: 1.5)
 
+                let thickness = try parameters.findRealTexture(
+                        name: "thickness", textures: textures, arena: &arena, else: 0.01)
+                let asymmetry = try parameters.findRealTexture(
+                        name: "g", textures: textures, arena: &arena, else: 0.0)
+                let maxDepth = try parameters.findOneInt(called: "maxdepth", else: 10)
+                let nSamples = try parameters.findOneInt(called: "nsamples", else: 1)
 
-        // PBRT defaults albedo to 0.0 (black)
-        let albedo = try parameters.findRgbSpectrumTexture(name: "albedo", textures: textures, arena: &arena, else: RgbSpectrum(intensity: 0.0))
+                // PBRT defaults albedo to 0.0 (black)
+                let albedo = try parameters.findRgbSpectrumTexture(
+                        name: "albedo", textures: textures, arena: &arena, else: RgbSpectrum(intensity: 0.0))
 
-        return CoatedDiffuse(
-                roughness: roughness,
-                reflectance: reflectance,
-                refractiveIndex: refractiveIndex,
-                thickness: thickness,
-                albedo: albedo,
-                asymmetry: asymmetry,
-                maxDepth: maxDepth,
-                nSamples: nSamples,
-                remapRoughness: remapRoughness)
-}
+                return CoatedDiffuse(
+                        roughness: roughness,
+                        reflectance: reflectance,
+                        refractiveIndex: refractiveIndex,
+                        thickness: thickness,
+                        albedo: albedo,
+                        asymmetry: asymmetry,
+                        maxDepth: maxDepth,
+                        nSamples: nSamples,
+                        remapRoughness: remapRoughness)
+        }
 }

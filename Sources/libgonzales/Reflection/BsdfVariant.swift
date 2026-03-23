@@ -9,49 +9,81 @@ enum BsdfVariant: FramedBsdf {
 
         func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum {
                 switch self {
-                case .coatedConductorBsdf(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .coatedDiffuseBsdf(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .dielectricBsdf(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .diffuseBsdf(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .hairBsdf(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .microfacetReflection(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .mixBsdf(let bsdf): return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .coatedConductorBsdf(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .coatedDiffuseBsdf(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .dielectricBsdf(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .hairBsdf(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .microfacetReflection(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .mixBsdf(let bsdf):
+                        return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
                 }
         }
 
-        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> Real {
+        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
+                -> Real {
                 switch self {
-                case .coatedConductorBsdf(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .coatedDiffuseBsdf(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .dielectricBsdf(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .diffuseBsdf(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .hairBsdf(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .microfacetReflection(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
-                case .mixBsdf(let bsdf): return bsdf.probabilityDensityWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
+                case .coatedConductorBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
+                case .coatedDiffuseBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
+                case .dielectricBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
+                case .hairBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
+                case .microfacetReflection(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
+                case .mixBsdf(let bsdf):
+                        return bsdf.probabilityDensityWorldSpace(
+                                outgoing: outgoingWorld, incident: incidentWorld)
                 }
         }
 
         func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool) {
                 switch self {
-                case .coatedConductorBsdf(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
-                case .coatedDiffuseBsdf(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
-                case .dielectricBsdf(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
-                case .diffuseBsdf(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
-                case .hairBsdf(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
-                case .microfacetReflection(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
-                case .mixBsdf(let bsdf): return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .coatedConductorBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .coatedDiffuseBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .dielectricBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .diffuseBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .hairBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .microfacetReflection(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
+                case .mixBsdf(let bsdf):
+                        return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)
                 }
         }
 
         func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
                 switch self {
-                case .coatedConductorBsdf(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
-                case .coatedDiffuseBsdf(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
+                case .coatedConductorBsdf(let bsdf):
+                        return bsdf.evaluate(outgoing: outgoing, incident: incident)
+                case .coatedDiffuseBsdf(let bsdf):
+                        return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 case .dielectricBsdf(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 case .diffuseBsdf(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 case .hairBsdf(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
-                case .microfacetReflection(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
+                case .microfacetReflection(let bsdf):
+                        return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 case .mixBsdf(let bsdf): return bsdf.evaluate(outgoing: outgoing, incident: incident)
                 }
         }

@@ -23,18 +23,18 @@ public struct RandomSampler: Sendable {
         }
 
         mutating func startPixelSample(pixel: Point2i, index: Int) {
-                var state = UInt64(bitPattern: Int64(pixel.x)) &* 0x85EBCA77C2B2AE63
-                state ^= UInt64(bitPattern: Int64(pixel.y)) &* 0xC2B2AE3D27D4EB4F
-                state ^= UInt64(bitPattern: Int64(index)) &* 0x27D4EB2F165667C5
-                
+                var state = UInt64(bitPattern: Int64(pixel.x)) &* 0x85EB_CA77_C2B2_AE63
+                state ^= UInt64(bitPattern: Int64(pixel.y)) &* 0xC2B2_AE3D_27D4_EB4F
+                state ^= UInt64(bitPattern: Int64(index)) &* 0x27D4_EB2F_1656_67C5
+
                 func splitmix64() -> UInt64 {
-                        state &+= 0x9e3779b97f4a7c15
+                        state &+= 0x9e37_79b9_7f4a_7c15
                         var z = state
-                        z = (z ^ (z &>> 30)) &* 0xBF58476D1CE4E5B9
-                        z = (z ^ (z &>> 27)) &* 0x94D049BB133111EB
+                        z = (z ^ (z &>> 30)) &* 0xBF58_476D_1CE4_E5B9
+                        z = (z ^ (z &>> 27)) &* 0x94D0_49BB_1331_11EB
                         return z ^ (z &>> 31)
                 }
-                
+
                 xoshiro = Xoshiro(seed: [splitmix64(), splitmix64(), splitmix64(), splitmix64()])
         }
 

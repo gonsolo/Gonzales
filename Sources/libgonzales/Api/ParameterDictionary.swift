@@ -49,26 +49,34 @@ extension ParameterDictionary {
 
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
-                                print("Warning: Could not find texture \"\(textureName)\", using default spectrum.")
+                                print(
+                                        "Warning: Could not find texture \"\(textureName)\", using default spectrum."
+                                )
                                 let constantTexture = ConstantTexture(value: spectrum)
-                                let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(constantTexture))
+                                let index = arena.appendRgb(
+                                        RgbSpectrumTexture.constantTexture(constantTexture))
                                 return Texture.rgbSpectrumTexture(index)
                         }
                         switch texture {
                         case .floatTexture:
                                 print("Warning: Could not find texture \(textureName)")
                                 let constantTexture = ConstantTexture<RgbSpectrum>(value: red)
-                                let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(constantTexture))
-				return Texture.rgbSpectrumTexture(index)
+                                let index = arena.appendRgb(
+                                        RgbSpectrumTexture.constantTexture(constantTexture))
+                                return Texture.rgbSpectrumTexture(index)
                         case .rgbSpectrumTexture:
-				return texture
+                                return texture
                         }
                 } else {
                         guard let spectrum = try findSpectrum(name: name, else: spectrum) else {
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Missing spectrum")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line,
+                                        message: "Missing spectrum")
                         }
                         guard let rgbSpectrum = spectrum as? RgbSpectrum else {
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "Expected RgbSpectrum")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line,
+                                        message: "Expected RgbSpectrum")
                         }
                         let constantTexture = ConstantTexture(value: rgbSpectrum)
                         let index = arena.appendRgb(RgbSpectrumTexture.constantTexture(constantTexture))
@@ -83,21 +91,27 @@ extension ParameterDictionary {
                 let textureName = try findTexture(name: name)
                 if textureName != "" {
                         guard let texture = textures[textureName] else {
-                                print("Warning: No named texture \"\(textureName)\" found, using default value.")
-                                let index = arena.appendFloat(FloatTexture.constantTexture(ConstantTexture<Real>(value: value)))
-				return Texture.floatTexture(index)
+                                print(
+                                        "Warning: No named texture \"\(textureName)\" found, using default value."
+                                )
+                                let index = arena.appendFloat(
+                                        FloatTexture.constantTexture(ConstantTexture<Real>(value: value)))
+                                return Texture.floatTexture(index)
                         }
                         switch texture {
                         case .floatTexture:
-				return texture
+                                return texture
                         case .rgbSpectrumTexture:
                                 print("No named float texture \"\(textureName)\"")
-                                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "No named float texture \"\(textureName)\"")
+                                throw RenderError.unimplemented(
+                                        function: #function, file: #filePath, line: #line,
+                                        message: "No named float texture \"\(textureName)\"")
                         }
                 } else {
                         let value = try findOneReal(called: name, else: value)
-                        let index = arena.appendFloat(FloatTexture.constantTexture(ConstantTexture<Real>(value: value)))
-				return Texture.floatTexture(index)
+                        let index = arena.appendFloat(
+                                FloatTexture.constantTexture(ConstantTexture<Real>(value: value)))
+                        return Texture.floatTexture(index)
                 }
         }
 

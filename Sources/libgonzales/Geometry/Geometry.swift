@@ -64,10 +64,12 @@ func union(bound: Bounds3f, point: Point) -> Bounds3f {
 func makeCoordinateSystem(from vector1: Vector) -> (vector2: Vector, vector3: Vector) {
         var vector2 = upVector
         if abs(vector1.x) > abs(vector1.y) {
-                vector2 = Vector(x: -vector1.z, y: 0, z: vector1.x)
+                vector2 =
+                        Vector(x: -vector1.z, y: 0, z: vector1.x)
                         / (vector1.x * vector1.x + vector1.z * vector1.z).squareRoot()
         } else {
-                vector2 = Vector(x: 0, y: vector1.z, z: -vector1.y)
+                vector2 =
+                        Vector(x: 0, y: vector1.z, z: -vector1.y)
                         / (vector1.y * vector1.y + vector1.z * vector1.z).squareRoot()
         }
         let vector3 = cross(vector1, vector2)

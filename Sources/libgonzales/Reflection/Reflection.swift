@@ -9,11 +9,11 @@ func reflect(vector: Vector, by normal: Vector) -> Vector {
 func refract(incident: Vector, normal: Normal, eta: Real) -> (Vector, Real)? {
         var eta = eta
         var cosThetaI = dot(normal, incident)
-        var n = Vector(normal: normal)
+        var flippedNormal = Vector(normal: normal)
         if cosThetaI < 0 {
                 eta = 1 / eta
                 cosThetaI = -cosThetaI
-                n = -n
+                flippedNormal = -flippedNormal
         }
         let sin2ThetaI = max(0, 1 - square(cosThetaI))
         let sin2ThetaT = sin2ThetaI / square(eta)
@@ -21,7 +21,7 @@ func refract(incident: Vector, normal: Normal, eta: Real) -> (Vector, Real)? {
                 return nil
         }
         let cosThetaT = (1 - sin2ThetaT).squareRoot()
-        let transmitted = -incident / eta + (cosThetaI / eta - cosThetaT) * n
+        let transmitted = -incident / eta + (cosThetaI / eta - cosThetaT) * flippedNormal
         return (transmitted, eta)
 }
 

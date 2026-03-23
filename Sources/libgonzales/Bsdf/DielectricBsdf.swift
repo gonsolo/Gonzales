@@ -19,7 +19,8 @@ public struct DielectricBsdf: FramedBsdf {
 extension DielectricBsdf {
 
         private func backfacing(incident: Vector, outgoing: Vector, half: Vector) -> Bool {
-                return dot(half, incident) * cosTheta(incident) < 0 || dot(half, outgoing) * cosTheta(outgoing) < 0
+                return dot(half, incident) * cosTheta(incident) < 0
+                        || dot(half, outgoing) * cosTheta(outgoing) < 0
         }
 
         public func evaluate(outgoing: Vector, incident: Vector) -> RgbSpectrum {
@@ -53,7 +54,8 @@ extension DielectricBsdf {
                         let estimate = RgbSpectrum(intensity: enumerator / denominator)
                         return estimate
                 } else {
-                        let denominator = square(dot(incident, half) + dot(outgoing, half) / etap)
+                        let denominator =
+                                square(dot(incident, half) + dot(outgoing, half) / etap)
                                 * absCosTheta(incident) * absCosTheta(outgoing)
                         let differentialArea = distribution.differentialArea(withNormal: half)
                         let visibleFraction = distribution.visibleFraction(from: outgoing, and: incident)
@@ -69,7 +71,9 @@ extension DielectricBsdf {
                 }
         }
 
-        private func sampleSpecularReflection(outgoing: Vector, reflected: Real, probabilityReflected: Probability)
+        private func sampleSpecularReflection(
+                outgoing: Vector, reflected: Real, probabilityReflected: Probability
+        )
                 -> BsdfSample {
                 let incident = mirror(outgoing)
                 let estimate = RgbSpectrum(intensity: reflected / absCosTheta(incident))
@@ -83,7 +87,10 @@ extension DielectricBsdf {
                 mode: TransportMode
         ) -> BsdfSample {
                 let upNormal = Normal(x: 0, y: 0, z: 1)
-                guard let (incident, etap) = refract(incident: outgoing, normal: upNormal, eta: refractiveIndex) else {
+                guard
+                        let (incident, etap) = refract(
+                                incident: outgoing, normal: upNormal, eta: refractiveIndex)
+                else {
                         return BsdfSample()
                 }
                 var estimate = RgbSpectrum(intensity: transmitted / absCosTheta(incident))
@@ -94,7 +101,8 @@ extension DielectricBsdf {
                 return BsdfSample(estimate, incident, probabilityTransmitted)
         }
 
-        private func sampleSpecular(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
+        private func sampleSpecular(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode)
+                -> BsdfSample {
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: cosTheta(outgoing),
                         refractiveIndex: refractiveIndex)
@@ -144,8 +152,9 @@ extension DielectricBsdf {
                 probabilityTransmitted: Probability,
                 mode: TransportMode
         ) -> BsdfSample {
-                guard let (incident, etap) = refract(
-                        incident: outgoing, normal: Normal(halfVector), eta: refractiveIndex)
+                guard
+                        let (incident, etap) = refract(
+                                incident: outgoing, normal: Normal(halfVector), eta: refractiveIndex)
                 else {
                         return BsdfSample()
                 }
@@ -156,15 +165,16 @@ extension DielectricBsdf {
                 let dwmDwi = absDot(incident, halfVector) / denom
                 let probabilityDensity =
                         distribution.probabilityDensity(outgoing: outgoing, half: halfVector) * dwmDwi
-                                * probabilityTransmitted
+                        * probabilityTransmitted
                 let differentialArea = distribution.differentialArea(withNormal: halfVector)
                 let visibleFraction = distribution.visibleFraction(from: outgoing, and: incident)
                 var estimate = RgbSpectrum(
                         intensity:
                                 transmitted * differentialArea * visibleFraction
                                 * abs(
-                                        dot(incident, halfVector) * dot(outgoing, halfVector) / (absCosTheta(incident)
-                                                * absCosTheta(outgoing) * denom)))
+                                        dot(incident, halfVector) * dot(outgoing, halfVector)
+                                                / (absCosTheta(incident)
+                                                        * absCosTheta(outgoing) * denom)))
                 if mode == .radiance {
                         // transport mode radiance
                         estimate /= square(etap)
@@ -172,8 +182,10 @@ extension DielectricBsdf {
                 return BsdfSample(estimate, incident, probabilityDensity)
         }
 
-        private func sampleRough(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode) -> BsdfSample {
-                let halfVector = distribution.sampleHalfVector(outgoing: outgoing, uSample: (uSample.0, uSample.1))
+        private func sampleRough(outgoing: Vector, uSample: ThreeRandomVariables, mode: TransportMode)
+                -> BsdfSample {
+                let halfVector = distribution.sampleHalfVector(
+                        outgoing: outgoing, uSample: (uSample.0, uSample.1))
                 let reflected = FresnelDielectric.reflected(
                         cosThetaI: dot(outgoing, halfVector),
                         refractiveIndex: refractiveIndex)
@@ -237,12 +249,14 @@ extension DielectricBsdf {
                 if reflect {
                         let dPdf: Real = distribution.probabilityDensity(outgoing: outgoing, half: halfVector)
                         let four: Real = 4 * absDot(outgoing, halfVector)
-                        let probability: Real = probabilityReflected / (probabilityReflected + probabilityTransmitted)
+                        let probability: Real =
+                                probabilityReflected / (probabilityReflected + probabilityTransmitted)
                         pdf = dPdf / four * probability
                 } else {
                         let denom = square(dot(incident, halfVector) + dot(outgoing, halfVector) / etap)
                         let dwmDwi = absDot(incident, halfVector) / denom
-                        pdf = distribution.probabilityDensity(outgoing: outgoing, half: halfVector) * dwmDwi
+                        pdf =
+                                distribution.probabilityDensity(outgoing: outgoing, half: halfVector) * dwmDwi
                                 * probabilityTransmitted / (probabilityReflected + probabilityTransmitted)
                 }
                 return pdf

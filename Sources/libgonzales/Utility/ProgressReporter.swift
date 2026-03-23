@@ -14,9 +14,9 @@ actor ProgressReporter {
         func tileFinished() {
                 completed += 1
         }
-        
-        func increment(by n: Int = 1) {
-                completed += n
+
+        func increment(by count: Int = 1) {
+                completed += count
         }
 
         func getProgressMetrics() -> (
@@ -29,7 +29,7 @@ actor ProgressReporter {
 }
 
 func runProgressReporter(reporter: ProgressReporter) async {
-        let reportInterval: UInt64 = 500_000_000 // 0.5s
+        let reportInterval: UInt64 = 500_000_000  // 0.5s
 
         func formatTime(_ time: TimeInterval) -> String {
                 let seconds = Int(time)
@@ -54,7 +54,9 @@ func runProgressReporter(reporter: ProgressReporter) async {
                         let progressString: String
 
                         if let total = metrics.total {
-                                let percentage = total > 0 ? (Double(metrics.completed) / Double(total)) * 100.0 : 100.0
+                                let percentage =
+                                        total > 0
+                                        ? (Double(metrics.completed) / Double(total)) * 100.0 : 100.0
                                 let predictedTotalTime = metrics.averageTimePerTile * Double(total)
                                 progressString = String(
                                         format: "%@: %d / %d (%.1f%%) | Elapsed: %@ | Total Est.: %@",

@@ -47,14 +47,14 @@ extension MixBsdf {
                 let remappedU0: Real
 
                 let bsdfSample: BsdfSample
-                
+
                 if selectionVar < weight1 {
                         remappedU0 = min(selectionVar / weight1, 1.0 - .ulpOfOne)
                         let newUSample = (remappedU0, uSample.1, uSample.2)
                         bsdfSample = bsdf1.sample(outgoing: outgoing, uSample: newUSample)
                 } else {
                         let weight2 = amount
-                        if weight2 == 0 { return BsdfSample() } // Safe fallback
+                        if weight2 == 0 { return BsdfSample() }  // Safe fallback
                         remappedU0 = min((selectionVar - weight1) / weight2, 1.0 - .ulpOfOne)
                         let newUSample = (remappedU0, uSample.1, uSample.2)
                         bsdfSample = bsdf2.sample(outgoing: outgoing, uSample: newUSample)
@@ -66,10 +66,10 @@ extension MixBsdf {
                 }
 
                 let incident = bsdfSample.incoming
-                if  bsdf1.isSpecular && bsdf2.isSpecular {
-                        return bsdfSample // Delta mixtures handled carefully
+                if bsdf1.isSpecular && bsdf2.isSpecular {
+                        return bsdfSample  // Delta mixtures handled carefully
                 }
-                
+
                 let eval = evaluate(outgoing: outgoing, incident: incident)
                 let pdf = probabilityDensity(outgoing: outgoing, incident: incident)
                 if pdf == 0 { return BsdfSample() }
@@ -78,7 +78,8 @@ extension MixBsdf {
         }
 
         func albedo() -> RgbSpectrum {
-                return RgbSpectrum(intensity: 1.0 - amount) * bsdf1.albedo() + RgbSpectrum(intensity: amount) * bsdf2.albedo()
+                return RgbSpectrum(intensity: 1.0 - amount) * bsdf1.albedo() + RgbSpectrum(intensity: amount)
+                        * bsdf2.albedo()
         }
 
         var isSpecular: Bool {

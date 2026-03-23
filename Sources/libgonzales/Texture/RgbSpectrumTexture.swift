@@ -9,10 +9,13 @@ enum RgbSpectrumTexture: Sendable {
 
         func evaluateRgbSpectrum(at interaction: any Interaction, arena: TextureArena) -> RgbSpectrum {
                 switch self {
-                case .constantTexture(let value): return value.evaluateRgbSpectrum(at: interaction, arena: arena)
-                case .openImageIoTexture(let value): return value.evaluateRgbSpectrum(at: interaction, arena: arena)
+                case .constantTexture(let value):
+                        return value.evaluateRgbSpectrum(at: interaction, arena: arena)
+                case .openImageIoTexture(let value):
+                        return value.evaluateRgbSpectrum(at: interaction, arena: arena)
                 case .ptex(let value): return value.evaluateRgbSpectrum(at: interaction, arena: arena)
-                case .scaledTexture(let value): return value.evaluateRgbSpectrum(at: interaction, arena: arena)
+                case .scaledTexture(let value):
+                        return value.evaluateRgbSpectrum(at: interaction, arena: arena)
                 }
         }
 

@@ -147,7 +147,7 @@ import Testing
 
         @Test func refractObeysSnellsLaw() {
                 // Snell's law: eta_i * sin(theta_i) = eta_t * sin(theta_t)
-                let incident = normalized(Vector(x: 0.5, y: 0, z: 0.8660254)) // ~30° from normal
+                let incident = normalized(Vector(x: 0.5, y: 0, z: 0.8660254))  // ~30° from normal
                 let normal = Normal(x: 0, y: 0, z: 1)
                 let eta: Real = 1.5  // entering glass
                 guard let (transmitted, etap) = refract(incident: incident, normal: normal, eta: eta) else {

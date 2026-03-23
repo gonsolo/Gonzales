@@ -112,7 +112,7 @@ func main() async {
         } catch let error {
                 handle(error)
         }
-        
+
         // Let the TileRenderer output settle before the overall timing
         try? await Task.sleep(nanoseconds: 100_000_000)
         let totalElapsed = DateInterval(start: globalStartTime, end: Date()).duration

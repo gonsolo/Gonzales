@@ -22,10 +22,18 @@ enum Light: Sendable {
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
                 throws -> LightSample {
                 switch self {
-                case .area(let light): return try light.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
-                case .infinite(let light): return light.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
-                case .distant(let light): return light.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
-                case .point(let light): return light.sample(point: point, samples: samples, accelerator: accelerator, scene: scene)
+                case .area(let light):
+                        return try light.sample(
+                                point: point, samples: samples, accelerator: accelerator, scene: scene)
+                case .infinite(let light):
+                        return light.sample(
+                                point: point, samples: samples, accelerator: accelerator, scene: scene)
+                case .distant(let light):
+                        return light.sample(
+                                point: point, samples: samples, accelerator: accelerator, scene: scene)
+                case .point(let light):
+                        return light.sample(
+                                point: point, samples: samples, accelerator: accelerator, scene: scene)
                 }
         }
 
@@ -34,10 +42,18 @@ enum Light: Sendable {
         )
                 throws -> Real {
                 switch self {
-                case .area(let light): return try light.probabilityDensityFor(scene: scene, samplingDirection: direction, from: reference)
-                case .infinite(let light): return try light.probabilityDensityFor(scene: scene, samplingDirection: direction, from: reference)
-                case .distant(let light): return try light.probabilityDensityFor(scene: scene, samplingDirection: direction, from: reference)
-                case .point(let light): return try light.probabilityDensityFor(scene: scene, samplingDirection: direction, from: reference)
+                case .area(let light):
+                        return try light.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: reference)
+                case .infinite(let light):
+                        return try light.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: reference)
+                case .distant(let light):
+                        return try light.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: reference)
+                case .point(let light):
+                        return try light.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: reference)
                 }
         }
 

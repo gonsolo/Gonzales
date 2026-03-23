@@ -62,7 +62,8 @@ struct TransformedPrimitive: Boundable, Intersectable {
         }
 
         func objectBound(scene _: Scene) throws -> Bounds3f {
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 
         // let acceleratorIndex: AcceleratorIndex

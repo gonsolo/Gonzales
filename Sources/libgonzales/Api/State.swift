@@ -32,24 +32,29 @@ struct State {
                 return Material.diffuse(diffuse)
         }
 
-        mutating func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture]) throws -> Material {
+        mutating func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture])
+                throws -> Material {
 
                 var material: Material
                 switch type {
                 case "coateddiffuse":
-                        let coatedDiffuse = try CoatedDiffuse.create(parameters: parameters, textures: textures, arena: &arena)
+                        let coatedDiffuse = try CoatedDiffuse.create(
+                                parameters: parameters, textures: textures, arena: &arena)
                         material = Material.coatedDiffuse(coatedDiffuse)
                 case "coatedconductor":
-                        let coatedConductor = try CoatedConductor.create(parameters: parameters, textures: textures, arena: &arena)
+                        let coatedConductor = try CoatedConductor.create(
+                                parameters: parameters, textures: textures, arena: &arena)
                         material = Material.coatedConductor(coatedConductor)
                 case "conductor":
                         let conductor = try Conductor.create(parameters: parameters, arena: &arena)
                         material = Material.conductor(conductor)
                 case "dielectric":
-                        let dielectric = try Dielectric.create(parameters: parameters, textures: textures, arena: &arena)
+                        let dielectric = try Dielectric.create(
+                                parameters: parameters, textures: textures, arena: &arena)
                         material = Material.dielectric(dielectric)
                 case "diffuse":
-                        let diffuse = try Diffuse.create(parameters: parameters, textures: textures, arena: &arena)
+                        let diffuse = try Diffuse.create(
+                                parameters: parameters, textures: textures, arena: &arena)
                         material = Material.diffuse(diffuse)
                 case "diffusetransmission":
                         let diffuseTransmission = try DiffuseTransmission.create(
@@ -65,7 +70,9 @@ struct State {
                         let measured = try Measured.create(parameters: parameters)
                         material = Material.measured(measured)
                 case "mix":
-                        let mix = try MixMaterial.create(parameters: parameters, textures: textures, namedMaterials: self.namedMaterials, state: &self)
+                        let mix = try MixMaterial.create(
+                                parameters: parameters, textures: textures,
+                                namedMaterials: self.namedMaterials, state: &self)
                         material = Material.mix(mix)
                 // subsurface missing
                 // thindielectric missing
@@ -88,15 +95,17 @@ struct State {
                         assert(currentNamedMaterial != "")
                         guard let named = namedMaterials[currentNamedMaterial] else {
                                 print("Warning: The material \(currentNamedMaterial) was not defined!")
-                                let idx = arena.appendRgb(RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
-				let diffuse = Diffuse(reflectance: Texture.rgbSpectrumTexture(idx))
+                                let idx = arena.appendRgb(
+                                        RgbSpectrumTexture.constantTexture(ConstantTexture(value: gray)))
+                                let diffuse = Diffuse(reflectance: Texture.rgbSpectrumTexture(idx))
                                 return Material.diffuse(diffuse)
                         }
                         material = named
                 }
                 var merged = parameters
                 merged.merge(material.parameters) { (current, _) in current }
-                return try makeMaterial(type: material.type, parameters: merged, textures: textures ?? self.textures)
+                return try makeMaterial(
+                        type: material.type, parameters: merged, textures: textures ?? self.textures)
         }
 
         func getImmutable() -> ImmutableState {
@@ -119,5 +128,5 @@ struct State {
         var reverseOrientation = false
 
         let ptexCache: PtexCache
-	var arena: TextureArena
+        var arena: TextureArena
 }

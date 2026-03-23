@@ -19,12 +19,14 @@ struct InfiniteLight: LightSource {
                 var data = [Real]()
                 data.reserveCapacity(width * height)
 
-                for v in 0..<height {
-                        for u in 0..<width {
-                                let uvCoordinates = Point2f(x: (Real(u) + 0.5) / Real(width), y: (Real(v) + 0.5) / Real(height))
+                for row in 0..<height {
+                        for col in 0..<width {
+                                let uvCoordinates = Point2f(
+                                        x: (Real(col) + 0.5) / Real(width),
+                                        y: (Real(row) + 0.5) / Real(height))
                                 let interaction = SurfaceInteraction(uvCoordinates: uvCoordinates)
                                 let color = texture.evaluateRgbSpectrum(at: interaction, arena: arena)
-									if true {
+                                if true {
                                         data.append(color.y)
                                 } else {
                                         data.append(0)
@@ -38,21 +40,25 @@ struct InfiniteLight: LightSource {
                 point: Point, samples: TwoRandomVariables,
                 accelerator _: Accelerator, scene: Scene
         ) -> LightSample {
-                let (uv, mapPdf) = distribution.sampleContinuous(u: Point2f(x: samples.0, y: samples.1))
+                let (texCoord, mapPdf) = distribution.sampleContinuous(
+                        sample: Point2f(x: samples.0, y: samples.1))
                 if mapPdf == 0 {
-                        return LightSample(radiance: black, direction: Vector(), pdf: 0, visibility: Visibility(from: point, target: point))
+                        return LightSample(
+                                radiance: black, direction: Vector(), pdf: 0,
+                                visibility: Visibility(from: point, target: point))
                 }
 
-                let lightDirection = equalAreaSquareToSphere(uv: uv)
+                let lightDirection = equalAreaSquareToSphere(texCoord: texCoord)
                 let direction = lightToWorld * lightDirection
-                
+
                 let pdf = mapPdf / (4 * Real.pi)
                 let distantPoint = point + direction * sceneDiameter
                 let visibility = Visibility(from: point, target: distantPoint)
-                
-                let interaction = SurfaceInteraction(uvCoordinates: uv)
+
+                let interaction = SurfaceInteraction(uvCoordinates: texCoord)
                 guard let color = texture.evaluate(at: interaction, arena: scene.arena) as? RgbSpectrum else {
-                        return LightSample(radiance: black, direction: direction, pdf: pdf, visibility: visibility)
+                        return LightSample(
+                                radiance: black, direction: direction, pdf: pdf, visibility: visibility)
                 }
 
                 return LightSample(radiance: color, direction: direction, pdf: pdf, visibility: visibility)
@@ -63,9 +69,9 @@ struct InfiniteLight: LightSource {
         )
                 throws -> Real {
                 let incoming = worldToLight * direction
-                let uv = equalAreaSphereToSquare(direction: incoming)
-                let pdf = distribution.pdf(uv: uv)
-                return pdf / (4 * Real.pi)
+                let texCoord = equalAreaSphereToSquare(direction: incoming)
+                let mapPdf = distribution.pdf(texCoord: texCoord)
+                return mapPdf / (4 * Real.pi)
         }
 
         private func directionToUV(direction: Vector) -> Point2f {
@@ -102,21 +108,21 @@ struct InfiniteLight: LightSource {
                 return Point2f(x: 0.5 * (uCoord + 1), y: 0.5 * (vCoord + 1))
         }
 
-        private func equalAreaSquareToSphere(uv: Point2f) -> Vector {
-                let u = 2 * uv.x - 1
-                let v = 2 * uv.y - 1
-                let up = abs(u)
-                let vp = abs(v)
-                let signedDistance = 1 - (up + vp)
-                let d = abs(signedDistance)
-                let r = 1 - d
-                let phi = (r == 0 ? 1 : (vp - up) / r + 1) * (Real.pi / 4)
-                let z = copysign(max(0, 1 - square(r)), signedDistance)
+        private func equalAreaSquareToSphere(texCoord: Point2f) -> Vector {
+                let remappedU = 2 * texCoord.x - 1
+                let remappedV = 2 * texCoord.y - 1
+                let absU = abs(remappedU)
+                let absV = abs(remappedV)
+                let signedDistance = 1 - (absU + absV)
+                let absDist = abs(signedDistance)
+                let radius = 1 - absDist
+                let phi = (radius == 0 ? 1 : (absV - absU) / radius + 1) * (Real.pi / 4)
+                let zCoord = copysign(max(0, 1 - square(radius)), signedDistance)
                 let cosPhi = cos(phi)
                 let sinPhi = sin(phi)
-                let x = copysign(r * cosPhi, u)
-                let y = copysign(r * sinPhi, v)
-                return Vector(x: x, y: y, z: z)
+                let xCoord = copysign(radius * cosPhi, remappedU)
+                let yCoord = copysign(radius * sinPhi, remappedV)
+                return Vector(x: xCoord, y: yCoord, z: zCoord)
         }
 
         func radianceFromInfinity(for ray: Ray, arena: TextureArena) -> RgbSpectrum {
@@ -141,24 +147,30 @@ struct InfiniteLight: LightSource {
 }
 
 extension InfiniteLight {
-        static func create(lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String, arena: inout TextureArena) throws
-        -> InfiniteLight {
-        guard let mapname = try parameters.findString(called: "filename") else {
-                let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
-                let constantTexture = ConstantTexture(value: brightness)
-                let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
-                let index = arena.appendRgb(rgbSpectrumTexture)
-                let texture = Texture.rgbSpectrumTexture(index)
+        static func create(
+                lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String,
+                arena: inout TextureArena
+        ) throws
+                -> InfiniteLight {
+                guard let mapname = try parameters.findString(called: "filename") else {
+                        let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
+                        let constantTexture = ConstantTexture(value: brightness)
+                        let rgbSpectrumTexture = RgbSpectrumTexture.constantTexture(constantTexture)
+                        let index = arena.appendRgb(rgbSpectrumTexture)
+                        let texture = Texture.rgbSpectrumTexture(index)
+                        return InfiniteLight(
+                                lightToWorld: lightToWorld,
+                                brightness: brightness,
+                                texture: texture,
+                                arena: arena)
+                }
+                let scale = try parameters.findOneReal(called: "scale", else: 1)
+                let texture = try getTextureFrom(
+                        name: mapname, type: "color", sceneDirectory: sceneDirectory, arena: &arena)
                 return InfiniteLight(
-                        lightToWorld: lightToWorld,
-                        brightness: brightness,
-                        texture: texture,
-                        arena: arena)
+                        lightToWorld: lightToWorld, brightness: RgbSpectrum(intensity: scale),
+                        texture: texture, arena: arena)
         }
-        let scale = try parameters.findOneReal(called: "scale", else: 1)
-        let texture = try getTextureFrom(name: mapname, type: "color", sceneDirectory: sceneDirectory, arena: &arena)
-        return InfiniteLight(lightToWorld: lightToWorld, brightness: RgbSpectrum(intensity: scale), texture: texture, arena: arena)
-}
 }
 
 extension InfiniteLight {

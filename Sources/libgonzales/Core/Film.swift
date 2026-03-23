@@ -4,7 +4,10 @@ struct Film {
                 case unknownFileType(name: String)
         }
 
-        init(name: String, resolution: Point2i, fileName: String, filter: any Filter, crop: Bounds2f, iso: Real = 100.0, maxComponentValue: Real = 0.0) {
+        init(
+                name: String, resolution: Point2i, fileName: String, filter: any Filter, crop: Bounds2f,
+                iso: Real = 100.0, maxComponentValue: Real = 0.0
+        ) {
 
                 func upperPoint2i(_ point: Point2f) -> Point2i {
                         return Point2i(x: Int(point.x.rounded(.up)), y: Int(point.y.rounded(.up)))
@@ -110,9 +113,9 @@ struct Film {
                 if isWithin(location: sample.pixel, resolution: image.getResolution()) {
                         var scaledLight = sample.light * RgbSpectrum(intensity: iso / 100.0)
                         if maxComponentValue > 0 {
-                                let m = scaledLight.maxValue
-                                if m > maxComponentValue {
-                                        scaledLight *= maxComponentValue / m
+                                let maxVal = scaledLight.maxValue
+                                if maxVal > maxComponentValue {
+                                        scaledLight *= maxComponentValue / maxVal
                                 }
                         }
                         image.addPixel(

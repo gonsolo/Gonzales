@@ -29,8 +29,11 @@ struct Hair {
 }
 
 extension Hair {
-        static func create(parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena) throws -> Hair {
-        let eumelanin = try parameters.findRealTexture(name: "eumelanin", textures: textures, arena: &arena, else: 1.3)
-        return Hair(eumelanin: eumelanin)
-}
+        static func create(
+                parameters: ParameterDictionary, textures: [String: Texture], arena: inout TextureArena
+        ) throws -> Hair {
+                let eumelanin = try parameters.findRealTexture(
+                        name: "eumelanin", textures: textures, arena: &arena, else: 1.3)
+                return Hair(eumelanin: eumelanin)
+        }
 }

@@ -52,8 +52,12 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                 var tmp = 1 / (alphaTerm * alphaTerm - 1)
                 if tmp > 1e10 { tmp = 1e10 }
                 let tanThetaValue = tanTheta
-                let discriminantValue = (max(0, tanThetaValue * tanThetaValue * tmp * tmp
-                        - (alphaTerm * alphaTerm - tanThetaValue * tanThetaValue) * tmp)).squareRoot()
+                let discriminantValue =
+                        (max(
+                                0,
+                                tanThetaValue * tanThetaValue * tmp * tmp
+                                        - (alphaTerm * alphaTerm - tanThetaValue * tanThetaValue) * tmp))
+                        .squareRoot()
                 let slopeX1 = tanThetaValue * tmp - discriminantValue
                 let slopeX2 = tanThetaValue * tmp + discriminantValue
                 var slope: (Real, Real) = (0.0, 0.0)
@@ -73,7 +77,8 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                 }
                 let z =
                         (uMutable.1 * (uMutable.1 * (uMutable.1 * 0.27385 - 0.73369) + 0.46341))
-                        / (uMutable.1 * (uMutable.1 * (uMutable.1 * 0.093073 + 0.309420) - 1.000000) + 0.597999)
+                        / (uMutable.1 * (uMutable.1 * (uMutable.1 * 0.093073 + 0.309420) - 1.000000)
+                                + 0.597999)
                 slope.1 = sign * z * (1 + slope.0 * slope.0).squareRoot()
                 assert(!slope.1.isInfinite)
                 assert(!slope.1.isNaN)

@@ -57,51 +57,51 @@ extension Vector3 {
         }
 
         public static func + (left: Vector3, right: Vector3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz + right.xyz
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz + right.xyz
+                return result
         }
 
         public static func - (left: Vector3, right: Vector3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz - right.xyz
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz - right.xyz
+                return result
         }
 
         public static func * (left: Vector3, right: Vector3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz * right.xyz
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz * right.xyz
+                return result
         }
 
         public static func * (left: Vector3, right: Real) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz * right
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz * right
+                return result
         }
 
         public static func * (left: Real, right: Vector3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left * right.xyz
-                return v
+                var result = Vector3()
+                result.xyz = left * right.xyz
+                return result
         }
 
         public static func / (left: Vector3, right: Real) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz / right
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz / right
+                return result
         }
 
         public static func / (left: Vector3, right: Vector3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = left.xyz / right.xyz
-                return v
+                var result = Vector3()
+                result.xyz = left.xyz / right.xyz
+                return result
         }
 
         public static prefix func - (vector: Vector3) -> Vector3 {
-                var v = Vector3()
-                v.xyz = -vector.xyz
-                return v
+                var result = Vector3()
+                result.xyz = -vector.xyz
+                return result
         }
 
         public static func += (left: inout Vector3, right: Vector3) {

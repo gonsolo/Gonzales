@@ -148,7 +148,8 @@ struct Curve: Shape {
                         for segment in 0..<2 {
                                 let cps = segment * 3
                                 let maxWidth = computeMaxWidth(
-                                        uRange: (uSamples[segment], uSamples[segment + 1]), width: common.width)
+                                        uRange: (uSamples[segment], uSamples[segment + 1]),
+                                        width: common.width)
                                 if !overlap(
                                         points: splitPoints, index: cps, xyz: 1, width: maxWidth) {
                                         continue
@@ -194,7 +195,9 @@ struct Curve: Shape {
                 } else {
                         func testTangent(_ indexA: Int, _ indexB: Int) -> Bool {
                                 let edge =
-                                        (points[indexA].y - points[indexB].y) * -points[indexB].y + points[indexB].x
+                                        (points[indexA].y - points[indexB].y) * -points[indexB].y + points[
+                                                indexB
+                                        ].x
                                         * (points[indexB].x - points[indexA].x)
                                 if edge < 0 {
                                         return false
@@ -288,7 +291,8 @@ struct Curve: Shape {
                 ray _: Ray,
                 tHit _: inout Real
         ) throws -> Bool {
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 
         func intersect(
@@ -296,15 +300,20 @@ struct Curve: Shape {
                 ray _: Ray,
                 tHit _: inout Real
         ) throws -> SurfaceInteraction? {
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 
         func area(scene _: Scene) throws -> Area {
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 
-        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) throws -> (interaction: I, pdf: Real) {
-                throw RenderError.unimplemented(function: #function, file: #filePath, line: #line, message: "")
+        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) throws -> (
+                interaction: I, pdf: Real
+        ) {
+                throw RenderError.unimplemented(
+                        function: #function, file: #filePath, line: #line, message: "")
         }
 
         public var description: String {
@@ -328,86 +337,86 @@ struct CurveCommon {
 
 extension Curve {
         static func create(objectToWorld: Transform, points: FourPoints, width: TwoFloats) -> [ShapeType] {
-        let common = CurveCommon(points: points, width: width)
-        // The default splitdepth in pbrt is 3 which would make this 8 segments (1 << splitDepth).
-        // Let's use 4 for the time being to save a little bit of memory.
-        let numberOfSegments = 4
-        var segments = [ShapeType]()
-        for index in 0..<numberOfSegments {
-                let numSegments = Real(numberOfSegments)
-                let uMin = Real(index) / numSegments
-                let uMax = (Real(index) + 1) / numSegments
-                let curve = Curve(objectToWorld: objectToWorld, common: common, uRange: (uMin, uMax))
-                let shape = ShapeType.curve(curve)
-                segments.append(shape)
+                let common = CurveCommon(points: points, width: width)
+                // The default splitdepth in pbrt is 3 which would make this 8 segments (1 << splitDepth).
+                // Let's use 4 for the time being to save a little bit of memory.
+                let numberOfSegments = 4
+                var segments = [ShapeType]()
+                for index in 0..<numberOfSegments {
+                        let numSegments = Real(numberOfSegments)
+                        let uMin = Real(index) / numSegments
+                        let uMax = (Real(index) + 1) / numSegments
+                        let curve = Curve(objectToWorld: objectToWorld, common: common, uRange: (uMin, uMax))
+                        let shape = ShapeType.curve(curve)
+                        segments.append(shape)
+                }
+                return segments
         }
-        return segments
-}
 
         static func createBVH(
-        controlPoints: [Point],
-        widths: (Float, Float),
-        objectToWorld: Transform,
-        degree: Int
-) -> [ShapeType] {
-        var curves = [ShapeType]()
-        let numberOfSegments = controlPoints.count - degree
-        for segment in 0..<numberOfSegments {
-                var bezierPoints: FourPoints
-                let p012 = controlPoints[segment + 0]
-                let p123 = controlPoints[segment + 1]
-                let p234 = controlPoints[segment + 2]
-                let p345 = controlPoints[segment + 3]
-                let p122 = lerp(with: 2.0 / 3.0, between: p012, and: p123)
-                let p223 = lerp(with: 1.0 / 3.0, between: p123, and: p234)
-                let p233 = lerp(with: 2.0 / 3.0, between: p123, and: p234)
-                let p334 = lerp(with: 1.0 / 3.0, between: p234, and: p345)
-                let p222 = lerp(with: 0.5, between: p122, and: p223)
-                let p333 = lerp(with: 0.5, between: p233, and: p334)
-                bezierPoints.0 = p222
-                bezierPoints.1 = p223
-                bezierPoints.2 = p233
-                bezierPoints.3 = p333
-                let width0 = lerp(
-                        with: Real(segment) / Real(numberOfSegments), between: widths.0,
-                        and: widths.1)
-                let width1 = lerp(
-                        with: Real(segment + 1) / Real(numberOfSegments), between: widths.0,
-                        and: widths.1)
-                let curve = Curve.create(
-                        objectToWorld: objectToWorld,
-                        points: bezierPoints,
-                        width: (width0, width1))
+                controlPoints: [Point],
+                widths: (Float, Float),
+                objectToWorld: Transform,
+                degree: Int
+        ) -> [ShapeType] {
+                var curves = [ShapeType]()
+                let numberOfSegments = controlPoints.count - degree
+                for segment in 0..<numberOfSegments {
+                        var bezierPoints: FourPoints
+                        let p012 = controlPoints[segment + 0]
+                        let p123 = controlPoints[segment + 1]
+                        let p234 = controlPoints[segment + 2]
+                        let p345 = controlPoints[segment + 3]
+                        let p122 = lerp(with: 2.0 / 3.0, between: p012, and: p123)
+                        let p223 = lerp(with: 1.0 / 3.0, between: p123, and: p234)
+                        let p233 = lerp(with: 2.0 / 3.0, between: p123, and: p234)
+                        let p334 = lerp(with: 1.0 / 3.0, between: p234, and: p345)
+                        let p222 = lerp(with: 0.5, between: p122, and: p223)
+                        let p333 = lerp(with: 0.5, between: p233, and: p334)
+                        bezierPoints.0 = p222
+                        bezierPoints.1 = p223
+                        bezierPoints.2 = p233
+                        bezierPoints.3 = p333
+                        let width0 = lerp(
+                                with: Real(segment) / Real(numberOfSegments), between: widths.0,
+                                and: widths.1)
+                        let width1 = lerp(
+                                with: Real(segment + 1) / Real(numberOfSegments), between: widths.0,
+                                and: widths.1)
+                        let curve = Curve.create(
+                                objectToWorld: objectToWorld,
+                                points: bezierPoints,
+                                width: (width0, width1))
 
-                curves.append(contentsOf: curve)
+                        curves.append(contentsOf: curve)
+                }
+                return curves
         }
-        return curves
-}
 
         static func createShape(
                 objectToWorld: Transform,
                 parameters: ParameterDictionary,
                 acceleratorName: String
         ) throws -> [ShapeType] {
-        let degree = 3
-        let controlPoints = try parameters.findPoints(name: "P")
-        let width = try parameters.findOneReal(called: "width", else: 0.5)
-        let width0 = try parameters.findOneReal(called: "width0", else: width)
-        let width1 = try parameters.findOneReal(called: "width1", else: width)
-        guard controlPoints.count >= degree + 1 else {
-                throw CurveError.numberControlPoints
+                let degree = 3
+                let controlPoints = try parameters.findPoints(name: "P")
+                let width = try parameters.findOneReal(called: "width", else: 0.5)
+                let width0 = try parameters.findOneReal(called: "width0", else: width)
+                let width1 = try parameters.findOneReal(called: "width1", else: width)
+                guard controlPoints.count >= degree + 1 else {
+                        throw CurveError.numberControlPoints
+                }
+                var curves = [ShapeType]()
+                switch acceleratorName {
+                case "bvh":
+                        curves = Curve.createBVH(
+                                controlPoints: controlPoints,
+                                widths: (width0, width1),
+                                objectToWorld: objectToWorld,
+                                degree: degree)
+                default:
+                        throw CurveError.accelerator
+                }
+                return curves
         }
-        var curves = [ShapeType]()
-        switch acceleratorName {
-        case "bvh":
-                curves = Curve.createBVH(
-                        controlPoints: controlPoints,
-                        widths: (width0, width1),
-                        objectToWorld: objectToWorld,
-                        degree: degree)
-        default:
-                throw CurveError.accelerator
-        }
-        return curves
-}
 }

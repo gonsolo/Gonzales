@@ -13,8 +13,10 @@ extension Shape {
                 data: inout TriangleIntersection
         ) throws -> Bool {
                 var localTHit = tHit
-                if let _ = try self.intersect(scene: scene, ray: worldRay, tHit: &localTHit) {
-                        data = TriangleIntersection(primId: PrimId(), tValue: localTHit, barycentric0: 0, barycentric1: 0, barycentric2: 0)
+                if (try self.intersect(scene: scene, ray: worldRay, tHit: &localTHit)) != nil {
+                        data = TriangleIntersection(
+                                primId: PrimId(), tValue: localTHit, barycentric0: 0, barycentric1: 0,
+                                barycentric2: 0)
                         tHit = localTHit
                         return true
                 }

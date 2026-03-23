@@ -26,7 +26,7 @@ struct PointLight: LightSource {
                 return 0
         }
 
-        func radianceFromInfinity(for _: Ray, arena: TextureArena) -> RgbSpectrum { return black }
+        func radianceFromInfinity(for _: Ray, arena _: TextureArena) -> RgbSpectrum { return black }
 
         func power(scene _: Scene) -> Real {
                 return intensity.average() * 4 * Real.pi
@@ -38,15 +38,15 @@ struct PointLight: LightSource {
 
 extension PointLight {
         static func create(lightToWorld: Transform, parameters: ParameterDictionary) throws -> PointLight {
-        guard let intensity = try parameters.findSpectrum(name: "I") as? RgbSpectrum else {
-                throw ParameterError.missing(parameter: "I", function: #function)
+                guard let intensity = try parameters.findSpectrum(name: "I") as? RgbSpectrum else {
+                        throw ParameterError.missing(parameter: "I", function: #function)
+                }
+                guard let scale = try parameters.findSpectrum(name: "scale", else: white) as? RgbSpectrum
+                else {
+                        throw ParameterError.missing(parameter: "scale", function: #function)
+                }
+                return PointLight(lightToWorld: lightToWorld, intensity: scale * intensity)
         }
-        guard let scale = try parameters.findSpectrum(name: "scale", else: white) as? RgbSpectrum
-        else {
-                throw ParameterError.missing(parameter: "scale", function: #function)
-        }
-        return PointLight(lightToWorld: lightToWorld, intensity: scale * intensity)
-}
 }
 
 extension PointLight {
