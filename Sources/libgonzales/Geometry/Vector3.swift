@@ -1,3 +1,4 @@
+// @doc:vector3-struct
 public struct Vector3: Sendable, ThreeComponent {
 
         public init(x: Real, y: Real, z: Real) {
@@ -50,6 +51,7 @@ public struct Vector3: Sendable, ThreeComponent {
 
         var xyz: SIMD4<Real>
 }
+// @doc:end
 
 extension Vector3 {
         public init(point: Point3) {

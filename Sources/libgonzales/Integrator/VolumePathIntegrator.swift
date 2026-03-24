@@ -206,6 +206,7 @@ extension VolumePathIntegrator {
                 }
         }
 
+        // @doc:mis-sampling
         private func sampleMultipleImportance<I: Interaction, D: DistributionModel>(
                 light: Light,
                 interaction: I,
@@ -246,6 +247,7 @@ extension VolumePathIntegrator {
 
                 return lightContribution + brdfContribution
         }
+        // @doc:end
 
         private func estimateDirect<I: Interaction, D: DistributionModel>(
                 light: Light,
@@ -300,6 +302,7 @@ extension VolumePathIntegrator {
                 return estimate / lightPdf
         }
 
+        // @doc:russian-roulette
         private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
                 -> Bool {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
@@ -312,6 +315,7 @@ extension VolumePathIntegrator {
                 }
                 return false
         }
+        // @doc:end
 
         private func sampleMedium<D: DistributionModel>(
                 state: BounceState,
@@ -454,6 +458,7 @@ extension VolumePathIntegrator {
                 return true
         }
 
+        // @doc:bounce-loop
         private mutating func bounces(
                 state: inout BounceState,
                 context: inout IntegratorContext
@@ -466,4 +471,5 @@ extension VolumePathIntegrator {
                         }
                 }
         }
+        // @doc:end
 }

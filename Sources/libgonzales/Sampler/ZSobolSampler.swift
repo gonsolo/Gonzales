@@ -2,6 +2,7 @@ import Foundation  // For Point2i, etc.
 
 let floatOneMinusEpsilon: Float = 1.0 - 1e-6  // Ensure type is Float
 
+// @doc:sobol-sample
 func sobolSample(sampleIndex: Int, dimension: Int, randomizer: FastOwenScrambler) -> Float {
         guard dimension < NSobolDimensions else {
                 preconditionFailure("Sobol dimension \(dimension) is out of range (\(NSobolDimensions))")
@@ -28,6 +29,7 @@ func sobolSample(sampleIndex: Int, dimension: Int, randomizer: FastOwenScrambler
 
         return min(floatValue, floatOneMinusEpsilon)
 }
+// @doc:end
 
 func reverseBits32(_ valueIn: UInt32) -> UInt32 {
         var value = valueIn
@@ -38,6 +40,7 @@ func reverseBits32(_ valueIn: UInt32) -> UInt32 {
         return (value >> 16) | (value << 16)
 }
 
+// @doc:owen-scramble
 struct FastOwenScrambler {
         let seed: UInt32
 
@@ -62,6 +65,7 @@ struct FastOwenScrambler {
                 return reverseBits32(value)
         }
 }
+// @doc:end
 
 @inlinable
 func encodeMorton2(_ coordX: UInt32, _ coordY: UInt32) -> UInt64 {

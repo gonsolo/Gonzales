@@ -63,6 +63,7 @@ struct TileRenderer: Renderer {
                 return samples
         }
 
+        // @doc:tile-rendering
         private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {
                 let tiles = generateTiles(from: bounds)
                 let reporter = ProgressReporter(title: "Rendering", total: tiles.count)
@@ -104,6 +105,7 @@ struct TileRenderer: Renderer {
 
                 await progressTask
         }
+        // @doc:end
 
         func render() async throws {
                 let timer = Timer("Rendering...")

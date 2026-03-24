@@ -1,3 +1,4 @@
+// @doc:diffuse-bsdf
 public struct DiffuseBsdf: FramedBsdf {
 
         var reflectance: RgbSpectrum = white
@@ -20,3 +21,4 @@ extension DiffuseBsdf {
         public var isSpecular: Bool { return false }
 
 }
+// @doc:end

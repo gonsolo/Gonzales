@@ -4,6 +4,7 @@ struct PiecewiseConstant1D {
         let integral: Real
         let count: Int
 
+        // @doc:cdf-construction
         init(values: [Real]) {
                 self.count = values.count
                 self.function = values
@@ -24,6 +25,7 @@ struct PiecewiseConstant1D {
                 }
                 self.cdf = cdf
         }
+        // @doc:end
 
         func countElements() -> Int {
                 return count
@@ -43,6 +45,7 @@ struct PiecewiseConstant1D {
                 return clamp(value: low - 1, low: 0, high: count - 1)
         }
 
+        // @doc:sample-continuous
         func sampleContinuous(sample: Real) -> (value: Real, pdf: Real, offset: Int) {
                 let offset = findInterval(sample: sample)
                 var delta = sample - cdf[offset]
@@ -54,6 +57,7 @@ struct PiecewiseConstant1D {
                 let probabilityDensity = pdf(value: value)
                 return (value, probabilityDensity, offset)
         }
+        // @doc:end
 
         func sampleDiscrete(sample: Real) -> (offset: Int, pdf: Real, uRemapped: Real) {
                 let offset = findInterval(sample: sample)

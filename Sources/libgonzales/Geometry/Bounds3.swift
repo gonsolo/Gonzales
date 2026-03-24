@@ -139,6 +139,7 @@ func max(_ lhs: Vector3, _ rhs: Vector3) -> Vector3 {
 
 extension Bounds3 {
 
+        // @doc:bounds-intersect
         @inline(__always)
         func intersects(ray: Ray, tHit: Real) -> Bool {
                 let tMin = (pMin - ray.origin) * ray.inverseDirection
@@ -161,6 +162,7 @@ extension Bounds3 {
 
                 return tNear <= tFar
         }
+        // @doc:end
 }
 
 extension Bounds3f {

@@ -220,6 +220,7 @@ let namedSpectra: [String: any Spectrum] = [
         "metal-Au-k": goldExtinctionCoefficients,
 ]
 
+// @doc:rgb-spectrum-struct
 public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
 
         init() {
@@ -281,6 +282,7 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
 
         var xyz: SIMD4<Real>
 }
+// @doc:end
 
 extension RgbSpectrum: CustomStringConvertible {
 
@@ -437,6 +439,7 @@ func gammaSrgbToLinear(light: RgbSpectrum) -> RgbSpectrum {
         return converted
 }
 
+// @doc:black-body
 /// Approximate blackbody radiation as RGB using Tanner Helland's algorithm.
 /// Returns normalized [0,1] RGB values for the given color temperature in Kelvin.
 func blackBodyToRgb(kelvin: Real) -> RgbSpectrum {
@@ -471,3 +474,4 @@ func blackBodyToRgb(kelvin: Real) -> RgbSpectrum {
 
         return RgbSpectrum(rgb: (red, green, blue))
 }
+// @doc:end

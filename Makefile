@@ -396,6 +396,9 @@ lldb_coated: debug
 testsuite:
 	swift test
 
+book:
+	python3 docs/build_book.py
+
 WALL_SCENE = wall.pbrt
 WALL_IMAGE = pavilion-wall.exr
 WALL_IMAGE_GONZALES = wall-gonzales.exr
