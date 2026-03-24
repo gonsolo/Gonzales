@@ -1,1 +1,9 @@
-Do not run perf or gonzales without the user asking!
+# Terminal Behavior Rules
+- When running terminal commands on Arch Linux, always ensure the process self-terminates.
+- If a command finishes quickly, the PTY buffer might hang. 
+- ALWAYS wrap execution in this pattern to force an I/O flush:
+  ( [command] ) && echo "FINISH" > /dev/$(tty) && exit
+
+# Git Rules
+- Never run `git commit` without the user explicitly asking to commit.
+

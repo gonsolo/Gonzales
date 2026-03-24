@@ -59,4 +59,46 @@ import Testing
                         z: normalized(Vector(x: 1, y: 10, z: 1)))
                 runShadingTest(frame: shadingFrame3, description: "Frame from Z-axis construction")
         }
+
+        // MARK: - Direct ShadingFrame Unit Tests
+
+        @Test func worldToLocalRoundTrip() {
+                let frame = ShadingFrame(z: normalized(Vector(x: 1, y: 2, z: 3)))
+                let original = normalized(Vector(x: 0.5, y: 0.7, z: 0.3))
+                let local = frame.worldToLocal(world: original)
+                let recovered = frame.localToWorld(local: local)
+                let recoveredNorm = normalized(recovered)
+                #expect(abs(recoveredNorm.x - original.x) <= 1e-4)
+                #expect(abs(recoveredNorm.y - original.y) <= 1e-4)
+                #expect(abs(recoveredNorm.z - original.z) <= 1e-4)
+        }
+
+        @Test func localToWorldPreservesLength() {
+                let frame = ShadingFrame(z: normalized(Vector(x: 0, y: 1, z: 1)))
+                let local = normalized(Vector(x: 0.3, y: 0.4, z: 0.5))
+                let world = frame.localToWorld(local: local)
+                let len = length(world)
+                #expect(abs(len - 1.0) <= 1e-4, "Transformed vector length \(len) != 1.0")
+        }
+
+        @Test func worldToLocalIdentityFrameIsIdentity() {
+                let frame = ShadingFrame()
+                let v = normalized(Vector(x: 1, y: 2, z: 3))
+                let local = frame.worldToLocal(world: v)
+                #expect(abs(local.x - v.x) <= 1e-4)
+                #expect(abs(local.y - v.y) <= 1e-4)
+                #expect(abs(local.z - v.z) <= 1e-4)
+        }
+
+        @Test func constructFromZAxisProducesOrthonormal() {
+                let frame = ShadingFrame(z: normalized(Vector(x: 1, y: 2, z: 3)))
+                // Orthogonality
+                #expect(abs(dot(frame.x, frame.y)) <= 1e-4)
+                #expect(abs(dot(frame.x, frame.z)) <= 1e-4)
+                #expect(abs(dot(frame.y, frame.z)) <= 1e-4)
+                // Unit length
+                #expect(abs(length(frame.x) - 1.0) <= 1e-4)
+                #expect(abs(length(frame.y) - 1.0) <= 1e-4)
+                #expect(abs(length(frame.z) - 1.0) <= 1e-4)
+        }
 }
