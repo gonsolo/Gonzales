@@ -1,4 +1,3 @@
-// @doc:ray-struct
 struct Ray: Sendable {
 
         init() {
@@ -26,7 +25,6 @@ struct Ray: Sendable {
         let inverseDirection: Vector
         let cameraSample: CameraSample
 }
-// @doc:end
 
 extension Ray: CustomStringConvertible {
         var description: String {

@@ -25,22 +25,30 @@ traversal cost.
 
 ## Traversal
 
-Traversal is the innermost loop of the renderer. Gonzales uses a stackless
-iterative traversal with a fixed-size array of 32 entries — enough for any
-reasonable tree depth, and avoids heap allocation entirely:
+Traversal is the innermost loop of the renderer. Gonzales uses an iterative
+traversal with a fixed-size stack of 32 entries:
 
-{{snippet:Sources/libgonzales/Accelerators/BoundingHierarchy.swift:bvh-traverse}}
+```swift
+var nodesToVisit: [32 of Int] = .init(repeating: 0)
 
-Key performance details:
+while true {
+        let node = nodes[current]
+        if node.bounds.intersects(ray: ray, tHit: tHit) {
+                if node.count > 0 {  // leaf
+                        processor.processLeaf(node)
+                } else {              // interior: visit nearer child first
+                        nodesToVisit[toVisit] = farChild
+                        current = nearChild
+                }
+        } else {
+                current = nodesToVisit[--toVisit]  // pop from stack
+        }
+}
+```
 
-- **Directional ordering**: the traversal visits the child that is closer
-  to the ray origin first. This maximizes early exits when a closer
-  intersection has already been found.
-- **Fixed-size stack**: `[32 of Int]` uses Swift's inline storage for
-  value-type arrays, avoiding any heap allocation per ray.
-- **Generic leaf processing**: the `LeafProcessor` protocol lets the same
-  traversal code handle both occlusion queries (shadow rays) and full
-  intersection queries (camera rays) without code duplication.
+The key optimization is **directional ordering**: the nearer child is
+visited first, maximizing early exits. The fixed-size stack avoids heap
+allocation per ray.
 
 ## PrimId Dispatch
 

@@ -24,12 +24,18 @@ normal without an explicit conversion.
 
 A ray is an origin plus a direction. Gonzales also precomputes the
 inverse direction, which avoids three divisions per bounding-box intersection
-test — one of the hottest paths in the renderer:
+test:
 
-{{snippet:Sources/libgonzales/Core/Ray.swift:ray-struct}}
+```swift
+struct Ray: Sendable {
+        let origin: Point
+        let direction: Vector
+        let inverseDirection: Vector  // precomputed: 1/direction
+}
+```
 
-The `getPointFor(parameter:)` method evaluates the parametric ray equation
-**p(t) = o + t·d**, used everywhere from intersection tests to spawn points.
+The parametric ray equation **p(t) = o + t·d** is evaluated by
+`getPointFor(parameter:)`, used in intersection tests and spawn points.
 
 ## Bounding Boxes
 

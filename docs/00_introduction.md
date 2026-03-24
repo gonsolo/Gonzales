@@ -2,7 +2,7 @@
 
 Gonzales is a physically based renderer written in Swift. It implements
 a volume path tracer capable of rendering production-quality scenes — including
-Disney's Moana Island — using modern Swift 6.2 features like strict concurrency,
+Disney's Moana Island — using modern Swift 6.3 features like strict concurrency,
 structured task groups, and SIMD vector types.
 
 ## Why Swift?

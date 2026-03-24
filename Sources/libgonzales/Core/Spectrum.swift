@@ -243,15 +243,6 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
                 self.init(x: rgb.0, y: rgb.1, z: rgb.2)
         }
 
-        var isNaN: Bool {
-                return red.isNaN || green.isNaN || blue.isNaN
-        }
-
-        var isInfinite: Bool {
-                return red.isInfinite || green.isInfinite || blue.isInfinite
-        }
-
-        // Convenience accessors
         var red: FloatType {
                 get { return x }
                 set { x = newValue }
@@ -267,6 +258,17 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
                 set { z = newValue }
         }
 
+        var xyz: SIMD4<Real>
+// @doc:end
+
+        var isNaN: Bool {
+                return red.isNaN || green.isNaN || blue.isNaN
+        }
+
+        var isInfinite: Bool {
+                return red.isInfinite || green.isInfinite || blue.isInfinite
+        }
+
         public var x: Real {
                 get { return xyz.x }
                 set { xyz.x = newValue }
@@ -279,10 +281,7 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
                 get { return xyz.z }
                 set { xyz.z = newValue }
         }
-
-        var xyz: SIMD4<Real>
 }
-// @doc:end
 
 extension RgbSpectrum: CustomStringConvertible {
 

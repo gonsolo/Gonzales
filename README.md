@@ -6,7 +6,7 @@
 
 # Gonzales — Physically Based Renderer
 
-A production-capable Monte Carlo path tracer written in **Swift 6.2**, designed
+A production-capable Monte Carlo path tracer written in **Swift 6.3**, designed
 for high-end light transport simulation. Gonzales renders complex scenes —
 including Disney's Moana Island and all 32 Bitterli benchmark scenes — using
 modern Swift features: strict concurrency, structured task groups, and SIMD

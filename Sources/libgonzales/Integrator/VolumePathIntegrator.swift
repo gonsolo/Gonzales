@@ -206,7 +206,6 @@ extension VolumePathIntegrator {
                 }
         }
 
-        // @doc:mis-sampling
         private func sampleMultipleImportance<I: Interaction, D: DistributionModel>(
                 light: Light,
                 interaction: I,

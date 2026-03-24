@@ -2,7 +2,7 @@
 
 ## Table of Contents
 
-0. [Introduction](00_introduction.md) — Motivation, architecture, and Swift 6.2
+0. [Introduction](00_introduction.md) — Motivation, architecture, and Swift 6.3
 1. [Geometry and Transformations](01_geometry.md) — Vectors, rays, bounding boxes
 2. [Spectra and Color](02_spectra_and_color.md) — RGB representation, metal optics, black-body radiation
 3. [Shapes and Acceleration](03_shapes_and_acceleration.md) — BVH construction and traversal

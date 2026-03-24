@@ -22,15 +22,24 @@ the BVH — and provides a natural granularity for parallel execution.
 The rendering loop uses Swift's structured concurrency to dispatch tiles
 across all available CPU cores:
 
-{{snippet:Sources/libgonzales/Core/TileRenderer.swift:tile-rendering}}
+```swift
+try await withThrowingTaskGroup(of: [Sample].self) { group in
+        for _ in 0..<maxConcurrent {
+                guard let tile = tileIterator.next() else { break }
+                group.addTask { try self.renderTile(tile: tile) }
+        }
+        for try await samples in group {
+                allSamples.append(contentsOf: samples)
+                if let tile = tileIterator.next() {
+                        group.addTask { try self.renderTile(tile: tile) }
+                }
+        }
+}
+```
 
-Key design decisions:
+The loop uses **backpressure** — it seeds `maxConcurrent` tasks and adds a
+new one only when a previous task completes, preventing memory spikes.
 
-- **Concurrency limiting**: `maxConcurrent` is set to `activeProcessorCount - 1`,
-  reserving one thread for the progress reporter and OS overhead.
-- **Backpressure**: rather than launching all tiles at once, the loop seeds
-  `maxConcurrent` tasks and adds a new one only when a previous task completes.
-  This prevents memory spikes from thousands of in-flight tile buffers.
 - **`withThrowingTaskGroup`**: Swift's structured concurrency ensures that if
   any tile fails, all other tiles are cancelled and the error propagates cleanly.
 - **Progress reporting**: an async progress reporter runs concurrently, printing

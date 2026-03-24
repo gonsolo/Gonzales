@@ -37,7 +37,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         // --- 2. Private Traversal Helper (Generic Shared Logic) ---
         // FIX: Changed 'rethrows' to 'throws' because it calls a throwing method but has no throwing function argument.
-        // @doc:bvh-traverse
         private func traverseHierarchy<P: LeafProcessor>(
                 scene: Scene,
                 ray: Ray,
@@ -95,7 +94,6 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                         }
                 }
         }
-        // @doc:end
 
         private struct OcclusionProcessor: LeafProcessor {
                 var intersected: Bool = false

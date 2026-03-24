@@ -37,14 +37,20 @@ sampling strategies:
    if it hits a light
 
 Neither strategy alone is optimal for all materials. MIS combines them using
-the power heuristic, which weights each sample by the square of its PDF
-relative to the sum of both PDFs:
+the power heuristic:
 
-{{snippet:Sources/libgonzales/Integrator/VolumePathIntegrator.swift:mis-sampling}}
+```swift
+let lightWeight = powerHeuristic(pdfF: lightPdf, pdfG: brdfPdf)
+let lightContribution = lightEstimate * lightWeight / lightPdf
 
-The power heuristic gives near-optimal variance in practice. Delta lights
-(point lights, distant lights) skip MIS entirely and use light sampling only,
-since the BSDF strategy cannot find their zero-area surfaces.
+let brdfWeight = powerHeuristic(pdfF: brdfPdf, pdfG: lightPdf)
+let brdfContribution = brdfEstimate * brdfWeight / brdfPdf
+
+return lightContribution + brdfContribution
+```
+
+The power heuristic weights each sample by `pdf² / (pdf₁² + pdf₂²)`,
+giving near-optimal variance in practice.
 
 ## Russian Roulette
 

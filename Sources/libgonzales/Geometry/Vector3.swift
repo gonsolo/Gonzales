@@ -5,6 +5,24 @@ public struct Vector3: Sendable, ThreeComponent {
                 self.xyz = SIMD4<Real>(x, y, z, 1.0)
         }
 
+        public var x: Real {
+                get { return xyz.x }
+                set { xyz.x = newValue }
+        }
+
+        public var y: Real {
+                get { return xyz.y }
+                set { xyz.y = newValue }
+        }
+
+        public var z: Real {
+                get { return xyz.z }
+                set { xyz.z = newValue }
+        }
+
+        var xyz: SIMD4<Real>
+// @doc:end
+
         init(value: Real) {
                 self.xyz = SIMD4<Real>(value, value, value, 1.0)
         }
@@ -33,25 +51,7 @@ public struct Vector3: Sendable, ThreeComponent {
         var isZero: Bool {
                 return x.isZero && y.isZero && z.isZero
         }
-
-        public var x: Real {
-                get { return xyz.x }
-                set { xyz.x = newValue }
-        }
-
-        public var y: Real {
-                get { return xyz.y }
-                set { xyz.y = newValue }
-        }
-
-        public var z: Real {
-                get { return xyz.z }
-                set { xyz.z = newValue }
-        }
-
-        var xyz: SIMD4<Real>
 }
-// @doc:end
 
 extension Vector3 {
         public init(point: Point3) {
