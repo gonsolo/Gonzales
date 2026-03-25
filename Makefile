@@ -205,7 +205,8 @@ view_denoised:
 
 v: view
 
-vr: release
+vr: view_release
+view_release: release
 	@read -p "Render Scenes/cornell-box.pbrt? [Y/n] " ans; \
 	if [ -z "$$ans" ] || [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
 		SCENE="Scenes/cornell-box.pbrt"; \
@@ -261,8 +262,6 @@ vr: release
 	fi; \
 	$(VIEWER) "$$IMAGE"
 
-view_release: test_release
-	@$(VIEWER) $(IMAGE)
 vd: debug
 	@read -p "Render Scenes/cornell-box.pbrt? [Y/n] " ans; \
 	if [ -z "$$ans" ] || [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \

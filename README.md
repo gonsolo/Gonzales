@@ -56,20 +56,30 @@ The renderer is organized into 18 modules mirroring the architecture of
 | v0.2 (2026) | — | — | — | ARC cleanup, Embree removed |
 | v0.3 (2026) | — | — | — | [Release Notes](Documentation/ReleaseNotes/0.3.md) |
 
+## Prerequisites
+
+| Dependency | Description | Install (Arch) |
+| --- | --- | --- |
+| [Swift 6.3](https://swift.org) | Compiler with C++20 interop | `pacman -S swift` |
+| [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) | EXR/HDR image I/O | `pacman -S openimageio` |
+| [Ptex](https://github.com/wdas/ptex) | Per-face texture mapping (Disney) | `pacman -S ptex` |
+| [Loupe](https://gitlab.gnome.org/GNOME/loupe) | EXR image viewer (for `make view_release`) | `pacman -S loupe` |
+
 ## Installation
 
 ### Arch Linux (AUR)
 
-```
+```bash
 yay gonzales-git
 ```
 
-https://aur.archlinux.org/packages/gonzales-git
+<https://aur.archlinux.org/packages/gonzales-git>
 
 ### Building from Source
 
-```
-swift build -c release
+```bash
+make debug    # debug build
+make release  # optimized release build
 ```
 
 > **Note (Swift 6.1.2+ on Arch Linux):** An [incompatibility with GCC 15](https://github.com/swiftlang/swift/issues/81774) requires patching `/usr/lib/swift/lib/swift/_FoundationCShims/_CStdlib.h` line 55 to wrap the `#if __has_include(<math.h>)` block in `#if 0 ... #endif`.
@@ -77,8 +87,11 @@ swift build -c release
 ## Getting Started
 
 1. Download scenes from [Bitterli](https://benedikt-bitterli.me/resources) (PBRT-v4 format) or [pbrt-v4-scenes](https://github.com/mmp/pbrt-v4-scenes)
-2. Render: `.build/release/gonzales path/to/scene.pbrt`
-3. View the output EXR with any HDR image viewer
+2. Quick test — render and view a Cornell Box:
+   ```bash
+   make view_release
+   ```
+3. Or render any scene directly: `.build/release/gonzales path/to/scene.pbrt`
 
 ## Acknowledgments
 
