@@ -23,8 +23,8 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 tHit: inout Real,
                 data: inout TriangleIntersection
         ) -> Bool {
-                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
-                        p.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                return #dispatchIntersectableNoThrow(primitive: self) { (typedPrimitive: Triangle) in
+                        typedPrimitive.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 
@@ -33,8 +33,8 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 data: TriangleIntersection,
                 worldRay: Ray
         ) -> SurfaceInteraction? {
-                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
-                        p.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+                return #dispatchIntersectableNoThrow(primitive: self) { (typedPrimitive: Triangle) in
+                        typedPrimitive.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
                 }
         }
 
@@ -43,20 +43,20 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 ray: Ray,
                 tHit: inout Real
         ) -> SurfaceInteraction? {
-                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
-                        p.intersect(scene: scene, ray: ray, tHit: &tHit)
+                return #dispatchIntersectableNoThrow(primitive: self) { (typedPrimitive: Triangle) in
+                        typedPrimitive.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 
         func worldBound(scene: Scene) -> Bounds3f {
-                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
-                        p.worldBound(scene: scene)
+                return #dispatchIntersectableNoThrow(primitive: self) { (typedPrimitive: Triangle) in
+                        typedPrimitive.worldBound(scene: scene)
                 }
         }
 
         func objectBound(scene: Scene) -> Bounds3f {
-                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
-                        p.objectBound(scene: scene)
+                return #dispatchIntersectableNoThrow(primitive: self) { (typedPrimitive: Triangle) in
+                        typedPrimitive.objectBound(scene: scene)
                 }
         }
 }

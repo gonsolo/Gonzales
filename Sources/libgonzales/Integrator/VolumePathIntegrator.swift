@@ -69,8 +69,6 @@ extension VolumePathIntegrator {
                 var specularBounce: Bool = false
         }
 
-
-
         private func brdfDensity<D: DistributionModel>(
                 light _: Light,
                 outgoing: Vector,
@@ -395,7 +393,7 @@ extension VolumePathIntegrator {
                 state: inout BounceState,
                 sampler: inout Sampler,
                 lightSampler: inout LightSampler,
-                immutableState: ImmutableState
+                immutableState _: ImmutableState
         ) throws -> Bool {
 
                 state.interaction = accelerator.intersect(

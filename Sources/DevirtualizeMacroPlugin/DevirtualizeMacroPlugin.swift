@@ -7,7 +7,7 @@ import SwiftSyntaxMacros
 public struct DispatchPrimitiveMacro: ExpressionMacro {
     public static func expansion(
         of node: some FreestandingMacroExpansionSyntax,
-        in context: some MacroExpansionContext
+        in _: some MacroExpansionContext
     ) throws -> ExprSyntax {
         guard let exprNode = node.as(MacroExpansionExprSyntax.self) else {
             throw CustomError(message: "Expected macro expansion expression")
@@ -42,7 +42,7 @@ public struct DispatchPrimitiveMacro: ExpressionMacro {
 
         let bodyStatements = closure.statements
         let needsReturn = bodyStatements.first?.item.is(ReturnStmtSyntax.self) == false
-        
+
         var bodyCode = ""
         for stmt in bodyStatements {
             bodyCode += stmt.description + "\n"
@@ -73,7 +73,7 @@ public struct DispatchPrimitiveMacro: ExpressionMacro {
         )
 
         let result: ExprSyntax = """
-        { () in 
+        { () in
             switch \(primIdExpr).type {
             case .triangle:
                 \(raw: bodyCodeTriangle)
@@ -119,7 +119,7 @@ func parseClosure(_ exprNode: MacroExpansionExprSyntax) throws -> (paramName: St
 
     let bodyStatements = closure.statements
     let needsReturn = bodyStatements.first?.item.is(ReturnStmtSyntax.self) == false
-    
+
     var bodyCode = ""
     for stmt in bodyStatements {
         bodyCode += stmt.description + "\n"
@@ -131,14 +131,14 @@ func parseClosure(_ exprNode: MacroExpansionExprSyntax) throws -> (paramName: St
 }
 
 public struct DispatchShapeTypeMacro: ExpressionMacro {
-    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in context: some MacroExpansionContext) throws -> ExprSyntax {
+    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in _: some MacroExpansionContext) throws -> ExprSyntax {
         guard let exprNode = node.as(MacroExpansionExprSyntax.self),
               let targetExpr = exprNode.arguments.first?.expression else {
             throw CustomError(message: "Expected target argument")
         }
         let (paramName, bodyCode) = try parseClosure(exprNode)
         return """
-        { () throws in 
+        { () throws in
             switch \(targetExpr) {
             case .triangle(let \(raw: paramName)):
                 \(raw: bodyCode)
@@ -155,14 +155,14 @@ public struct DispatchShapeTypeMacro: ExpressionMacro {
 }
 
 public struct DispatchShapeTypeNoThrowMacro: ExpressionMacro {
-    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in context: some MacroExpansionContext) throws -> ExprSyntax {
+    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in _: some MacroExpansionContext) throws -> ExprSyntax {
         guard let exprNode = node.as(MacroExpansionExprSyntax.self),
               let targetExpr = exprNode.arguments.first?.expression else {
             throw CustomError(message: "Expected target argument")
         }
         let (paramName, bodyCode) = try parseClosure(exprNode)
         return """
-        { () in 
+        { () in
             switch \(targetExpr) {
             case .triangle(let \(raw: paramName)):
                 \(raw: bodyCode)
@@ -179,14 +179,14 @@ public struct DispatchShapeTypeNoThrowMacro: ExpressionMacro {
 }
 
 public struct DispatchIntersectableMacro: ExpressionMacro {
-    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in context: some MacroExpansionContext) throws -> ExprSyntax {
+    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in _: some MacroExpansionContext) throws -> ExprSyntax {
         guard let exprNode = node.as(MacroExpansionExprSyntax.self),
               let targetExpr = exprNode.arguments.first?.expression else {
             throw CustomError(message: "Expected target argument")
         }
         let (paramName, bodyCode) = try parseClosure(exprNode)
         return """
-        { () throws in 
+        { () throws in
             switch \(targetExpr) {
             case .geometricPrimitive(let \(raw: paramName)):
                 \(raw: bodyCode)
@@ -203,14 +203,14 @@ public struct DispatchIntersectableMacro: ExpressionMacro {
 }
 
 public struct DispatchIntersectableNoThrowMacro: ExpressionMacro {
-    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in context: some MacroExpansionContext) throws -> ExprSyntax {
+    public static func expansion(of node: some FreestandingMacroExpansionSyntax, in _: some MacroExpansionContext) throws -> ExprSyntax {
         guard let exprNode = node.as(MacroExpansionExprSyntax.self),
               let targetExpr = exprNode.arguments.first?.expression else {
             throw CustomError(message: "Expected target argument")
         }
         let (paramName, bodyCode) = try parseClosure(exprNode)
         return """
-        { () in 
+        { () in
             switch \(targetExpr) {
             case .geometricPrimitive(let \(raw: paramName)):
                 \(raw: bodyCode)

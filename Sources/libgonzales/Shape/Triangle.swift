@@ -67,14 +67,14 @@ struct TriangleMesh {
         private let uvs: [Vector2F]
 
         var cStruct: TriangleMesh_C {
-                let p = points.withUnsafeBufferPointer { $0.baseAddress! }
-                let f = faceIndices.withUnsafeBufferPointer { $0.baseAddress! }
-                let v = vertexIndices.withUnsafeBufferPointer { $0.baseAddress! }
-                
+                let pPtr = points.withUnsafeBufferPointer { $0.baseAddress! }
+                let fPtr = faceIndices.withUnsafeBufferPointer { $0.baseAddress! }
+                let vPtr = vertexIndices.withUnsafeBufferPointer { $0.baseAddress! }
+
                 return TriangleMesh_C(
-                        points: UnsafeRawPointer(p).assumingMemoryBound(to: Float.self),
-                        faceIndices: UnsafeRawPointer(f).assumingMemoryBound(to: Int64.self),
-                        vertexIndices: UnsafeRawPointer(v).assumingMemoryBound(to: Int64.self)
+                        points: UnsafeRawPointer(pPtr).assumingMemoryBound(to: Float.self),
+                        faceIndices: UnsafeRawPointer(fPtr).assumingMemoryBound(to: Int64.self),
+                        vertexIndices: UnsafeRawPointer(vPtr).assumingMemoryBound(to: Int64.self)
                 )
         }
 }

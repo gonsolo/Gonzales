@@ -5,7 +5,6 @@ function_body_length:
 excluded:
   - .build
   - External
-  - Sources/libgonzales/Sampler/SobolMatrices.swift
 opt_in_rules:
   - unused_parameter
 disabled_rules:

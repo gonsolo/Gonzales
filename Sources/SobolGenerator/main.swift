@@ -35,8 +35,8 @@ func generateSobolMatrices(directionNumbersPath: String) throws -> [[UInt32]] {
     var matrices = [[UInt32]](repeating: [UInt32](repeating: 0, count: matrixSize), count: nDimensions)
 
     // Dimension 0: identity matrix (Van der Corput sequence)
-    for i in 0..<32 {
-        matrices[0][i] = 1 << (31 - i)
+    for idx in 0..<32 {
+        matrices[0][idx] = 1 << (31 - idx)
     }
     // Bits 32-51 are zero for dimension 0
 
@@ -52,23 +52,23 @@ func generateSobolMatrices(directionNumbersPath: String) throws -> [[UInt32]] {
         var v = [UInt32](repeating: 0, count: matrixSize + 1)
 
         // Initialize first s direction numbers from Joe-Kuo data
-        for i in 1...s {
-            v[i] = UInt32(entry.m[i - 1]) << (32 - i)
+        for idx in 1...s {
+            v[idx] = UInt32(entry.m[idx - 1]) << (32 - idx)
         }
 
         // Compute remaining direction numbers via recurrence
-        for i in (s + 1)...matrixSize {
-            v[i] = v[i - s] ^ (v[i - s] >> s)
-            for j in 1..<s {
-                if (a >> (s - 1 - j)) & 1 == 1 {
-                    v[i] ^= v[i - j]
+        for idx in (s + 1)...matrixSize {
+            v[idx] = v[idx - s] ^ (v[idx - s] >> s)
+            for jdx in 1..<s {
+                if (a >> (s - 1 - jdx)) & 1 == 1 {
+                    v[idx] ^= v[idx - jdx]
                 }
             }
         }
 
         // Store as matrix columns
-        for i in 0..<matrixSize {
-            matrices[dim][i] = v[i + 1]
+        for idx in 0..<matrixSize {
+            matrices[dim][idx] = v[idx + 1]
         }
     }
 
@@ -102,8 +102,8 @@ func formatSwiftSource(matrices: [[UInt32]]) -> String {
     output += "        let _ = data.copyBytes(to: dest)\n"
     output += "    }\n"
     output += "    #if _endian(big)\n"
-    output += "    for i in 0..<arr.count {\n"
-    output += "        arr[i] = UInt32(littleEndian: arr[i])\n"
+    output += "    for idx in 0..<arr.count {\n"
+    output += "        arr[idx] = UInt32(littleEndian: arr[idx])\n"
     output += "    }\n"
     output += "    #endif\n"
     output += "    return arr\n"

@@ -126,12 +126,12 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 while children.count < 8 {
                         var maxArea: Real = -1
                         var splitIdx = -1
-                        for (i, c) in children.enumerated() {
-                                if c.nPrimitives == 0 { // Interior
-                                        let area = c.bounds.surfaceArea()
+                        for (idx, childNode) in children.enumerated() {
+                                if childNode.nPrimitives == 0 { // Interior
+                                        let area = childNode.bounds.surfaceArea()
                                         if area > maxArea {
                                                 maxArea = area
-                                                splitIdx = i
+                                                splitIdx = idx
                                         }
                                 }
                         }
@@ -146,30 +146,30 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
         private func flatten8(node: BVHBuildNode) -> Int {
                 let linearOffset = totalNodes
                 totalNodes += 1
-                
-                var n8 = BoundingHierarchyNode()
-                nodes.append(n8)
-                
+
+                var node8 = BoundingHierarchyNode()
+                nodes.append(node8)
+
                 let children = extractChildren8(node: node)
-                
-                for (i, child) in children.enumerated() {
-                        n8.pMinX[i] = Float(child.bounds.pMin.x)
-                        n8.pMaxX[i] = Float(child.bounds.pMax.x)
-                        n8.pMinY[i] = Float(child.bounds.pMin.y)
-                        n8.pMaxY[i] = Float(child.bounds.pMax.y)
-                        n8.pMinZ[i] = Float(child.bounds.pMin.z)
-                        n8.pMaxZ[i] = Float(child.bounds.pMax.z)
-                        
+
+                for (idx, child) in children.enumerated() {
+                        node8.pMinX[idx] = Float(child.bounds.pMin.x)
+                        node8.pMaxX[idx] = Float(child.bounds.pMax.x)
+                        node8.pMinY[idx] = Float(child.bounds.pMin.y)
+                        node8.pMaxY[idx] = Float(child.bounds.pMax.y)
+                        node8.pMinZ[idx] = Float(child.bounds.pMin.z)
+                        node8.pMaxZ[idx] = Float(child.bounds.pMax.z)
+
                         if child.nPrimitives > 0 { // Leaf
-                                n8.primitiveCounts[i] = Int32(child.nPrimitives)
-                                n8.primitiveOffsets[i] = Int32(child.firstPrimOffset)
+                                node8.primitiveCounts[idx] = Int32(child.nPrimitives)
+                                node8.primitiveOffsets[idx] = Int32(child.firstPrimOffset)
                         } else { // Interior
                                 let childIdx = flatten8(node: child)
-                                n8.childNodes[i] = Int32(childIdx)
+                                node8.childNodes[idx] = Int32(childIdx)
                         }
                 }
-                
-                nodes[linearOffset] = n8
+
+                nodes[linearOffset] = node8
                 return linearOffset
         }
 

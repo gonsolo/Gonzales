@@ -1,5 +1,5 @@
 @freestanding(expression)
-public macro dispatchPrimitive<T, P>(id: Any, scene: Any, body: (P) throws -> T) -> T = #externalMacro(module: "DevirtualizeMacroPlugin", type: "DispatchPrimitiveMacro")
+public macro dispatchPrimitive<T, P>(identifier: Any, scene: Any, body: (P) throws -> T) -> T = #externalMacro(module: "DevirtualizeMacroPlugin", type: "DispatchPrimitiveMacro")
 
 @freestanding(expression)
 public macro dispatchShapeType<T, P>(shape: Any, body: (P) throws -> T) -> T = #externalMacro(module: "DevirtualizeMacroPlugin", type: "DispatchShapeTypeMacro")

@@ -29,12 +29,12 @@ struct Disk: Shape {
                 // Reject rays parallel to the disk plane
                 guard ray.direction.z != 0 else { return nil }
 
-                // Compute t where ray hits z=0 plane
-                let t = -ray.origin.z / ray.direction.z
-                guard t > 0 && t < tHit else { return nil }
+                // Compute time where ray hits z=0 plane
+                let rayTime = -ray.origin.z / ray.direction.z
+                guard rayTime > 0 && rayTime < tHit else { return nil }
 
                 // Check if hit point is within the disk radius
-                let pHit = ray.getPointFor(parameter: t)
+                let pHit = ray.getPointFor(parameter: rayTime)
                 let dist2 = pHit.x * pHit.x + pHit.y * pHit.y
                 guard dist2 <= radius * radius else { return nil }
 
@@ -54,7 +54,7 @@ struct Disk: Shape {
                         outgoing: -ray.direction,
                         dpdu: dpdu,
                         uvCoordinates: uvCoordinates)
-                tHit = t
+                tHit = rayTime
                 return objectToWorld * interaction
         }
 
@@ -74,7 +74,7 @@ struct Disk: Shape {
                 interaction: SurfaceInteraction, pdf: Real
         ) {
                 // Concentric disk sampling
-                let (localX, localY) = concentricSampleDisk(u: samples.0, v: samples.1)
+                let (localX, localY) = concentricSampleDisk(sampleU: samples.0, sampleV: samples.1)
                 let localPosition = Point(x: localX * radius, y: localY * radius, z: 0)
                 let worldNormal = normalized(objectToWorld * Normal(x: 0, y: 0, z: 1))
                 let worldPosition = objectToWorld * localPosition
@@ -84,19 +84,19 @@ struct Disk: Shape {
         }
 
         // Maps a unit square sample to a unit disk using Shirley's concentric mapping.
-        private func concentricSampleDisk(u: Real, v: Real) -> (Real, Real) {
-                let sx = 2 * u - 1
-                let sy = 2 * v - 1
-                guard sx != 0 || sy != 0 else { return (0, 0) }
-                let (r, theta): (Real, Real)
-                if abs(sx) > abs(sy) {
-                        r = sx
-                        theta = (Real.pi / 4) * (sy / sx)
+        private func concentricSampleDisk(sampleU: Real, sampleV: Real) -> (Real, Real) {
+                let sampleX = 2 * sampleU - 1
+                let sampleY = 2 * sampleV - 1
+                guard sampleX != 0 || sampleY != 0 else { return (0, 0) }
+                let (radiusLocal, theta): (Real, Real)
+                if abs(sampleX) > abs(sampleY) {
+                        radiusLocal = sampleX
+                        theta = (Real.pi / 4) * (sampleY / sampleX)
                 } else {
-                        r = sy
-                        theta = (Real.pi / 2) - (Real.pi / 4) * (sx / sy)
+                        radiusLocal = sampleY
+                        theta = (Real.pi / 2) - (Real.pi / 4) * (sampleX / sampleY)
                 }
-                return (r * cos(theta), r * sin(theta))
+                return (radiusLocal * cos(theta), radiusLocal * sin(theta))
         }
 
         public var description: String {

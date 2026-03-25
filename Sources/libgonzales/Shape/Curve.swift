@@ -304,17 +304,17 @@ struct Curve: Shape {
         ) -> SurfaceInteraction? {
                 let ray = objectToWorld.inverse * worldRay
                 guard lengthSquared(ray.direction) > 0 else { return nil }
-                
+
                 let cpObj = blossomBezier(points: common.points, uSamples: uRange)
 
-                var dx = cross(ray.direction, cpObj.3 - cpObj.0)
-                if lengthSquared(dx) < 1e-8 {
-                        (dx, _) = makeCoordinateSystem(from: ray.direction)
+                var deltaX = cross(ray.direction, cpObj.3 - cpObj.0)
+                if lengthSquared(deltaX) < 1e-8 {
+                        (deltaX, _) = makeCoordinateSystem(from: ray.direction)
                 }
 
                 let dir = normalized(ray.direction)
-                let right = normalized(cross(normalized(dx), dir))
-                var upVector = dx
+                let right = normalized(cross(normalized(deltaX), dir))
+                var upVector = deltaX
                 if length(right) != 0 {
                         upVector = cross(dir, right)
                 }
@@ -323,10 +323,10 @@ struct Curve: Shape {
                         t10: right.y, t11: upVector.y, t12: dir.y, t13: ray.origin.y,
                         t20: right.z, t21: upVector.z, t22: dir.z, t23: ray.origin.z,
                         t30: 0, t31: 0, t32: 0, t33: 1)
-                
+
                 guard let rayFromObject = try? Transform(matrix: matrix.inverse) else { return nil }
 
-                let cp = [
+                let controlPoints = [
                         rayFromObject * cpObj.0,
                         rayFromObject * cpObj.1,
                         rayFromObject * cpObj.2,
@@ -335,36 +335,37 @@ struct Curve: Shape {
 
                 let maxWidth = computeMaxWidth(uRange: uRange, width: common.width)
                 let curveBounds = union(
-                        first: Bounds3f(first: cp[0], second: cp[1]),
-                        second: Bounds3f(first: cp[2], second: cp[3]))
+                        first: Bounds3f(first: controlPoints[0], second: controlPoints[1]),
+                        second: Bounds3f(first: controlPoints[2], second: controlPoints[3]))
                 let expanded = expand(bounds: curveBounds, by: maxWidth * 0.5)
 
                 let rayBounds = Bounds3f(
                         first: Point(x: 0, y: 0, z: 0),
                         second: Point(x: 0, y: 0, z: length(ray.direction) * tHit))
-                
+
                 let overlapsX = (expanded.pMax.x >= rayBounds.pMin.x) && (expanded.pMin.x <= rayBounds.pMax.x)
                 let overlapsY = (expanded.pMax.y >= rayBounds.pMin.y) && (expanded.pMin.y <= rayBounds.pMax.y)
                 let overlapsZ = (expanded.pMax.z >= rayBounds.pMin.z) && (expanded.pMin.z <= rayBounds.pMax.z)
                 guard overlapsX && overlapsY && overlapsZ else { return nil }
 
-                var l0: Real = 0
-                for i in 0..<2 {
-                        let valX = abs(cp[i].x - 2 * cp[i + 1].x + cp[i + 2].x)
-                        let valY = abs(cp[i].y - 2 * cp[i + 1].y + cp[i + 2].y)
-                        let valZ = abs(cp[i].z - 2 * cp[i + 1].z + cp[i + 2].z)
-                        l0 = max(l0, max(max(valX, valY), valZ))
+                var maxLen: Real = 0
+                for idx in 0..<2 {
+                        let valX = abs(controlPoints[idx].x - 2 * controlPoints[idx + 1].x + controlPoints[idx + 2].x)
+                        let valY = abs(controlPoints[idx].y - 2 * controlPoints[idx + 1].y + controlPoints[idx + 2].y)
+                        let valZ = abs(controlPoints[idx].z - 2 * controlPoints[idx + 1].z + controlPoints[idx + 2].z)
+                        maxLen = max(maxLen, max(max(valX, valY), valZ))
                 }
 
                 var maxDepth = 0
-                if l0 > 0 {
+                if maxLen > 0 {
                         let eps = max(common.width.0, common.width.1) * 0.05
-                        let r0 = Int(log2(1.41421356237 * 6.0 * l0 / (8.0 * eps))) / 2
-                        maxDepth = clamp(value: r0, low: 0, high: 10)
+                        let reqDepth = Int(log2(1.41421356237 * 6.0 * maxLen / (8.0 * eps))) / 2
+                        maxDepth = clamp(value: reqDepth, low: 0, high: 10)
                 }
 
-                let state = CurveIntersectionState(points: cp, uRange: uRange, depth: maxDepth, index: 0)
-                let (interaction, _) = recursiveIntersect(ray: ray, tHit: &tHit, rayToObject: rayFromObject.inverse, state: state)
+                let state = CurveIntersectionState(points: controlPoints, uRange: uRange, depth: maxDepth, index: 0)
+                let (interaction, _) = recursiveIntersect(
+                        ray: ray, tHit: &tHit, rayToObject: rayFromObject.inverse, state: state)
                 return interaction
         }
 
@@ -380,33 +381,33 @@ struct Curve: Shape {
         func sample<I: Interaction>(samples: TwoFloats, scene: Scene) -> (
                 interaction: I, pdf: Real
         ) {
-                let u = samples.0
-                let v = samples.1 * 2 * Real.pi
-                
-                let (pointObj, derivative) = evalBezier(points: common.points, uSample: u)
-                
+                let paramU = samples.0
+                let paramV = samples.1 * 2 * Real.pi
+
+                let (pointObj, derivative) = evalBezier(points: common.points, uSample: paramU)
+
                 let tangent = normalized(derivative)
-                let (dx, dy) = makeCoordinateSystem(from: tangent)
-                
-                let widthObj = lerp(with: u, between: common.width.0, and: common.width.1)
+                let (dirX, dirY) = makeCoordinateSystem(from: tangent)
+
+                let widthObj = lerp(with: paramU, between: common.width.0, and: common.width.1)
                 let radius = widthObj * 0.5
-                
-                let offset = (dx * cos(v) + dy * sin(v)) * radius
+
+                let offset = (dirX * cos(paramV) + dirY * sin(paramV)) * radius
                 let pObj = pointObj + offset
                 let nObj = Normal(normalized(offset))
-                
+
                 let pWorld = objectToWorld * pObj
                 let nWorld = objectToWorld * nObj
-                
+
                 let interaction = SurfaceInteraction(
                         position: pWorld,
                         normal: nWorld,
                         shadingNormal: nWorld,
                         outgoing: Vector(x: 0, y: 0, z: 0),
                         dpdu: Vector(x: 0, y: 0, z: 0),
-                        uvCoordinates: Point2f(x: u, y: samples.1),
+                        uvCoordinates: Point2f(x: paramU, y: samples.1),
                         faceIndex: 0)
-                
+
                 // swiftlint:disable:next force_cast
                 return (interaction as! I, 1.0 / area(scene: scene))
         }

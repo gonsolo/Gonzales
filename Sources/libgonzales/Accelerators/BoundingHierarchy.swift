@@ -32,8 +32,6 @@ struct Stack128 {
     }
 }
 
-
-
 final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
 
         let nodesPointer: UnsafeMutablePointer<BoundingHierarchyNode>
@@ -45,7 +43,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 self.nodesCount = nodes.count
                 self.nodesPointer = UnsafeMutablePointer<BoundingHierarchyNode>.allocate(capacity: nodes.count)
                 self.nodesPointer.initialize(from: nodes, count: nodes.count)
-                
+
                 var ids = [PrimId]()
                 for primitive in primitives {
                         switch primitive {
@@ -83,11 +81,11 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 self.primIdsCount = ids.count
                 self.primIdsPointer = UnsafeMutablePointer<PrimId>.allocate(capacity: ids.count)
                 self.primIdsPointer.initialize(from: ids, count: ids.count)
-                
+
                 // Count PrimId types
                 var typeCount = [Int](repeating: 0, count: 4)
-                for i in 0..<ids.count {
-                        typeCount[Int(ids[i].type.rawValue)] += 1
+                for idx in 0..<ids.count {
+                        typeCount[Int(ids[idx].type.rawValue)] += 1
                 }
                 print("LAYOUT: PrimId types: triangle=\(typeCount[0]) geoPrim=\(typeCount[1]) xform=\(typeCount[2]) areaLight=\(typeCount[3]) total=\(ids.count)")
 
@@ -102,18 +100,18 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 print("LAYOUT: Intersection stride=\(MemoryLayout<Intersection_C>.stride) size=\(MemoryLayout<Intersection_C>.size)")
                 print("LAYOUT: TriMesh_C    stride=\(MemoryLayout<TriangleMesh_C>.stride) size=\(MemoryLayout<TriangleMesh_C>.size)")
                 if nodesCount > 0 {
-                        let n = nodesPointer[0]
-                        print("LAYOUT: root pMinX=\(n.pMinX)")
-                        print("LAYOUT: root pMaxX=\(n.pMaxX)")
-                        print("LAYOUT: root pMinY=\(n.pMinY)")
-                        print("LAYOUT: root pMaxY=\(n.pMaxY)")
-                        print("LAYOUT: root pMinZ=\(n.pMinZ)")
-                        print("LAYOUT: root pMaxZ=\(n.pMaxZ)")
-                        print("LAYOUT: root childNodes=\(n.childNodes)")
-                        print("LAYOUT: root primCounts=\(n.primitiveCounts)")
+                        let nodePtr = nodesPointer[0]
+                        print("LAYOUT: root pMinX=\(nodePtr.pMinX)")
+                        print("LAYOUT: root pMaxX=\(nodePtr.pMaxX)")
+                        print("LAYOUT: root pMinY=\(nodePtr.pMinY)")
+                        print("LAYOUT: root pMaxY=\(nodePtr.pMaxY)")
+                        print("LAYOUT: root pMinZ=\(nodePtr.pMinZ)")
+                        print("LAYOUT: root pMaxZ=\(nodePtr.pMaxZ)")
+                        print("LAYOUT: root childNodes=\(nodePtr.childNodes)")
+                        print("LAYOUT: root primCounts=\(nodePtr.primitiveCounts)")
                         // Test AABB intersection with a realistic diagonal ray
                         let testRay = Ray_C(orgX: 0.1, orgY: 0.5, orgZ: 0.5, dirX: 0.1, dirY: -0.2, dirZ: -0.8)
-                        
+
                         var testRayMut2 = testRay
                         let mojoMask = withUnsafePointer(to: &testRayMut2) { rayP in
                                 mojo_test_intersect(UnsafeRawPointer(nodesPointer), rayP, 1e30)
@@ -133,8 +131,8 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                 nearZIsMin: (1.0 / testRay.dirZ) >= 0
                         )
                         var swiftMask: UInt8 = 0
-                        let (_, swiftResult) = n.intersect8(ray: precomp, tHit: 1e30)
-                        for i in 0..<8 { if swiftResult[i] { swiftMask |= UInt8(1 << i) } }
+                        let (_, swiftResult) = nodePtr.intersect8(ray: precomp, tHit: 1e30)
+                        for idx in 0..<8 { if swiftResult[idx] { swiftMask |= UInt8(1 << idx) } }
                         print("LAYOUT: AABB test ray=(0.1,0.5,0.5)->(0.1,-0.2,-0.8) SwiftMask=\(String(swiftMask, radix: 2)) MojoMask=\(String(mojoMask, radix: 2))")
                         if swiftMask != UInt8(mojoMask) {
                                 print("LAYOUT: AABB MASK MISMATCH!")
@@ -158,14 +156,14 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 let count = Int(node.primitiveCounts[childIndex])
                 let offset = Int(node.primitiveOffsets[childIndex])
                 var found = false
-                var j = 0
-                while j < count {
+                var jdx = 0
+                while jdx < count {
                         if scene.intersect(
-                                primId: primIdsPointer[offset + j],
+                                primId: primIdsPointer[offset + jdx],
                                 ray: ray, tHit: &tHit) {
                                 found = true
                         }
-                        j += 1
+                        jdx += 1
                 }
                 return found
         }
@@ -177,7 +175,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 tHit: inout Real
         ) -> Bool {
                 if nodesCount == 0 { return false }
-                
+
                 return scene.meshesC.withUnsafeBufferPointer { meshesPtr in
                         var desc = SceneDescriptor_C(
                                 bvhNodes: UnsafeRawPointer(nodesPointer),
@@ -238,7 +236,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 if result.hit != 0 {
                         let id1 = Int(result.primId.id1)
                         let rawId2 = Int(result.primId.id2)
-                        
+
                         let type: PrimType
                         if result.primId.type == 0 {
                                 type = .triangle
@@ -247,7 +245,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                         } else {
                                 type = .areaLight
                         }
-                        
+
                         let meshIdx: Int
                         let triIdx: Int
                         if type == .geometricPrimitive || type == .areaLight {
@@ -257,7 +255,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                 meshIdx = id1
                                 triIdx = rawId2
                         }
-                        
+
                         let data = TriangleIntersection(
                                 primId: PrimId(id1: meshIdx, id2: triIdx, type: .triangle),
                                 tValue: Real(result.tHit),
@@ -268,7 +266,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                         tHit = Real(result.tHit)
                         return scene.computeSurfaceInteraction(primId: PrimId(id1: id1, id2: rawId2, type: type), data: data, worldRay: ray)
                 }
-                
+
                 return nil
         }
 
@@ -280,13 +278,13 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 if nodesCount == 0 {
                         return Bounds3f()
                 } else {
-                        let n = nodesPointer[0]
+                        let nodePtr = nodesPointer[0]
                         var totalBound = Bounds3f()
-                        for i in 0..<8 {
-                                if n.pMinX[i] != Float.infinity {
+                        for idx in 0..<8 {
+                                if nodePtr.pMinX[idx] != Float.infinity {
                                         let childBound = Bounds3f(
-                                                first: Point3(x: Real(n.pMinX[i]), y: Real(n.pMinY[i]), z: Real(n.pMinZ[i])),
-                                                second: Point3(x: Real(n.pMaxX[i]), y: Real(n.pMaxY[i]), z: Real(n.pMaxZ[i]))
+                                                first: Point3(x: Real(nodePtr.pMinX[idx]), y: Real(nodePtr.pMinY[idx]), z: Real(nodePtr.pMinZ[idx])),
+                                                second: Point3(x: Real(nodePtr.pMaxX[idx]), y: Real(nodePtr.pMaxY[idx]), z: Real(nodePtr.pMaxZ[idx]))
                                         )
                                         totalBound = union(first: totalBound, second: childBound)
                                 }
