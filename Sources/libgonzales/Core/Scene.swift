@@ -1,3 +1,5 @@
+import DevirtualizeMacro
+
 struct Scene {
 
         init(
@@ -27,21 +29,8 @@ struct Scene {
         }
 
         func intersect(primId: PrimId, ray: Ray, tHit: inout Real) throws -> Bool {
-                switch primId.type {
-                case .triangle:
-                        let triangle = try Triangle(
-                                meshIndex: primId.id1, number: primId.id2,
-                                triangleMeshes: meshes)
-                        return try triangle.intersect(scene: self, ray: ray, tHit: &tHit) != nil
-                case .geometricPrimitive:
-                        let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.intersect(scene: self, ray: ray, tHit: &tHit) != nil
-                case .transformedPrimitive:
-                        let transformedPrimitive = transformedPrimitives[primId.id1]
-                        return try transformedPrimitive.intersect(scene: self, ray: ray, tHit: &tHit) != nil
-                case .areaLight:
-                        let areaLight = areaLights[primId.id1]
-                        return try areaLight.intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                return try #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
+                        try p.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 }
         }
 
@@ -52,25 +41,8 @@ struct Scene {
                 data: inout TriangleIntersection
         ) throws
                 -> Bool {
-                switch primId.type {
-                case .triangle:
-                        let triangle = try Triangle(
-                                meshIndex: primId.id1, number: primId.id2,
-                                triangleMeshes: meshes)
-                        return try triangle.getIntersectionData(
-                                scene: self, ray: ray, tHit: &tHit, data: &data)
-                case .geometricPrimitive:
-                        let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.getIntersectionData(
-                                scene: self, ray: ray, tHit: &tHit, data: &data)
-                case .transformedPrimitive:
-                        let transformedPrimitive = transformedPrimitives[primId.id1]
-                        return try transformedPrimitive.getIntersectionData(
-                                scene: self, ray: ray, tHit: &tHit, data: &data)
-                case .areaLight:
-                        let areaLight = areaLights[primId.id1]
-                        return try areaLight.getIntersectionData(
-                                scene: self, ray: ray, tHit: &tHit, data: &data)
+                return try #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
+                        try p.getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
                 }
         }
 
@@ -79,25 +51,8 @@ struct Scene {
                 data: TriangleIntersection,
                 worldRay: Ray
         ) throws -> SurfaceInteraction? {
-                switch primId.type {
-                case .triangle:
-                        let triangle = try Triangle(
-                                meshIndex: primId.id1, number: primId.id2,
-                                triangleMeshes: meshes)
-                        return triangle.computeSurfaceInteraction(
-                                scene: self, data: data, worldRay: worldRay)
-                case .geometricPrimitive:
-                        let geometricPrimitive = geometricPrimitives[primId.id1]
-                        return try geometricPrimitive.computeSurfaceInteraction(
-                                scene: self, data: data, worldRay: worldRay)
-                case .transformedPrimitive:
-                        let transformedPrimitive = transformedPrimitives[primId.id1]
-                        return try transformedPrimitive.computeSurfaceInteraction(
-                                scene: self, data: data, worldRay: worldRay)
-                case .areaLight:
-                        let areaLight = areaLights[primId.id1]
-                        return try areaLight.computeSurfaceInteraction(
-                                scene: self, data: data, worldRay: worldRay)
+                return try #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
+                        try p.computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
                 }
         }
 
