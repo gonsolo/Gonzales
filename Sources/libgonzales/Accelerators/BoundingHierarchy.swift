@@ -92,7 +92,9 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 print("LAYOUT: PrimId types: triangle=\(typeCount[0]) geoPrim=\(typeCount[1]) xform=\(typeCount[2]) areaLight=\(typeCount[3]) total=\(ids.count)")
 
                 // One-time struct layout validation (Mojo expected sizes computed from struct definitions)
-                print("LAYOUT: BVHNode      stride=\(MemoryLayout<BoundingHierarchyNode>.stride) size=\(MemoryLayout<BoundingHierarchyNode>.size) align=\(MemoryLayout<BoundingHierarchyNode>.alignment)")
+                print("LAYOUT: BVHNode      stride=\(MemoryLayout<BoundingHierarchyNode>.stride) " +
+                      "size=\(MemoryLayout<BoundingHierarchyNode>.size) " +
+                      "align=\(MemoryLayout<BoundingHierarchyNode>.alignment)")
                 print("LAYOUT: PrimId       stride=\(MemoryLayout<PrimId>.stride) size=\(MemoryLayout<PrimId>.size)")
                 print("LAYOUT: PrimId_C     stride=\(MemoryLayout<PrimId_C>.stride) size=\(MemoryLayout<PrimId_C>.size)")
                 print("LAYOUT: SceneDesc_C  stride=\(MemoryLayout<SceneDescriptor_C>.stride) size=\(MemoryLayout<SceneDescriptor_C>.size)")
