@@ -132,7 +132,8 @@ extension VolumePathIntegrator {
                         ray: ray,
                         tHit: &tHit)
                 if let brdfInteraction {
-                        if let areaLight = brdfInteraction.areaLight {
+                        if let areaLightIndex = brdfInteraction.areaLightIndex {
+                                let areaLight = scene.areaLights[areaLightIndex]
                                 let radiance = areaLight.emittedRadiance(
                                         from: brdfInteraction,
                                         inDirection: bsdfSample.incoming)
@@ -349,7 +350,8 @@ extension VolumePathIntegrator {
         ) throws -> Bool {
                 guard let surfaceInteraction = state.interaction else { return false }
                 if state.bounce == 0 || state.specularBounce {
-                        if let areaLight = surfaceInteraction.areaLight {
+                        if let areaLightIndex = surfaceInteraction.areaLightIndex {
+                                let areaLight = scene.areaLights[areaLightIndex]
                                 state.estimate +=
                                         state.throughput
                                         * areaLight.emittedRadiance(

@@ -70,7 +70,7 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                         data: data,
                         worldRay: worldRay)
                 if var unwrapped = interaction {
-                        unwrapped.areaLight = self
+                        unwrapped.areaLightIndex = self.idx
                         if reverseOrientation {
                                 unwrapped.normal = -unwrapped.normal
                                 unwrapped.shadingNormal = -unwrapped.shadingNormal
@@ -91,7 +91,7 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                         ray: ray,
                         tHit: &tHit)
                 if var unwrapped = interaction {
-                        unwrapped.areaLight = self
+                        unwrapped.areaLightIndex = self.idx
                         if reverseOrientation {
                                 unwrapped.normal = -unwrapped.normal
                                 unwrapped.shadingNormal = -unwrapped.shadingNormal
