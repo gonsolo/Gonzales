@@ -126,28 +126,19 @@ extension Parser {
         }
 
         private func parseFalse() throws {
-                if scanner.scanString("f") == nil { try bail() }
-                if scanner.scanString("a") == nil { try bail() }
-                if scanner.scanString("l") == nil { try bail() }
-                if scanner.scanString("s") == nil { try bail() }
-                if scanner.scanString("e") == nil { try bail() }
+                if scanner.scanString("false") == nil { try bail() }
         }
 
         private func parseTrue() throws {
-                if scanner.scanString("t") == nil { try bail() }
-                if scanner.scanString("r") == nil { try bail() }
-                if scanner.scanString("u") == nil { try bail() }
-                if scanner.scanString("e") == nil { try bail() }
+                if scanner.scanString("true") == nil { try bail() }
         }
 
         private func parseBool() throws -> [Bool] {
-                let peekF = scanner.peekString("f")
-                if peekF != nil {
+                if scanner.peekString("false") != nil {
                         try parseFalse()
                         return [false]
                 }
-                let peekT = scanner.peekString("t")
-                if peekT != nil {
+                if scanner.peekString("true") != nil {
                         try parseTrue()
                         return [true]
                 }
@@ -422,13 +413,9 @@ extension Parser {
 
         private func parseParameters() throws -> ParameterDictionary {
                 var parameters = ParameterDictionary()
-                var nameAndParameter = try parseParameter()
-                while nameAndParameter != nil {
-                        let name = nameAndParameter!.0
-                        let parameter = nameAndParameter!.1
+                while let (name, parameter) = try parseParameter() {
                         parameters[name] = parameter
                         parseComments()
-                        nameAndParameter = try parseParameter()
                 }
                 return parameters
         }
