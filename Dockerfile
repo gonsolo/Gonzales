@@ -1,3 +1,4 @@
+# Swift 6.3
 FROM archlinux:latest
 
 # Update and install system dependencies
