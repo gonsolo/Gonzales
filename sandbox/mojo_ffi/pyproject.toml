@@ -1,0 +1,8 @@
+[project]
+name = "mojo-swift-experiment"
+version = "0.1.0"
+description = "Experiment with Mojo and Swift FFI"
+requires-python = ">=3.13"
+dependencies = [
+    "modular>=26.2.0",
+]
