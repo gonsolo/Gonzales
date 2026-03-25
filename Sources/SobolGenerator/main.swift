@@ -77,38 +77,37 @@ func generateSobolMatrices(directionNumbersPath: String) throws -> [[UInt32]] {
 
 func formatSwiftSource(matrices: [[UInt32]]) -> String {
     var output = ""
+    output += "import Foundation\n\n"
     output += "public let NSobolDimensions = \(nDimensions)\n"
     output += "public let SobolMatrixSize = \(matrixSize)\n"
     output += "\n"
-    output += "let sobolMatrices: [UInt32] = [\n"
+    output += "public let sobolMatrices: [UInt32] = {\n"
 
-    let totalValues = nDimensions * matrixSize
-    var lineValues: [String] = []
-
+    var data = Data()
+    data.reserveCapacity(nDimensions * matrixSize * 4)
     for dim in 0..<nDimensions {
         for row in 0..<matrixSize {
-            lineValues.append(String(format: "0x%08x", matrices[dim][row]))
-            if lineValues.count == 6 {
-                let flatIndex = dim * matrixSize + row
-                let isLast = flatIndex == totalValues - 1
-                output += "    " + lineValues.joined(separator: ", ")
-                if !isLast {
-                    output += ","
-                } else {
-                    output += ","
-                }
-                output += "\n"
-                lineValues = []
+            var value = matrices[dim][row].littleEndian
+            withUnsafeBytes(of: &value) { buffer in
+                data.append(contentsOf: buffer)
             }
         }
     }
+    let base64 = data.base64EncodedString()
 
-    // Handle any remaining values (totalValues % 6 != 0)
-    if !lineValues.isEmpty {
-        output += "    " + lineValues.joined(separator: ", ") + ",\n"
-    }
-
-    output += "]\n"
+    output += "    let base64 = \"\(base64)\"\n"
+    output += "    let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters)!\n"
+    output += "    var arr = [UInt32](repeating: 0, count: \(nDimensions) * \(matrixSize))\n"
+    output += "    arr.withUnsafeMutableBufferPointer { dest in\n"
+    output += "        let _ = data.copyBytes(to: dest)\n"
+    output += "    }\n"
+    output += "    #if _endian(big)\n"
+    output += "    for i in 0..<arr.count {\n"
+    output += "        arr[i] = UInt32(littleEndian: arr[i])\n"
+    output += "    }\n"
+    output += "    #endif\n"
+    output += "    return arr\n"
+    output += "}()\n"
 
     return output
 }
