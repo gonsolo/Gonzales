@@ -47,7 +47,7 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                         return try value.computeSurfaceInteraction(
                                 scene: scene, data: data, worldRay: worldRay)
                 case .triangle(let value):
-                        return value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+                        return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
                 case .transformedPrimitive(let value):
                         return try value.computeSurfaceInteraction(
                                 scene: scene, data: data, worldRay: worldRay)

@@ -358,7 +358,7 @@ extension Triangle {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) -> SurfaceInteraction? {
+        ) throws -> SurfaceInteraction? {
                 let barycentric0 = data.barycentric0
                 let barycentric1 = data.barycentric1
                 let barycentric2 = data.barycentric2
@@ -480,7 +480,7 @@ extension Triangle {
                 }
 
                 // 2. Compute the full SurfaceInteraction using the new private method
-                let interaction = computeSurfaceInteraction(
+                let interaction = try computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay

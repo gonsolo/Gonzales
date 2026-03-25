@@ -60,7 +60,7 @@ enum ShapeType: Shape {
         ) throws -> SurfaceInteraction? {
                 switch self {
                 case .triangle(let value):
-                        return value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+                        return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
                 case .sphere(let value):
                         return try value.computeSurfaceInteraction(
                                 scene: scene, data: data, worldRay: worldRay)
