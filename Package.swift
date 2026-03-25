@@ -29,6 +29,7 @@ let package = Package(
                                 "openImageIOBridge",
                                 "ptexBridge",
                                 "DevirtualizeMacro",
+                                "mojoKernel",
                         ],
                         resources: [
                                 .copy("Resources/new-joe-kuo-6.21201")
@@ -56,6 +57,9 @@ let package = Package(
                         swiftSettings: [
                                 .unsafeFlags(["-Ounchecked"]),
                         ],
+                        linkerSettings: [
+                                .unsafeFlags(["-L.build", "-lmojo"])
+                        ]
                 ),
                 .executableTarget(
                         name: "SobolGenerator"
@@ -76,6 +80,11 @@ let package = Package(
                 .target(
                         name: "ptexBridge",
                         dependencies: ["ptex"]
+                ),
+                .target(
+                        name: "mojoKernel",
+                        path: "Sources/mojoKernel",
+                        publicHeadersPath: "include"
                 ),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),

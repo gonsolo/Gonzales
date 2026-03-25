@@ -1,0 +1,8 @@
+[project]
+name = "gonzales-mojo"
+version = "0.1.0"
+description = "Mojo kernels for Gonzales"
+requires-python = ">=3.13"
+dependencies = [
+    "modular>=26.2.0",
+]

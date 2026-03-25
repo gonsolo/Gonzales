@@ -1,5 +1,6 @@
 import Foundation
 import libgonzales
+import mojoKernel
 
 enum MainError: Error {
         case format
@@ -89,6 +90,7 @@ func parseArguments() throws -> (String, RenderOptions) {
 
 @MainActor
 func main() async {
+        mojo_init()
         do {
                 let (sceneName, parsedOptions) = try parseArguments()
                 var renderOptions = parsedOptions

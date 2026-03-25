@@ -144,6 +144,7 @@ endif
 	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)
 
 	BUILD_DIRECTORY 	= .build
+	MOJO_LIB			= $(BUILD_DIRECTORY)/libmojo.a
 	RELEASE_DIRECTORY 	= $(BUILD_DIRECTORY)/release
 	DEBUG_DIRECTORY 	= $(BUILD_DIRECTORY)/debug
 	GONZALES_RELEASE 	= $(RELEASE_DIRECTORY)/gonzales
@@ -166,11 +167,16 @@ em: editMakefile
 editMakefile:
 	@vim Makefile
 
+$(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml
+	@mkdir -p .build
+	uv run mojo build Sources/mojoKernel/kernel.mojo -o .build/kernel.o --emit object
+	ar rcs $(MOJO_LIB) .build/kernel.o
+
 r: release
-release:
+release: $(MOJO_LIB)
 	@$(BUILD_RELEASE)
 d: debug
-debug:
+debug: $(MOJO_LIB)
 	@$(BUILD_DEBUG)
 t: test
 td: test_debug

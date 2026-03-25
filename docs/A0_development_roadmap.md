@@ -32,7 +32,7 @@ and the same kernel can later target GPU via `@gpu` (Phase 3) without a
 rewrite. A working Mojo CPU+GPU raytracer prototype exists at
 `/home/gonsolo/work/mojo_gpu_raytracer/`. Estimate: 1–2 weeks.
 
-### Step 1a: Mojo Object File FFI ✅ (2026-03-25)
+#### Step 1a: Mojo Object File FFI ✅ (2026-03-25)
 
 Created a standalone experiment in `sandbox/mojo_ffi/` demonstrating
 Mojo-to-Swift C FFI. Uses `uv` and `modular` to compile a `.mojo` file
