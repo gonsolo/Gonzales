@@ -121,7 +121,8 @@ endif
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
-	SWIFT_OPTIMIZE		= $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA) $(SWIFT_LTO)
+	SWIFT_UNCHECKED		= -Xswiftc -Ounchecked
+	SWIFT_OPTIMIZE		= $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA) $(SWIFT_LTO) $(SWIFT_UNCHECKED)
 
 	# Should not be needed since there is only one module
 	# CROSS 			= -Xswiftc -cross-module-optimization

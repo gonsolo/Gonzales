@@ -27,136 +27,69 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                 self.primIds = ids
         }
 
-        // --- 1. Private Traversal Protocol (The Leaf Logic Interface) ---
-        private protocol LeafProcessor {
-                mutating func processLeaf(
-                        scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray)
-                var tHit: Real { get set }
-                var shouldEarlyExit: Bool { get }
-        }
-
-        // --- 2. The Core Traversal Engine ---
-        @inline(__always)
-        private func traverseHierarchy<P: LeafProcessor>(
-                scene: Scene,
-                ray: Ray,
-                processor: inout P
-        ) {
-                var toVisit = 0
-                var current = 0
-                // Use a fixed-size array/tuple for performance
-                var nodesToVisit: [32 of Int] = .init(repeating: 0)
-
-                if nodes.isEmpty { return }
-
-                while true {
-                        let node = nodes[current]
-
-                        // 1. Check intersection with the bounding box
-                        if node.bounds.intersects(ray: ray, tHit: processor.tHit) {
-
-                                if node.count > 0 {  // leaf node
-
-                                        // 2. Execute the leaf-specific logic via the protocol method
-                                        processor.processLeaf(
-                                                scene: scene, hierarchy: self, node: node, ray: ray)
-
-                                        if processor.shouldEarlyExit {
-                                                return
-                                        }
-
-                                        // 3. Move to the next node from the stack (if any)
-                                        if toVisit == 0 { break }
-                                        toVisit -= 1
-                                        current = nodesToVisit[toVisit]
-
-                                } else {  // interior node
-                                        // 4. Determine child traversal order (Closest child first)
-                                        let firstChildIndex: Int
-                                        let secondChildIndex: Int
-
-                                        if ray.direction[node.axis] < 0 {
-                                                firstChildIndex = node.offset
-                                                secondChildIndex = current + 1
-                                        } else {
-                                                firstChildIndex = current + 1
-                                                secondChildIndex = node.offset
-                                        }
-
-                                        // 5. Push the farther child onto the stack
-                                        nodesToVisit[toVisit] = secondChildIndex
-                                        toVisit += 1
-
-                                        // 6. Set the current node to the nearer child
-                                        current = firstChildIndex
-                                }
-                        } else {
-                                // Missed bounding box, move to the next node from the stack
-                                if toVisit == 0 { break }
-                                toVisit -= 1
-                                current = nodesToVisit[toVisit]
-                        }
-                }
-        }
-
-        private struct OcclusionProcessor: LeafProcessor {
-                var intersected = false
-                var tHit: Real
-                var shouldEarlyExit: Bool { return intersected }
-
-                @inline(__always)
-                mutating func processLeaf(
-                        scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
-                ) {
-                        for index in 0..<node.count {
-                                if scene.intersect(
-                                        primId: hierarchy.primIds[node.offset + index],
-                                        ray: ray,
-                                        tHit: &tHit) {
-                                        intersected = true
-                                        return
-                                }
-                        }
-                }
-        }
-
         // --- Public Intersect (Occlusion Query) ---
         func intersect(
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
         ) -> Bool {
-                var processor = OcclusionProcessor(tHit: tHit)
-                traverseHierarchy(scene: scene, ray: ray, processor: &processor)
-                tHit = processor.tHit
-                return processor.intersected
-        }
+                if nodes.isEmpty { return false }
 
-        // --- 4. Interaction Leaf Logic (Value Type) ---
-        private struct InteractionProcessor: LeafProcessor {
-                var index: Int = 0
-                var gdata: TriangleIntersection?
-                var tHit: Real
-                var shouldEarlyExit: Bool { return false }
+                var isOccluded = false
+                var localTHit = tHit
 
-                @inline(__always)
-                mutating func processLeaf(
-                        scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
-                ) {
-                        var currentData = TriangleIntersection()
-                        for index in 0..<node.count {
-                                let intersectionFound = scene.getIntersectionData(
-                                        primId: hierarchy.primIds[node.offset + index],
-                                        ray: ray,
-                                        tHit: &tHit,
-                                        data: &currentData)
+                nodes.withUnsafeBufferPointer { nodesBuffer in
+                        primIds.withUnsafeBufferPointer { primsBuffer in
+                                var toVisit = 0
+                                var current = 0
+                                var nodesToVisit: [32 of Int] = .init(repeating: 0)
 
-                                if intersectionFound {
-                                        self.index = node.offset + index
-                                        gdata = currentData
+                                while true {
+                                        let node = nodesBuffer[current]
+
+                                        if node.bounds.intersects(ray: ray, tHit: localTHit) {
+                                                if node.count > 0 {  // leaf node
+                                                        for index in 0..<node.count {
+                                                                if scene.intersect(
+                                                                        primId: primsBuffer[node.offset + index],
+                                                                        ray: ray,
+                                                                        tHit: &localTHit) {
+                                                                        isOccluded = true
+                                                                        break
+                                                                }
+                                                        }
+                                                        if isOccluded { break }
+
+                                                        if toVisit == 0 { break }
+                                                        toVisit -= 1
+                                                        current = nodesToVisit[toVisit]
+
+                                                } else {  // interior node
+                                                        let firstChildIndex: Int
+                                                        let secondChildIndex: Int
+                                                        if ray.direction[node.axis] < 0 {
+                                                                firstChildIndex = node.offset
+                                                                secondChildIndex = current + 1
+                                                        } else {
+                                                                firstChildIndex = current + 1
+                                                                secondChildIndex = node.offset
+                                                        }
+
+                                                        nodesToVisit[toVisit] = secondChildIndex
+                                                        toVisit += 1
+                                                        current = firstChildIndex
+                                                }
+                                        } else {
+                                                if toVisit == 0 { break }
+                                                toVisit -= 1
+                                                current = nodesToVisit[toVisit]
+                                        }
                                 }
                         }
                 }
+                
+                tHit = localTHit
+                return isOccluded
         }
 
         func intersect(
@@ -164,18 +97,73 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                 ray: Ray,
                 tHit: inout Real
         ) -> SurfaceInteraction? {
-                var processor = InteractionProcessor(tHit: tHit)
-                traverseHierarchy(scene: scene, ray: ray, processor: &processor)
+                if nodes.isEmpty { return nil }
 
-                tHit = processor.tHit
-                var interaction: SurfaceInteraction?
-                if let gdata = processor.gdata {
-                        interaction = scene.computeSurfaceInteraction(
-                                primId: primIds[processor.index],
+                var hitIndex: Int = -1
+                var bestData: TriangleIntersection? = nil
+                var localTHit = tHit
+
+                nodes.withUnsafeBufferPointer { nodesBuffer in
+                        primIds.withUnsafeBufferPointer { primsBuffer in
+                                var toVisit = 0
+                                var current = 0
+                                var nodesToVisit: [32 of Int] = .init(repeating: 0)
+
+                                while true {
+                                        let node = nodesBuffer[current]
+
+                                        if node.bounds.intersects(ray: ray, tHit: localTHit) {
+                                                if node.count > 0 {  // leaf node
+                                                        var currentData = TriangleIntersection()
+                                                        for index in 0..<node.count {
+                                                                let intersectionFound = scene.getIntersectionData(
+                                                                        primId: primsBuffer[node.offset + index],
+                                                                        ray: ray,
+                                                                        tHit: &localTHit,
+                                                                        data: &currentData)
+
+                                                                if intersectionFound {
+                                                                        hitIndex = node.offset + index
+                                                                        bestData = currentData
+                                                                }
+                                                        }
+
+                                                        if toVisit == 0 { break }
+                                                        toVisit -= 1
+                                                        current = nodesToVisit[toVisit]
+
+                                                } else {  // interior node
+                                                        let firstChildIndex: Int
+                                                        let secondChildIndex: Int
+                                                        if ray.direction[node.axis] < 0 {
+                                                                firstChildIndex = node.offset
+                                                                secondChildIndex = current + 1
+                                                        } else {
+                                                                firstChildIndex = current + 1
+                                                                secondChildIndex = node.offset
+                                                        }
+
+                                                        nodesToVisit[toVisit] = secondChildIndex
+                                                        toVisit += 1
+                                                        current = firstChildIndex
+                                                }
+                                        } else {
+                                                if toVisit == 0 { break }
+                                                toVisit -= 1
+                                                current = nodesToVisit[toVisit]
+                                        }
+                                }
+                        }
+                }
+
+                tHit = localTHit
+                if let gdata = bestData, hitIndex >= 0 {
+                        return scene.computeSurfaceInteraction(
+                                primId: primIds[hitIndex],
                                 data: gdata,
                                 worldRay: ray)
                 }
-                return interaction
+                return nil
         }
 
         func objectBound(scene: Scene) -> Bounds3f {
