@@ -1,6 +1,6 @@
 import Foundation
 
-struct TransformedPrimitive: Boundable, Intersectable {
+final class TransformedPrimitive: Boundable, Intersectable, Sendable {
 
         func intersect(
                 scene: Scene,
@@ -65,8 +65,13 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 return accelerator.worldBound(scene: scene)
         }
 
-        // let acceleratorIndex: AcceleratorIndex
         let accelerator: Accelerator
         let transform: Transform
         let idx: Int
+
+        init(accelerator: Accelerator, transform: Transform, idx: Int) {
+                self.accelerator = accelerator
+                self.transform = transform
+                self.idx = idx
+        }
 }

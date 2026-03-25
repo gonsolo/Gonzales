@@ -51,21 +51,38 @@ public struct DispatchPrimitiveMacro: ExpressionMacro {
             bodyCode = "return " + bodyCode
         }
 
+        let bodyCodeTriangle = bodyCode.replacingOccurrences(
+            of: "\\b\(paramName)\\b",
+            with: "Triangle(meshIndex: \(primIdExpr).id1, number: \(primIdExpr).id2)",
+            options: .regularExpression
+        )
+        let bodyCodeGeo = bodyCode.replacingOccurrences(
+            of: "\\b\(paramName)\\b",
+            with: "(\(sceneExpr).geometricPrimitives[\(primIdExpr).id1])",
+            options: .regularExpression
+        )
+        let bodyCodeTrans = bodyCode.replacingOccurrences(
+            of: "\\b\(paramName)\\b",
+            with: "(\(sceneExpr).transformedPrimitives[\(primIdExpr).id1])",
+            options: .regularExpression
+        )
+        let bodyCodeLight = bodyCode.replacingOccurrences(
+            of: "\\b\(paramName)\\b",
+            with: "(\(sceneExpr).areaLights[\(primIdExpr).id1])",
+            options: .regularExpression
+        )
+
         let result: ExprSyntax = """
         { () in 
             switch \(primIdExpr).type {
             case .triangle:
-                let \(raw: paramName) = Triangle(meshIndex: \(primIdExpr).id1, number: \(primIdExpr).id2)
-                \(raw: bodyCode)
+                \(raw: bodyCodeTriangle)
             case .geometricPrimitive:
-                let \(raw: paramName) = \(sceneExpr).geometricPrimitives[\(primIdExpr).id1]
-                \(raw: bodyCode)
+                \(raw: bodyCodeGeo)
             case .transformedPrimitive:
-                let \(raw: paramName) = \(sceneExpr).transformedPrimitives[\(primIdExpr).id1]
-                \(raw: bodyCode)
+                \(raw: bodyCodeTrans)
             case .areaLight:
-                let \(raw: paramName) = \(sceneExpr).areaLights[\(primIdExpr).id1]
-                \(raw: bodyCode)
+                \(raw: bodyCodeLight)
             }
         }()
         """

@@ -1,29 +1,30 @@
 // BoundingHierarchy.swift
 
-struct BoundingHierarchy: Boundable, Intersectable, Sendable {
+final class BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         init(primitives: [IntersectablePrimitive], nodes: [BoundingHierarchyNode]) {
                 self.nodes = nodes
-                self.primIds = []
+                var ids = [PrimId]()
                 for primitive in primitives {
                         switch primitive {
                         case .geometricPrimitive(let geometricPrimitive):
                                 let primId = PrimId(
                                         id1: geometricPrimitive.idx, id2: -1, type: .geometricPrimitive)
-                                self.primIds.append(primId)
+                                ids.append(primId)
                         case .triangle(let triangle):
                                 let primId = PrimId(
                                         id1: triangle.meshIndex, id2: triangle.triangleIndex, type: .triangle)
-                                self.primIds.append(primId)
+                                ids.append(primId)
                         case .transformedPrimitive(let transformedPrimitive):
                                 let primId = PrimId(
                                         id1: transformedPrimitive.idx, id2: -1, type: .transformedPrimitive)
-                                self.primIds.append(primId)
+                                ids.append(primId)
                         case .areaLight(let areaLight):
                                 let primId = PrimId(id1: areaLight.idx, id2: -1, type: .areaLight)
-                                self.primIds.append(primId)
+                                ids.append(primId)
                         }
                 }
+                self.primIds = ids
         }
 
         // --- 1. Private Traversal Protocol (The Leaf Logic Interface) ---
@@ -179,7 +180,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
         }
 
         let nodes: [BoundingHierarchyNode]
-        var primIds: [PrimId]
+        let primIds: [PrimId]
 }
 
 enum PrimType: UInt8 {

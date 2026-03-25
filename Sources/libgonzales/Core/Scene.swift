@@ -1,6 +1,6 @@
 import DevirtualizeMacro
 
-struct Scene {
+final class Scene: Sendable {
 
         init(
                 lights: [Light],
@@ -56,12 +56,12 @@ struct Scene {
                 }
         }
 
-        var lights: [Light]
-        var infiniteLights: [InfiniteLight]
-        var materials: [Material]
-        var meshes: TriangleMeshes
-        var geometricPrimitives: [GeometricPrimitive]
-        var areaLights: [AreaLight]
-        var transformedPrimitives: [TransformedPrimitive]
-        var arena: TextureArena
+        let lights: [Light]
+        let infiniteLights: [InfiniteLight]
+        let materials: [Material]
+        let meshes: TriangleMeshes
+        let geometricPrimitives: [GeometricPrimitive]
+        let areaLights: [AreaLight]
+        let transformedPrimitives: [TransformedPrimitive]
+        let arena: TextureArena
 }
