@@ -8,7 +8,7 @@ protocol Intersectable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction?
+        ) -> SurfaceInteraction?
 }
 
 enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
@@ -22,9 +22,9 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
-                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
-                        try p.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+        ) -> Bool {
+                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
+                        p.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 
@@ -32,9 +32,9 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
-                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
-                        try p.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+        ) -> SurfaceInteraction? {
+                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
+                        p.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
                 }
         }
 
@@ -42,21 +42,21 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
-                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
-                        try p.intersect(scene: scene, ray: ray, tHit: &tHit)
+        ) -> SurfaceInteraction? {
+                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
+                        p.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 
-        func worldBound(scene: Scene) throws -> Bounds3f {
-                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
-                        try p.worldBound(scene: scene)
+        func worldBound(scene: Scene) -> Bounds3f {
+                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
+                        p.worldBound(scene: scene)
                 }
         }
 
-        func objectBound(scene: Scene) throws -> Bounds3f {
-                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
-                        try p.objectBound(scene: scene)
+        func objectBound(scene: Scene) -> Bounds3f {
+                return #dispatchIntersectableNoThrow(primitive: self) { (p: Triangle) in
+                        p.objectBound(scene: scene)
                 }
         }
 }

@@ -52,10 +52,10 @@ public struct DispatchPrimitiveMacro: ExpressionMacro {
         }
 
         let result: ExprSyntax = """
-        { () throws in 
+        { () in 
             switch \(primIdExpr).type {
             case .triangle:
-                let \(raw: paramName) = try Triangle(meshIndex: \(primIdExpr).id1, number: \(primIdExpr).id2, triangleMeshes: \(sceneExpr).meshes)
+                let \(raw: paramName) = Triangle(meshIndex: \(primIdExpr).id1, number: \(primIdExpr).id2)
                 \(raw: bodyCode)
             case .geometricPrimitive:
                 let \(raw: paramName) = \(sceneExpr).geometricPrimitives[\(primIdExpr).id1]

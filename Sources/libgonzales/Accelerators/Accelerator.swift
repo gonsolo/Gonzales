@@ -14,8 +14,8 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
-                return try boundingHierarchy.intersect(
+        ) -> SurfaceInteraction? {
+                return boundingHierarchy.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)

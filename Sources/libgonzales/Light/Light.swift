@@ -2,13 +2,13 @@
 
 protocol LightSource: Sendable {
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
-                throws -> LightSample
+                -> LightSample
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
-                throws -> Real
+                -> Real
         func radianceFromInfinity(for ray: Ray, arena: TextureArena) -> RgbSpectrum
-        func power(scene: Scene) throws -> Real
+        func power(scene: Scene) -> Real
         var isDelta: Bool { get }
 }
 
@@ -20,10 +20,10 @@ enum Light: Sendable {
         case point(PointLight)
 
         func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
-                throws -> LightSample {
+                -> LightSample {
                 switch self {
                 case .area(let light):
-                        return try light.sample(
+                        return light.sample(
                                 point: point, samples: samples, accelerator: accelerator, scene: scene)
                 case .infinite(let light):
                         return light.sample(
@@ -40,19 +40,19 @@ enum Light: Sendable {
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
         )
-                throws -> Real {
+                -> Real {
                 switch self {
                 case .area(let light):
-                        return try light.probabilityDensityFor(
+                        return light.probabilityDensityFor(
                                 scene: scene, samplingDirection: direction, from: reference)
                 case .infinite(let light):
-                        return try light.probabilityDensityFor(
+                        return light.probabilityDensityFor(
                                 scene: scene, samplingDirection: direction, from: reference)
                 case .distant(let light):
-                        return try light.probabilityDensityFor(
+                        return light.probabilityDensityFor(
                                 scene: scene, samplingDirection: direction, from: reference)
                 case .point(let light):
-                        return try light.probabilityDensityFor(
+                        return light.probabilityDensityFor(
                                 scene: scene, samplingDirection: direction, from: reference)
                 }
         }
@@ -66,9 +66,9 @@ enum Light: Sendable {
                 }
         }
 
-        func power(scene: Scene) throws -> Real {
+        func power(scene: Scene) -> Real {
                 switch self {
-                case .area(let light): return try light.power(scene: scene)
+                case .area(let light): return light.power(scene: scene)
                 case .infinite(let light): return light.power(scene: scene)
                 case .distant(let light): return light.power(scene: scene)
                 case .point(let light): return light.power(scene: scene)

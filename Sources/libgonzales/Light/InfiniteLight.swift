@@ -67,7 +67,7 @@ struct InfiniteLight: LightSource {
         func probabilityDensityFor<I: Interaction>(
                 scene _: Scene, samplingDirection direction: Vector, from _: I
         )
-                throws -> Real {
+                -> Real {
                 let incoming = worldToLight * direction
                 let texCoord = equalAreaSphereToSquare(direction: incoming)
                 let mapPdf = distribution.pdf(texCoord: texCoord)

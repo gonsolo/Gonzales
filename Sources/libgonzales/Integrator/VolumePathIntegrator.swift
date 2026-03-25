@@ -107,14 +107,14 @@ extension VolumePathIntegrator {
                 distributionModel: D,
                 sampler: inout Sampler,
                 scene: Scene
-        ) throws -> BsdfSample {
-                let lightSample = try light.sample(
+        ) -> BsdfSample {
+                let lightSample = light.sample(
                         point: interaction.position, samples: sampler.get2D(), accelerator: accelerator,
                         scene: scene)
                 guard !lightSample.radiance.isBlack && !lightSample.pdf.isInfinite else {
                         return invalidBsdfSample
                 }
-                guard try !lightSample.visibility.occluded(scene: scene, accelerator: accelerator) else {
+                guard !lightSample.visibility.occluded(scene: scene, accelerator: accelerator) else {
                         return invalidBsdfSample
                 }
                 let scatter = distributionModel.evaluateDistributionFunction(
@@ -130,7 +130,7 @@ extension VolumePathIntegrator {
                 interaction: I,
                 distributionModel: D,
                 sampler: inout Sampler
-        ) throws -> BsdfSample {
+        ) -> BsdfSample {
 
                 let zero = BsdfSample()
                 var bsdfSample = distributionModel.sampleDistributionFunction(
@@ -140,7 +140,7 @@ extension VolumePathIntegrator {
                 }
                 let ray = interaction.spawnRay(inDirection: bsdfSample.incoming)
                 var tHit = Real.infinity
-                let brdfInteraction = try accelerator.intersect(
+                let brdfInteraction = accelerator.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
@@ -174,8 +174,8 @@ extension VolumePathIntegrator {
                 distributionModel: D,
                 sampler: inout Sampler,
                 scene: Scene
-        ) throws -> RgbSpectrum {
-                let lightSample = try sampleLightSource(
+        ) -> RgbSpectrum {
+                let lightSample = sampleLightSource(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
@@ -193,8 +193,8 @@ extension VolumePathIntegrator {
                 interaction: I,
                 distributionModel: D,
                 sampler: inout Sampler
-        ) throws -> RgbSpectrum {
-                let bsdfSample = try sampleDistributionFunction(
+        ) -> RgbSpectrum {
+                let bsdfSample = sampleDistributionFunction(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
@@ -212,9 +212,9 @@ extension VolumePathIntegrator {
                 distributionModel: D,
                 sampler: inout Sampler,
                 scene: Scene
-        ) throws -> RgbSpectrum {
+        ) -> RgbSpectrum {
 
-                let lightSample = try sampleLightSource(
+                let lightSample = sampleLightSource(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
@@ -230,12 +230,12 @@ extension VolumePathIntegrator {
                         lightSample.probabilityDensity == 0
                         ? black : lightSample.estimate * lightWeight / lightSample.probabilityDensity
 
-                let brdfSample = try sampleDistributionFunction(
+                let brdfSample = sampleDistributionFunction(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
                         sampler: &sampler)
-                let lightDensity = try light.probabilityDensityFor(
+                let lightDensity = light.probabilityDensityFor(
                         scene: scene,
                         samplingDirection: brdfSample.incoming,
                         from: interaction)
@@ -254,9 +254,9 @@ extension VolumePathIntegrator {
                 distributionModel: D,
                 sampler: inout Sampler,
                 scene: Scene
-        ) throws -> RgbSpectrum {
+        ) -> RgbSpectrum {
                 if light.isDelta {
-                        return try sampleLight(
+                        return sampleLight(
                                 light: light,
                                 interaction: interaction,
                                 distributionModel: distributionModel,
@@ -264,16 +264,16 @@ extension VolumePathIntegrator {
                                 scene: scene)
                 }
                 // For debugging uncomment one of the two following methods:
-                // return try sampleLight(
+                // return sampleLight(
                 //        light: light,
                 //        interaction: interaction,
                 //        sampler: sampler)
-                // return try sampleFramedBsdf(
+                // return sampleFramedBsdf(
                 //        light: light,
                 //        interaction: interaction,
                 //        sampler: sampler)
 
-                return try sampleMultipleImportance(
+                return sampleMultipleImportance(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
@@ -292,7 +292,7 @@ extension VolumePathIntegrator {
                         sampler: sampler,
                         lightSampler: &lightSampler,
                         scene: scene)
-                let estimate = try estimateDirect(
+                let estimate = estimateDirect(
                         light: light,
                         interaction: interaction,
                         distributionModel: distributionModel,
@@ -403,7 +403,7 @@ extension VolumePathIntegrator {
                 context: inout IntegratorContext
         ) throws -> Bool {
 
-                state.interaction = try accelerator.intersect(
+                state.interaction = accelerator.intersect(
                         scene: scene,
                         ray: state.ray,
                         tHit: &state.tHit)

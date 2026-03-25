@@ -6,9 +6,9 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 let localRay = transform.inverse * ray
-                var interaction = try accelerator.intersect(
+                var interaction = accelerator.intersect(
                         scene: scene,
                         ray: localRay,
                         tHit: &tHit)
@@ -26,10 +26,10 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
+        ) -> Bool {
                 let localRay = transform.inverse * worldRay
                 var localTHit = tHit
-                if try accelerator.intersect(scene: scene, ray: localRay, tHit: &localTHit) != nil {
+                if accelerator.intersect(scene: scene, ray: localRay, tHit: &localTHit) != nil {
                         tHit = localTHit
                         data = TriangleIntersection(
                                 primId: PrimId(id1: idx, id2: -1, type: .transformedPrimitive),
@@ -46,10 +46,10 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 let localRay = transform.inverse * worldRay
                 var localTHit = data.tValue + 1e-5
-                var interaction = try accelerator.intersect(scene: scene, ray: localRay, tHit: &localTHit)
+                var interaction = accelerator.intersect(scene: scene, ray: localRay, tHit: &localTHit)
                 if let inter = interaction {
                         interaction = transform * inter
                 }
@@ -61,9 +61,8 @@ struct TransformedPrimitive: Boundable, Intersectable {
                 return bound
         }
 
-        func objectBound(scene _: Scene) throws -> Bounds3f {
-                throw RenderError.unimplemented(
-                        function: #function, file: #filePath, line: #line, message: "")
+        func objectBound(scene: Scene) -> Bounds3f {
+                return accelerator.worldBound(scene: scene)
         }
 
         // let acceleratorIndex: AcceleratorIndex

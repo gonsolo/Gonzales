@@ -71,7 +71,7 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 let buffer = UnsafeMutableBufferPointer(start: pointer, count: primitives.count)
 
                 let primitiveBufferWrapper = UnsafePrimitiveBuffer(buffer: buffer)
-                try await withThrowingTaskGroup(of: Void.self) { group in
+                await withTaskGroup(of: Void.self) { group in
                         let chunkSize = 32768
                         var startIndex = 0
                         while startIndex < primitives.count {
@@ -79,14 +79,14 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                                 group.addTask { [startIndex, endIndex, scene] in
                                         for index in startIndex..<endIndex {
                                                 let primitive = primitives[index]
-                                                let bound = try primitive.worldBound(scene: scene)
+                                                let bound = primitive.worldBound(scene: scene)
                                                 primitiveBufferWrapper.buffer[index] = CachedPrimitive(
                                                         index: index, bound: bound, center: bound.center)
                                         }
                                 }
                                 startIndex += chunkSize
                         }
-                        for try await _ in group {}
+                        for await _ in group {}
                 }
 
                 self.bufferWrapper = UnsafePrimitiveBuffer(buffer: buffer)

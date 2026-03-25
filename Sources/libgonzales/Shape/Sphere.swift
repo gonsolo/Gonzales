@@ -113,19 +113,19 @@ struct Sphere: Shape {
         }
 
         func intersect(
-                scene _: Scene,
-                ray _: Ray,
-                tHit _: inout Real
-        ) throws -> Bool {
-                throw RenderError.unimplemented(
-                        function: #function, file: #filePath, line: #line, message: "")
+                scene: Scene,
+                ray: Ray,
+                tHit: inout Real
+        ) -> Bool {
+                var t = tHit
+                return intersect(scene: scene, ray: ray, tHit: &t) != nil
         }
 
         func intersect(
                 scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 let ray = getWorldToObject(scene: scene) * worldRay
                 let originX = ray.origin.x
                 let originY = ray.origin.y

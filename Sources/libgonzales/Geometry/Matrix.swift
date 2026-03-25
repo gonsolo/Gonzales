@@ -1,3 +1,5 @@
+private nonisolated(unsafe) var hasPrintedSingularMatrixWarning = false
+
 public struct Matrix: Sendable {
 
         public init(
@@ -137,7 +139,10 @@ public struct Matrix: Sendable {
                         // return Matrix(minv)
                         return Matrix(backing: minv)
                 } catch MatrixError.singularMatrix {
-                        print("Warning: Singular matrix encountered!")
+                        if !hasPrintedSingularMatrixWarning {
+                                print("Warning: Singular matrix encountered! \(self)")
+                                hasPrintedSingularMatrixWarning = true
+                        }
                         return Matrix()
                 } catch {
                         throw error

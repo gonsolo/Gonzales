@@ -22,7 +22,7 @@ struct PointLight: LightSource {
         func probabilityDensityFor<I: Interaction>(
                 scene _: Scene, samplingDirection _: Vector, from _: I
         )
-                throws -> Real {
+                -> Real {
                 return 0
         }
 

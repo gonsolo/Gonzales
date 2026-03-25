@@ -127,7 +127,7 @@ struct Curve: Shape {
                 tHit: inout Real,
                 rayToObject: Transform,
                 state: CurveIntersectionState
-        ) throws -> (SurfaceInteraction?, Real) {
+        ) -> (SurfaceInteraction?, Real) {
                 let points = state.points
                 let uRange = state.uRange
                 let depth = state.depth
@@ -169,7 +169,7 @@ struct Curve: Shape {
                                         uRange: (uSamples[segment], uSamples[segment + 1]),
                                         depth: depth - 1,
                                         index: cps)
-                                hits[segment] = try recursiveIntersect(
+                                hits[segment] = recursiveIntersect(
                                         ray: ray,
                                         tHit: &tHit,
                                         rayToObject: rayToObject,
@@ -232,6 +232,7 @@ struct Curve: Shape {
                         }
                         // if tHit != nullptr
                         let tHitValue = pointOnCurve.z / rayLength
+                        tHit = tHitValue
                         // let pError = Vector(x: 2 * hitWidth, y: 2 * hitWidth, z: 2 * hitWidth)
                         let (_, dpdu) = evalBezier(points: common.points, uSample: curveU)
                         let dpduPlane = rayToObject.inverse * dpdu
@@ -287,33 +288,128 @@ struct Curve: Shape {
         }
 
         func intersect(
-                scene _: Scene,
-                ray _: Ray,
-                tHit _: inout Real
-        ) throws -> Bool {
-                throw RenderError.unimplemented(
-                        function: #function, file: #filePath, line: #line, message: "")
+                scene: Scene,
+                ray: Ray,
+                tHit: inout Real
+        ) -> Bool {
+                // We must use a copy of tHit so boolean queries don't mutate the ray's tMax inappropriately.
+                var t = tHit
+                return intersect(scene: scene, ray: ray, tHit: &t) != nil
         }
 
         func intersect(
                 scene _: Scene,
-                ray _: Ray,
-                tHit _: inout Real
-        ) throws -> SurfaceInteraction? {
-                throw RenderError.unimplemented(
-                        function: #function, file: #filePath, line: #line, message: "")
+                ray worldRay: Ray,
+                tHit: inout Real
+        ) -> SurfaceInteraction? {
+                let ray = objectToWorld.inverse * worldRay
+                guard lengthSquared(ray.direction) > 0 else { return nil }
+                
+                let cpObj = blossomBezier(points: common.points, uSamples: uRange)
+
+                var dx = cross(ray.direction, cpObj.3 - cpObj.0)
+                if lengthSquared(dx) < 1e-8 {
+                        var _dy = Vector(x: 0, y: 0, z: 0)
+                        (dx, _dy) = makeCoordinateSystem(from: ray.direction)
+                }
+
+                let dir = normalized(ray.direction)
+                let right = normalized(cross(normalized(dx), dir))
+                var upVector = dx
+                if length(right) != 0 {
+                        upVector = cross(dir, right)
+                }
+                let matrix = Matrix(
+                        t00: right.x, t01: upVector.x, t02: dir.x, t03: ray.origin.x,
+                        t10: right.y, t11: upVector.y, t12: dir.y, t13: ray.origin.y,
+                        t20: right.z, t21: upVector.z, t22: dir.z, t23: ray.origin.z,
+                        t30: 0, t31: 0, t32: 0, t33: 1)
+                
+                guard let rayFromObject = try? Transform(matrix: matrix.inverse) else { return nil }
+
+                let cp = [
+                        rayFromObject * cpObj.0,
+                        rayFromObject * cpObj.1,
+                        rayFromObject * cpObj.2,
+                        rayFromObject * cpObj.3
+                ]
+
+                let maxWidth = computeMaxWidth(uRange: uRange, width: common.width)
+                let curveBounds = union(
+                        first: Bounds3f(first: cp[0], second: cp[1]),
+                        second: Bounds3f(first: cp[2], second: cp[3]))
+                let expanded = expand(bounds: curveBounds, by: maxWidth * 0.5)
+
+                let rayBounds = Bounds3f(
+                        first: Point(x: 0, y: 0, z: 0),
+                        second: Point(x: 0, y: 0, z: length(ray.direction) * tHit))
+                
+                let overlapsX = (expanded.pMax.x >= rayBounds.pMin.x) && (expanded.pMin.x <= rayBounds.pMax.x)
+                let overlapsY = (expanded.pMax.y >= rayBounds.pMin.y) && (expanded.pMin.y <= rayBounds.pMax.y)
+                let overlapsZ = (expanded.pMax.z >= rayBounds.pMin.z) && (expanded.pMin.z <= rayBounds.pMax.z)
+                guard overlapsX && overlapsY && overlapsZ else { return nil }
+
+                var l0: Real = 0
+                for i in 0..<2 {
+                        let valX = abs(cp[i].x - 2 * cp[i + 1].x + cp[i + 2].x)
+                        let valY = abs(cp[i].y - 2 * cp[i + 1].y + cp[i + 2].y)
+                        let valZ = abs(cp[i].z - 2 * cp[i + 1].z + cp[i + 2].z)
+                        l0 = max(l0, max(max(valX, valY), valZ))
+                }
+
+                var maxDepth = 0
+                if l0 > 0 {
+                        let eps = max(common.width.0, common.width.1) * 0.05
+                        let r0 = Int(log2(1.41421356237 * 6.0 * l0 / (8.0 * eps))) / 2
+                        maxDepth = clamp(value: r0, low: 0, high: 10)
+                }
+
+                let state = CurveIntersectionState(points: cp, uRange: uRange, depth: maxDepth, index: 0)
+                let (interaction, _) = recursiveIntersect(ray: ray, tHit: &tHit, rayToObject: rayFromObject.inverse, state: state)
+                return interaction
         }
 
-        func area(scene _: Scene) throws -> Area {
-                throw RenderError.unimplemented(
-                        function: #function, file: #filePath, line: #line, message: "")
+        func area(scene _: Scene) -> Area {
+                let cpObj = blossomBezier(points: common.points, uSamples: uRange)
+                let width0 = lerp(with: uRange.0, between: common.width.0, and: common.width.1)
+                let width1 = lerp(with: uRange.1, between: common.width.0, and: common.width.1)
+                let avgWidth = (width0 + width1) * 0.5
+                let approxLength = length(cpObj.0 - cpObj.1) + length(cpObj.1 - cpObj.2) + length(cpObj.2 - cpObj.3)
+                return approxLength * avgWidth
         }
 
-        func sample<I: Interaction>(samples _: TwoFloats, scene _: Scene) throws -> (
+        func sample<I: Interaction>(samples: TwoFloats, scene: Scene) -> (
                 interaction: I, pdf: Real
         ) {
-                throw RenderError.unimplemented(
-                        function: #function, file: #filePath, line: #line, message: "")
+                let u = samples.0
+                let v = samples.1 * 2 * Real.pi
+                
+                let (pointObj, derivative) = evalBezier(points: common.points, uSample: u)
+                
+                let tangent = normalized(derivative)
+                let (dx, dy) = makeCoordinateSystem(from: tangent)
+                
+                let widthObj = lerp(with: u, between: common.width.0, and: common.width.1)
+                let radius = widthObj * 0.5
+                
+                let offset = (dx * cos(v) + dy * sin(v)) * radius
+                let pObj = pointObj + offset
+                let nObj = Normal(normalized(offset))
+                
+                let pWorld = objectToWorld * pObj
+                let nWorld = objectToWorld * nObj
+                
+                let interaction = SurfaceInteraction(
+                        position: pWorld,
+                        normal: nWorld,
+                        shadingNormal: nWorld,
+                        outgoing: Vector(x: 0, y: 0, z: 0),
+                        dpdu: Vector(x: 0, y: 0, z: 0),
+                        uvCoordinates: Point2f(x: u, y: samples.1),
+                        faceIndex: 0)
+                
+                // swiftlint:disable:next force_cast
+                return (interaction as! I, 1.0 / area(scene: scene))
         }
 
         public var description: String {

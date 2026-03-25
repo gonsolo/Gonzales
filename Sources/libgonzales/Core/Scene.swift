@@ -28,9 +28,9 @@ struct Scene {
                 self.arena = arena
         }
 
-        func intersect(primId: PrimId, ray: Ray, tHit: inout Real) throws -> Bool {
-                return try #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
-                        try p.intersect(scene: self, ray: ray, tHit: &tHit) != nil
+        func intersect(primId: PrimId, ray: Ray, tHit: inout Real) -> Bool {
+                return #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
+                        p.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 }
         }
 
@@ -39,10 +39,10 @@ struct Scene {
                 ray: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws
+        )
                 -> Bool {
-                return try #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
-                        try p.getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                return #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
+                        p.getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
                 }
         }
 
@@ -50,9 +50,9 @@ struct Scene {
                 primId: PrimId,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
-                return try #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
-                        try p.computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+        ) -> SurfaceInteraction? {
+                return #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
+                        p.computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
                 }
         }
 

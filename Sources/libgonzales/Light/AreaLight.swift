@@ -16,8 +16,8 @@ final class AreaLight: Boundable, Intersectable, LightSource {
         }
 
         func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene: Scene)
-                throws -> LightSample {
-                let (shapeInteraction, pdf) = try shape.sample(point: point, samples: samples, scene: scene)
+                -> LightSample {
+                let (shapeInteraction, pdf) = shape.sample(point: point, samples: samples, scene: scene)
                 let direction: Vector = normalized(shapeInteraction.position - point)
                 assert(!direction.isNaN)
                 let visibility = Visibility(from: point, target: shapeInteraction.position)
@@ -30,23 +30,23 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                 samplingDirection direction: Vector,
                 from reference: I
         )
-                throws -> Real {
-                return try shape.probabilityDensityFor(
+                -> Real {
+                return shape.probabilityDensityFor(
                         scene: scene, samplingDirection: direction, from: reference)
         }
 
         func radianceFromInfinity(for _: Ray, arena _: TextureArena) -> RgbSpectrum { return black }
 
-        func power(scene: Scene) throws -> Real {
-                return try brightness.average() * shape.area(scene: scene) * Real.pi
+        func power(scene: Scene) -> Real {
+                return brightness.average() * shape.area(scene: scene) * Real.pi
         }
 
-        func worldBound(scene: Scene) throws -> Bounds3f {
-                return try shape.worldBound(scene: scene)
+        func worldBound(scene: Scene) -> Bounds3f {
+                return shape.worldBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) throws -> Bounds3f {
-                return try shape.objectBound(scene: scene)
+        func objectBound(scene: Scene) -> Bounds3f {
+                return shape.objectBound(scene: scene)
         }
 
         func getIntersectionData(
@@ -54,18 +54,18 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
+        ) -> Bool {
                 if alpha == 0 { return false }
-                return try shape.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                return shape.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
         }
 
         func computeSurfaceInteraction(
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                let interaction = try shape.computeSurfaceInteraction(
+                let interaction = shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
@@ -84,9 +84,9 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                let interaction = try shape.intersect(
+                let interaction = shape.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)

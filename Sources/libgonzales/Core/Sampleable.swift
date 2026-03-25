@@ -7,11 +7,11 @@
 
 protocol Sampleable {
 
-        func sample(samples: TwoRandomVariables, scene: Scene) throws -> (
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (
                 interaction: SurfaceInteraction, pdf: Real
         )
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (
                 SurfaceInteraction, Real
         )
 
@@ -19,17 +19,17 @@ protocol Sampleable {
                 scene: Scene,
                 samplingDirection direction: Vector,
                 from interaction: SurfaceInteraction
-        ) throws -> Real
+        ) -> Real
 
-        func area(scene: Scene) throws -> Area
+        func area(scene: Scene) -> Area
 }
 
 extension Sampleable {
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (
                 SurfaceInteraction, Real
         ) {
-                var (intr, pdf) = try sample(samples: samples, scene: scene)
+                var (intr, pdf) = sample(samples: samples, scene: scene)
                 let incident: Vector = normalized(intr.position - point)
                 let squaredDistance = distanceSquared(point, intr.position)
                 let angle = absDot(Vector(normal: intr.normal), -incident)
@@ -45,15 +45,15 @@ extension Sampleable where Self: Intersectable {
                 samplingDirection direction: Vector,
                 from: I
         )
-                throws -> Real {
+                -> Real {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: Real = 0.0
-                guard let interaction = try intersect(scene: scene, ray: ray, tHit: &tHit) else {
+                guard let interaction = intersect(scene: scene, ray: ray, tHit: &tHit) else {
                         return 0
                 }
                 let squaredDistance = distanceSquared(from.position, interaction.position)
                 let angle = absDot(interaction.normal, -direction)
-                let angleTimesArea = angle * (try area(scene: scene))
+                let angleTimesArea = angle * area(scene: scene)
                 let density = squaredDistance / angleTimesArea
                 if density.isInfinite {
                         return 0

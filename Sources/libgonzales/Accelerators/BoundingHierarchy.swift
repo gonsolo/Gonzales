@@ -28,20 +28,17 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
         // --- 1. Private Traversal Protocol (The Leaf Logic Interface) ---
         private protocol LeafProcessor {
-                // processLeaf is declared with 'throws'
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray)
-                        throws
                 var tHit: Real { get set }
         }
 
         // --- 2. Private Traversal Helper (Generic Shared Logic) ---
-        // FIX: Changed 'rethrows' to 'throws' because it calls a throwing method but has no throwing function argument.
         private func traverseHierarchy<P: LeafProcessor>(
                 scene: Scene,
                 ray: Ray,
                 processor: inout P
-        ) throws {
+        ) {
                 var toVisit = 0
                 var current = 0
                 // Use a fixed-size array/tuple for performance
@@ -58,7 +55,7 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                                 if node.count > 0 {  // leaf node
 
                                         // 2. Execute the leaf-specific logic via the protocol method
-                                        try processor.processLeaf(
+                                        processor.processLeaf(
                                                 scene: scene, hierarchy: self, node: node, ray: ray)
 
                                         // 3. Move to the next node from the stack (if any)
@@ -101,10 +98,10 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
-                ) throws {
+                ) {
                         for index in 0..<node.count {
                                 intersected =
-                                        try intersected
+                                        intersected
                                         || scene.intersect(
                                                 primId: hierarchy.primIds[node.offset + index],
                                                 ray: ray,
@@ -118,9 +115,9 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> Bool {
+        ) -> Bool {
                 var processor = OcclusionProcessor(tHit: tHit)
-                try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
+                traverseHierarchy(scene: scene, ray: ray, processor: &processor)
                 tHit = processor.tHit
                 return processor.intersected
         }
@@ -133,10 +130,10 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
 
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
-                ) throws {
+                ) {
                         var currentData = TriangleIntersection()
                         for index in 0..<node.count {
-                                let intersectionFound = try scene.getIntersectionData(
+                                let intersectionFound = scene.getIntersectionData(
                                         primId: hierarchy.primIds[node.offset + index],
                                         ray: ray,
                                         tHit: &tHit,
@@ -154,14 +151,14 @@ struct BoundingHierarchy: Boundable, Intersectable, Sendable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 var processor = InteractionProcessor(tHit: tHit)
-                try traverseHierarchy(scene: scene, ray: ray, processor: &processor)
+                traverseHierarchy(scene: scene, ray: ray, processor: &processor)
 
                 tHit = processor.tHit
                 var interaction: SurfaceInteraction?
                 if let gdata = processor.gdata {
-                        interaction = try scene.computeSurfaceInteraction(
+                        interaction = scene.computeSurfaceInteraction(
                                 primId: primIds[processor.index],
                                 data: gdata,
                                 worldRay: ray)

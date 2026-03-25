@@ -11,9 +11,9 @@ extension Shape {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
+        ) -> Bool {
                 var localTHit = tHit
-                if (try self.intersect(scene: scene, ray: worldRay, tHit: &localTHit)) != nil {
+                if self.intersect(scene: scene, ray: worldRay, tHit: &localTHit) != nil {
                         data = TriangleIntersection(
                                 primId: PrimId(), tValue: localTHit, barycentric0: 0, barycentric1: 0,
                                 barycentric2: 0)
@@ -27,8 +27,8 @@ extension Shape {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 var tHit = data.tValue + 0.0001
-                return try self.intersect(scene: scene, ray: worldRay, tHit: &tHit)
+                return self.intersect(scene: scene, ray: worldRay, tHit: &tHit)
         }
 }

@@ -173,25 +173,10 @@ struct Triangle: Shape {
 
         init(
                 meshIndex: Int,
-                number: Int,
-                triangleMeshes: TriangleMeshes
-        ) throws {
+                number: Int
+        ) {
                 self.meshIndex = meshIndex
                 self.triangleIndex = 3 * number
-
-                let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
-                guard
-                        triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: triangleIndex + 0)
-                                < pointCount
-                                && triangleMeshes.getVertexIndexFor(
-                                        meshIndex: meshIndex, at: triangleIndex + 1)
-                                        < pointCount
-                                && triangleMeshes.getVertexIndexFor(
-                                        meshIndex: meshIndex, at: triangleIndex + 2)
-                                        < pointCount
-                else {
-                        throw TriangleError.index
-                }
         }
 
 }
@@ -266,7 +251,7 @@ extension Triangle {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
+        ) -> Bool {
 
                 // Transform the ray to object space
                 let ray = getObjectToWorld(scene: scene).inverse * worldRay
@@ -349,16 +334,16 @@ extension Triangle {
                 scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout Real
-        ) throws -> Bool {
+        ) -> Bool {
                 var notUsed = TriangleIntersection()
-                return try getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &notUsed)
+                return getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &notUsed)
         }
 
         func computeSurfaceInteraction(
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 let barycentric0 = data.barycentric0
                 let barycentric1 = data.barycentric1
                 let barycentric2 = data.barycentric2
@@ -473,14 +458,14 @@ extension Triangle {
                 scene: Scene,
                 ray worldRay: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 var data = TriangleIntersection()
-                if try !getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data) {
+                if !getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data) {
                         return nil
                 }
 
                 // 2. Compute the full SurfaceInteraction using the new private method
-                let interaction = try computeSurfaceInteraction(
+                let interaction = computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay
@@ -616,13 +601,26 @@ extension Triangle {
                 let meshIndex = triangleMeshBuilder.appendMesh(mesh: mesh)
                 let triangleMeshes = triangleMeshBuilder.getMeshes()
 
+                let pointCount = triangleMeshes.getPointCountFor(meshIndex: meshIndex)
                 for triangleIndexLoop in 0..<numberTriangles {
+                        let base = 3 * triangleIndexLoop
+                        guard
+                                triangleMeshes.getVertexIndexFor(meshIndex: meshIndex, at: base + 0)
+                                        < pointCount
+                                        && triangleMeshes.getVertexIndexFor(
+                                                meshIndex: meshIndex, at: base + 1)
+                                                < pointCount
+                                        && triangleMeshes.getVertexIndexFor(
+                                                meshIndex: meshIndex, at: base + 2)
+                                                < pointCount
+                        else {
+                                throw TriangleError.index
+                        }
                         triangles.append(
-                                try .triangle(
+                                .triangle(
                                         Triangle(
                                                 meshIndex: meshIndex,
-                                                number: triangleIndexLoop,
-                                                triangleMeshes: triangleMeshes)))
+                                                number: triangleIndexLoop)))
                 }
                 return triangles
         }

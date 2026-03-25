@@ -12,15 +12,15 @@ enum ShapeType: Shape {
                 }
         }
 
-        func objectBound(scene: Scene) throws -> Bounds3f {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.objectBound(scene: scene)
+        func objectBound(scene: Scene) -> Bounds3f {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.objectBound(scene: scene)
                 }
         }
 
-        func worldBound(scene: Scene) throws -> Bounds3f {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.worldBound(scene: scene)
+        func worldBound(scene: Scene) -> Bounds3f {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.worldBound(scene: scene)
                 }
         }
 
@@ -29,9 +29,9 @@ enum ShapeType: Shape {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+        ) -> Bool {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 
@@ -39,9 +39,9 @@ enum ShapeType: Shape {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
+        ) -> SurfaceInteraction? {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
                 }
         }
 
@@ -49,31 +49,31 @@ enum ShapeType: Shape {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.intersect(scene: scene, ray: ray, tHit: &tHit)
+        ) -> SurfaceInteraction? {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 
-        func sample(samples: TwoRandomVariables, scene: Scene) throws -> (
+        func sample(samples: TwoRandomVariables, scene: Scene) -> (
                 interaction: SurfaceInteraction, pdf: Real
         ) {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.sample(samples: samples, scene: scene)
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.sample(samples: samples, scene: scene)
                 }
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) throws -> (
+        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (
                 SurfaceInteraction, Real
         ) {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.sample(point: point, samples: samples, scene: scene)
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.sample(point: point, samples: samples, scene: scene)
                 }
         }
 
-        func area(scene: Scene) throws -> Area {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.area(scene: scene)
+        func area(scene: Scene) -> Area {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.area(scene: scene)
                 }
         }
 
@@ -81,9 +81,9 @@ enum ShapeType: Shape {
                 scene: Scene,
                 samplingDirection direction: Vector,
                 from interaction: I
-        ) throws -> Real {
-                return try #dispatchShapeType(shape: self) { (p: Triangle) in
-                        try p.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
+        ) -> Real {
+                return #dispatchShapeTypeNoThrow(shape: self) { (p: Triangle) in
+                        p.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
                 }
         }
 }

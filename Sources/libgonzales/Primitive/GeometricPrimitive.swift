@@ -5,9 +5,9 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 ray worldRay: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        ) throws -> Bool {
+        ) -> Bool {
                 if alpha == 0 { return false }
-                return try shape.getIntersectionData(
+                return shape.getIntersectionData(
                         scene: scene,
                         ray: worldRay,
                         tHit: &tHit,
@@ -18,9 +18,9 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 scene: Scene,
                 data: TriangleIntersection,
                 worldRay: Ray
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                let interaction = try shape.computeSurfaceInteraction(
+                let interaction = shape.computeSurfaceInteraction(
                         scene: scene,
                         data: data,
                         worldRay: worldRay)
@@ -39,9 +39,9 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 scene: Scene,
                 ray: Ray,
                 tHit: inout Real
-        ) throws -> SurfaceInteraction? {
+        ) -> SurfaceInteraction? {
                 if alpha == 0 { return nil }
-                let interaction = try shape.intersect(
+                let interaction = shape.intersect(
                         scene: scene,
                         ray: ray,
                         tHit: &tHit)
@@ -56,12 +56,12 @@ struct GeometricPrimitive: Boundable, Intersectable {
                 return nil
         }
 
-        func worldBound(scene: Scene) throws -> Bounds3f {
-                return try shape.worldBound(scene: scene)
+        func worldBound(scene: Scene) -> Bounds3f {
+                return shape.worldBound(scene: scene)
         }
 
-        func objectBound(scene: Scene) throws -> Bounds3f {
-                return try shape.objectBound(scene: scene)
+        func objectBound(scene: Scene) -> Bounds3f {
+                return shape.objectBound(scene: scene)
         }
 
         var shape: ShapeType
