@@ -14,7 +14,7 @@
 
 ### Appendices
 
-A. [Development Roadmap](A0_development_roadmap.md) — From CPU optimization to GPU wavefront tracing
+1. [Development Roadmap](A0_development_roadmap.md) — From CPU optimization to GPU wavefront tracing
 
 All code snippets in this book are extracted directly from the source code.
 If the source changes, the book updates automatically via `make book`.
