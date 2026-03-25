@@ -198,7 +198,7 @@ class RenderConfiguration {
                 cleanUp()
 
                 let integrator = try makeIntegrator(sampler: sampler, accelerator: accelerator, scene: scene)
-                let powerLightSampler = try PowerLightSampler(
+                let powerLightSampler = PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
                 let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
                 let tileSize = (32, 32)

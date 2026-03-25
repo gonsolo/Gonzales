@@ -19,32 +19,32 @@ public func lowerBound<T: Comparable>(_ array: [T], key: T) -> (Int, T) {
 
 struct PowerLightSampler: Sendable {
 
-        init(sampler: Sampler, lights: [Light], scene: Scene) throws {
+        init(sampler: Sampler, lights: [Light], scene: Scene) {
                 self.sampler = sampler
                 self.lights = lights
 
                 var cumulativePowers = [Real]()
-                totalPower = try lights.reduce(
-                        0, { total, light in try total + light.power(scene: scene) })
+                totalPower = lights.reduce(
+                        0, { total, light in total + light.power(scene: scene) })
                 for (index, light) in lights.enumerated() {
                         if index == 0 {
-                                cumulativePowers.append(try light.power(scene: scene))
+                                cumulativePowers.append(light.power(scene: scene))
                         } else {
                                 cumulativePowers.append(
-                                        try cumulativePowers.last! + light.power(scene: scene))
+                                        cumulativePowers.last! + light.power(scene: scene))
                         }
                 }
 
                 self.cumulativePowers = cumulativePowers
         }
 
-        mutating func chooseLight(scene: Scene) throws -> (Light, Real) {
+        mutating func chooseLight(scene: Scene) -> (Light, Real) {
                 assert(lights.count > 0)
                 let uSample = sampler.get1D()
                 let powerIndex = uSample * totalPower
                 let (index, _) = lowerBound(cumulativePowers, key: powerIndex)
                 let light = lights[index]
-                let probabilityDensity = try light.power(scene: scene) / totalPower
+                let probabilityDensity = light.power(scene: scene) / totalPower
                 return (light, probabilityDensity)
         }
 

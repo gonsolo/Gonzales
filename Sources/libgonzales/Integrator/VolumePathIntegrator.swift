@@ -96,9 +96,8 @@ extension VolumePathIntegrator {
                 sampler _: Sampler,
                 lightSampler: inout LightSampler,
                 scene: Scene
-        ) throws
-                -> (Light, Real) {
-                return try lightSampler.chooseLight(scene: scene)
+        ) -> (Light, Real) {
+                return lightSampler.chooseLight(scene: scene)
         }
 
         private func sampleLightSource<I: Interaction, D: DistributionModel>(
@@ -288,7 +287,7 @@ extension VolumePathIntegrator {
                 lightSampler: inout LightSampler,
                 scene: Scene
         ) throws -> RgbSpectrum {
-                let (light, lightPdf) = try chooseLight(
+                let (light, lightPdf) = chooseLight(
                         sampler: sampler,
                         lightSampler: &lightSampler,
                         scene: scene)

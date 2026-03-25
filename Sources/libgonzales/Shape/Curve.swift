@@ -309,8 +309,7 @@ struct Curve: Shape {
 
                 var dx = cross(ray.direction, cpObj.3 - cpObj.0)
                 if lengthSquared(dx) < 1e-8 {
-                        var _dy = Vector(x: 0, y: 0, z: 0)
-                        (dx, _dy) = makeCoordinateSystem(from: ray.direction)
+                        (dx, _) = makeCoordinateSystem(from: ray.direction)
                 }
 
                 let dir = normalized(ray.direction)
