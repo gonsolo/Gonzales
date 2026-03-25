@@ -156,20 +156,20 @@ Estimate: 3–4 weeks.
 
 ## Step Dependencies
 
-```mermaid
-graph LR
-    S1[Step 1: Mojo Kernel] --> S7[Step 7: GPU Traversal]
-    S2[Step 2: BVH2] --> S7
-    S4[Step 4: Wavefront] --> S6[Step 6: Ray Packets]
-    S4 --> S7
-    S4 --> S8[Step 8: GPU Shading]
-    S4 --> S9[Step 9: Viewer]
-    S5[Step 5: SOA Data] --> S7
-    S5 --> S8
-    S5 --> S11[Step 11: USD]
-    S7 --> S10[Step 10: GPU BVH Build]
-    S11 --> S12[Step 12: Blender]
-    S1 ~~~ S3[Step 3: OIDN]
+```text
+Step 1: Mojo Kernel ───────┐
+                           ▼
+Step 2: BVH2 ────────────► Step 7: GPU Traversal ──────► Step 10: GPU BVH Build
+                           ▲
+Step 4: Wavefront ─────────┤
+  ├─► Step 6: CPU Packets  │
+  └─► Step 9: Viewer       │
+                           │
+Step 5: SOA Data ──────────┤
+  ├─► Step 11: USD ──────► Step 12: Blender Integration
+  └─► Step 8: GPU Shading
+
+Step 3: OIDN (Independent)
 ```
 
 ## VFX Reference Platform Ecosystem
