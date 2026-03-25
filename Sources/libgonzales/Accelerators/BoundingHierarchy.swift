@@ -1,3 +1,5 @@
+import mojoKernel
+
 struct Stack128 {
     var e00 = 0, e01 = 0, e02 = 0, e03 = 0, e04 = 0, e05 = 0, e06 = 0, e07 = 0
     var e08 = 0, e09 = 0, e10 = 0, e11 = 0, e12 = 0, e13 = 0, e14 = 0, e15 = 0
@@ -48,9 +50,17 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 for primitive in primitives {
                         switch primitive {
                         case .geometricPrimitive(let geometricPrimitive):
-                                let primId = PrimId(
-                                        id1: geometricPrimitive.idx, id2: -1, type: .geometricPrimitive)
-                                ids.append(primId)
+                                if case .triangle(let triangle) = geometricPrimitive.shape {
+                                        // Pack meshIndex high, triIndex low into id2 so Mojo can intersect
+                                        let packed = (triangle.meshIndex << 32) | (triangle.triangleIndex / 3)
+                                        let primId = PrimId(
+                                                id1: geometricPrimitive.idx, id2: packed, type: .geometricPrimitive)
+                                        ids.append(primId)
+                                } else {
+                                        let primId = PrimId(
+                                                id1: geometricPrimitive.idx, id2: -1, type: .geometricPrimitive)
+                                        ids.append(primId)
+                                }
                         case .triangle(let triangle):
                                 let primId = PrimId(
                                         id1: triangle.meshIndex, id2: triangle.triangleIndex, type: .triangle)
@@ -67,6 +77,61 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 self.primIdsCount = ids.count
                 self.primIdsPointer = UnsafeMutablePointer<PrimId>.allocate(capacity: ids.count)
                 self.primIdsPointer.initialize(from: ids, count: ids.count)
+                
+                // Count PrimId types
+                var typeCount = [Int](repeating: 0, count: 4)
+                for i in 0..<ids.count {
+                        typeCount[Int(ids[i].type.rawValue)] += 1
+                }
+                print("LAYOUT: PrimId types: triangle=\(typeCount[0]) geoPrim=\(typeCount[1]) xform=\(typeCount[2]) areaLight=\(typeCount[3]) total=\(ids.count)")
+
+                // One-time struct layout validation (Mojo expected sizes computed from struct definitions)
+                print("LAYOUT: BVHNode      stride=\(MemoryLayout<BoundingHierarchyNode>.stride) size=\(MemoryLayout<BoundingHierarchyNode>.size) align=\(MemoryLayout<BoundingHierarchyNode>.alignment)")
+                print("LAYOUT: PrimId       stride=\(MemoryLayout<PrimId>.stride) size=\(MemoryLayout<PrimId>.size)")
+                print("LAYOUT: PrimId_C     stride=\(MemoryLayout<PrimId_C>.stride) size=\(MemoryLayout<PrimId_C>.size)")
+                print("LAYOUT: SceneDesc_C  stride=\(MemoryLayout<SceneDescriptor_C>.stride) size=\(MemoryLayout<SceneDescriptor_C>.size)")
+                print("LAYOUT: Ray_C        stride=\(MemoryLayout<Ray_C>.stride) size=\(MemoryLayout<Ray_C>.size)")
+                print("LAYOUT: Intersection stride=\(MemoryLayout<Intersection_C>.stride) size=\(MemoryLayout<Intersection_C>.size)")
+                print("LAYOUT: TriMesh_C    stride=\(MemoryLayout<TriangleMesh_C>.stride) size=\(MemoryLayout<TriangleMesh_C>.size)")
+                if nodesCount > 0 {
+                        let n = nodesPointer[0]
+                        print("LAYOUT: root pMinX=\(n.pMinX)")
+                        print("LAYOUT: root pMaxX=\(n.pMaxX)")
+                        print("LAYOUT: root pMinY=\(n.pMinY)")
+                        print("LAYOUT: root pMaxY=\(n.pMaxY)")
+                        print("LAYOUT: root pMinZ=\(n.pMinZ)")
+                        print("LAYOUT: root pMaxZ=\(n.pMaxZ)")
+                        print("LAYOUT: root childNodes=\(n.childNodes)")
+                        print("LAYOUT: root primCounts=\(n.primitiveCounts)")
+                        // Test AABB intersection with a realistic diagonal ray
+                        let testRay = Ray_C(orgX: 0.1, orgY: 0.5, orgZ: 0.5, dirX: 0.1, dirY: -0.2, dirZ: -0.8)
+                        
+                        var testRayMut2 = testRay
+                        let mojoMask = withUnsafePointer(to: &testRayMut2) { rayP in
+                                mojo_test_intersect(UnsafeRawPointer(nodesPointer), rayP, 1e30)
+                        }
+                        // Run Swift AABB test on same data
+                        let rdirX = SIMD8<Float>(repeating: 1.0 / testRay.dirX)
+                        let rdirY = SIMD8<Float>(repeating: 1.0 / testRay.dirY)
+                        let rdirZ = SIMD8<Float>(repeating: 1.0 / testRay.dirZ)
+                        let orgRdirX = SIMD8<Float>(repeating: testRay.orgX * (1.0 / testRay.dirX))
+                        let orgRdirY = SIMD8<Float>(repeating: testRay.orgY * (1.0 / testRay.dirY))
+                        let orgRdirZ = SIMD8<Float>(repeating: testRay.orgZ * (1.0 / testRay.dirZ))
+                        let precomp = BoundingHierarchyNode.RayAABBPrecomputed(
+                                rdirX: rdirX, rdirY: rdirY, rdirZ: rdirZ,
+                                orgRdirX: orgRdirX, orgRdirY: orgRdirY, orgRdirZ: orgRdirZ,
+                                nearXIsMin: (1.0 / testRay.dirX) >= 0,
+                                nearYIsMin: (1.0 / testRay.dirY) >= 0,
+                                nearZIsMin: (1.0 / testRay.dirZ) >= 0
+                        )
+                        var swiftMask: UInt8 = 0
+                        let (_, swiftResult) = n.intersect8(ray: precomp, tHit: 1e30)
+                        for i in 0..<8 { if swiftResult[i] { swiftMask |= UInt8(1 << i) } }
+                        print("LAYOUT: AABB test ray=(0.1,0.5,0.5)->(0.1,-0.2,-0.8) SwiftMask=\(String(swiftMask, radix: 2)) MojoMask=\(String(mojoMask, radix: 2))")
+                        if swiftMask != UInt8(mojoMask) {
+                                print("LAYOUT: AABB MASK MISMATCH!")
+                        }
+                }
         }
 
         deinit {
@@ -104,76 +169,32 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 tHit: inout Real
         ) -> Bool {
                 if nodesCount == 0 { return false }
-
-                // Precompute ray constants (Embree-style)
-                let rdirX = SIMD8<Float>(repeating: Float(ray.inverseDirection.x))
-                let rdirY = SIMD8<Float>(repeating: Float(ray.inverseDirection.y))
-                let rdirZ = SIMD8<Float>(repeating: Float(ray.inverseDirection.z))
-                let orgRdirX = SIMD8<Float>(repeating: Float(ray.origin.x) * Float(ray.inverseDirection.x))
-                let orgRdirY = SIMD8<Float>(repeating: Float(ray.origin.y) * Float(ray.inverseDirection.y))
-                let orgRdirZ = SIMD8<Float>(repeating: Float(ray.origin.z) * Float(ray.inverseDirection.z))
-                let nearXIsMin = ray.inverseDirection.x >= 0
-                let nearYIsMin = ray.inverseDirection.y >= 0
-                let nearZIsMin = ray.inverseDirection.z >= 0
-
-                var localTHit = Float(tHit)
-                var stack = Stack128()
-                var toVisit = 0
-                var current = 0
-
-                while true {
-                        let node = nodesPointer[current]
-                        let (_, hitMask) = node.intersect8(
-                                rdirX: rdirX, rdirY: rdirY, rdirZ: rdirZ,
-                                orgRdirX: orgRdirX, orgRdirY: orgRdirY, orgRdirZ: orgRdirZ,
-                                nearXIsMin: nearXIsMin, nearYIsMin: nearYIsMin, nearZIsMin: nearZIsMin,
-                                tHit: localTHit)
-
-                        var mask: UInt8 = 0
-                        if hitMask[0] { mask |= 1 }
-                        if hitMask[1] { mask |= 2 }
-                        if hitMask[2] { mask |= 4 }
-                        if hitMask[3] { mask |= 8 }
-                        if hitMask[4] { mask |= 16 }
-                        if hitMask[5] { mask |= 32 }
-                        if hitMask[6] { mask |= 64 }
-                        if hitMask[7] { mask |= 128 }
-                        while mask != 0 {
-                                let i = Int(mask.trailingZeroBitCount)
-                                mask &= mask &- 1 // clear lowest set bit (bscf)
-
-                                if node.primitiveCounts[i] > 0 { // leaf
-                                        var realTHit = Real(localTHit)
-                                        let count = Int(node.primitiveCounts[i])
-                                        let offset = Int(node.primitiveOffsets[i])
-                                        var j = 0
-                                        while j < count {
-                                                if scene.intersect(
-                                                        primId: primIdsPointer[offset + j],
-                                                        ray: ray,
-                                                        tHit: &realTHit) {
-                                                        tHit = realTHit
-                                                        return true
-                                                }
-                                                j += 1
-                                        }
-                                        localTHit = Float(realTHit)
-                                } else { // interior
-                                        let childIdx = Int(node.childNodes[i])
-                                        if childIdx >= 0 {
-                                                stack[toVisit] = childIdx
-                                                toVisit += 1
+                
+                return scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                        var desc = SceneDescriptor_C(
+                                bvhNodes: UnsafeRawPointer(nodesPointer),
+                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(to: PrimId_C.self),
+                                meshes: meshesPtr.baseAddress,
+                                meshCount: Int64(scene.meshesC.count)
+                        )
+                        var rayC = Ray_C(
+                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y), orgZ: Float(ray.origin.z),
+                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y), dirZ: Float(ray.direction.z)
+                        )
+                        var result = Intersection_C()
+                        withUnsafePointer(to: &desc) { descP in
+                                withUnsafePointer(to: &rayC) { rayP in
+                                        withUnsafeMutablePointer(to: &result) { resP in
+                                                mojo_traverse(descP, rayP, Float(tHit), resP)
                                         }
                                 }
                         }
-
-                        if toVisit == 0 { break }
-                        toVisit -= 1
-                        current = stack[toVisit]
+                        if result.hit != 0 {
+                                tHit = Real(result.tHit)
+                                return true
+                        }
+                        return false
                 }
-                
-                tHit = Real(localTHit)
-                return false
         }
 
         // --- Closest Hit Query (Embree-style hit-count specialized) ---
@@ -184,135 +205,44 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
         ) -> SurfaceInteraction? {
                 if nodesCount == 0 { return nil }
 
-                // Precompute ray constants (Embree-style)
-                let rdirX = SIMD8<Float>(repeating: Float(ray.inverseDirection.x))
-                let rdirY = SIMD8<Float>(repeating: Float(ray.inverseDirection.y))
-                let rdirZ = SIMD8<Float>(repeating: Float(ray.inverseDirection.z))
-                let orgRdirX = SIMD8<Float>(repeating: Float(ray.origin.x) * Float(ray.inverseDirection.x))
-                let orgRdirY = SIMD8<Float>(repeating: Float(ray.origin.y) * Float(ray.inverseDirection.y))
-                let orgRdirZ = SIMD8<Float>(repeating: Float(ray.origin.z) * Float(ray.inverseDirection.z))
-                let nearXIsMin = ray.inverseDirection.x >= 0
-                let nearYIsMin = ray.inverseDirection.y >= 0
-                let nearZIsMin = ray.inverseDirection.z >= 0
-
-                var hitIndex: Int = -1
-                var bestData: TriangleIntersection? = nil
-                var localTHit = Float(tHit)
-
-                var stack = Stack128()
-                var toVisit = 0
-                var current = 0
-
-                while true {
-                        let node = nodesPointer[current]
-                        let (_, hitMask) = node.intersect8(
-                                rdirX: rdirX, rdirY: rdirY, rdirZ: rdirZ,
-                                orgRdirX: orgRdirX, orgRdirY: orgRdirY, orgRdirZ: orgRdirZ,
-                                nearXIsMin: nearXIsMin, nearYIsMin: nearYIsMin, nearZIsMin: nearZIsMin,
-                                tHit: localTHit)
-
-                        var mask: UInt8 = 0
-                        if hitMask[0] { mask |= 1 }
-                        if hitMask[1] { mask |= 2 }
-                        if hitMask[2] { mask |= 4 }
-                        if hitMask[3] { mask |= 8 }
-                        if hitMask[4] { mask |= 16 }
-                        if hitMask[5] { mask |= 32 }
-                        if hitMask[6] { mask |= 64 }
-                        if hitMask[7] { mask |= 128 }
-
-                        if mask != 0 {
-                                // Embree-style: handle 1 hit case directly (most common)
-                                let r0 = Int(mask.trailingZeroBitCount)
-                                mask &= mask &- 1
-
-                                if node.primitiveCounts[r0] > 0 { // leaf
-                                        var currentData = TriangleIntersection()
-                                        let count = Int(node.primitiveCounts[r0])
-                                        let offset = Int(node.primitiveOffsets[r0])
-                                        var k = 0
-                                        while k < count {
-                                                var realTHit = Real(localTHit)
-                                                if scene.getIntersectionData(
-                                                        primId: primIdsPointer[offset + k],
-                                                        ray: ray,
-                                                        tHit: &realTHit,
-                                                        data: &currentData) {
-                                                        localTHit = Float(realTHit)
-                                                        hitIndex = offset + k
-                                                        bestData = currentData
-                                                }
-                                                k += 1
+                let result = scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                        var desc = SceneDescriptor_C(
+                                bvhNodes: UnsafeRawPointer(nodesPointer),
+                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(to: PrimId_C.self),
+                                meshes: meshesPtr.baseAddress,
+                                meshCount: Int64(scene.meshesC.count)
+                        )
+                        var rayC = Ray_C(
+                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y), orgZ: Float(ray.origin.z),
+                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y), dirZ: Float(ray.direction.z)
+                        )
+                        var result = Intersection_C()
+                        withUnsafePointer(to: &desc) { descP in
+                                withUnsafePointer(to: &rayC) { rayP in
+                                        withUnsafeMutablePointer(to: &result) { resP in
+                                                mojo_traverse(descP, rayP, Float(tHit), resP)
                                         }
-                                }
-
-                                if mask == 0 {
-                                        // 1 hit: if interior, continue directly (no stack push)
-                                        if node.primitiveCounts[r0] <= 0 {
-                                                let childIdx = Int(node.childNodes[r0])
-                                                if childIdx >= 0 {
-                                                        current = childIdx
-                                                        continue
-                                                }
-                                        }
-                                } else {
-                                        // 2+ hits: push first child if interior, then process remaining
-                                        if node.primitiveCounts[r0] <= 0 {
-                                                let childIdx = Int(node.childNodes[r0])
-                                                if childIdx >= 0 {
-                                                        stack[toVisit] = childIdx
-                                                        toVisit += 1
-                                                }
-                                        }
-
-                                        // Process remaining hit children
-                                        while mask != 0 {
-                                                let ri = Int(mask.trailingZeroBitCount)
-                                                mask &= mask &- 1
-
-                                                if node.primitiveCounts[ri] > 0 { // leaf
-                                                        var currentData = TriangleIntersection()
-                                                        let count = Int(node.primitiveCounts[ri])
-                                                        let offset = Int(node.primitiveOffsets[ri])
-                                                        var k = 0
-                                                        while k < count {
-                                                                var realTHit = Real(localTHit)
-                                                                if scene.getIntersectionData(
-                                                                        primId: primIdsPointer[offset + k],
-                                                                        ray: ray,
-                                                                        tHit: &realTHit,
-                                                                        data: &currentData) {
-                                                                        localTHit = Float(realTHit)
-                                                                        hitIndex = offset + k
-                                                                        bestData = currentData
-                                                                }
-                                                                k += 1
-                                                        }
-                                                } else { // interior
-                                                        let childIdx = Int(node.childNodes[ri])
-                                                        if childIdx >= 0 {
-                                                                stack[toVisit] = childIdx
-                                                                toVisit += 1
-                                                        }
-                                                }
-                                        }
-
-
                                 }
                         }
-
-                        if toVisit == 0 { break }
-                        toVisit -= 1
-                        current = stack[toVisit]
+                        return result
                 }
 
-                tHit = Real(localTHit)
-                if let gdata = bestData, hitIndex >= 0 {
-                        return scene.computeSurfaceInteraction(
-                                primId: primIdsPointer[hitIndex],
-                                data: gdata,
-                                worldRay: ray)
+                if result.hit != 0 {
+                        let id1 = Int(result.primId.id1)
+                        let id2 = Int(result.primId.id2)
+                        let type = result.primId.type == 0 ? PrimType.triangle : PrimType.geometricPrimitive
+                        
+                        let data = TriangleIntersection(
+                                primId: PrimId(id1: id1, id2: id2, type: type),
+                                tValue: Real(result.tHit),
+                                barycentric0: Real(1.0 - result.u - result.v),
+                                barycentric1: Real(result.u),
+                                barycentric2: Real(result.v)
+                        )
+                        tHit = Real(result.tHit)
+                        return scene.computeSurfaceInteraction(primId: PrimId(id1: id1, id2: id2, type: type), data: data, worldRay: ray)
                 }
+                
                 return nil
         }
 

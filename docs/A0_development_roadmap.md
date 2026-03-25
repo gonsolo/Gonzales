@@ -21,7 +21,7 @@ Eliminate the Swift language tax and improve single-ray traversal. Each step
 produces a measurable speedup and can be benchmarked against the Barcelona
 Pavilion scene.
 
-### Step 1: Mojo Traversal Kernel
+### Step 1: Mojo Traversal Kernel ✅ (2026-03-25)
 
 Write the BVH traversal and triangle intersection in Mojo, exported via
 `@export` with C calling convention and called from Swift via a bridging
