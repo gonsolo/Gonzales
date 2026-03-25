@@ -1,3 +1,5 @@
+import DevirtualizeMacro
+
 /// A type that can be intersected by a ray.
 
 protocol Intersectable {
@@ -21,19 +23,8 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 tHit: inout Real,
                 data: inout TriangleIntersection
         ) throws -> Bool {
-                switch self {
-                case .geometricPrimitive(let value):
-                        return try value.getIntersectionData(
-                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                case .triangle(let value):
-                        return try value.getIntersectionData(
-                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                case .transformedPrimitive(let value):
-                        return try value.getIntersectionData(
-                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
-                case .areaLight(let value):
-                        return try value.getIntersectionData(
-                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
+                        try p.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 
@@ -42,18 +33,8 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 data: TriangleIntersection,
                 worldRay: Ray
         ) throws -> SurfaceInteraction? {
-                switch self {
-                case .geometricPrimitive(let value):
-                        return try value.computeSurfaceInteraction(
-                                scene: scene, data: data, worldRay: worldRay)
-                case .triangle(let value):
-                        return try value.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
-                case .transformedPrimitive(let value):
-                        return try value.computeSurfaceInteraction(
-                                scene: scene, data: data, worldRay: worldRay)
-                case .areaLight(let value):
-                        return try value.computeSurfaceInteraction(
-                                scene: scene, data: data, worldRay: worldRay)
+                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
+                        try p.computeSurfaceInteraction(scene: scene, data: data, worldRay: worldRay)
                 }
         }
 
@@ -62,31 +43,20 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 ray: Ray,
                 tHit: inout Real
         ) throws -> SurfaceInteraction? {
-                switch self {
-                case .geometricPrimitive(let value):
-                        return try value.intersect(scene: scene, ray: ray, tHit: &tHit)
-                case .triangle(let value): return try value.intersect(scene: scene, ray: ray, tHit: &tHit)
-                case .transformedPrimitive(let value):
-                        return try value.intersect(scene: scene, ray: ray, tHit: &tHit)
-                case .areaLight(let value): return try value.intersect(scene: scene, ray: ray, tHit: &tHit)
+                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
+                        try p.intersect(scene: scene, ray: ray, tHit: &tHit)
                 }
         }
 
         func worldBound(scene: Scene) throws -> Bounds3f {
-                switch self {
-                case .geometricPrimitive(let value): return try value.worldBound(scene: scene)
-                case .triangle(let value): return value.worldBound(scene: scene)
-                case .transformedPrimitive(let value): return value.worldBound(scene: scene)
-                case .areaLight(let value): return try value.worldBound(scene: scene)
+                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
+                        try p.worldBound(scene: scene)
                 }
         }
 
         func objectBound(scene: Scene) throws -> Bounds3f {
-                switch self {
-                case .geometricPrimitive(let value): return try value.objectBound(scene: scene)
-                case .triangle(let value): return value.objectBound(scene: scene)
-                case .transformedPrimitive(let value): return try value.objectBound(scene: scene)
-                case .areaLight(let value): return try value.objectBound(scene: scene)
+                return try #dispatchIntersectable(primitive: self) { (p: Triangle) in
+                        try p.objectBound(scene: scene)
                 }
         }
 }
