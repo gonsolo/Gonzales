@@ -12,5 +12,9 @@
 7. [Path Tracing](07_path_tracing.md) — The rendering equation in practice
 8. [The Rendering Pipeline](08_rendering_pipeline.md) — Tile-based concurrency and image output
 
+### Appendices
+
+A. [Development Roadmap](A_development_roadmap.md) — From CPU optimization to GPU wavefront tracing
+
 All code snippets in this book are extracted directly from the source code.
 If the source changes, the book updates automatically via `make book`.

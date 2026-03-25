@@ -118,30 +118,59 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 let rootNode = try await Self.build(
                         range: 0..<wrapper.buffer.count, ptr: wrapper,
                         primitivesPerNode: self.primitivesPerNode)
-                _ = flatten(node: rootNode)
+                _ = flatten8(node: rootNode)
         }
 
-        private func flatten(node: BVHBuildNode) -> Int {
+        private func extractChildren8(node: BVHBuildNode) -> [BVHBuildNode] {
+                var children = [node]
+                while children.count < 8 {
+                        var maxArea: Real = -1
+                        var splitIdx = -1
+                        for (i, c) in children.enumerated() {
+                                if c.nPrimitives == 0 { // Interior
+                                        let area = c.bounds.surfaceArea()
+                                        if area > maxArea {
+                                                maxArea = area
+                                                splitIdx = i
+                                        }
+                                }
+                        }
+                        if splitIdx == -1 { break } // All current children are leaves
+                        let split = children.remove(at: splitIdx)
+                        if let left = split.left { children.append(left) }
+                        if let right = split.right { children.append(right) }
+                }
+                return children
+        }
+
+        private func flatten8(node: BVHBuildNode) -> Int {
                 let linearOffset = totalNodes
                 totalNodes += 1
-
-                if node.nPrimitives > 0 {  // Leaf
-                        nodes.append(
-                                BoundingHierarchyNode(
-                                        bounds: node.bounds, count: node.nPrimitives,
-                                        offset: node.firstPrimOffset, axis: 0))
-                        return linearOffset
-                } else {  // Interior
-                        nodes.append(
-                                BoundingHierarchyNode(
-                                        bounds: node.bounds, count: 0, offset: 0, axis: node.splitAxis))
-                        _ = flatten(node: node.left!)
-                        let secondChildOffset = flatten(node: node.right!)
-                        nodes[linearOffset] = BoundingHierarchyNode(
-                                bounds: node.bounds, count: 0, offset: secondChildOffset, axis: node.splitAxis
-                        )
-                        return linearOffset
+                
+                var n8 = BoundingHierarchyNode()
+                nodes.append(n8)
+                
+                let children = extractChildren8(node: node)
+                
+                for (i, child) in children.enumerated() {
+                        n8.pMinX[i] = Float(child.bounds.pMin.x)
+                        n8.pMaxX[i] = Float(child.bounds.pMax.x)
+                        n8.pMinY[i] = Float(child.bounds.pMin.y)
+                        n8.pMaxY[i] = Float(child.bounds.pMax.y)
+                        n8.pMinZ[i] = Float(child.bounds.pMin.z)
+                        n8.pMaxZ[i] = Float(child.bounds.pMax.z)
+                        
+                        if child.nPrimitives > 0 { // Leaf
+                                n8.primitiveCounts[i] = Int32(child.nPrimitives)
+                                n8.primitiveOffsets[i] = Int32(child.firstPrimOffset)
+                        } else { // Interior
+                                let childIdx = flatten8(node: child)
+                                n8.childNodes[i] = Int32(childIdx)
+                        }
                 }
+                
+                nodes[linearOffset] = n8
+                return linearOffset
         }
 
         // --- Static Helper functions ---

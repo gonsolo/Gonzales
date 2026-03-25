@@ -1,6 +1,6 @@
 import DevirtualizeMacro
 
-final class Scene: Sendable {
+final class Scene: @unchecked Sendable {
 
         init(
                 lights: [Light],
@@ -25,12 +25,22 @@ final class Scene: Sendable {
                 self.geometricPrimitives = geometricPrimitives
                 self.areaLights = areaLights
                 self.transformedPrimitives = transformedPrimitives
+                self.unmanagedTransformedPrimitives = transformedPrimitives.map { Unmanaged.passUnretained($0) }
                 self.arena = arena
         }
 
         func intersect(primId: PrimId, ray: Ray, tHit: inout Real) -> Bool {
-                return #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
-                        p.intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                switch primId.type {
+                case .triangle:
+                        return Triangle(meshIndex: primId.id1, number: primId.id2).intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                case .geometricPrimitive:
+                        return self.geometricPrimitives[primId.id1].intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                case .transformedPrimitive:
+                        return self.unmanagedTransformedPrimitives[primId.id1]._withUnsafeGuaranteedRef {
+                                $0.intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                        }
+                case .areaLight:
+                        return self.areaLights[primId.id1].intersect(scene: self, ray: ray, tHit: &tHit) != nil
                 }
         }
 
@@ -39,10 +49,18 @@ final class Scene: Sendable {
                 ray: Ray,
                 tHit: inout Real,
                 data: inout TriangleIntersection
-        )
-                -> Bool {
-                return #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
-                        p.getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+        ) -> Bool {
+                switch primId.type {
+                case .triangle:
+                        return Triangle(meshIndex: primId.id1, number: primId.id2).getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                case .geometricPrimitive:
+                        return self.geometricPrimitives[primId.id1].getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                case .transformedPrimitive:
+                        return self.unmanagedTransformedPrimitives[primId.id1]._withUnsafeGuaranteedRef {
+                                $0.getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                        }
+                case .areaLight:
+                        return self.areaLights[primId.id1].getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
                 }
         }
 
@@ -51,8 +69,17 @@ final class Scene: Sendable {
                 data: TriangleIntersection,
                 worldRay: Ray
         ) -> SurfaceInteraction? {
-                return #dispatchPrimitive(id: primId, scene: self) { (p: Triangle) in
-                        p.computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                switch primId.type {
+                case .triangle:
+                        return Triangle(meshIndex: primId.id1, number: primId.id2).computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                case .geometricPrimitive:
+                        return self.geometricPrimitives[primId.id1].computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                case .transformedPrimitive:
+                        return self.unmanagedTransformedPrimitives[primId.id1]._withUnsafeGuaranteedRef {
+                                $0.computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                        }
+                case .areaLight:
+                        return self.areaLights[primId.id1].computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
                 }
         }
 
@@ -63,5 +90,6 @@ final class Scene: Sendable {
         let geometricPrimitives: [GeometricPrimitive]
         let areaLights: [AreaLight]
         let transformedPrimitives: [TransformedPrimitive]
+        let unmanagedTransformedPrimitives: [Unmanaged<TransformedPrimitive>]
         let arena: TextureArena
 }
