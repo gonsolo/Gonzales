@@ -1,4 +1,5 @@
 import DevirtualizeMacro
+import mojoKernel
 
 final class Scene: @unchecked Sendable {
 
@@ -27,6 +28,7 @@ final class Scene: @unchecked Sendable {
                 self.transformedPrimitives = transformedPrimitives
                 self.unmanagedTransformedPrimitives = transformedPrimitives.map { Unmanaged.passUnretained($0) }
                 self.arena = arena
+                self.meshesC = meshes.meshes.map { $0.cStruct }
         }
 
         func intersect(primId: PrimId, ray: Ray, tHit: inout Real) -> Bool {
@@ -92,4 +94,5 @@ final class Scene: @unchecked Sendable {
         let transformedPrimitives: [TransformedPrimitive]
         let unmanagedTransformedPrimitives: [Unmanaged<TransformedPrimitive>]
         let arena: TextureArena
+        let meshesC: [TriangleMesh_C]
 }

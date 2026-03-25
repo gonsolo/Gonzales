@@ -90,7 +90,6 @@ func parseArguments() throws -> (String, RenderOptions) {
 
 @MainActor
 func main() async {
-        mojo_init()
         do {
                 let (sceneName, parsedOptions) = try parseArguments()
                 var renderOptions = parsedOptions

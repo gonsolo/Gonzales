@@ -171,6 +171,7 @@ $(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml
 	@mkdir -p .build
 	uv run mojo build Sources/mojoKernel/kernel.mojo -o .build/kernel.o --emit object
 	ar rcs $(MOJO_LIB) .build/kernel.o
+	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
 
 r: release
 release: $(MOJO_LIB)

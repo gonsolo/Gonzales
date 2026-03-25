@@ -11,33 +11,37 @@ struct BoundingHierarchyNode {
         var primitiveOffsets = SIMD8<Int32>(repeating: 0)
         var primitiveCounts = SIMD8<Int32>(repeating: 0)
 
+        struct RayAABBPrecomputed {
+                let rdirX: SIMD8<Float>, rdirY: SIMD8<Float>, rdirZ: SIMD8<Float>
+                let orgRdirX: SIMD8<Float>, orgRdirY: SIMD8<Float>, orgRdirZ: SIMD8<Float>
+                let nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool
+        }
+
         /// Embree-style AABB test: precomputed orgRdir + near/far bound selection
         /// eliminates per-axis min/max and uses FMA-candidate multiply-subtract.
         @inline(__always)
         func intersect8(
-                rdirX: SIMD8<Float>, rdirY: SIMD8<Float>, rdirZ: SIMD8<Float>,
-                orgRdirX: SIMD8<Float>, orgRdirY: SIMD8<Float>, orgRdirZ: SIMD8<Float>,
-                nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
+                ray: RayAABBPrecomputed,
                 tHit: Float
         ) -> (SIMD8<Float>, SIMDMask<SIMD8<Float.SIMDMaskScalar>>) {
                 // Select near/far bounds based on ray direction sign (precomputed per ray)
                 // This eliminates the per-axis min/max operations entirely
-                let nearX = nearXIsMin ? pMinX : pMaxX
-                let farX  = nearXIsMin ? pMaxX : pMinX
-                let nearY = nearYIsMin ? pMinY : pMaxY
-                let farY  = nearYIsMin ? pMaxY : pMinY
-                let nearZ = nearZIsMin ? pMinZ : pMaxZ
-                let farZ  = nearZIsMin ? pMaxZ : pMinZ
+                let nearX = ray.nearXIsMin ? pMinX : pMaxX
+                let farX  = ray.nearXIsMin ? pMaxX : pMinX
+                let nearY = ray.nearYIsMin ? pMinY : pMaxY
+                let farY  = ray.nearYIsMin ? pMaxY : pMinY
+                let nearZ = ray.nearZIsMin ? pMinZ : pMaxZ
+                let farZ  = ray.nearZIsMin ? pMaxZ : pMinZ
 
                 // nearBound * rdir - orgRdir = (nearBound - org) / dir
                 // The compiler should fuse this into vfmsub (FMA) with -Ounchecked + AVX2
-                let tNearX = nearX * rdirX - orgRdirX
-                let tNearY = nearY * rdirY - orgRdirY
-                let tNearZ = nearZ * rdirZ - orgRdirZ
+                let tNearX = nearX * ray.rdirX - ray.orgRdirX
+                let tNearY = nearY * ray.rdirY - ray.orgRdirY
+                let tNearZ = nearZ * ray.rdirZ - ray.orgRdirZ
 
-                let tFarX = farX * rdirX - orgRdirX
-                let tFarY = farY * rdirY - orgRdirY
-                let tFarZ = farZ * rdirZ - orgRdirZ
+                let tFarX = farX * ray.rdirX - ray.orgRdirX
+                let tFarY = farY * ray.rdirY - ray.orgRdirY
+                let tFarZ = farZ * ray.rdirZ - ray.orgRdirZ
 
                 // tNear = max(tNearX, tNearY, tNearZ, 0)
                 let zero = SIMD8<Float>(repeating: 0)
@@ -52,7 +56,7 @@ struct BoundingHierarchyNode {
                 tFar = tFar.replacing(with: tHitV, where: tHitV .< tFar)
 
                 let safeGamma = SIMD8<Float>(repeating: 1.0000003)
-                tFar = tFar * safeGamma
+                tFar *= safeGamma
 
                 return (tNear, tNear .<= tFar)
         }

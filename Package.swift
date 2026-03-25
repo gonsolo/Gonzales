@@ -47,6 +47,9 @@ let package = Package(
                         swiftSettings: [
                                 .interoperabilityMode(.Cxx),
                                 .unsafeFlags(["-Ounchecked"]),
+                        ],
+                        linkerSettings: [
+                                .unsafeFlags(["-L.build", "-lmojo"])
                         ]
                 ),
                 .executableTarget(

@@ -1,5 +1,5 @@
 import Foundation
-
+import mojoKernel
 struct TriangleMesh {
 
         init() {
@@ -24,8 +24,8 @@ struct TriangleMesh {
                 self.objectToWorld = objectToWorld
                 self.vertexIndices = vertexIndices
                 self.numberTriangles = numberTriangles
-                self.points = points
-                self.normals = normals
+                self.points = points.map { objectToWorld * $0 }
+                self.normals = normals.map { objectToWorld * $0 }
                 self.uvs = uvs
                 self.faceIndices = faceIndices
         }
@@ -65,6 +65,18 @@ struct TriangleMesh {
         private let points: [Point]
         private let vertexIndices: [Int]
         private let uvs: [Vector2F]
+
+        var cStruct: TriangleMesh_C {
+                let p = points.withUnsafeBufferPointer { $0.baseAddress! }
+                let f = faceIndices.withUnsafeBufferPointer { $0.baseAddress! }
+                let v = vertexIndices.withUnsafeBufferPointer { $0.baseAddress! }
+                
+                return TriangleMesh_C(
+                        points: UnsafeRawPointer(p).assumingMemoryBound(to: Float.self),
+                        faceIndices: UnsafeRawPointer(f).assumingMemoryBound(to: Int64.self),
+                        vertexIndices: UnsafeRawPointer(v).assumingMemoryBound(to: Int64.self)
+                )
+        }
 }
 
 enum TriangleError: Error {
@@ -232,7 +244,7 @@ extension Triangle {
         }
 
         func worldBound(scene: Scene) -> Bounds3f {
-                return getObjectToWorld(scene: scene) * objectBound(scene: scene)
+                return objectBound(scene: scene)
         }
 
         func computeUVHit(
@@ -253,8 +265,8 @@ extension Triangle {
                 data: inout TriangleIntersection
         ) -> Bool {
 
-                // Transform the ray to object space
-                let ray = getObjectToWorld(scene: scene).inverse * worldRay
+                // Ray is processed natively in world space
+                let ray = worldRay
 
                 // --- Setup and Plane Projection ---
 
@@ -442,12 +454,10 @@ extension Triangle {
                 }
 
                 // --- Finalize SurfaceInteraction ---
-                let rayObjectSpace = getObjectToWorld(scene: scene).inverse * worldRay
-
-                interaction.position = getObjectToWorld(scene: scene) * pHitValue
-                interaction.normal = normalized(getObjectToWorld(scene: scene) * normal)
-                interaction.shadingNormal = normalized(getObjectToWorld(scene: scene) * shadingNormal)
-                interaction.outgoing = normalized(getObjectToWorld(scene: scene) * -rayObjectSpace.direction)
+                interaction.position = pHitValue
+                interaction.normal = normalized(normal)
+                interaction.shadingNormal = normalized(shadingNormal)
+                interaction.outgoing = normalized(-worldRay.direction)
                 interaction.dpdu = dpdu
                 interaction.uvCoordinates = uvHit
                 interaction.faceIndex = faceIndex
@@ -478,7 +488,7 @@ extension Triangle {
         }
 
         private func getWorldPoint(scene: Scene, index: Int) -> Point {
-                return getObjectToWorld(scene: scene) * getLocalPoint(scene: scene, index: index)
+                return getLocalPoint(scene: scene, index: index)
         }
 
         public func getLocalPoints(scene: Scene) -> (Point, Point, Point) {
@@ -501,7 +511,7 @@ extension Triangle {
         }
 
         func area(scene: Scene) -> Area {
-                let (point0, point1, point2) = getLocalPoints(scene: scene)
+                let (point0, point1, point2) = getWorldPoints(scene: scene)
                 return 0.5 * length(cross(Vector(vector: (point1 - point0)), point2 - point0))
         }
 
