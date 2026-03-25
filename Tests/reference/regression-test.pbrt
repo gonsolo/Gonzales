@@ -1,6 +1,6 @@
 Integrator "path" "integer maxdepth" [ 4 ]
 Transform [ 1 -0 -0 -0 -0 1 -0 -0 -0 -0 -1 -0 -0 -1 6.8 1  ]
-Sampler "sobol" "integer pixelsamples" [ 4 ]
+Sampler "sobol" "integer pixelsamples" [ 64 ]
 
 PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
 
