@@ -32,6 +32,7 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray)
                 var tHit: Real { get set }
+                var shouldEarlyExit: Bool { get }
         }
 
         // --- 2. The Core Traversal Engine ---
@@ -59,6 +60,10 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                                         // 2. Execute the leaf-specific logic via the protocol method
                                         processor.processLeaf(
                                                 scene: scene, hierarchy: self, node: node, ray: ray)
+
+                                        if processor.shouldEarlyExit {
+                                                return
+                                        }
 
                                         // 3. Move to the next node from the stack (if any)
                                         if toVisit == 0 { break }
@@ -97,18 +102,20 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
         private struct OcclusionProcessor: LeafProcessor {
                 var intersected = false
                 var tHit: Real
+                var shouldEarlyExit: Bool { return intersected }
 
                 @inline(__always)
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
                 ) {
                         for index in 0..<node.count {
-                                intersected =
-                                        intersected
-                                        || scene.intersect(
-                                                primId: hierarchy.primIds[node.offset + index],
-                                                ray: ray,
-                                                tHit: &tHit)
+                                if scene.intersect(
+                                        primId: hierarchy.primIds[node.offset + index],
+                                        ray: ray,
+                                        tHit: &tHit) {
+                                        intersected = true
+                                        return
+                                }
                         }
                 }
         }
@@ -130,6 +137,7 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var index: Int = 0
                 var gdata: TriangleIntersection?
                 var tHit: Real
+                var shouldEarlyExit: Bool { return false }
 
                 @inline(__always)
                 mutating func processLeaf(
