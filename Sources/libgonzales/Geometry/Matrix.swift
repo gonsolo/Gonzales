@@ -2,63 +2,64 @@ private nonisolated(unsafe) var hasPrintedSingularMatrixWarning = false
 
 public struct Matrix: Sendable {
 
+        public var col0: SIMD4<Real>
+        public var col1: SIMD4<Real>
+        public var col2: SIMD4<Real>
+        public var col3: SIMD4<Real>
+
         public init(
                 t00: Real, t01: Real, t02: Real, t03: Real,
                 t10: Real, t11: Real, t12: Real, t13: Real,
                 t20: Real, t21: Real, t22: Real, t23: Real,
                 t30: Real, t31: Real, t32: Real, t33: Real
         ) {
-                self.init()
-
-                backing[0, 0] = t00
-                backing[0, 1] = t01
-                backing[0, 2] = t02
-                backing[0, 3] = t03
-
-                backing[1, 0] = t10
-                backing[1, 1] = t11
-                backing[1, 2] = t12
-                backing[1, 3] = t13
-
-                backing[2, 0] = t20
-                backing[2, 1] = t21
-                backing[2, 2] = t22
-                backing[2, 3] = t23
-
-                backing[3, 0] = t30
-                backing[3, 1] = t31
-                backing[3, 2] = t32
-                backing[3, 3] = t33
-        }
-
-        init(backing: MatrixBacking) {
-                self.backing = backing
+                self.col0 = SIMD4<Real>(t00, t10, t20, t30)
+                self.col1 = SIMD4<Real>(t01, t11, t21, t31)
+                self.col2 = SIMD4<Real>(t02, t12, t22, t32)
+                self.col3 = SIMD4<Real>(t03, t13, t23, t33)
         }
 
         public init(matrix: Matrix) {
-                self.backing = matrix.backing
+                self.col0 = matrix.col0
+                self.col1 = matrix.col1
+                self.col2 = matrix.col2
+                self.col3 = matrix.col3
         }
 
         public init() {
-                backing = MatrixBacking()
+                self.col0 = SIMD4<Real>(1, 0, 0, 0)
+                self.col1 = SIMD4<Real>(0, 1, 0, 0)
+                self.col2 = SIMD4<Real>(0, 0, 1, 0)
+                self.col3 = SIMD4<Real>(0, 0, 0, 1)
         }
 
         subscript(row: Int, column: Int) -> Real {
-                get { return backing[row, column] }
-                set { backing[row, column] = newValue }
-        }
-
-        public static func * (matrix1: Matrix, matrix2: Matrix) -> Matrix {
-                var result = Matrix()
-                for rowIndex in 0..<4 {
-                        for columnIndex in 0..<4 {
-                                let valA = matrix1[rowIndex, 0] * matrix2[0, columnIndex]
-                                let valB = matrix1[rowIndex, 1] * matrix2[1, columnIndex]
-                                let valC = matrix1[rowIndex, 2] * matrix2[2, columnIndex]
-                                let valD = matrix1[rowIndex, 3] * matrix2[3, columnIndex]
-                                result[rowIndex, columnIndex] = valA + valB + valC + valD
+                get {
+                        switch column {
+                        case 0: return col0[row]
+                        case 1: return col1[row]
+                        case 2: return col2[row]
+                        case 3: return col3[row]
+                        default: fatalError("Matrix column index out of bounds")
                         }
                 }
+                set {
+                        switch column {
+                        case 0: col0[row] = newValue
+                        case 1: col1[row] = newValue
+                        case 2: col2[row] = newValue
+                        case 3: col3[row] = newValue
+                        default: fatalError("Matrix column index out of bounds")
+                        }
+                }
+        }
+
+        public static func * (left: Matrix, right: Matrix) -> Matrix {
+                var result = Matrix()
+                result.col0 = left.col0 * right.col0.x + left.col1 * right.col0.y + left.col2 * right.col0.z + left.col3 * right.col0.w
+                result.col1 = left.col0 * right.col1.x + left.col1 * right.col1.y + left.col2 * right.col1.z + left.col3 * right.col1.w
+                result.col2 = left.col0 * right.col2.x + left.col1 * right.col2.y + left.col2 * right.col2.z + left.col3 * right.col2.w
+                result.col3 = left.col0 * right.col3.x + left.col1 * right.col3.y + left.col2 * right.col3.z + left.col3 * right.col3.w
                 return result
         }
 
@@ -67,7 +68,7 @@ public struct Matrix: Sendable {
                 var indxc = [0, 0, 0, 0]
                 var indxr = [0, 0, 0, 0]
                 var ipiv = [0, 0, 0, 0]
-                var minv = backing
+                var minv = self
 
                 func choosePivot(irow: inout Int, icol: inout Int) throws {
                         var big: Real = 0.0
@@ -136,8 +137,7 @@ public struct Matrix: Sendable {
                 do {
                         for iteration in 0..<4 { try reduce(iteration) }
                         swapColumns()
-                        // return Matrix(minv)
-                        return Matrix(backing: minv)
+                        return minv
                 } catch MatrixError.singularMatrix {
                         if !hasPrintedSingularMatrixWarning {
                                 print("Warning: Singular matrix encountered! \(self)")
@@ -150,13 +150,12 @@ public struct Matrix: Sendable {
         }
 
         func transpose() -> Matrix {
-                var transposed = Matrix()
-                for rowIndex in 0..<4 {
-                        for columnIndex in 0..<4 {
-                                transposed[rowIndex, columnIndex] = backing[columnIndex, rowIndex]
-                        }
-                }
-                return transposed
+                return Matrix(
+                        t00: col0.x, t01: col0.y, t02: col0.z, t03: col0.w,
+                        t10: col1.x, t11: col1.y, t12: col1.z, t13: col1.w,
+                        t20: col2.x, t21: col2.y, t22: col2.z, t23: col2.w,
+                        t30: col3.x, t31: col3.y, t32: col3.z, t33: col3.w
+                )
         }
 
         public var inverse: Matrix {
@@ -164,8 +163,6 @@ public struct Matrix: Sendable {
                         return try invert(m: self)
                 }
         }
-
-        var backing: MatrixBacking
 }
 
 extension Matrix: CustomStringConvertible {
@@ -174,7 +171,7 @@ extension Matrix: CustomStringConvertible {
                 for rowIndex in 0..<4 {
                         desc += "[ "
                         for columnIndex in 0..<4 {
-                                desc += "\(backing[rowIndex, columnIndex])"
+                                desc += "\(self[rowIndex, columnIndex])"
                                 if columnIndex != 3 { desc += " " }
                         }
                         desc += " ]"
