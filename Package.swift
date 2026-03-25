@@ -14,9 +14,13 @@ let package = Package(
                                 "openImageIOBridge",
                                 "ptexBridge",
                         ],
+                        resources: [
+                                .copy("Resources/new-joe-kuo-6.21201")
+                        ],
                         swiftSettings: [
                                 .unsafeFlags(["-Ounchecked"]),
-                        ]
+                        ],
+                        plugins: ["SobolGeneratorPlugin"]
                 ),
                 .testTarget(
                         name: "libgonzalesTests",
@@ -36,6 +40,14 @@ let package = Package(
                         swiftSettings: [
                                 .unsafeFlags(["-Ounchecked"]),
                         ],
+                ),
+                .executableTarget(
+                        name: "SobolGenerator"
+                ),
+                .plugin(
+                        name: "SobolGeneratorPlugin",
+                        capability: .buildTool(),
+                        dependencies: ["SobolGenerator"]
                 ),
                 .target(
                         name: "openImageIOBridge",
