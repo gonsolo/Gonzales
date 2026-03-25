@@ -70,8 +70,14 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                         id1: transformedPrimitive.idx, id2: -1, type: .transformedPrimitive)
                                 ids.append(primId)
                         case .areaLight(let areaLight):
-                                let primId = PrimId(id1: areaLight.idx, id2: -1, type: .areaLight)
-                                ids.append(primId)
+                                if case .triangle(let triangle) = areaLight.shape {
+                                        let packed = (triangle.meshIndex << 32) | (triangle.triangleIndex / 3)
+                                        let primId = PrimId(id1: areaLight.idx, id2: packed, type: .areaLight)
+                                        ids.append(primId)
+                                } else {
+                                        let primId = PrimId(id1: areaLight.idx, id2: -1, type: .areaLight)
+                                        ids.append(primId)
+                                }
                         }
                 }
                 self.primIdsCount = ids.count
@@ -229,18 +235,36 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
 
                 if result.hit != 0 {
                         let id1 = Int(result.primId.id1)
-                        let id2 = Int(result.primId.id2)
-                        let type = result.primId.type == 0 ? PrimType.triangle : PrimType.geometricPrimitive
+                        let rawId2 = Int(result.primId.id2)
+                        
+                        let type: PrimType
+                        if result.primId.type == 0 {
+                                type = .triangle
+                        } else if result.primId.type == 1 {
+                                type = .geometricPrimitive
+                        } else {
+                                type = .areaLight
+                        }
+                        
+                        let meshIdx: Int
+                        let triIdx: Int
+                        if type == .geometricPrimitive || type == .areaLight {
+                                meshIdx = rawId2 >> 32
+                                triIdx = rawId2 & 0xFFFFFFFF
+                        } else {
+                                meshIdx = id1
+                                triIdx = rawId2
+                        }
                         
                         let data = TriangleIntersection(
-                                primId: PrimId(id1: id1, id2: id2, type: type),
+                                primId: PrimId(id1: meshIdx, id2: triIdx, type: .triangle),
                                 tValue: Real(result.tHit),
                                 barycentric0: Real(1.0 - result.u - result.v),
                                 barycentric1: Real(result.u),
                                 barycentric2: Real(result.v)
                         )
                         tHit = Real(result.tHit)
-                        return scene.computeSurfaceInteraction(primId: PrimId(id1: id1, id2: id2, type: type), data: data, worldRay: ray)
+                        return scene.computeSurfaceInteraction(primId: PrimId(id1: id1, id2: rawId2, type: type), data: data, worldRay: ray)
                 }
                 
                 return nil

@@ -150,7 +150,7 @@ fn intersect_triangle(
         return (False, tMax, 0.0, 0.0)
         
     var t = dot(e2, qvec) * invDet
-    if t < 0.0000001 or t > tMax:
+    if t <= 0.0 or t > tMax:
         return (False, tMax, 0.0, 0.0)
         
     return (True, t, u, v)
@@ -236,11 +236,11 @@ fn mojo_traverse(scenePtr: UnsafePointer[SceneDescriptor_C, MutAnyOrigin], rayPt
                     var offset = Int(node.primitiveOffsets[i])
                     for j in range(count):
                         var prim = scene.primIds[offset + j]
-                        if prim.type == 0 or prim.type == 1:
+                        if prim.type == 0 or prim.type == 1 or prim.type == 2:
                             var mesh_idx = Int(prim.id1)
                             var tri_idx = Int(prim.id2)
                             
-                            if prim.type == 1:
+                            if prim.type == 1 or prim.type == 2:
                                 mesh_idx = Int(prim.id2 >> 32)
                                 tri_idx = Int(prim.id2 & 0xFFFFFFFF)
                                 
