@@ -37,6 +37,12 @@ jobs:
           swift --version
           swiftlint --version
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
       - name: Lint
         run: |
              SWIFT_LIB_PATH=$(find /usr -name libsourcekitdInProc.so | head -n 1 | xargs dirname)

@@ -32,5 +32,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
       - name: Run tests
         run: swift test
