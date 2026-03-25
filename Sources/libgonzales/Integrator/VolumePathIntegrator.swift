@@ -43,17 +43,10 @@ extension VolumePathIntegrator {
                         throughput: white,
                         albedo: black,
                         firstNormal: zeroNormal)
-                var context = IntegratorContext(
-                        sampler: sampler,
-                        lightSampler: lightSampler,
-                        state: state,
-                        scene: scene)
 
-                try bounces(state: &bounceState, context: &context)
+                try bounces(state: &bounceState, sampler: &sampler, lightSampler: &lightSampler, immutableState: state)
 
                 tHit = bounceState.tHit
-                sampler = context.sampler
-                lightSampler = context.lightSampler
 
                 return RayTraceSample(
                         estimate: bounceState.estimate,
@@ -76,12 +69,7 @@ extension VolumePathIntegrator {
                 var specularBounce: Bool = false
         }
 
-        private struct IntegratorContext {
-                var sampler: Sampler
-                var lightSampler: LightSampler
-                let state: ImmutableState
-                let scene: Scene
-        }
+
 
         private func brdfDensity<D: DistributionModel>(
                 light _: Light,
@@ -319,19 +307,20 @@ extension VolumePathIntegrator {
                 state: BounceState,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                context: inout IntegratorContext
+                sampler: inout Sampler,
+                lightSampler: inout LightSampler
         ) throws -> (RgbSpectrum, Ray) {
                 let estimate =
                         try state.throughput
                         * sampleOneLight(
                                 at: mediumInteraction,
                                 distributionModel: distributionModel,
-                                with: &context.sampler,
-                                lightSampler: &context.lightSampler,
-                                scene: context.scene)
+                                with: &sampler,
+                                lightSampler: &lightSampler,
+                                scene: scene)
                 let (_, incident) = mediumInteraction.phase.samplePhase(
                         outgoing: -state.ray.direction,
-                        sampler: &context.sampler)
+                        sampler: &sampler)
                 let spawnedRay = mediumInteraction.spawnRay(inDirection: incident)
                 return (estimate, spawnedRay)
         }
@@ -340,20 +329,23 @@ extension VolumePathIntegrator {
                 state: inout BounceState,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
-                context: inout IntegratorContext
+                sampler: inout Sampler,
+                lightSampler: inout LightSampler
         ) throws -> RgbSpectrum {
                 var mediumRadiance = black
                 (mediumRadiance, state.ray) = try sampleMedium(
                         state: state,
                         mediumInteraction: mediumInteraction,
                         distributionModel: distributionModel,
-                        context: &context)
+                        sampler: &sampler,
+                        lightSampler: &lightSampler)
                 return mediumRadiance
         }
 
         private func surfaceEstimate(
                 state: inout BounceState,
-                context: inout IntegratorContext
+                sampler: inout Sampler,
+                lightSampler: inout LightSampler
         ) throws -> Bool {
                 guard let surfaceInteraction = state.interaction else { return false }
                 if state.bounce == 0 || state.specularBounce {
@@ -378,12 +370,12 @@ extension VolumePathIntegrator {
                         * sampleOneLight(
                                 at: surfaceInteraction,
                                 distributionModel: bsdf,
-                                with: &context.sampler,
-                                lightSampler: &context.lightSampler,
-                                scene: context.scene)
+                                with: &sampler,
+                                lightSampler: &lightSampler,
+                                scene: scene)
                 state.estimate += lightEstimate
                 let (bsdfSample, _) = bsdf.sampleWorldSpace(
-                        outgoing: surfaceInteraction.outgoing, uSample: context.sampler.get3D())
+                        outgoing: surfaceInteraction.outgoing, uSample: sampler.get3D())
                 guard
                         bsdfSample.probabilityDensity != 0
                                 && !bsdfSample.probabilityDensity.isNaN
@@ -399,7 +391,9 @@ extension VolumePathIntegrator {
 
         private mutating func oneBounce(
                 state: inout BounceState,
-                context: inout IntegratorContext
+                sampler: inout Sampler,
+                lightSampler: inout LightSampler,
+                immutableState: ImmutableState
         ) throws -> Bool {
 
                 state.interaction = accelerator.intersect(
@@ -436,12 +430,14 @@ extension VolumePathIntegrator {
                                 state: &state,
                                 mediumInteraction: mediumInteraction,
                                 distributionModel: distributionModel,
-                                context: &context)
+                                sampler: &sampler,
+                                lightSampler: &lightSampler)
                 } else {
                         // Surface hit: Perform lighting and generate new ray
                         let result = try surfaceEstimate(
                                 state: &state,
-                                context: &context)
+                                sampler: &sampler,
+                                lightSampler: &lightSampler)
                         guard result else {
                                 return false
                         }
@@ -459,11 +455,13 @@ extension VolumePathIntegrator {
         // @doc:bounce-loop
         private mutating func bounces(
                 state: inout BounceState,
-                context: inout IntegratorContext
+                sampler: inout Sampler,
+                lightSampler: inout LightSampler,
+                immutableState: ImmutableState
         ) throws {
                 for bounce in state.bounce...maxDepth {
                         state.bounce = bounce
-                        let result = try oneBounce(state: &state, context: &context)
+                        let result = try oneBounce(state: &state, sampler: &sampler, lightSampler: &lightSampler, immutableState: immutableState)
                         if !result {
                                 break
                         }

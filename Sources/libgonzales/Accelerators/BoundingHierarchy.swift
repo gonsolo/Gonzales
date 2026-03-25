@@ -34,7 +34,8 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var tHit: Real { get set }
         }
 
-        // --- 2. Private Traversal Helper (Generic Shared Logic) ---
+        // --- 2. The Core Traversal Engine ---
+        @inline(__always)
         private func traverseHierarchy<P: LeafProcessor>(
                 scene: Scene,
                 ray: Ray,
@@ -94,9 +95,10 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
         }
 
         private struct OcclusionProcessor: LeafProcessor {
-                var intersected: Bool = false
+                var intersected = false
                 var tHit: Real
 
+                @inline(__always)
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
                 ) {
@@ -129,6 +131,7 @@ final class BoundingHierarchy: Boundable, Intersectable, Sendable {
                 var gdata: TriangleIntersection?
                 var tHit: Real
 
+                @inline(__always)
                 mutating func processLeaf(
                         scene: Scene, hierarchy: BoundingHierarchy, node: BoundingHierarchyNode, ray: Ray
                 ) {
