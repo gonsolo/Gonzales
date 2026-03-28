@@ -1,5 +1,9 @@
 # Appendix 1: Development Roadmap
 
+**Design principle:** hardware-agnostic compute kernels. The same Mojo code
+targets CPU SIMD, GPU warps, and future wide-vector architectures (RISC-V V,
+ARM SVE). Write once, run anywhere the hardware is wide.
+
 ## Current Architecture
 
 Gonzales uses a **megakernel** integrator: each tile traces one ray at a time
@@ -50,7 +54,7 @@ Already used by PBRT-v4 and Blender Cycles.
 ## Phase 2: Wavefront Architecture
 
 Restructure the integrator to process rays in batches — the foundation for
-both CPU ray packets and GPU compute.
+GPU compute and future wide-vector CPU architectures.
 
 ### Step 4a: Extract PathState (Refactor) ✅ (2026-03-28)
 
@@ -77,44 +81,27 @@ together:
 
 The tile structure stays intact — only the inner loop changes.
 
-### Step 5: SOA Scene Data Layout
-
-Convert scene data from Array-of-Structures to Structure-of-Arrays:
-
-- **Meshes**: separate arrays for vertex X, Y, Z coordinates instead of
-  `[Point3]`
-- **Materials/textures**: flat indexed arrays instead of class references
-- **Primitive IDs**: flat index + type tag instead of enum dispatch
-
-SOA maps directly to both SIMD lanes (CPU) and coalesced memory access
-(GPU). Estimate: 1–2 weeks.
-
-### Step 6: CPU Ray Packets
-
-Implement 8-ray packet traversal for coherent rays. Within each tile,
-process 2×4 pixel blocks as a single packet through the BVH. Primary and
-shadow rays benefit most. Fall back to single-ray when coherence drops
-(Embree's hybrid approach). Estimate: 2–3 weeks.
-
 ## Phase 3: GPU Wavefront
 
-Port the traversal kernel to GPU compute. The Mojo kernel from Step 1 and
-SOA data from Step 5 provide the foundation.
+Port the traversal kernel to GPU compute. The Mojo kernel from Step 1,
+compact BVH2 from Step 2, and wavefront architecture from Step 4 provide
+the foundation.
 
-### Step 7: GPU BVH Traversal
+### Step 5: GPU BVH Traversal
 
-Implement BVH traversal as a GPU compute kernel. The Mojo traversal from
-Step 1 targets GPU via `@gpu`. SOA ray buffers from Step 5 and flat BVH
-from Step 2 provide the data layout. The wavefront integrator from Step 4
-provides the batch dispatch structure. Estimate: 3–4 weeks.
+Add `@gpu` to the existing Mojo traversal kernel. The flat BVH2 node
+array and primitive ID arrays are already GPU-friendly (contiguous,
+fixed-size structs). The wavefront batch dispatch from Step 4b provides
+the host-side launch structure. SOA conversion happens here as needed
+for GPU-coalesced memory access.
 
-### Step 8: GPU Shading and Material Evaluation
+### Step 6: GPU Shading and Material Evaluation
 
 Port material and texture evaluation to GPU compute. The wavefront
 architecture naturally separates trace and shade phases, so each can be a
-distinct compute dispatch. Estimate: 3–4 weeks.
+distinct compute dispatch.
 
-### Step 9: Interactive Viewer
+### Step 7: Interactive Viewer
 
 Implement an interactive viewer using GLFW/SDL2 with OpenGL/Vulkan display:
 
@@ -126,61 +113,74 @@ Implement an interactive viewer using GLFW/SDL2 with OpenGL/Vulkan display:
 PBRT-v4 has an interactive GUI mode using GLFW and Dear ImGui. The
 fullscreen rendering support was contributed upstream (PBRT PR #307,
 merged Nov 2022) — the PBRT codebase at `/home/gonsolo/src/pbrt-v4/`
-serves as a working reference. Estimate: 2–3 weeks.
+serves as a working reference.
 
-### Step 10: GPU BVH Construction
+### Step 8: GPU BVH Construction
 
 For dynamic scenes, build the BVH on the GPU using Linear BVH (LBVH) with
 Morton codes. Use a TLAS/BLAS two-level structure for instanced geometry.
-Estimate: 2–3 weeks.
 
 ## Phase 4: Ecosystem Integration
 
 Connect gonzales to production pipelines and tools.
 
-### Step 11: USD Scene Support
+### Step 9: USD Scene Support
 
 OpenUSD (Pixar's Universal Scene Description) integration:
 
-- **Scene abstraction layer** — common interface for PBRT + USD readers,
-  feeding SOA data from Step 5
+- **Scene abstraction layer** — common interface for PBRT + USD readers
 - **OpenUSD C++ bridging** — via Swift C++ interop (Swift 5.9+) or C wrapper
 - **Hydra render delegate** — USD's rendering abstraction, used by Cycles,
   Arnold, and RenderMan. Works in any Hydra application (Blender, Solaris,
   usdview, NVIDIA Omniverse)
 - **MaterialX support** — USD's material description format
 
-Estimate: 4–6 weeks.
-
-### Step 12: Blender Integration
+### Step 10: Blender Integration
 
 Gonzales as a render engine inside Blender, via two paths:
 
 - **Python Render Engine API** — `bpy.types.RenderEngine` with a Python
   extension module (similar to Cycles' `_cycles` in
   `intern/cycles/blender/python.cpp`)
-- **Hydra render delegate** — reuses the Hydra delegate from Step 11, plugs
+- **Hydra render delegate** — reuses the Hydra delegate from Step 9, plugs
   into Blender's Hydra viewport (see `intern/cycles/hydra/`). More
   future-proof: works in any Hydra-capable application
 
-Estimate: 3–4 weeks.
+## Optional: CPU-Specific Optimizations
+
+These optimizations improve CPU rendering performance but are not on the
+critical path to GPU. They can be added independently at any time.
+
+### SOA Scene Data Layout
+
+Convert scene data from Array-of-Structures to Structure-of-Arrays:
+separate arrays for vertex X, Y, Z coordinates. Benefits SIMD ray packets
+and GPU coalesced access. Do as part of GPU work (Step 5) or standalone.
+
+### CPU Ray Packets
+
+Implement N-ray packet traversal for coherent rays using SIMD (AVX2, RVV,
+SVE). The wavefront batch structure from Step 4b provides the ray buffers.
+Width-agnostic with Mojo's `SIMD[DType, N]`. Worth revisiting when
+wide-vector CPUs (RISC-V V) become mainstream.
 
 ## Step Dependencies
 
 ```text
 Step 1: Mojo Kernel ───────┐
                            ▼
-Step 2: BVH2 ────────────► Step 7: GPU Traversal ──────► Step 10: GPU BVH Build
+Step 2: BVH2 ────────────► Step 5: GPU Traversal ──► Step 8: GPU BVH Build
                            ▲
 Step 4: Wavefront ─────────┤
-  ├─► Step 6: CPU Packets  │
-  └─► Step 9: Viewer       │
-                           │
-Step 5: SOA Data ──────────┤
-  ├─► Step 11: USD ──────► Step 12: Blender Integration
-  └─► Step 8: GPU Shading
+                           ▼
+                    Step 6: GPU Shading
+                           ▼
+                    Step 7: Interactive Viewer
+                           ▼
+                    Step 9: USD ──► Step 10: Blender
 
 Step 3: OIDN (Independent)
+Optional: SOA, CPU Ray Packets (independent, any time)
 ```
 
 ## VFX Reference Platform Ecosystem
@@ -193,8 +193,8 @@ bridging pattern already used for OIIO and Ptex.
 | ----------------------- | ------- | ---------------------------------------------------------- |
 | **OpenImageIO**         | ✅ Used | Image I/O (EXR, PNG, JPEG) and texture system              |
 | **Ptex**                | ✅ Used | Per-face texture mapping (Disney scenes)                   |
-| **OpenImageDenoise**    | Step 3  | AI denoiser for noise-free images at low sample counts     |
-| **MaterialX**           | Step 11 | Industry-standard material descriptions (required for USD) |
+| **OpenImageDenoise**    | ✅ Used | AI denoiser for noise-free images at low sample counts     |
+| **MaterialX**           | Step 9  | Industry-standard material descriptions (required for USD) |
 | **OpenColorIO**         | Future  | Color management (ACES, scene-linear workflows)            |
 | **OpenShadingLanguage** | Future  | Runtime-compiled shaders (used by Cycles, Arnold)          |
 | **OpenVDB**             | Future  | Sparse volumetric data (clouds, smoke, fire)               |
