@@ -41,11 +41,11 @@ path tracing, smaller nodes mean fewer cache misses per traversal step.
 Use a linearized depth-first layout with skip pointers for stackless
 traversal — this same layout works on GPUs.
 
-### Step 3: OpenImageDenoise Integration
+### Step 3: OpenImageDenoise Integration ✅ (2026-03-28)
 
 Integrate Intel OIDN for AI-powered denoising. Produces clean images from
 noisy renders, dramatically reducing sample counts for production quality.
-Already used by PBRT-v4 and Blender Cycles. Estimate: 2–3 days.
+Already used by PBRT-v4 and Blender Cycles.
 
 ## Phase 2: Wavefront Architecture
 

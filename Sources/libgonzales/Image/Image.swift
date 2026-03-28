@@ -29,6 +29,13 @@ struct Image {
                 }
         }
 
+        mutating func setPixel(color: RgbSpectrum, atLocation location: Point2i) {
+                let index = location.y * fullResolution.x + location.x
+                if index >= 0 && index < pixels.count {
+                        pixels[index] = Pixel(light: color, weight: 1)
+                }
+        }
+
         func getResolution() -> Point2i {
                 return fullResolution
         }

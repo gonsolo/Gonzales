@@ -1,0 +1,5 @@
+module openimagedenoise [system] {
+    header "shim.h"
+    link "OpenImageDenoise"
+    export *
+}

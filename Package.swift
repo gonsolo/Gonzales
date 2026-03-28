@@ -30,6 +30,7 @@ let package = Package(
                                 "ptexBridge",
                                 "DevirtualizeMacro",
                                 "mojoKernel",
+                                "openimagedenoise",
                         ],
                         resources: [
                                 .copy("Resources/new-joe-kuo-6.21201")
@@ -91,6 +92,7 @@ let package = Package(
                 ),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
+                .systemLibrary(name: "openimagedenoise"),
         ],
         swiftLanguageModes: [.v6],
         cxxLanguageStandard: .cxx20

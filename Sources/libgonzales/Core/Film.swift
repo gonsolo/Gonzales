@@ -39,46 +39,41 @@ struct Film {
         }
 
         func writeImages(samples: [Sample], tileSize: (Int, Int)) async throws {
-                let processAndWrite:
-                        @Sendable (_ name: String, _ fileName: String, _ isAlbedoOrNormal: Bool) async throws
-                                -> Void =
-                                { name, fileName, isAlbedoOrNormal in
 
-                                        var image = Image(resolution: self.resolution)
+                // 1. Build all three images from samples
+                var beautyImage = Image(resolution: self.resolution)
+                var albedoImage = Image(resolution: self.resolution)
+                var normalImage = Image(resolution: self.resolution)
 
-                                        if isAlbedoOrNormal {
-                                                if name.contains("albedo") {
-                                                        self.add(samples: samples, albedoImage: &image)
-                                                } else if name.contains("normal") {
-                                                        self.add(samples: samples, normalImage: &image)
-                                                } else {
-                                                        self.add(samples: samples, image: &image)
-                                                }
-                                        } else {
-                                                self.add(samples: samples, image: &image)
-                                        }
+                self.add(samples: samples, image: &beautyImage)
+                self.add(samples: samples, albedoImage: &albedoImage)
+                self.add(samples: samples, normalImage: &normalImage)
 
-                                        try image.normalize()
-                                        let imageWriter = try self.chooseWriter(name: fileName)
-                                        try await imageWriter.write(
-                                                fileName: fileName, crop: self.crop, image: image,
-                                                tileSize: tileSize)
-                                }
+                // 2. Normalize
+                try beautyImage.normalize()
+                try albedoImage.normalize()
+                try normalImage.normalize()
+
+                // 3. Denoise beauty using albedo + normal as auxiliary inputs
+                Denoiser.denoise(beauty: &beautyImage, albedo: albedoImage, normal: normalImage)
+
+                // 4. Write all images to disk (copy to let bindings for sendability)
+                let finalBeauty = beautyImage
+                let finalAlbedo = albedoImage
+                let finalNormal = normalImage
+
+                let writeImage: @Sendable (_ fileName: String, _ image: Image) async throws -> Void = {
+                        fileName, image in
+                        let imageWriter = try self.chooseWriter(name: fileName)
+                        try await imageWriter.write(
+                                fileName: fileName, crop: self.crop, image: image,
+                                tileSize: tileSize)
+                }
 
                 try await withThrowingTaskGroup(of: Void.self) { group in
-
-                        group.addTask {
-                                try await processAndWrite(self.name, self.name, false)
-                        }
-
-                        group.addTask {
-                                try await processAndWrite("albedo", "albedo.exr", true)
-                        }
-
-                        group.addTask {
-                                try await processAndWrite("normal", "normal.exr", true)
-                        }
-
+                        group.addTask { try await writeImage(self.name, finalBeauty) }
+                        group.addTask { try await writeImage("albedo.exr", finalAlbedo) }
+                        group.addTask { try await writeImage("normal.exr", finalNormal) }
                         try await group.waitForAll()
                 }
         }
