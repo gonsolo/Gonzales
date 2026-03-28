@@ -31,6 +31,7 @@ let package = Package(
                                 "DevirtualizeMacro",
                                 "mojoKernel",
                                 "openimagedenoise",
+                                "vulkanViewer",
                         ],
                         resources: [
                                 .copy("Resources/new-joe-kuo-6.21201")
@@ -93,6 +94,19 @@ let package = Package(
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
                 .systemLibrary(name: "openimagedenoise"),
+                .target(
+                        name: "vulkanViewer",
+                        path: "Sources/vulkanViewer",
+                        exclude: ["shaders", "generated"],
+                        publicHeadersPath: "include",
+                        cxxSettings: [
+                                .headerSearchPath("generated")
+                        ],
+                        linkerSettings: [
+                                .linkedLibrary("vulkan"),
+                                .linkedLibrary("glfw")
+                        ]
+                ),
         ],
         swiftLanguageModes: [.v6],
         cxxLanguageStandard: .cxx20

@@ -1,4 +1,4 @@
-final class PerspectiveCamera: Camera, Transformable {
+final class PerspectiveCamera: Camera, Transformable, @unchecked Sendable {
 
         init(
                 cameraToWorld: Transform,
@@ -55,6 +55,6 @@ final class PerspectiveCamera: Camera, Transformable {
         let focalDistance: Distance
         let lensRadius: Distance
         let cameraTransform: CameraTransform
-        let objectToWorld: Transform
+        var objectToWorld: Transform
         let film: Film
 }

@@ -101,7 +101,7 @@ Port material and texture evaluation to GPU compute. The wavefront
 architecture naturally separates trace and shade phases, so each can be a
 distinct compute dispatch.
 
-### Step 7: Interactive Viewer
+### Step 7: Interactive Viewer ✅ (2026-03-28)
 
 Implement an interactive viewer using GLFW/SDL2 with OpenGL/Vulkan display:
 

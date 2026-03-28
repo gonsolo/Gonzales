@@ -42,6 +42,7 @@ func usage() {
         print("Usage: gonzales [options] scene.pbrt")
         print("Options:")
         print("  --quick             Quick render mode")
+        print("  --interactive       Interactive viewer mode (1 spp)")
         print("  --single X Y        Trace a single ray at pixel (X, Y)")
         print("  --parse             Just parse the scene without rendering")
         print("  --ptexmem MEM       Set Ptex memory limit (in MB/GB depending on implementation)")
@@ -62,6 +63,8 @@ func parseArguments() throws -> (String, RenderOptions) {
                 switch argument {
                 case "--quick":
                         renderOptions.quick = true
+                case "--interactive":
+                        renderOptions.interactive = true
                 case "--single":
                         guard let argumentX = iterator.next() else { throw MainError.missingOption }
                         guard let argumentY = iterator.next() else { throw MainError.missingOption }

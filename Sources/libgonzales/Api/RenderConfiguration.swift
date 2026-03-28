@@ -179,7 +179,7 @@ class RenderConfiguration {
                 renderOptions: RenderOptions,
                 meshes: TriangleMeshes,
                 arena: TextureArena
-        ) async throws -> some Renderer {
+        ) async throws -> any Renderer {
                 let camera = try makeCamera(quick: renderOptions.quick)
                 let sampler = try makeSampler(film: camera.film, quick: renderOptions.quick)
                 let scene = Scene(
@@ -203,14 +203,23 @@ class RenderConfiguration {
                 let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
                 let tileSize = (32, 32)
 
-                return TileRenderer(
-                        camera: camera,
-                        integrator: integrator,
-                        sampler: sampler,
-                        lightSampler: lightSampler,
-                        tileSize: tileSize,
-                        immutableState: immutableState,
-                        renderOptions: renderOptions
-                )
+                if renderOptions.interactive {
+                        return InteractiveRenderer(
+                                camera: camera,
+                                integrator: integrator,
+                                sampler: sampler,
+                                lightSampler: lightSampler,
+                                tileSize: tileSize,
+                                immutableState: immutableState)
+                } else {
+                        return TileRenderer(
+                                camera: camera,
+                                integrator: integrator,
+                                sampler: sampler,
+                                lightSampler: lightSampler,
+                                tileSize: tileSize,
+                                immutableState: immutableState,
+                                renderOptions: renderOptions)
+                }
         }
 }

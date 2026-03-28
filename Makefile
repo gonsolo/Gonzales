@@ -278,6 +278,10 @@ view_release: release
 	fi; \
 	$(VIEWER) "$$IMAGE"
 
+vir: view_interactive_release
+view_interactive_release: release
+	$(SELECT_SCENE); \
+	$(GONZALES_RELEASE) --interactive $(OPTIONS) "$$SCENE"
 
 vd: debug
 	$(SELECT_SCENE); \

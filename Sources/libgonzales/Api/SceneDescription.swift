@@ -812,8 +812,10 @@ extension SceneDescription {
 
                 if renderOptions.justParse { return }
                 let renderer = try await options.makeRenderer(
-                        geometricPrimitives: apiGeometricPrimitives, areaLights: areaLights,
-                        materials: materials, transformedPrimitives: transformedPrimitives,
+                        geometricPrimitives: apiGeometricPrimitives,
+                        areaLights: areaLights,
+                        materials: materials,
+                        transformedPrimitives: transformedPrimitives,
                         acceleratorName: acceleratorName,
                         immutableState: state.getImmutable(),
                         renderOptions: renderOptions,
