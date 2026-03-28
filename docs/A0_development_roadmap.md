@@ -30,7 +30,7 @@ header. Eliminates all ARC traffic from the hot path (~22% of CPU time).
 Mojo's built-in `SIMD[f32, 8]` maps directly to AVX2 for the AABB test,
 and the same kernel can later target GPU via `@gpu` (Phase 3) without a
 rewrite. A working Mojo CPU+GPU raytracer prototype exists at
-`/home/gonsolo/work/mojo_gpu_raytracer/`. Estimate: 1–2 weeks.
+`/home/gonsolo/work/mojo_gpu_raytracer/`.
 
 ### Step 2: BVH2 with Compact Nodes ✅ (2026-03-28)
 
@@ -39,7 +39,7 @@ Replace BVH8 (288-byte nodes, 4.5 cache lines) with a binary BVH using
 path tracing, smaller nodes mean fewer cache misses per traversal step.
 
 Use a linearized depth-first layout with skip pointers for stackless
-traversal — this same layout works on GPUs. Estimate: 1–2 weeks.
+traversal — this same layout works on GPUs.
 
 ### Step 3: OpenImageDenoise Integration
 
