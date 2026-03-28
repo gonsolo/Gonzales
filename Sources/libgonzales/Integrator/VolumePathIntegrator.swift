@@ -16,58 +16,34 @@ struct VolumePathIntegrator {
         }
 }
 
-struct RayTraceSample {
-        let estimate: RgbSpectrum
-        let albedo: RgbSpectrum
-        let normal: Normal
+struct PathState {
+        var ray: Ray
+        var tHit: Real
+        var bounce: Int
+        var estimate: RgbSpectrum
+        var throughput: RgbSpectrum
+        var albedo: RgbSpectrum
+        var firstNormal: Normal
+        var interaction: SurfaceInteraction?
+        var specularBounce: Bool = false
+        var pixel: Point2i
+        var filterWeight: Real
 }
 
 extension VolumePathIntegrator {
 
         mutating func evaluateRayPath(
-                from ray: Ray,
-                tHit: inout Real,
+                state: inout PathState,
                 with sampler: inout Sampler,
                 lightSampler: inout LightSampler,
-                state: ImmutableState
-        ) throws -> RayTraceSample {
+                immutableState: ImmutableState
+        ) throws {
 
-                // Path throughput weight
-                // The product of all FramedBsdfs and cosines divided by the pdf
-                // Π f |cosθ| / pdf
-                var bounceState = BounceState(
-                        ray: ray,
-                        tHit: tHit,
-                        bounce: 0,
-                        estimate: black,
-                        throughput: white,
-                        albedo: black,
-                        firstNormal: zeroNormal)
-
-                try bounces(state: &bounceState, sampler: &sampler, lightSampler: &lightSampler, immutableState: state)
-
-                tHit = bounceState.tHit
-
-                return RayTraceSample(
-                        estimate: bounceState.estimate,
-                        albedo: bounceState.albedo,
-                        normal: bounceState.firstNormal
-                )
+                try bounces(state: &state, sampler: &sampler, lightSampler: &lightSampler, immutableState: immutableState)
         }
 }
 
 extension VolumePathIntegrator {
-        private struct BounceState {
-                var ray: Ray
-                var tHit: Real
-                var bounce: Int
-                var estimate: RgbSpectrum
-                var throughput: RgbSpectrum
-                var albedo: RgbSpectrum
-                var firstNormal: Normal
-                var interaction: SurfaceInteraction?
-                var specularBounce: Bool = false
-        }
 
         private func brdfDensity<D: DistributionModel>(
                 light _: Light,
@@ -303,7 +279,7 @@ extension VolumePathIntegrator {
         // @doc:end
 
         private func sampleMedium<D: DistributionModel>(
-                state: BounceState,
+                state: PathState,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
                 sampler: inout Sampler,
@@ -325,7 +301,7 @@ extension VolumePathIntegrator {
         }
 
         private func mediumEstimate<D: DistributionModel>(
-                state: inout BounceState,
+                state: inout PathState,
                 mediumInteraction: MediumInteraction,
                 distributionModel: D,
                 sampler: inout Sampler,
@@ -342,7 +318,7 @@ extension VolumePathIntegrator {
         }
 
         private func surfaceEstimate(
-                state: inout BounceState,
+                state: inout PathState,
                 sampler: inout Sampler,
                 lightSampler: inout LightSampler
         ) throws -> Bool {
@@ -390,7 +366,7 @@ extension VolumePathIntegrator {
         }
 
         private mutating func oneBounce(
-                state: inout BounceState,
+                state: inout PathState,
                 sampler: inout Sampler,
                 lightSampler: inout LightSampler,
                 immutableState _: ImmutableState
@@ -454,7 +430,7 @@ extension VolumePathIntegrator {
 
         // @doc:bounce-loop
         private mutating func bounces(
-                state: inout BounceState,
+                state: inout PathState,
                 sampler: inout Sampler,
                 lightSampler: inout LightSampler,
                 immutableState: ImmutableState

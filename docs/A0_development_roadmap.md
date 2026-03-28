@@ -52,10 +52,22 @@ Already used by PBRT-v4 and Blender Cycles.
 Restructure the integrator to process rays in batches — the foundation for
 both CPU ray packets and GPU compute.
 
-### Step 4: Wavefront Integrator
+### Step 4a: Extract PathState (Refactor) ✅ (2026-03-28)
 
-Restructure `Tile.render()` from *one ray through all bounces* to *all rays
-at bounce N, then bounce N+1*:
+Make the integrator's path state explicit and public. The existing
+`BounceState` struct is already close — promote it to a standalone
+`PathState` type that can later be stored in flat buffers:
+
+- ray, throughput, accumulated radiance, bounce depth, pixel index
+- albedo, first normal (for AOVs)
+- specularBounce flag
+
+Verify: **pixel-perfect match** with current output.
+
+### Step 4b: Batch Processing
+
+Collect all rays at the same bounce depth into a buffer and process them
+together:
 
 1. Generate all primary rays for the tile into a buffer
 2. Trace all primary rays (batch BVH traversal)
@@ -64,7 +76,6 @@ at bounce N, then bounce N+1*:
 5. Generate bounce rays, repeat
 
 The tile structure stays intact — only the inner loop changes.
-Estimate: 2–3 weeks.
 
 ### Step 5: SOA Scene Data Layout
 
