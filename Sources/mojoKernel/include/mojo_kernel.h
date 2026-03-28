@@ -13,15 +13,6 @@ struct TriangleMesh_C {
     const int64_t* vertexIndices;
 };
 
-struct BoundingHierarchyNode; // Opaque forward declaration since Swift provides raw void pointer
-
-struct SceneDescriptor_C {
-    const void* bvhNodes;    // BoundingHierarchyNode
-    const struct PrimId_C* primIds;
-    const struct TriangleMesh_C* meshes;
-    int64_t meshCount;
-};
-
 struct Ray_C {
     float orgX, orgY, orgZ;
     float dirX, dirY, dirZ;
@@ -35,6 +26,18 @@ struct Intersection_C {
     int8_t hit;
 };
 
+struct BVH2Node {
+    float boundsMinX, boundsMinY, boundsMinZ;
+    float boundsMaxX, boundsMaxY, boundsMaxZ;
+    int32_t offset;     // interior: right child index, leaf: primIds offset
+    int32_t count;      // 0 = interior, >0 = leaf primitive count
+};
 
-int32_t mojo_test_intersect(const void* bvhNodes, const struct Ray_C* ray, float tMax);
-void mojo_traverse(const struct SceneDescriptor_C* scene, const struct Ray_C* ray, float tMax, struct Intersection_C* result);
+struct SceneDescriptor2_C {
+    const struct BVH2Node* bvh2Nodes;
+    const struct PrimId_C* primIds;
+    const struct TriangleMesh_C* meshes;
+    int64_t meshCount;
+};
+
+void mojo_traverse_bvh2(const struct SceneDescriptor2_C* scene, const struct Ray_C* ray, float tMax, struct Intersection_C* result);

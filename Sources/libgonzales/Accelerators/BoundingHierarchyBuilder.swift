@@ -61,11 +61,10 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
         private var bufferWrapper: UnsafePrimitiveBuffer?
         private var primitives: [IntersectablePrimitive]
 
-        var nodes = [BoundingHierarchyNode]()
+        var bvh2Nodes = [BVH2Node]()
 
         internal init(scene: Scene, primitives: [IntersectablePrimitive]) async throws {
                 self.primitives = primitives
-                self.nodes.reserveCapacity(primitives.count * 2)
 
                 let pointer = UnsafeMutablePointer<CachedPrimitive>.allocate(capacity: primitives.count)
                 let buffer = UnsafeMutableBufferPointer(start: pointer, count: primitives.count)
@@ -100,17 +99,12 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 }
         }
 
-        internal func getSortedPrimitivesAndNodes() throws -> (
-                [IntersectablePrimitive], [BoundingHierarchyNode]
-        ) {
-                guard let wrapper = bufferWrapper else { return ([], nodes) }
-                let sortedPrimitives = wrapper.buffer.map { primitives[$0.index] }
-                return (sortedPrimitives, nodes)
-        }
-
         internal func getBoundingHierarchy() throws -> BoundingHierarchy {
-                let (sortedPrimitives, nodes) = try getSortedPrimitivesAndNodes()
-                return BoundingHierarchy(primitives: sortedPrimitives, nodes: nodes)
+                guard let wrapper = bufferWrapper else {
+                        return BoundingHierarchy(primitives: [], bvh2Nodes: [])
+                }
+                let sortedPrimitives = wrapper.buffer.map { primitives[$0.index] }
+                return BoundingHierarchy(primitives: sortedPrimitives, bvh2Nodes: bvh2Nodes)
         }
 
         private func buildHierarchy() async throws {
@@ -118,59 +112,48 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 let rootNode = try await Self.build(
                         range: 0..<wrapper.buffer.count, ptr: wrapper,
                         primitivesPerNode: self.primitivesPerNode)
-                _ = flatten8(node: rootNode)
+                _ = flatten2(node: rootNode)
         }
 
-        private func extractChildren8(node: BVHBuildNode) -> [BVHBuildNode] {
-                var children = [node]
-                while children.count < 8 {
-                        var maxArea: Real = -1
-                        var splitIdx = -1
-                        for (idx, childNode) in children.enumerated() {
-                                if childNode.nPrimitives == 0 { // Interior
-                                        let area = childNode.bounds.surfaceArea()
-                                        if area > maxArea {
-                                                maxArea = area
-                                                splitIdx = idx
-                                        }
-                                }
-                        }
-                        if splitIdx == -1 { break } // All current children are leaves
-                        let split = children.remove(at: splitIdx)
-                        if let left = split.left { children.append(left) }
-                        if let right = split.right { children.append(right) }
-                }
-                return children
-        }
 
-        private func flatten8(node: BVHBuildNode) -> Int {
-                let linearOffset = totalNodes
+        // --- BVH2 Flattening: depth-first linear layout ---
+        // Left child is always at index + 1; right child index stored in .offset.
+        // Each node stores its own AABB.
+
+        private func flatten2(node: BVHBuildNode) -> Int {
+                let myIndex = bvh2Nodes.count
                 totalNodes += 1
 
-                var node8 = BoundingHierarchyNode()
-                nodes.append(node8)
+                // Append placeholder — we'll fill it in below
+                bvh2Nodes.append(BVH2Node())
 
-                let children = extractChildren8(node: node)
+                var n = BVH2Node()
+                n.boundsMinX = Float(node.bounds.pMin.x)
+                n.boundsMinY = Float(node.bounds.pMin.y)
+                n.boundsMinZ = Float(node.bounds.pMin.z)
+                n.boundsMaxX = Float(node.bounds.pMax.x)
+                n.boundsMaxY = Float(node.bounds.pMax.y)
+                n.boundsMaxZ = Float(node.bounds.pMax.z)
 
-                for (idx, child) in children.enumerated() {
-                        node8.pMinX[idx] = Float(child.bounds.pMin.x)
-                        node8.pMaxX[idx] = Float(child.bounds.pMax.x)
-                        node8.pMinY[idx] = Float(child.bounds.pMin.y)
-                        node8.pMaxY[idx] = Float(child.bounds.pMax.y)
-                        node8.pMinZ[idx] = Float(child.bounds.pMin.z)
-                        node8.pMaxZ[idx] = Float(child.bounds.pMax.z)
-
-                        if child.nPrimitives > 0 { // Leaf
-                                node8.primitiveCounts[idx] = Int32(child.nPrimitives)
-                                node8.primitiveOffsets[idx] = Int32(child.firstPrimOffset)
-                        } else { // Interior
-                                let childIdx = flatten8(node: child)
-                                node8.childNodes[idx] = Int32(childIdx)
+                if node.nPrimitives > 0 {
+                        // Leaf
+                        n.offset = Int32(node.firstPrimOffset)
+                        n.count = Int32(node.nPrimitives)
+                } else {
+                        // Interior — left child is at myIndex + 1
+                        if let left = node.left {
+                                _ = flatten2(node: left)
                         }
+                        // Right child gets the next available index
+                        if let right = node.right {
+                                let rightIndex = flatten2(node: right)
+                                n.offset = Int32(rightIndex)
+                        }
+                        n.count = 0
                 }
 
-                nodes[linearOffset] = node8
-                return linearOffset
+                bvh2Nodes[myIndex] = n
+                return myIndex
         }
 
         // --- Static Helper functions ---

@@ -20,73 +20,6 @@ struct TriangleMesh_C(TrivialRegisterPassable):
     var vertexIndices: UnsafePointer[Int64, MutAnyOrigin]
 
 @fieldwise_init
-struct BoundingHierarchyNode(TrivialRegisterPassable):
-    var pMinX: SIMD[DType.float32, 8]
-    var pMaxX: SIMD[DType.float32, 8]
-    var pMinY: SIMD[DType.float32, 8]
-    var pMaxY: SIMD[DType.float32, 8]
-    var pMinZ: SIMD[DType.float32, 8]
-    var pMaxZ: SIMD[DType.float32, 8]
-    var childNodes: SIMD[DType.int32, 8]
-    var primitiveOffsets: SIMD[DType.int32, 8]
-    var primitiveCounts: SIMD[DType.int32, 8]
-
-    @always_inline
-    fn intersect8(
-        self,
-        rdirX: SIMD[DType.float32, 8],
-        rdirY: SIMD[DType.float32, 8],
-        rdirZ: SIMD[DType.float32, 8],
-        orgRdirX: SIMD[DType.float32, 8],
-        orgRdirY: SIMD[DType.float32, 8],
-        orgRdirZ: SIMD[DType.float32, 8],
-        nearXIsMin: Bool,
-        nearYIsMin: Bool,
-        nearZIsMin: Bool,
-        tHit: Float32
-    ) -> SIMD[DType.bool, 8]:
-
-        var nearX = self.pMinX if nearXIsMin else self.pMaxX
-        var farX = self.pMaxX if nearXIsMin else self.pMinX
-        var nearY = self.pMinY if nearYIsMin else self.pMaxY
-        var farY = self.pMaxY if nearYIsMin else self.pMinY
-        var nearZ = self.pMinZ if nearZIsMin else self.pMaxZ
-        var farZ = self.pMaxZ if nearZIsMin else self.pMinZ
-
-        var tNearX = nearX * rdirX - orgRdirX
-        var tNearY = nearY * rdirY - orgRdirY
-        var tNearZ = nearZ * rdirZ - orgRdirZ
-
-        var tFarX = farX * rdirX - orgRdirX
-        var tFarY = farY * rdirY - orgRdirY
-        var tFarZ = farZ * rdirZ - orgRdirZ
-
-        # tNear = max(tNearX, tNearY, tNearZ, 0) - NaN-safe using element-wise comparisons
-        # When comparison involves NaN, .gt()/.lt() return False, keeping the original value
-        var zero = SIMD[DType.float32, 8](0.0)
-        var tNear = tNearY.gt(tNearX).select(tNearY, tNearX)
-        tNear = tNearZ.gt(tNear).select(tNearZ, tNear)
-        tNear = zero.gt(tNear).select(zero, tNear)
-
-        # tFar = min(tFarX, tFarY, tFarZ, tHit) * gamma - NaN-safe
-        var tHitV = SIMD[DType.float32, 8](tHit)
-        var tFar = tFarY.lt(tFarX).select(tFarY, tFarX)
-        tFar = tFarZ.lt(tFar).select(tFarZ, tFar)
-        tFar = tHitV.lt(tFar).select(tHitV, tFar)
-
-        var safeGamma = SIMD[DType.float32, 8](1.0000003)
-        tFar = tFar * safeGamma
-
-        return tNear.le(tFar)
-
-@fieldwise_init
-struct SceneDescriptor_C(TrivialRegisterPassable):
-    var bvhNodes: UnsafePointer[BoundingHierarchyNode, MutAnyOrigin]
-    var primIds: UnsafePointer[PrimId_C, MutAnyOrigin]
-    var meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin]
-    var meshCount: Int64
-
-@fieldwise_init
 struct Ray_C(TrivialRegisterPassable):
     var orgX: Float32
     var orgY: Float32
@@ -155,63 +88,87 @@ fn intersect_triangle(
         
     return (True, t, u, v)
 
+# ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
+
+@fieldwise_init
+struct BVH2Node(TrivialRegisterPassable):
+    var boundsMinX: Float32
+    var boundsMinY: Float32
+    var boundsMinZ: Float32
+    var boundsMaxX: Float32
+    var boundsMaxY: Float32
+    var boundsMaxZ: Float32
+    var offset: Int32       # interior: right child index, leaf: primIds offset
+    var count: Int32        # 0 = interior, >0 = leaf primitive count
+
+@always_inline
+fn intersect_aabb(
+    boundsMinX: Float32, boundsMinY: Float32, boundsMinZ: Float32,
+    boundsMaxX: Float32, boundsMaxY: Float32, boundsMaxZ: Float32,
+    rdirX: Float32, rdirY: Float32, rdirZ: Float32,
+    orgRdirX: Float32, orgRdirY: Float32, orgRdirZ: Float32,
+    nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
+    tMax: Float32
+) -> Tuple[Bool, Float32]:
+    var nearX = boundsMinX if nearXIsMin else boundsMaxX
+    var farX  = boundsMaxX if nearXIsMin else boundsMinX
+    var nearY = boundsMinY if nearYIsMin else boundsMaxY
+    var farY  = boundsMaxY if nearYIsMin else boundsMinY
+    var nearZ = boundsMinZ if nearZIsMin else boundsMaxZ
+    var farZ  = boundsMaxZ if nearZIsMin else boundsMinZ
+
+    var tNearX = nearX * rdirX - orgRdirX
+    var tNearY = nearY * rdirY - orgRdirY
+    var tNearZ = nearZ * rdirZ - orgRdirZ
+
+    var tFarX = farX * rdirX - orgRdirX
+    var tFarY = farY * rdirY - orgRdirY
+    var tFarZ = farZ * rdirZ - orgRdirZ
+
+    # tNear = max(tNearX, tNearY, tNearZ, 0)
+    var tNear = tNearX if tNearX > tNearY else tNearY
+    tNear = tNearZ if tNearZ > tNear else tNear
+    tNear = Float32(0.0) if Float32(0.0) > tNear else tNear
+
+    # tFar = min(tFarX, tFarY, tFarZ, tMax) * gamma
+    var tFar = tFarX if tFarX < tFarY else tFarY
+    tFar = tFarZ if tFarZ < tFar else tFar
+    tFar = tMax if tMax < tFar else tFar
+    tFar = tFar * Float32(1.0000003)
+
+    return (tNear <= tFar, tNear)
+
+@fieldwise_init
+struct SceneDescriptor2_C(TrivialRegisterPassable):
+    var bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin]
+    var primIds: UnsafePointer[PrimId_C, MutAnyOrigin]
+    var meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin]
+    var meshCount: Int64
+
 @export
-fn mojo_test_intersect(bvhNodes: UnsafePointer[BoundingHierarchyNode, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32) -> Int32:
-    """Run intersect8 on root node and return bitmask result."""
-    var ray = rayPtr[0]
-    var node = bvhNodes[0]
-
-    var rdirXs = Float32(1.0) / ray.dirX
-    var rdirYs = Float32(1.0) / ray.dirY
-    var rdirZs = Float32(1.0) / ray.dirZ
-    
-    var rdirX = SIMD[DType.float32, 8](rdirXs)
-    var rdirY = SIMD[DType.float32, 8](rdirYs)
-    var rdirZ = SIMD[DType.float32, 8](rdirZs)
-    var orgRdirX = SIMD[DType.float32, 8](ray.orgX * rdirXs)
-    var orgRdirY = SIMD[DType.float32, 8](ray.orgY * rdirYs)
-    var orgRdirZ = SIMD[DType.float32, 8](ray.orgZ * rdirZs)
-    var nearXIsMin = rdirXs >= Float32(0.0)
-    var nearYIsMin = rdirYs >= Float32(0.0)
-    var nearZIsMin = rdirZs >= Float32(0.0)
-
-    var mask = node.intersect8(
-        rdirX, rdirY, rdirZ,
-        orgRdirX, orgRdirY, orgRdirZ,
-        nearXIsMin, nearYIsMin, nearZIsMin,
-        tMax
-    )
-    
-    var result: Int32 = 0
-    for i in range(8):
-        if mask[i]:
-            result |= Int32(1 << i)
-    return result
-
-@export
-fn mojo_traverse(scenePtr: UnsafePointer[SceneDescriptor_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
+fn mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
 
     var scene = scenePtr[0]
     var ray = rayPtr[0]
 
-    var rdirX = SIMD[DType.float32, 8](1.0 / ray.dirX)
-    var rdirY = SIMD[DType.float32, 8](1.0 / ray.dirY)
-    var rdirZ = SIMD[DType.float32, 8](1.0 / ray.dirZ)
-    
-    var orgRdirX = SIMD[DType.float32, 8](ray.orgX * (1.0 / ray.dirX))
-    var orgRdirY = SIMD[DType.float32, 8](ray.orgY * (1.0 / ray.dirY))
-    var orgRdirZ = SIMD[DType.float32, 8](ray.orgZ * (1.0 / ray.dirZ))
-    
-    var nearXIsMin = (1.0 / ray.dirX) >= 0.0
-    var nearYIsMin = (1.0 / ray.dirY) >= 0.0
-    var nearZIsMin = (1.0 / ray.dirZ) >= 0.0
+    var rdirX = Float32(1.0) / ray.dirX
+    var rdirY = Float32(1.0) / ray.dirY
+    var rdirZ = Float32(1.0) / ray.dirZ
+
+    var orgRdirX = ray.orgX * rdirX
+    var orgRdirY = ray.orgY * rdirY
+    var orgRdirZ = ray.orgZ * rdirZ
+
+    var nearXIsMin = rdirX >= Float32(0.0)
+    var nearYIsMin = rdirY >= Float32(0.0)
+    var nearZIsMin = rdirZ >= Float32(0.0)
 
     var hitIndex: Int = -1
     var localTHit = tMax
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
 
-    var stack = InlineArray[Int, 128](fill=0)
+    var stack = InlineArray[Int, 64](fill=0)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -220,73 +177,104 @@ fn mojo_traverse(scenePtr: UnsafePointer[SceneDescriptor_C, MutAnyOrigin], rayPt
     var ray_dir = SIMD[DType.float32, 3](ray.dirX, ray.dirY, ray.dirZ)
 
     while True:
-        var node = scene.bvhNodes[current]
-        var mask = node.intersect8(
-            rdirX, rdirY, rdirZ,
-            orgRdirX, orgRdirY, orgRdirZ,
-            nearXIsMin, nearYIsMin, nearZIsMin,
-            localTHit
-        )
+        var node = scene.bvh2Nodes[current]
 
-        for i in range(8):
-            if mask[i]:
-                
-                var count = Int(node.primitiveCounts[i])
-                if count > 0: # leaf node
-                    var offset = Int(node.primitiveOffsets[i])
-                    for j in range(count):
-                        var prim = scene.primIds[offset + j]
-                        if prim.type == 0 or prim.type == 1 or prim.type == 2:
-                            var mesh_idx = Int(prim.id1)
-                            var tri_idx = Int(prim.id2)
-                            
-                            if prim.type == 1 or prim.type == 2:
-                                mesh_idx = Int(prim.id2 >> 32)
-                                tri_idx = Int(prim.id2 & 0xFFFFFFFF)
-                                
-                            var mesh = scene.meshes[mesh_idx]
-                            var v0_idx = Int(mesh.vertexIndices[tri_idx * 3])
-                            var v1_idx = Int(mesh.vertexIndices[tri_idx * 3 + 1])
-                            var v2_idx = Int(mesh.vertexIndices[tri_idx * 3 + 2])
-                            
-                            # Points are stored as SIMD4<Float> in Swift, so offset by * 4
-                            var p0 = SIMD[DType.float32, 3](
-                                mesh.points[v0_idx * 4],
-                                mesh.points[v0_idx * 4 + 1],
-                                mesh.points[v0_idx * 4 + 2]
-                            )
-                            var p1 = SIMD[DType.float32, 3](
-                                mesh.points[v1_idx * 4],
-                                mesh.points[v1_idx * 4 + 1],
-                                mesh.points[v1_idx * 4 + 2]
-                            )
-                            var p2 = SIMD[DType.float32, 3](
-                                mesh.points[v2_idx * 4],
-                                mesh.points[v2_idx * 4 + 1],
-                                mesh.points[v2_idx * 4 + 2]
-                            )
-                            
-                            var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
-                            if hit_res[0]:
-                                localTHit = hit_res[1]
-                                bestU = hit_res[2]
-                                bestV = hit_res[3]
-                                hitIndex = offset + j
+        if node.count > 0:
+            # Leaf node — intersect primitives
+            var offset = Int(node.offset)
+            var count = Int(node.count)
+            for j in range(count):
+                var prim = scene.primIds[offset + j]
+                if prim.type == 0 or prim.type == 1 or prim.type == 2:
+                    var mesh_idx = Int(prim.id1)
+                    var tri_idx = Int(prim.id2)
+
+                    if prim.type == 1 or prim.type == 2:
+                        mesh_idx = Int(prim.id2 >> 32)
+                        tri_idx = Int(prim.id2 & 0xFFFFFFFF)
+
+                    var mesh = scene.meshes[mesh_idx]
+                    var v0_idx = Int(mesh.vertexIndices[tri_idx * 3])
+                    var v1_idx = Int(mesh.vertexIndices[tri_idx * 3 + 1])
+                    var v2_idx = Int(mesh.vertexIndices[tri_idx * 3 + 2])
+
+                    var p0 = SIMD[DType.float32, 3](
+                        mesh.points[v0_idx * 4],
+                        mesh.points[v0_idx * 4 + 1],
+                        mesh.points[v0_idx * 4 + 2]
+                    )
+                    var p1 = SIMD[DType.float32, 3](
+                        mesh.points[v1_idx * 4],
+                        mesh.points[v1_idx * 4 + 1],
+                        mesh.points[v1_idx * 4 + 2]
+                    )
+                    var p2 = SIMD[DType.float32, 3](
+                        mesh.points[v2_idx * 4],
+                        mesh.points[v2_idx * 4 + 1],
+                        mesh.points[v2_idx * 4 + 2]
+                    )
+
+                    var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                    if hit_res[0]:
+                        localTHit = hit_res[1]
+                        bestU = hit_res[2]
+                        bestV = hit_res[3]
+                        hitIndex = offset + j
+
+            # Pop next node from stack
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = stack_ptr[toVisit]
+        else:
+            # Interior node — test both children, visit nearer first
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+
+            var leftNode = scene.bvh2Nodes[leftIdx]
+            var rightNode = scene.bvh2Nodes[rightIdx]
+
+            var leftHit = intersect_aabb(
+                leftNode.boundsMinX, leftNode.boundsMinY, leftNode.boundsMinZ,
+                leftNode.boundsMaxX, leftNode.boundsMaxY, leftNode.boundsMaxZ,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+            var rightHit = intersect_aabb(
+                rightNode.boundsMinX, rightNode.boundsMinY, rightNode.boundsMinZ,
+                rightNode.boundsMaxX, rightNode.boundsMaxY, rightNode.boundsMaxZ,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+
+            if leftIsHit and rightIsHit:
+                # Both hit — visit nearer first, push farther
+                var leftTNear = leftHit[1]
+                var rightTNear = rightHit[1]
+                if leftTNear <= rightTNear:
+                    current = leftIdx
+                    stack_ptr[toVisit] = rightIdx
                 else:
-                    var childIdx = Int(node.childNodes[i])
-                    if childIdx >= 0:
-                        stack_ptr[toVisit] = childIdx
-                        toVisit += 1
-
-        if toVisit == 0:
-            break
-        toVisit -= 1
-        current = stack_ptr[toVisit]
+                    current = rightIdx
+                    stack_ptr[toVisit] = leftIdx
+                toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+            elif rightIsHit:
+                current = rightIdx
+            else:
+                # Neither child hit — pop from stack
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = stack_ptr[toVisit]
 
     if hitIndex != -1:
         resultPtr[0] = Intersection_C(scene.primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
         var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0)
         resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
-
 

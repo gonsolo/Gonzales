@@ -1,7 +1,7 @@
 struct Accelerator: Boundable, Intersectable, Sendable {
 
         init() {
-                self.boundingHierarchy = BoundingHierarchy(primitives: [], nodes: [])
+                self.boundingHierarchy = BoundingHierarchy(primitives: [], bvh2Nodes: [])
         }
 
         init(boundingHierarchy: BoundingHierarchy) {

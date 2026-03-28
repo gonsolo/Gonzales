@@ -32,7 +32,7 @@ and the same kernel can later target GPU via `@gpu` (Phase 3) without a
 rewrite. A working Mojo CPU+GPU raytracer prototype exists at
 `/home/gonsolo/work/mojo_gpu_raytracer/`. Estimate: 1–2 weeks.
 
-### Step 2: BVH2 with Compact Nodes
+### Step 2: BVH2 with Compact Nodes ✅ (2026-03-28)
 
 Replace BVH8 (288-byte nodes, 4.5 cache lines) with a binary BVH using
 32-byte cache-line-sized nodes. For incoherent secondary rays that dominate
