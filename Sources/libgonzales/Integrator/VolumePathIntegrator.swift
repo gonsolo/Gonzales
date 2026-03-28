@@ -365,7 +365,7 @@ extension VolumePathIntegrator {
                 return true
         }
 
-        private mutating func oneBounce(
+        mutating func oneBounce(
                 state: inout PathState,
                 sampler: inout Sampler,
                 lightSampler: inout LightSampler,

@@ -1,16 +1,27 @@
 struct Tile: Sendable {
 
+        /// An active path being traced through the scene.
+        /// Bundles the path state with its per-path sampler state.
+        private struct ActivePath {
+                var state: PathState
+                var sampler: Sampler
+                var lightSampler: LightSampler
+        }
+
         mutating func render(
                 sampler: inout Sampler,
                 camera: any Camera,
                 lightSampler: inout LightSampler,
                 state: ImmutableState
         ) throws -> [Sample] {
-                var samples = [Sample]()
+
+                // Phase 1: Generate all primary rays
+                var activePaths = [ActivePath]()
                 for pixel in bounds {
                         for sampleIndex in 0..<sampler.samplesPerPixel {
-                                sampler.startPixelSample(pixel: pixel, index: sampleIndex)
-                                let cameraSample = sampler.getCameraSample(
+                                var pathSampler = sampler
+                                pathSampler.startPixelSample(pixel: pixel, index: sampleIndex)
+                                let cameraSample = pathSampler.getCameraSample(
                                         pixel: pixel, filter: camera.film.filter)
                                 let ray = camera.generateRay(cameraSample: cameraSample)
 
@@ -20,7 +31,7 @@ struct Tile: Sendable {
                                 let filterValue = camera.film.filter.evaluate(atLocation: filterLocation)
                                 let rayWeight = filterValue / cameraSample.filterWeight
 
-                                var pathState = PathState(
+                                let pathState = PathState(
                                         ray: ray,
                                         tHit: Real.infinity,
                                         bounce: 0,
@@ -31,21 +42,54 @@ struct Tile: Sendable {
                                         pixel: pixel,
                                         filterWeight: rayWeight)
 
-                                try integrator.evaluateRayPath(
-                                        state: &pathState,
-                                        with: &sampler,
-                                        lightSampler: &lightSampler,
-                                        immutableState: state)
-
-                                let sample = Sample(
-                                        light: pathState.estimate,
-                                        albedo: pathState.albedo,
-                                        normal: pathState.firstNormal,
-                                        weight: pathState.filterWeight,
-                                        pixel: pathState.pixel)
-                                samples.append(sample)
+                                activePaths.append(ActivePath(
+                                        state: pathState,
+                                        sampler: pathSampler,
+                                        lightSampler: lightSampler))
                         }
                 }
+
+                // Phase 2: Process bounces — all paths at bounce N, then bounce N+1
+                var samples = [Sample]()
+                samples.reserveCapacity(activePaths.count)
+
+                for bounce in 0...integrator.maxDepth {
+                        guard !activePaths.isEmpty else { break }
+
+                        var nextActive = [ActivePath]()
+                        nextActive.reserveCapacity(activePaths.count)
+
+                        for var path in activePaths {
+                                path.state.bounce = bounce
+                                let continues = try integrator.oneBounce(
+                                        state: &path.state,
+                                        sampler: &path.sampler,
+                                        lightSampler: &path.lightSampler,
+                                        immutableState: state)
+                                if continues {
+                                        nextActive.append(path)
+                                } else {
+                                        samples.append(Sample(
+                                                light: path.state.estimate,
+                                                albedo: path.state.albedo,
+                                                normal: path.state.firstNormal,
+                                                weight: path.state.filterWeight,
+                                                pixel: path.state.pixel))
+                                }
+                        }
+                        activePaths = nextActive
+                }
+
+                // Any paths that survived all bounces
+                for path in activePaths {
+                        samples.append(Sample(
+                                light: path.state.estimate,
+                                albedo: path.state.albedo,
+                                normal: path.state.firstNormal,
+                                weight: path.state.filterWeight,
+                                pixel: path.state.pixel))
+                }
+
                 return samples
         }
 

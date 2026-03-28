@@ -64,7 +64,7 @@ Make the integrator's path state explicit and public. The existing
 
 Verify: **pixel-perfect match** with current output.
 
-### Step 4b: Batch Processing
+### Step 4b: Batch Processing ✅ (2026-03-28)
 
 Collect all rays at the same bounce depth into a buffer and process them
 together:
