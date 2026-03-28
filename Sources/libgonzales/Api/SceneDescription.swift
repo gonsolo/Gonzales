@@ -395,7 +395,8 @@ extension SceneDescription {
                 // 1. Identify unique objects that need an accelerator
                 var uniqueNamesSet = Set<String>()
                 var uniqueNames = [String]()
-                for instanceDesc in uninstantiatedInstances where !uniqueNamesSet.contains(instanceDesc.name) {
+                for instanceDesc in uninstantiatedInstances where !uniqueNamesSet.contains(instanceDesc.name)
+                {
                         uniqueNamesSet.insert(instanceDesc.name)
                         uniqueNames.append(instanceDesc.name)
                 }
@@ -535,7 +536,8 @@ extension SceneDescription {
                 textureClass: String,
                 parameters: ParameterDictionary
         )
-                throws {
+                throws
+        {
                 guard type == "spectrum" || type == "float" || type == "color" else {
                         print("Warning: Unimplemented texture type: \(type)")
                         return
@@ -830,7 +832,8 @@ extension SceneDescription {
                 parameters: ParameterDictionary,
                 lightToWorld: Transform
         )
-                throws -> Light {
+                throws -> Light
+        {
                 switch name {
                 case "distant":
                         let distantLight = try DistantLight.create(
@@ -857,7 +860,8 @@ extension SceneDescription {
 }
 
 func getTextureFrom(name: String, type: String, sceneDirectory: String, arena: inout TextureArena) throws
-        -> Texture {
+        -> Texture
+{
         let fileManager = FileManager.default
         let absoluteFileName = sceneDirectory + "/" + name
         guard fileManager.fileExists(atPath: absoluteFileName) else {

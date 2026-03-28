@@ -54,7 +54,8 @@ import Testing
                 // Parse RMSE value from output like "123.45 (0.00123)"
                 // The normalized value is in parentheses
                 if let openParen = output.firstIndex(of: "("),
-                        let closeParen = output.firstIndex(of: ")") {
+                        let closeParen = output.firstIndex(of: ")")
+                {
                         let start = output.index(after: openParen)
                         let rmseString = String(output[start..<closeParen])
                         if let rmse = Double(rmseString) {

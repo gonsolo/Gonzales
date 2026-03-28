@@ -42,10 +42,11 @@ struct Tile: Sendable {
                                         pixel: pixel,
                                         filterWeight: rayWeight)
 
-                                activePaths.append(ActivePath(
-                                        state: pathState,
-                                        sampler: pathSampler,
-                                        lightSampler: lightSampler))
+                                activePaths.append(
+                                        ActivePath(
+                                                state: pathState,
+                                                sampler: pathSampler,
+                                                lightSampler: lightSampler))
                         }
                 }
 
@@ -69,12 +70,13 @@ struct Tile: Sendable {
                                 if continues {
                                         nextActive.append(path)
                                 } else {
-                                        samples.append(Sample(
-                                                light: path.state.estimate,
-                                                albedo: path.state.albedo,
-                                                normal: path.state.firstNormal,
-                                                weight: path.state.filterWeight,
-                                                pixel: path.state.pixel))
+                                        samples.append(
+                                                Sample(
+                                                        light: path.state.estimate,
+                                                        albedo: path.state.albedo,
+                                                        normal: path.state.firstNormal,
+                                                        weight: path.state.filterWeight,
+                                                        pixel: path.state.pixel))
                                 }
                         }
                         activePaths = nextActive
@@ -82,12 +84,13 @@ struct Tile: Sendable {
 
                 // Any paths that survived all bounces
                 for path in activePaths {
-                        samples.append(Sample(
-                                light: path.state.estimate,
-                                albedo: path.state.albedo,
-                                normal: path.state.firstNormal,
-                                weight: path.state.filterWeight,
-                                pixel: path.state.pixel))
+                        samples.append(
+                                Sample(
+                                        light: path.state.estimate,
+                                        albedo: path.state.albedo,
+                                        normal: path.state.firstNormal,
+                                        weight: path.state.filterWeight,
+                                        pixel: path.state.pixel))
                 }
 
                 return samples

@@ -44,7 +44,8 @@ struct Sphere: Shape {
         }
 
         func sample(ref: any Interaction, samples: TwoRandomVariables, scene: Scene)
-                -> (interaction: any Interaction, pdf: Real) {
+                -> (interaction: any Interaction, pdf: Real)
+        {
                 let center = objectToWorld * origin
                 if distanceSquared(ref.position, center) <= radius * radius {
                         var (interaction, pdf) = sample(samples: samples, scene: scene)

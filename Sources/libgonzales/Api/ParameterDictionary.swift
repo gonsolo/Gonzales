@@ -7,7 +7,8 @@ typealias ParameterDictionary = [String: any Parameter]
 extension ParameterDictionary {
 
         func findSpectrum(name: String, else spectrum: (any Spectrum)? = nil)
-                throws -> (any Spectrum)? {
+                throws -> (any Spectrum)?
+        {
                 let spectra = try findSpectra(name: name)
                 if spectra.isEmpty {
                         return spectrum
@@ -44,7 +45,8 @@ extension ParameterDictionary {
                 arena: inout TextureArena,
                 else spectrum: RgbSpectrum = RgbSpectrum(intensity: 1)
         )
-                throws -> Texture {
+                throws -> Texture
+        {
                 let textureName = try findTexture(name: name)
 
                 if textureName != "" {

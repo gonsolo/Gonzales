@@ -67,7 +67,8 @@ struct InfiniteLight: LightSource {
         func probabilityDensityFor<I: Interaction>(
                 scene _: Scene, samplingDirection direction: Vector, from _: I
         )
-                -> Real {
+                -> Real
+        {
                 let incoming = worldToLight * direction
                 let texCoord = equalAreaSphereToSquare(direction: incoming)
                 let mapPdf = distribution.pdf(texCoord: texCoord)
@@ -151,7 +152,8 @@ extension InfiniteLight {
                 lightToWorld: Transform, parameters: ParameterDictionary, sceneDirectory: String,
                 arena: inout TextureArena
         ) throws
-                -> InfiniteLight {
+                -> InfiniteLight
+        {
                 guard let mapname = try parameters.findString(called: "filename") else {
                         let brightness = try parameters.findSpectrum(name: "L") as? RgbSpectrum ?? white
                         let constantTexture = ConstantTexture(value: brightness)

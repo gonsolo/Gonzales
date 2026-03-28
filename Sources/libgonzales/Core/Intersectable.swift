@@ -24,7 +24,8 @@ enum IntersectablePrimitive: Intersectable, Sendable, Boundable {
                 data: inout TriangleIntersection
         ) -> Bool {
                 return #dispatchIntersectableNoThrow(primitive: self) { (typedPrimitive: Triangle) in
-                        typedPrimitive.getIntersectionData(scene: scene, ray: worldRay, tHit: &tHit, data: &data)
+                        typedPrimitive.getIntersectionData(
+                                scene: scene, ray: worldRay, tHit: &tHit, data: &data)
                 }
         }
 

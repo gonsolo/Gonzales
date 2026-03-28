@@ -128,7 +128,8 @@ class RenderConfiguration {
         }
 
         func makeIntegrator(sampler _: Sampler, accelerator: Accelerator, scene: Scene) throws
-                -> VolumePathIntegrator {
+                -> VolumePathIntegrator
+        {
                 switch self.integratorName {
                 case "path": break
                 case "volpath": break

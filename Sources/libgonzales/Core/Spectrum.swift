@@ -259,7 +259,7 @@ public struct RgbSpectrum: Initializable, Sendable, ThreeComponent, Spectrum {
         }
 
         var xyz: SIMD4<Real>
-// @doc:end
+        // @doc:end
 
         var isNaN: Bool {
                 return red.isNaN || green.isNaN || blue.isNaN

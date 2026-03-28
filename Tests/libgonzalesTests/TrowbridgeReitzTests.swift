@@ -79,6 +79,6 @@ import Testing
         @Test func getAlphaFromRoughness() {
                 let roughness: Real = 0.25
                 let alpha = TrowbridgeReitzDistribution.getAlpha(from: roughness)
-                #expect(abs(alpha - 0.5) <= 1e-5) // sqrt(0.25) = 0.5
+                #expect(abs(alpha - 0.5) <= 1e-5)  // sqrt(0.25) = 0.5
         }
 }

@@ -12,7 +12,8 @@ public protocol FramedBsdf: BsdfFrameProtocol, DistributionModel, Bsdf, Sendable
 extension FramedBsdf {
 
         public func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
-                -> RgbSpectrum {
+                -> RgbSpectrum
+        {
                 var totalLightScattered = black
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
                 let incidentLocal = worldToLocal(world: incidentWorld)
@@ -36,7 +37,8 @@ extension FramedBsdf {
         }
 
         public func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
-                -> (bsdfSample: BsdfSample, isTransmissive: Bool) {
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
+        {
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
                 let bsdfSample = sample(outgoing: outgoingLocal, uSample: uSample)
                 let incidentWorld = localToWorld(local: bsdfSample.incoming)
@@ -47,7 +49,8 @@ extension FramedBsdf {
         }
 
         public func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal: Normal)
-                -> RgbSpectrum {
+                -> RgbSpectrum
+        {
                 let reflected = evaluateWorldSpace(outgoing: outgoing, incident: incident)
                 let dotVal = absDot(incident, Vector(normal: normal))
                 let scatter = reflected * dotVal
@@ -55,7 +58,8 @@ extension FramedBsdf {
         }
 
         public func sampleDistributionFunction(outgoing: Vector, normal: Normal, sampler: inout Sampler)
-                -> BsdfSample {
+                -> BsdfSample
+        {
                 var (bsdfSample, _) = sampleWorldSpace(outgoing: outgoing, uSample: sampler.get3D())
                 bsdfSample.estimate *= absDot(bsdfSample.incoming, normal)
                 return bsdfSample

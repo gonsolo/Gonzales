@@ -181,7 +181,8 @@ extension LayeredBsdf {
                                         }
                                         // Must be reflection (if transmission, the path exits — we break)
                                         if !boundarySample.isValid || boundarySample.probabilityDensity == 0
-                                                || boundarySample.incoming.z == 0 {
+                                                || boundarySample.incoming.z == 0
+                                        {
                                                 break
                                         }
                                         if boundarySample.isTransmission(outgoing: -walkDir) { break }
@@ -239,7 +240,8 @@ extension LayeredBsdf {
                                                         outgoing: -walkDir, uSample: sampler.get3D())
                                         }
                                         if !boundarySample.isValid || boundarySample.probabilityDensity == 0
-                                                || boundarySample.incoming.z == 0 {
+                                                || boundarySample.incoming.z == 0
+                                        {
                                                 break
                                         }
                                         if boundarySample.isTransmission(outgoing: -walkDir) { break }
@@ -374,7 +376,8 @@ extension LayeredBsdf {
                         }
 
                         if !bsdfSample.isValid || bsdfSample.probabilityDensity == 0
-                                || bsdfSample.incoming.z == 0 {
+                                || bsdfSample.incoming.z == 0
+                        {
                                 return invalidBsdfSample
                         }
 
@@ -432,7 +435,8 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && incidentSample.isTransmission(outgoing: localIncident) {
+                                                && incidentSample.isTransmission(outgoing: localIncident)
+                                        {
 
                                                 let topIsNonSpecular = !topIsSpecular
                                                 if !topIsNonSpecular {
@@ -445,7 +449,8 @@ extension LayeredBsdf {
                                                                 outgoing: -outgoingSample.incoming,
                                                                 uSample: sampler.get3D())
                                                         if reflSample.isValid
-                                                                && reflSample.probabilityDensity > 0 {
+                                                                && reflSample.probabilityDensity > 0
+                                                        {
                                                                 let bottomIsNonSpecular = !bottomIsSpecular
                                                                 if !bottomIsNonSpecular {
                                                                         pdfSum += top.probabilityDensity(
@@ -486,7 +491,8 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && outgoingSample.isTransmission(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && incidentSample.isTransmission(outgoing: localIncident) {
+                                                && incidentSample.isTransmission(outgoing: localIncident)
+                                        {
 
                                                 let bottomIsNonSpecular = !bottomIsSpecular
                                                 if !bottomIsNonSpecular {
@@ -499,7 +505,8 @@ extension LayeredBsdf {
                                                                 outgoing: -outgoingSample.incoming,
                                                                 uSample: sampler.get3D())
                                                         if reflSample.isValid
-                                                                && reflSample.probabilityDensity > 0 {
+                                                                && reflSample.probabilityDensity > 0
+                                                        {
                                                                 let topIsNonSpecular = !topIsSpecular
                                                                 if !topIsNonSpecular {
                                                                         pdfSum += bottom.probabilityDensity(
@@ -542,7 +549,8 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && !outgoingSample.isReflection(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && !incidentSample.isReflection(outgoing: localIncident) {
+                                                && !incidentSample.isReflection(outgoing: localIncident)
+                                        {
                                                 let probability1 = top.probabilityDensity(
                                                         outgoing: localOutgoing,
                                                         incident: -incidentSample.incoming)
@@ -560,7 +568,8 @@ extension LayeredBsdf {
                                         if outgoingSample.isValid
                                                 && !outgoingSample.isReflection(outgoing: localOutgoing)
                                                 && incidentSample.isValid
-                                                && !incidentSample.isReflection(outgoing: localIncident) {
+                                                && !incidentSample.isReflection(outgoing: localIncident)
+                                        {
                                                 let probability1 = bottom.probabilityDensity(
                                                         outgoing: localOutgoing,
                                                         incident: -incidentSample.incoming)
@@ -610,7 +619,8 @@ extension LayeredBsdf {
                 }
 
                 if !outgoingSample.isValid || outgoingSample.isReflection(outgoing: localOutgoing)
-                        || outgoingSample.incoming.z == 0 {
+                        || outgoingSample.incoming.z == 0
+                {
                         return RgbSpectrum(intensity: 0)
                 }
 
@@ -624,7 +634,8 @@ extension LayeredBsdf {
                 }
 
                 if !incidentSample.isValid || incidentSample.isReflection(outgoing: localIncident)
-                        || incidentSample.incoming.z == 0 {
+                        || incidentSample.incoming.z == 0
+                {
                         return RgbSpectrum(intensity: 0)
                 }
 
@@ -705,7 +716,8 @@ extension LayeredBsdf {
                                         zCurrent: zCurrent,
                                         sampledDirection: &sampledDirection,
                                         throughput: &throughput,
-                                        sampler: &sampler) {
+                                        sampler: &sampler)
+                                {
                                         if result { break } else { continue }
                                 }
                         } else {
@@ -715,7 +727,8 @@ extension LayeredBsdf {
                                         sampledDirection: &sampledDirection,
                                         throughput: &throughput,
                                         sampleF: &sampleF,
-                                        sampler: &sampler) {
+                                        sampler: &sampler)
+                                {
                                         if result { break } else { continue }
                                 }
                         }
@@ -739,7 +752,8 @@ extension LayeredBsdf {
                 }
 
                 if !exitSample.isValid || exitSample.probabilityDensity == 0
-                        || exitSample.incoming.z == 0 {
+                        || exitSample.incoming.z == 0
+                {
                         return true
                 }
                 if exitSample.isTransmission(outgoing: -sampledDirection) { return true }
@@ -817,7 +831,8 @@ extension LayeredBsdf {
                 }
 
                 if !sample.isValid || sample.probabilityDensity == 0
-                        || sample.incoming.z == 0 {
+                        || sample.incoming.z == 0
+                {
                         return true
                 }
                 if sample.isTransmission(outgoing: -sampledDirection) { return true }

@@ -56,10 +56,18 @@ public struct Matrix: Sendable {
 
         public static func * (left: Matrix, right: Matrix) -> Matrix {
                 var result = Matrix()
-                result.col0 = left.col0 * right.col0.x + left.col1 * right.col0.y + left.col2 * right.col0.z + left.col3 * right.col0.w
-                result.col1 = left.col0 * right.col1.x + left.col1 * right.col1.y + left.col2 * right.col1.z + left.col3 * right.col1.w
-                result.col2 = left.col0 * right.col2.x + left.col1 * right.col2.y + left.col2 * right.col2.z + left.col3 * right.col2.w
-                result.col3 = left.col0 * right.col3.x + left.col1 * right.col3.y + left.col2 * right.col3.z + left.col3 * right.col3.w
+                result.col0 =
+                        left.col0 * right.col0.x + left.col1 * right.col0.y + left.col2 * right.col0.z + left
+                        .col3 * right.col0.w
+                result.col1 =
+                        left.col0 * right.col1.x + left.col1 * right.col1.y + left.col2 * right.col1.z + left
+                        .col3 * right.col1.w
+                result.col2 =
+                        left.col0 * right.col2.x + left.col1 * right.col2.y + left.col2 * right.col2.z + left
+                        .col3 * right.col2.w
+                result.col3 =
+                        left.col0 * right.col3.x + left.col1 * right.col3.y + left.col2 * right.col3.z + left
+                        .col3 * right.col3.w
                 return result
         }
 

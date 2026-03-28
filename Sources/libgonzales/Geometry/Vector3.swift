@@ -21,7 +21,7 @@ public struct Vector3: Sendable, ThreeComponent {
         }
 
         var xyz: SIMD4<Real>
-// @doc:end
+        // @doc:end
 
         init(value: Real) {
                 self.xyz = SIMD4<Real>(value, value, value, 1.0)

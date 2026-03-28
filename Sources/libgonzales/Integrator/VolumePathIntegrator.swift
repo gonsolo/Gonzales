@@ -39,7 +39,9 @@ extension VolumePathIntegrator {
                 immutableState: ImmutableState
         ) throws {
 
-                try bounces(state: &state, sampler: &sampler, lightSampler: &lightSampler, immutableState: immutableState)
+                try bounces(
+                        state: &state, sampler: &sampler, lightSampler: &lightSampler,
+                        immutableState: immutableState)
         }
 }
 
@@ -265,7 +267,8 @@ extension VolumePathIntegrator {
 
         // @doc:russian-roulette
         private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
-                -> Bool {
+                -> Bool
+        {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
                         let probability: Real = max(0, 1 - pathThroughputWeight.maxValue)
                         let roulette = Real.random(in: 0..<1, using: &xoshiro)
@@ -422,7 +425,8 @@ extension VolumePathIntegrator {
                 state.tHit = Real.infinity
                 if stopWithRussianRoulette(
                         bounce: state.bounce,
-                        pathThroughputWeight: &state.throughput) {
+                        pathThroughputWeight: &state.throughput)
+                {
                         return false
                 }
                 return true
@@ -437,7 +441,9 @@ extension VolumePathIntegrator {
         ) throws {
                 for bounce in state.bounce...maxDepth {
                         state.bounce = bounce
-                        let result = try oneBounce(state: &state, sampler: &sampler, lightSampler: &lightSampler, immutableState: immutableState)
+                        let result = try oneBounce(
+                                state: &state, sampler: &sampler, lightSampler: &lightSampler,
+                                immutableState: immutableState)
                         if !result {
                                 break
                         }

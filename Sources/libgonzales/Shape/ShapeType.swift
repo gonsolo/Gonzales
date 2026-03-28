@@ -83,7 +83,8 @@ enum ShapeType: Shape {
                 from interaction: I
         ) -> Real {
                 return #dispatchShapeTypeNoThrow(shape: self) { (typedShape: Triangle) in
-                        typedShape.probabilityDensityFor(scene: scene, samplingDirection: direction, from: interaction)
+                        typedShape.probabilityDensityFor(
+                                scene: scene, samplingDirection: direction, from: interaction)
                 }
         }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import mojoKernel
+
 struct TriangleMesh {
 
         init() {
@@ -318,7 +319,8 @@ extension Triangle {
                 // Ray t range test against tHit and ray segment limits (0)
                 let hitCondition = det > 0
                 if (hitCondition && (tScaled <= 0 || tScaled > tHit * det))
-                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det)) {
+                        || (!hitCondition && (tScaled >= 0 || tScaled < tHit * det))
+                {
                         return false
                 }
 

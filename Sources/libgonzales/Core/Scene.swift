@@ -26,7 +26,9 @@ final class Scene: @unchecked Sendable {
                 self.geometricPrimitives = geometricPrimitives
                 self.areaLights = areaLights
                 self.transformedPrimitives = transformedPrimitives
-                self.unmanagedTransformedPrimitives = transformedPrimitives.map { Unmanaged.passUnretained($0) }
+                self.unmanagedTransformedPrimitives = transformedPrimitives.map {
+                        Unmanaged.passUnretained($0)
+                }
                 self.arena = arena
                 self.meshesC = meshes.meshes.map { $0.cStruct }
         }
@@ -34,15 +36,18 @@ final class Scene: @unchecked Sendable {
         func intersect(primId: PrimId, ray: Ray, tHit: inout Real) -> Bool {
                 switch primId.type {
                 case .triangle:
-                        return Triangle(meshIndex: primId.id1, number: primId.id2).intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                        return Triangle(meshIndex: primId.id1, number: primId.id2).intersect(
+                                scene: self, ray: ray, tHit: &tHit) != nil
                 case .geometricPrimitive:
-                        return self.geometricPrimitives[primId.id1].intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                        return self.geometricPrimitives[primId.id1].intersect(
+                                scene: self, ray: ray, tHit: &tHit) != nil
                 case .transformedPrimitive:
                         return self.unmanagedTransformedPrimitives[primId.id1]._withUnsafeGuaranteedRef {
                                 $0.intersect(scene: self, ray: ray, tHit: &tHit) != nil
                         }
                 case .areaLight:
-                        return self.areaLights[primId.id1].intersect(scene: self, ray: ray, tHit: &tHit) != nil
+                        return self.areaLights[primId.id1].intersect(scene: self, ray: ray, tHit: &tHit)
+                                != nil
                 }
         }
 
@@ -54,15 +59,18 @@ final class Scene: @unchecked Sendable {
         ) -> Bool {
                 switch primId.type {
                 case .triangle:
-                        return Triangle(meshIndex: primId.id1, number: primId.id2).getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                        return Triangle(meshIndex: primId.id1, number: primId.id2).getIntersectionData(
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .geometricPrimitive:
-                        return self.geometricPrimitives[primId.id1].getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                        return self.geometricPrimitives[primId.id1].getIntersectionData(
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 case .transformedPrimitive:
                         return self.unmanagedTransformedPrimitives[primId.id1]._withUnsafeGuaranteedRef {
                                 $0.getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
                         }
                 case .areaLight:
-                        return self.areaLights[primId.id1].getIntersectionData(scene: self, ray: ray, tHit: &tHit, data: &data)
+                        return self.areaLights[primId.id1].getIntersectionData(
+                                scene: self, ray: ray, tHit: &tHit, data: &data)
                 }
         }
 
@@ -73,15 +81,18 @@ final class Scene: @unchecked Sendable {
         ) -> SurfaceInteraction? {
                 switch primId.type {
                 case .triangle:
-                        return Triangle(meshIndex: primId.id1, number: primId.id2).computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                        return Triangle(meshIndex: primId.id1, number: primId.id2).computeSurfaceInteraction(
+                                scene: self, data: data, worldRay: worldRay)
                 case .geometricPrimitive:
-                        return self.geometricPrimitives[primId.id1].computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                        return self.geometricPrimitives[primId.id1].computeSurfaceInteraction(
+                                scene: self, data: data, worldRay: worldRay)
                 case .transformedPrimitive:
                         return self.unmanagedTransformedPrimitives[primId.id1]._withUnsafeGuaranteedRef {
                                 $0.computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
                         }
                 case .areaLight:
-                        return self.areaLights[primId.id1].computeSurfaceInteraction(scene: self, data: data, worldRay: worldRay)
+                        return self.areaLights[primId.id1].computeSurfaceInteraction(
+                                scene: self, data: data, worldRay: worldRay)
                 }
         }
 

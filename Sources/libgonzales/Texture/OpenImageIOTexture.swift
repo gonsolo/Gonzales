@@ -46,7 +46,8 @@ struct OpenImageIOTexture {
                         filename: filename, s: s, t: t)
                 let lower = filename.lowercased()
                 if lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg")
-                        || lower.hasSuffix(".tga") {
+                        || lower.hasSuffix(".tga")
+                {
                         return gammaSrgbToLinear(light: value)
                 }
                 return value

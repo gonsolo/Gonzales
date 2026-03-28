@@ -7,7 +7,8 @@ enum BsdfVariant: FramedBsdf {
         case microfacetReflection(MicrofacetReflection)
         case mixBsdf(MixBsdf)
 
-        func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum {
+        func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
+        {
                 switch self {
                 case .coatedConductorBsdf(let bsdf):
                         return bsdf.evaluateWorldSpace(outgoing: outgoingWorld, incident: incidentWorld)
@@ -27,7 +28,8 @@ enum BsdfVariant: FramedBsdf {
         }
 
         func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
-                -> Real {
+                -> Real
+        {
                 switch self {
                 case .coatedConductorBsdf(let bsdf):
                         return bsdf.probabilityDensityWorldSpace(
@@ -54,7 +56,8 @@ enum BsdfVariant: FramedBsdf {
         }
 
         func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
-                -> (bsdfSample: BsdfSample, isTransmissive: Bool) {
+                -> (bsdfSample: BsdfSample, isTransmissive: Bool)
+        {
                 switch self {
                 case .coatedConductorBsdf(let bsdf):
                         return bsdf.sampleWorldSpace(outgoing: outgoingWorld, uSample: uSample)

@@ -295,7 +295,8 @@ extension PlyMesh {
                                         && (properties[6].name == PropertyName.uProperty
                                                 || properties[6].name == PropertyName.s)
                                         && (properties[7].name == PropertyName.vProperty
-                                                || properties[7].name == PropertyName.t) {
+                                                || properties[7].name == PropertyName.t)
+                                {
                                         appendPoint(from: buffer)
                                         appendNormal(from: buffer)
                                         appendUV(from: buffer)
@@ -306,7 +307,8 @@ extension PlyMesh {
                                         && properties[4].name == PropertyName.vProperty
                                         && properties[5].name == PropertyName.normalX
                                         && properties[6].name == PropertyName.normalY
-                                        && properties[7].name == PropertyName.normalZ {
+                                        && properties[7].name == PropertyName.normalZ
+                                {
                                         appendPoint(from: buffer)
                                         appendUV(from: buffer)
                                         appendNormal(from: buffer)

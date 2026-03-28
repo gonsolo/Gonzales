@@ -45,7 +45,8 @@ extension Sampleable where Self: Intersectable {
                 samplingDirection direction: Vector,
                 from: I
         )
-                -> Real {
+                -> Real
+        {
                 let ray = from.spawnRay(inDirection: direction)
                 var tHit: Real = 0.0
                 guard let interaction = intersect(scene: scene, ray: ray, tHit: &tHit) else {

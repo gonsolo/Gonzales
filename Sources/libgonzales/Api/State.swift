@@ -33,7 +33,8 @@ struct State {
         }
 
         mutating func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture])
-                throws -> Material {
+                throws -> Material
+        {
 
                 var material: Material
                 switch type {

@@ -18,9 +18,11 @@ struct InteractiveRenderer: Renderer {
                 let width = resolution.x
                 let height = resolution.y
 
-                guard let viewer = viewer_create(
-                        Int32(width), Int32(height), "Gonzales"
-                ) else {
+                guard
+                        let viewer = viewer_create(
+                                Int32(width), Int32(height), "Gonzales"
+                        )
+                else {
                         print("Error: Failed to create viewer window")
                         return
                 }
@@ -65,7 +67,9 @@ struct InteractiveRenderer: Renderer {
                                         y: Real(cameraState.upY),
                                         z: Real(cameraState.upZ))
 
-                                if let viewTransform = try? lookAtTransform(eye: eye, target: target, upVector: upVec) {
+                                if let viewTransform = try? lookAtTransform(
+                                        eye: eye, target: target, upVector: upVec)
+                                {
                                         camera.objectToWorld = viewTransform.inverse
                                 }
 
@@ -108,17 +112,34 @@ struct InteractiveRenderer: Renderer {
         }
 
         private func buildImage(from samples: [Sample], resolution: Point2i) -> Image {
-                var image = Image(resolution: resolution)
+                var beautyImage = Image(resolution: resolution)
+                var albedoImage = Image(resolution: resolution)
+                var normalImage = Image(resolution: resolution)
+
                 let iso = camera.film.iso
                 for sample in samples {
                         let scaledLight = sample.light * RgbSpectrum(intensity: iso / 100.0)
-                        image.addPixel(
+                        beautyImage.addPixel(
                                 withColor: scaledLight,
                                 withWeight: sample.weight,
                                 atLocation: sample.pixel)
+                        albedoImage.addPixel(
+                                withColor: sample.albedo,
+                                withWeight: sample.weight,
+                                atLocation: sample.pixel)
+                        normalImage.addPixel(
+                                withColor: RgbSpectrum(from: sample.normal),
+                                withWeight: sample.weight,
+                                atLocation: sample.pixel)
                 }
-                try? image.normalize()
-                return image
+
+                try? beautyImage.normalize()
+                try? albedoImage.normalize()
+                try? normalImage.normalize()
+
+                Denoiser.denoise(beauty: &beautyImage, albedo: albedoImage, normal: normalImage)
+
+                return beautyImage
         }
 
         private func pushToViewer(
@@ -151,9 +172,10 @@ struct InteractiveRenderer: Renderer {
                                         x: min(minX + tileSize.0, bounds.pMax.x),
                                         y: min(minY + tileSize.1, bounds.pMax.y))
                                 let tileBounds = Bounds2i(pMin: pMin, pMax: pMax)
-                                tiles.append(Tile(
-                                        integrator: integrator,
-                                        bounds: tileBounds))
+                                tiles.append(
+                                        Tile(
+                                                integrator: integrator,
+                                                bounds: tileBounds))
                                 minX += tileSize.0
                         }
                         minY += tileSize.1

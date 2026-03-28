@@ -9,7 +9,8 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
 
         init(primitives: [IntersectablePrimitive], bvh2Nodes: [BVH2Node]) {
                 self.bvh2NodesCount = bvh2Nodes.count
-                self.bvh2NodesPointer = UnsafeMutablePointer<BVH2Node>.allocate(capacity: max(bvh2Nodes.count, 1))
+                self.bvh2NodesPointer = UnsafeMutablePointer<BVH2Node>.allocate(
+                        capacity: max(bvh2Nodes.count, 1))
                 if !bvh2Nodes.isEmpty {
                         self.bvh2NodesPointer.initialize(from: bvh2Nodes, count: bvh2Nodes.count)
                 }
@@ -22,11 +23,13 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                         // Pack meshIndex high, triIndex low into id2 so Mojo can intersect
                                         let packed = (triangle.meshIndex << 32) | (triangle.triangleIndex / 3)
                                         let primId = PrimId(
-                                                id1: geometricPrimitive.idx, id2: packed, type: .geometricPrimitive)
+                                                id1: geometricPrimitive.idx, id2: packed,
+                                                type: .geometricPrimitive)
                                         ids.append(primId)
                                 } else {
                                         let primId = PrimId(
-                                                id1: geometricPrimitive.idx, id2: -1, type: .geometricPrimitive)
+                                                id1: geometricPrimitive.idx, id2: -1,
+                                                type: .geometricPrimitive)
                                         ids.append(primId)
                                 }
                         case .triangle(let triangle):
@@ -54,13 +57,13 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                         self.primIdsPointer.initialize(from: ids, count: ids.count)
                 }
 
-                print("LAYOUT: BVH2Node     stride=\(MemoryLayout<BVH2Node>.stride) " +
-                      "size=\(MemoryLayout<BVH2Node>.size) " +
-                      "align=\(MemoryLayout<BVH2Node>.alignment)")
+                print(
+                        "LAYOUT: BVH2Node     stride=\(MemoryLayout<BVH2Node>.stride) "
+                                + "size=\(MemoryLayout<BVH2Node>.size) "
+                                + "align=\(MemoryLayout<BVH2Node>.alignment)")
                 print("LAYOUT: BVH2 nodes=\(bvh2Nodes.count) prims=\(ids.count)")
                 print("LAYOUT: BVH2 memory=\(bvh2Nodes.count * MemoryLayout<BVH2Node>.stride) bytes")
         }
-
 
         deinit {
                 if bvh2NodesCount > 0 {
@@ -83,14 +86,18 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
 
                 return scene.meshesC.withUnsafeBufferPointer { meshesPtr in
                         var desc = SceneDescriptor2_C(
-                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(to: mojoKernel.BVH2Node.self),
-                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(to: PrimId_C.self),
+                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(
+                                        to: mojoKernel.BVH2Node.self),
+                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(
+                                        to: PrimId_C.self),
                                 meshes: meshesPtr.baseAddress,
                                 meshCount: Int64(scene.meshesC.count)
                         )
                         var rayC = Ray_C(
-                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y), orgZ: Float(ray.origin.z),
-                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y), dirZ: Float(ray.direction.z)
+                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                                orgZ: Float(ray.origin.z),
+                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                                dirZ: Float(ray.direction.z)
                         )
                         var result = Intersection_C()
                         withUnsafePointer(to: &desc) { descP in
@@ -118,14 +125,18 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
 
                 let result = scene.meshesC.withUnsafeBufferPointer { meshesPtr in
                         var desc = SceneDescriptor2_C(
-                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(to: mojoKernel.BVH2Node.self),
-                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(to: PrimId_C.self),
+                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(
+                                        to: mojoKernel.BVH2Node.self),
+                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(
+                                        to: PrimId_C.self),
                                 meshes: meshesPtr.baseAddress,
                                 meshCount: Int64(scene.meshesC.count)
                         )
                         var rayC = Ray_C(
-                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y), orgZ: Float(ray.origin.z),
-                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y), dirZ: Float(ray.direction.z)
+                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                                orgZ: Float(ray.origin.z),
+                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                                dirZ: Float(ray.direction.z)
                         )
                         var result = Intersection_C()
                         withUnsafePointer(to: &desc) { descP in
@@ -155,7 +166,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                         let triIdx: Int
                         if type == .geometricPrimitive || type == .areaLight {
                                 meshIdx = rawId2 >> 32
-                                triIdx = rawId2 & 0xFFFFFFFF
+                                triIdx = rawId2 & 0xFFFF_FFFF
                         } else {
                                 meshIdx = id1
                                 triIdx = rawId2
@@ -169,7 +180,8 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                 barycentric2: Real(result.v)
                         )
                         tHit = Real(result.tHit)
-                        return scene.computeSurfaceInteraction(primId: PrimId(id1: id1, id2: rawId2, type: type), data: data, worldRay: ray)
+                        return scene.computeSurfaceInteraction(
+                                primId: PrimId(id1: id1, id2: rawId2, type: type), data: data, worldRay: ray)
                 }
 
                 return nil
@@ -185,8 +197,12 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 } else {
                         let root = bvh2NodesPointer[0]
                         return Bounds3f(
-                                first: Point3(x: Real(root.boundsMinX), y: Real(root.boundsMinY), z: Real(root.boundsMinZ)),
-                                second: Point3(x: Real(root.boundsMaxX), y: Real(root.boundsMaxY), z: Real(root.boundsMaxZ))
+                                first: Point3(
+                                        x: Real(root.boundsMinX), y: Real(root.boundsMinY),
+                                        z: Real(root.boundsMinZ)),
+                                second: Point3(
+                                        x: Real(root.boundsMaxX), y: Real(root.boundsMaxY),
+                                        z: Real(root.boundsMaxZ))
                         )
                 }
         }

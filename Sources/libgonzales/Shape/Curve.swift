@@ -151,17 +151,20 @@ struct Curve: Shape {
                                         uRange: (uSamples[segment], uSamples[segment + 1]),
                                         width: common.width)
                                 if !overlap(
-                                        points: splitPoints, index: cps, xyz: 1, width: maxWidth) {
+                                        points: splitPoints, index: cps, xyz: 1, width: maxWidth)
+                                {
                                         continue
                                 }
                                 if !overlap(
-                                        points: splitPoints, index: cps, xyz: 0, width: maxWidth) {
+                                        points: splitPoints, index: cps, xyz: 0, width: maxWidth)
+                                {
                                         continue
                                 }
                                 let zMax = rayLength * tHit
                                 if !overlap(
                                         points: splitPoints, index: cps, xyz: 2, width: maxWidth,
-                                        limits: (0, zMax)) {
+                                        limits: (0, zMax))
+                                {
                                         continue
                                 }
                                 let nextState = CurveIntersectionState(
@@ -330,7 +333,7 @@ struct Curve: Shape {
                         rayFromObject * cpObj.0,
                         rayFromObject * cpObj.1,
                         rayFromObject * cpObj.2,
-                        rayFromObject * cpObj.3
+                        rayFromObject * cpObj.3,
                 ]
 
                 let maxWidth = computeMaxWidth(uRange: uRange, width: common.width)
@@ -350,9 +353,15 @@ struct Curve: Shape {
 
                 var maxLen: Real = 0
                 for idx in 0..<2 {
-                        let valX = abs(controlPoints[idx].x - 2 * controlPoints[idx + 1].x + controlPoints[idx + 2].x)
-                        let valY = abs(controlPoints[idx].y - 2 * controlPoints[idx + 1].y + controlPoints[idx + 2].y)
-                        let valZ = abs(controlPoints[idx].z - 2 * controlPoints[idx + 1].z + controlPoints[idx + 2].z)
+                        let valX = abs(
+                                controlPoints[idx].x - 2 * controlPoints[idx + 1].x + controlPoints[idx + 2].x
+                        )
+                        let valY = abs(
+                                controlPoints[idx].y - 2 * controlPoints[idx + 1].y + controlPoints[idx + 2].y
+                        )
+                        let valZ = abs(
+                                controlPoints[idx].z - 2 * controlPoints[idx + 1].z + controlPoints[idx + 2].z
+                        )
                         maxLen = max(maxLen, max(max(valX, valY), valZ))
                 }
 
@@ -363,7 +372,8 @@ struct Curve: Shape {
                         maxDepth = clamp(value: reqDepth, low: 0, high: 10)
                 }
 
-                let state = CurveIntersectionState(points: controlPoints, uRange: uRange, depth: maxDepth, index: 0)
+                let state = CurveIntersectionState(
+                        points: controlPoints, uRange: uRange, depth: maxDepth, index: 0)
                 let (interaction, _) = recursiveIntersect(
                         ray: ray, tHit: &tHit, rayToObject: rayFromObject.inverse, state: state)
                 return interaction
@@ -374,7 +384,8 @@ struct Curve: Shape {
                 let width0 = lerp(with: uRange.0, between: common.width.0, and: common.width.1)
                 let width1 = lerp(with: uRange.1, between: common.width.0, and: common.width.1)
                 let avgWidth = (width0 + width1) * 0.5
-                let approxLength = length(cpObj.0 - cpObj.1) + length(cpObj.1 - cpObj.2) + length(cpObj.2 - cpObj.3)
+                let approxLength =
+                        length(cpObj.0 - cpObj.1) + length(cpObj.1 - cpObj.2) + length(cpObj.2 - cpObj.3)
                 return approxLength * avgWidth
         }
 

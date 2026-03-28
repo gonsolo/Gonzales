@@ -115,7 +115,6 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 _ = flatten2(node: rootNode)
         }
 
-
         // --- BVH2 Flattening: depth-first linear layout ---
         // Left child is always at index + 1; right child index stored in .offset.
         // Each node stores its own AABB.
@@ -158,19 +157,22 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
 
         // --- Static Helper functions ---
 
-        private static func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool {
+        private static func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool
+        {
                 return primitive.center[dimension] < pivot
         }
 
         private static func isSmaller(_ first: CachedPrimitive, _ second: CachedPrimitive, in dimension: Int)
-                -> Bool {
+                -> Bool
+        {
                 return isSmaller(first, second.center[dimension], in: dimension)
         }
 
         private static func splitEqual(
                 bounds _: Bounds3f, dimension: Int, range: Range<Int>, ptr: UnsafePrimitiveBuffer
         )
-                -> (start: Int, middle: Int, end: Int) {
+                -> (start: Int, middle: Int, end: Int)
+        {
                 ptr.buffer[range].sort(by: { isSmaller($0, $1, in: dimension) })
                 let start = range.lowerBound
                 let mid = start + range.count / 2
@@ -181,7 +183,8 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
         private static func splitMiddle(
                 bounds: Bounds3f, dimension: Int, range: Range<Int>, ptr: UnsafePrimitiveBuffer
         )
-                -> (start: Int, middle: Int, end: Int) {
+                -> (start: Int, middle: Int, end: Int)
+        {
                 let pivot = (bounds.pMin[dimension] + bounds.pMax[dimension]) / 2
                 let mid = ptr.buffer[range].partition(by: { isSmaller($0, pivot, in: dimension) })
                 let start = range.lowerBound
@@ -260,7 +263,8 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
         }
 
         private static func build(range: Range<Int>, ptr: UnsafePrimitiveBuffer, primitivesPerNode: Int)
-                async throws -> BVHBuildNode {
+                async throws -> BVHBuildNode
+        {
                 if range.isEmpty { return BVHBuildNode(offset: 0, nPrimitives: 0, bounds: Bounds3f()) }
 
                 var bounds = Bounds3f()
@@ -274,7 +278,8 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 let dim = centroidBounds.maximumExtent()
 
                 if bounds.surfaceArea() == 0 || range.count == 1
-                        || centroidBounds.pMax[dim] == centroidBounds.pMin[dim] {
+                        || centroidBounds.pMax[dim] == centroidBounds.pMin[dim]
+                {
                         return BVHBuildNode(
                                 offset: range.lowerBound, nPrimitives: range.count, bounds: bounds)
                 }
