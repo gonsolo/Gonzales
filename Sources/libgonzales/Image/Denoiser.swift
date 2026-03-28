@@ -78,70 +78,72 @@ struct Denoiser {
                 let filter = oidnNewFilter(device, "RT")
 
                 // Set images — use shared memory (zero-copy)
-                colorBuffer.withUnsafeMutableBufferPointer { colorPtr in
-                        albedoBuffer.withUnsafeMutableBufferPointer { albedoPtr in
-                                normalBuffer.withUnsafeMutableBufferPointer { normalPtr in
-                                        outputBuffer.withUnsafeMutableBufferPointer { outputPtr in
+                        let denoiseTimer = Timer("Denoising...", newline: false)
+                        colorBuffer.withUnsafeMutableBufferPointer { colorPtr in
+                                albedoBuffer.withUnsafeMutableBufferPointer { albedoPtr in
+                                        normalBuffer.withUnsafeMutableBufferPointer { normalPtr in
+                                                outputBuffer.withUnsafeMutableBufferPointer { outputPtr in
 
-                                                oidnSetSharedFilterImage(
-                                                        filter, "color",
-                                                        colorPtr.baseAddress,
-                                                        OIDN_FORMAT_FLOAT3,
-                                                        size_t(width), size_t(height),
-                                                        0, 0, 0)
+                                                        oidnSetSharedFilterImage(
+                                                                filter, "color",
+                                                                colorPtr.baseAddress,
+                                                                OIDN_FORMAT_FLOAT3,
+                                                                size_t(width), size_t(height),
+                                                                0, 0, 0)
 
-                                                oidnSetSharedFilterImage(
-                                                        filter, "albedo",
-                                                        albedoPtr.baseAddress,
-                                                        OIDN_FORMAT_FLOAT3,
-                                                        size_t(width), size_t(height),
-                                                        0, 0, 0)
+                                                        oidnSetSharedFilterImage(
+                                                                filter, "albedo",
+                                                                albedoPtr.baseAddress,
+                                                                OIDN_FORMAT_FLOAT3,
+                                                                size_t(width), size_t(height),
+                                                                0, 0, 0)
 
-                                                oidnSetSharedFilterImage(
-                                                        filter, "normal",
-                                                        normalPtr.baseAddress,
-                                                        OIDN_FORMAT_FLOAT3,
-                                                        size_t(width), size_t(height),
-                                                        0, 0, 0)
+                                                        oidnSetSharedFilterImage(
+                                                                filter, "normal",
+                                                                normalPtr.baseAddress,
+                                                                OIDN_FORMAT_FLOAT3,
+                                                                size_t(width), size_t(height),
+                                                                0, 0, 0)
 
-                                                oidnSetSharedFilterImage(
-                                                        filter, "output",
-                                                        outputPtr.baseAddress,
-                                                        OIDN_FORMAT_FLOAT3,
-                                                        size_t(width), size_t(height),
-                                                        0, 0, 0)
+                                                        oidnSetSharedFilterImage(
+                                                                filter, "output",
+                                                                outputPtr.baseAddress,
+                                                                OIDN_FORMAT_FLOAT3,
+                                                                size_t(width), size_t(height),
+                                                                0, 0, 0)
 
-                                                oidnSetFilterBool(filter, "hdr", true)
-                                                oidnSetFilterInt(filter, "quality", 6)  // OIDN_QUALITY_HIGH
+                                                        oidnSetFilterBool(filter, "hdr", true)
+                                                        oidnSetFilterInt(filter, "quality", 6)  // OIDN_QUALITY_HIGH
 
-                                                oidnCommitFilter(filter)
-                                                oidnExecuteFilter(filter)
+                                                        oidnCommitFilter(filter)
+                                                        oidnExecuteFilter(filter)
+                                                }
                                         }
                                 }
                         }
-                }
 
-                // Check for errors
-                let filterError = oidnGetDeviceError(device, &errorMessage)
-                if filterError != OIDN_ERROR_NONE {
-                        if let msg = errorMessage {
-                                print("OIDN filter error: \(String(cString: msg))")
-                        }
-                } else {
-                        // Copy denoised result back into the beauty Image
-                        for y in 0..<height {
-                                for x in 0..<width {
-                                        let idx = (y * width + x) * 3
-                                        let color = RgbSpectrum(
-                                                red: Real(outputBuffer[idx + 0]),
-                                                green: Real(outputBuffer[idx + 1]),
-                                                blue: Real(outputBuffer[idx + 2])
-                                        )
-                                        beauty.setPixel(color: color, atLocation: Point2i(x: x, y: y))
+                        // Check for errors
+                        let filterError = oidnGetDeviceError(device, &errorMessage)
+                        if filterError != OIDN_ERROR_NONE {
+                                if let msg = errorMessage {
+                                        print("\nOIDN filter error: \(String(cString: msg))")
                                 }
+                        } else {
+                                // Copy denoised result back into the beauty Image
+                                for y in 0..<height {
+                                        for x in 0..<width {
+                                                let idx = (y * width + x) * 3
+                                                let color = RgbSpectrum(
+                                                        red: Real(outputBuffer[idx + 0]),
+                                                        green: Real(outputBuffer[idx + 1]),
+                                                        blue: Real(outputBuffer[idx + 2])
+                                                )
+                                                beauty.setPixel(color: color, atLocation: Point2i(x: x, y: y))
+                                        }
+                                }
+                                let duration = denoiseTimer.duration
+                                print(String(format: "\rOIDN: Denoising complete (%.3fs)", duration))
                         }
-                        print("OIDN: Denoising complete")
-                }
 
                 oidnReleaseFilter(filter)
                 oidnReleaseDevice(device)

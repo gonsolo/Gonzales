@@ -40,5 +40,32 @@ struct SceneDescriptor2_C {
         int64_t meshCount;
 };
 
+// CPU traversal (single ray)
 void mojo_traverse_bvh2(const struct SceneDescriptor2_C *scene, const struct Ray_C *ray, float tMax,
                         struct Intersection_C *result);
+
+// GPU support
+bool mojo_gpu_available(void);
+
+// Opaque handle to GPU-resident scene data
+struct GpuSceneHandle;
+
+void *mojo_gpu_upload_scene(
+        const struct BVH2Node *bvh2Nodes,
+        int64_t bvh2NodesCount,
+        const struct PrimId_C *primIds,
+        int64_t primIdsCount,
+        const struct TriangleMesh_C *meshes,
+        int64_t meshCount,
+        const int64_t *meshPointsCounts,
+        const int64_t *meshFaceIndicesCounts,
+        const int64_t *meshVertexIndicesCounts);
+
+void mojo_gpu_traverse_batch(
+        void *handle,
+        const struct Ray_C *rays,
+        const float *tMaxValues,
+        int64_t count,
+        struct Intersection_C *results);
+
+void mojo_gpu_free_scene(void *handle);

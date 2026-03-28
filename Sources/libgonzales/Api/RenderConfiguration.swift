@@ -194,7 +194,8 @@ class RenderConfiguration {
 
                 let accelerator = try await makeAccelerator(
                         scene: scene, primitives: primitives,
-                        acceleratorName: acceleratorName)
+                        acceleratorName: acceleratorName,
+                        renderOptions: renderOptions)
 
                 cleanUp()
 
@@ -202,7 +203,10 @@ class RenderConfiguration {
                 let powerLightSampler = PowerLightSampler(
                         sampler: sampler, lights: lights, scene: scene)
                 let lightSampler = LightSampler(powerLightSampler: powerLightSampler)
-                let tileSize = (32, 32)
+                let targetRaysPerBatch = 1_000_000
+                let pixelsPerBatch = max(1, targetRaysPerBatch / sampler.samplesPerPixel)
+                let gpuTileDimension = max(32, Int(Double(pixelsPerBatch).squareRoot()))
+                let tileSize = accelerator.useGPU ? (gpuTileDimension, gpuTileDimension) : (32, 32)
 
                 if renderOptions.interactive {
                         return InteractiveRenderer(

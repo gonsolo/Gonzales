@@ -10,6 +10,7 @@ public struct RenderOptions: Sendable {
         public var singleRay = false
         public var justParse = false
         public var interactive = false
+        public var gpu = false
         public var ptexMemory = 4  // GB
         public var sceneDirectory = String()
 

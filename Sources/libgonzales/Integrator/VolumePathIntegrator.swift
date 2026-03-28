@@ -368,17 +368,12 @@ extension VolumePathIntegrator {
                 return true
         }
 
-        mutating func oneBounce(
+        mutating func shadeBounce(
                 state: inout PathState,
                 sampler: inout Sampler,
                 lightSampler: inout LightSampler,
                 immutableState _: ImmutableState
         ) throws -> Bool {
-
-                state.interaction = accelerator.intersect(
-                        scene: scene,
-                        ray: state.ray,
-                        tHit: &state.tHit)
 
                 if state.interaction == nil {
                         if state.bounce == 0 || state.specularBounce {
@@ -430,6 +425,19 @@ extension VolumePathIntegrator {
                         return false
                 }
                 return true
+        }
+
+        mutating func oneBounce(
+                state: inout PathState,
+                sampler: inout Sampler,
+                lightSampler: inout LightSampler,
+                immutableState: ImmutableState
+        ) throws -> Bool {
+                state.interaction = accelerator.intersect(
+                        scene: scene,
+                        ray: state.ray,
+                        tHit: &state.tHit)
+                return try shadeBounce(state: &state, sampler: &sampler, lightSampler: &lightSampler, immutableState: immutableState)
         }
 
         // @doc:bounce-loop

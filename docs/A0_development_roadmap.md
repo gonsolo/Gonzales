@@ -87,7 +87,7 @@ Port the traversal kernel to GPU compute. The Mojo kernel from Step 1,
 compact BVH2 from Step 2, and wavefront architecture from Step 4 provide
 the foundation.
 
-### Step 5: GPU BVH Traversal
+### Step 5: GPU BVH Traversal ✅ (2026-03-28)
 
 Add `@gpu` to the existing Mojo traversal kernel. The flat BVH2 node
 array and primitive ID arrays are already GPU-friendly (contiguous,
@@ -114,6 +114,18 @@ PBRT-v4 has an interactive GUI mode using GLFW and Dear ImGui. The
 fullscreen rendering support was contributed upstream (PBRT PR #307,
 merged Nov 2022) — the PBRT codebase at `/home/gonsolo/src/pbrt-v4/`
 serves as a working reference.
+
+### Step 7b: Refining and Telemetry ✅ (2026-03-28)
+
+Implement detailed sub-system profiling to measure execution duration across
+different renderer stages (BVH GPU Trace, CPU Shading, and Denoising). Must
+support concurrent accumulator synchronization for accurate bottleneck analysis.
+
+### Step 7c: Custom Denoising
+
+Implement a lightweight, custom denoiser to complement OIDN. This will explore
+techniques like spatial/temporal filtering, A-Trous wavelets, and edge-avoiding
+blur for fast preview scenarios or environments where OIDN is unavailable.
 
 ### Step 8: GPU BVH Construction
 
@@ -176,6 +188,10 @@ Step 4: Wavefront ─────────┤
                     Step 6: GPU Shading
                            ▼
                     Step 7: Interactive Viewer
+                           ▼
+                    Step 7b: Refining and Telemetry
+                           ▼
+                    Step 7c: Custom Denoising
                            ▼
                     Step 9: USD ──► Step 10: Blender
 

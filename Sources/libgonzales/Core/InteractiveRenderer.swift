@@ -92,18 +92,22 @@ struct InteractiveRenderer: Renderer {
                 let bounds = camera.getSampleBounds()
                 var tiles = generateTiles(from: bounds)
                 var allSamples = [Sample]()
+                var frameStats = RenderStats()
 
                 for i in 0..<tiles.count {
                         var tileSampler = makeSingleSppSampler()
                         var tileLightSampler = self.lightSampler
-                        let samples = try tiles[i].render(
+                        let result = try tiles[i].render(
                                 sampler: &tileSampler,
                                 camera: camera,
                                 lightSampler: &tileLightSampler,
                                 state: immutableState)
-                        allSamples.append(contentsOf: samples)
+                        allSamples.append(contentsOf: result.samples)
+                        frameStats.bvhTime += result.stats.bvhTime
+                        frameStats.shadeTime += result.stats.shadeTime
                 }
 
+                print(String(format: "Interactive Frame - GPU BVH: %.3fs | CPU Shade: %.3fs", frameStats.bvhTime, frameStats.shadeTime))
                 return allSamples
         }
 

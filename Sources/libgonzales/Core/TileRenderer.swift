@@ -50,17 +50,17 @@ struct TileRenderer: Renderer {
                 return tiles
         }
 
-        private func renderTile(tile: Tile, state: ImmutableState) throws -> [Sample] {
+        private func renderTile(tile: Tile, state: ImmutableState) throws -> (samples: [Sample], stats: RenderStats) {
                 var tileSampler = self.sampler
                 var lightSampler = self.lightSampler
                 var tile = tile
-                let samples = try tile.render(
+                let result = try tile.render(
                         sampler: &tileSampler,
                         camera: self.camera,
                         lightSampler: &lightSampler,
                         state: state
                 )
-                return samples
+                return result
         }
 
         private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {
@@ -72,32 +72,40 @@ struct TileRenderer: Renderer {
                 // Limit concurrency to keep one cooperative thread free for the progress reporter.
                 let maxConcurrent = max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
 
-                try await withThrowingTaskGroup(of: [Sample].self) { group in
+                try await withThrowingTaskGroup(of: (samples: [Sample], stats: RenderStats).self) { group in
                         var tileIterator = tiles.makeIterator()
 
                         // Seed the group with maxConcurrent tasks
                         for _ in 0..<maxConcurrent {
                                 guard let tile = tileIterator.next() else { break }
                                 group.addTask {
-                                        let samples = try self.renderTile(tile: tile, state: immutableState)
+                                        let result = try self.renderTile(tile: tile, state: immutableState)
                                         await reporter.tileFinished()
-                                        return samples
+                                        return result
                                 }
                         }
 
                         // As each task completes, add the next tile
                         var allSamples: [Sample] = []
-                        for try await samples in group {
-                                allSamples.append(contentsOf: samples)
+                        var totalStats = RenderStats()
+
+                        for try await result in group {
+                                allSamples.append(contentsOf: result.samples)
+                                totalStats.bvhTime += result.stats.bvhTime
+                                totalStats.shadeTime += result.stats.shadeTime
+
                                 if let tile = tileIterator.next() {
                                         group.addTask {
-                                                let samples = try self.renderTile(
+                                                let result = try self.renderTile(
                                                         tile: tile, state: immutableState)
                                                 await reporter.tileFinished()
-                                                return samples
+                                                return result
                                         }
                                 }
                         }
+
+                        print(String(format: "Telemetry - GPU BVH Time: %.2fs", totalStats.bvhTime))
+                        print(String(format: "Telemetry - CPU Shade Time: %.2fs", totalStats.shadeTime))
 
                         try await self.camera.film.writeImages(samples: allSamples, tileSize: tileSize)
                 }

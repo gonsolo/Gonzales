@@ -144,7 +144,7 @@ endif
 	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)
 
 	BUILD_DIRECTORY 	= .build
-	MOJO_LIB			= $(BUILD_DIRECTORY)/libmojo.a
+	MOJO_LIB			= $(BUILD_DIRECTORY)/libmojo.so
 	RELEASE_DIRECTORY 	= $(BUILD_DIRECTORY)/release
 	DEBUG_DIRECTORY 	= $(BUILD_DIRECTORY)/debug
 	GONZALES_RELEASE 	= $(RELEASE_DIRECTORY)/gonzales
@@ -169,8 +169,7 @@ editMakefile:
 
 $(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml
 	@mkdir -p .build
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o .build/kernel.o --emit object
-	ar rcs $(MOJO_LIB) .build/kernel.o
+	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) --emit shared-lib
 	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
 
 r: release
@@ -278,10 +277,26 @@ view_release: release
 	fi; \
 	$(VIEWER) "$$IMAGE"
 
+vrg: view_release_gpu
+view_release_gpu: release
+	$(SELECT_SCENE); \
+	read -p "Run with Gonzales or PBRT on GPU? (g/p) [g]: " engine; \
+	if [ "$$engine" = "p" ] || [ "$$engine" = "P" ]; then \
+		$(PBRT) $(PBRT_OPTIONS) --gpu "$$SCENE"; \
+	else \
+		$(GONZALES_RELEASE) $(OPTIONS) --gpu "$$SCENE"; \
+	fi; \
+	$(VIEWER) "$$IMAGE"
+
 vir: view_interactive_release
 view_interactive_release: release
 	$(SELECT_SCENE); \
 	$(GONZALES_RELEASE) --interactive $(OPTIONS) "$$SCENE"
+
+virg: view_interactive_release_gpu
+view_interactive_release_gpu: release
+	$(SELECT_SCENE); \
+	$(GONZALES_RELEASE) --interactive --gpu $(OPTIONS) "$$SCENE"
 
 vd: debug
 	$(SELECT_SCENE); \

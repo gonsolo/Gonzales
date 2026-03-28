@@ -1,15 +1,29 @@
 import Foundation
+import mojoKernel
 
 func makeAccelerator(
         scene: Scene,
         primitives: [IntersectablePrimitive],
-        acceleratorName: String
+        acceleratorName: String,
+        renderOptions: RenderOptions
 ) async throws -> Accelerator {
         switch acceleratorName {
         case "bvh":
                 let builder = try await BoundingHierarchyBuilder(scene: scene, primitives: primitives)
                 let boundingHierarchy = try builder.getBoundingHierarchy()
-                let accelerator = Accelerator(boundingHierarchy: boundingHierarchy)
+
+                var useGPU = renderOptions.gpu
+                if useGPU {
+                        if !mojo_gpu_available() {
+                                print("Warning: GPU requested but no compatible accelerator found. Falling back to CPU.")
+                                useGPU = false
+                        }
+                }
+
+                let accelerator = Accelerator(boundingHierarchy: boundingHierarchy, useGPU: useGPU)
+                if useGPU {
+                        accelerator.uploadToGPU(scene: scene)
+                }
                 return accelerator
         default:
                 throw SceneDescriptionError.accelerator
@@ -416,6 +430,7 @@ extension SceneDescription {
                 let localInstancedAccelerators = LocalInstancedAccelerators(count: uniqueNames.count)
                 let immutableUniqueNames = uniqueNames
                 let localAcceleratorName = self.acceleratorName
+                let localRenderOptions = self.renderOptions
                 let immutableObjects = options.objects  // Value-type copy for Sendable closure capture
 
                 await withTaskGroup(of: Void.self) { group in
@@ -427,7 +442,8 @@ extension SceneDescription {
                                                 let accelerator = try await makeAccelerator(
                                                         scene: tempScene,
                                                         primitives: prims,
-                                                        acceleratorName: localAcceleratorName)
+                                                        acceleratorName: localAcceleratorName,
+                                                        renderOptions: localRenderOptions)
                                                 localInstancedAccelerators.set(
                                                         index: index, accelerator: accelerator)
                                         } catch {
@@ -770,6 +786,7 @@ extension SceneDescription {
                         let localAccelerators = LocalAccelerators(count: meshBvhPrims.count)
                         let immutableMeshBvhPrims = meshBvhPrims
                         let localAcceleratorName = self.acceleratorName
+                        let localRenderOptions = self.renderOptions
 
                         let tempScene = Scene(
                                 lights: [], materials: materials, meshes: triangleMeshBuilder.getMeshes(),
@@ -786,7 +803,8 @@ extension SceneDescription {
                                                                 }
                                                         let accelerator = try await makeAccelerator(
                                                                 scene: tempScene, primitives: primsArray,
-                                                                acceleratorName: localAcceleratorName)
+                                                                acceleratorName: localAcceleratorName,
+                                                                renderOptions: localRenderOptions)
                                                         localAccelerators.set(
                                                                 index: index, accelerator: accelerator)
                                                 } catch {

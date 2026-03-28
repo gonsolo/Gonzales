@@ -51,7 +51,7 @@ let package = Package(
                                 .unsafeFlags(["-Ounchecked"]),
                         ],
                         linkerSettings: [
-                                .unsafeFlags(["-L.build", "-lmojo"])
+                                .unsafeFlags(["-L.build", "-lmojo", "-Xlinker", "-rpath", "-Xlinker", ".build"])
                         ]
                 ),
                 .executableTarget(
@@ -63,7 +63,7 @@ let package = Package(
                                 .unsafeFlags(["-Ounchecked"]),
                         ],
                         linkerSettings: [
-                                .unsafeFlags(["-L.build", "-lmojo"])
+                                .unsafeFlags(["-L.build", "-lmojo", "-Xlinker", "-rpath", "-Xlinker", ".build"])
                         ]
                 ),
                 .executableTarget(

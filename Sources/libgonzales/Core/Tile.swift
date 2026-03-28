@@ -1,3 +1,10 @@
+import Foundation
+
+struct RenderStats: Sendable {
+        var bvhTime: TimeInterval = 0
+        var shadeTime: TimeInterval = 0
+}
+
 struct Tile: Sendable {
 
         /// An active path being traced through the scene.
@@ -13,7 +20,7 @@ struct Tile: Sendable {
                 camera: any Camera,
                 lightSampler: inout LightSampler,
                 state: ImmutableState
-        ) throws -> [Sample] {
+        ) throws -> (samples: [Sample], stats: RenderStats) {
 
                 // Phase 1: Generate all primary rays
                 var activePaths = [ActivePath]()
@@ -53,6 +60,7 @@ struct Tile: Sendable {
                 // Phase 2: Process bounces — all paths at bounce N, then bounce N+1
                 var samples = [Sample]()
                 samples.reserveCapacity(activePaths.count)
+                var stats = RenderStats()
 
                 for bounce in 0...integrator.maxDepth {
                         guard !activePaths.isEmpty else { break }
@@ -60,9 +68,31 @@ struct Tile: Sendable {
                         var nextActive = [ActivePath]()
                         nextActive.reserveCapacity(activePaths.count)
 
-                        for var path in activePaths {
+                        var rays = [Ray]()
+                        var tHits = [Real]()
+                        rays.reserveCapacity(activePaths.count)
+                        tHits.reserveCapacity(activePaths.count)
+
+                        for path in activePaths {
+                                rays.append(path.state.ray)
+                                tHits.append(path.state.tHit)
+                        }
+
+                        let bvhStart = Date()
+                        let interactions = integrator.accelerator.intersectBatch(
+                                scene: integrator.scene,
+                                rays: rays,
+                                tHits: &tHits)
+                        stats.bvhTime += Date().timeIntervalSince(bvhStart)
+
+                        let shadeStart = Date()
+                        for i in 0..<activePaths.count {
+                                var path = activePaths[i]
                                 path.state.bounce = bounce
-                                let continues = try integrator.oneBounce(
+                                path.state.tHit = tHits[i]
+                                path.state.interaction = interactions[i]
+
+                                let continues = try integrator.shadeBounce(
                                         state: &path.state,
                                         sampler: &path.sampler,
                                         lightSampler: &path.lightSampler,
@@ -79,6 +109,7 @@ struct Tile: Sendable {
                                                         pixel: path.state.pixel))
                                 }
                         }
+                        stats.shadeTime += Date().timeIntervalSince(shadeStart)
                         activePaths = nextActive
                 }
 
@@ -93,7 +124,7 @@ struct Tile: Sendable {
                                         pixel: path.state.pixel))
                 }
 
-                return samples
+                return (samples, stats)
         }
 
         var integrator: VolumePathIntegrator

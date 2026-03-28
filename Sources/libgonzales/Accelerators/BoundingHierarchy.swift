@@ -6,6 +6,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
         let bvh2NodesCount: Int
         let primIdsPointer: UnsafeMutablePointer<PrimId>
         let primIdsCount: Int
+        var gpuSceneHandle: UnsafeMutableRawPointer?
 
         init(primitives: [IntersectablePrimitive], bvh2Nodes: [BVH2Node]) {
                 self.bvh2NodesCount = bvh2Nodes.count
@@ -14,6 +15,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 if !bvh2Nodes.isEmpty {
                         self.bvh2NodesPointer.initialize(from: bvh2Nodes, count: bvh2Nodes.count)
                 }
+                self.gpuSceneHandle = nil
 
                 var ids = [PrimId]()
                 for primitive in primitives {
@@ -65,7 +67,130 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 print("LAYOUT: BVH2 memory=\(bvh2Nodes.count * MemoryLayout<BVH2Node>.stride) bytes")
         }
 
+        func uploadToGPU(scene: Scene) {
+                guard bvh2NodesCount > 0 else {
+                        print("GPU: No BVH nodes to upload")
+                        return
+                }
+
+                // Prepare per-mesh size arrays for the Mojo upload function
+                let meshCount = scene.meshesC.count
+                var pointsCounts = [Int64]()
+                var faceIndicesCounts = [Int64]()
+                var vertexIndicesCounts = [Int64]()
+
+                for mesh in scene.meshes.meshes {
+                        // Points: each Point3 is SIMD4<Float32> = 4 floats
+                        pointsCounts.append(Int64(mesh.pointCount * 4))
+                        faceIndicesCounts.append(Int64(mesh.faceIndices.count))
+                        // vertexIndices: numberTriangles * 3 entries
+                        vertexIndicesCounts.append(Int64(mesh.numberTriangles * 3))
+                }
+
+                let handle = scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                        pointsCounts.withUnsafeBufferPointer { ptsPtr in
+                                faceIndicesCounts.withUnsafeBufferPointer { fiPtr in
+                                        vertexIndicesCounts.withUnsafeBufferPointer { viPtr in
+                                                mojo_gpu_upload_scene(
+                                                        UnsafeRawPointer(bvh2NodesPointer)
+                                                                .assumingMemoryBound(
+                                                                        to: mojoKernel.BVH2Node.self),
+                                                        Int64(bvh2NodesCount),
+                                                        UnsafeRawPointer(primIdsPointer)
+                                                                .assumingMemoryBound(
+                                                                        to: PrimId_C.self),
+                                                        Int64(primIdsCount),
+                                                        meshesPtr.baseAddress,
+                                                        Int64(meshCount),
+                                                        ptsPtr.baseAddress,
+                                                        fiPtr.baseAddress,
+                                                        viPtr.baseAddress
+                                                )
+                                        }
+                                }
+                        }
+                }
+                gpuSceneHandle = handle
+        }
+
+        // --- GPU Batch Intersect ---
+        func intersectGPU(
+                scene: Scene,
+                ray: Ray,
+                tHit: inout Real
+        ) -> Intersection_C? {
+                guard let handle = gpuSceneHandle else { return nil }
+
+                var rayC = Ray_C(
+                        orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                        orgZ: Float(ray.origin.z),
+                        dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                        dirZ: Float(ray.direction.z)
+                )
+                var tMaxValue = Float(tHit)
+                var result = Intersection_C()
+
+                withUnsafePointer(to: &rayC) { rayPtr in
+                        withUnsafePointer(to: &tMaxValue) { tMaxPtr in
+                                withUnsafeMutablePointer(to: &result) { resPtr in
+                                        mojo_gpu_traverse_batch(
+                                                handle,
+                                                rayPtr,
+                                                tMaxPtr,
+                                                1,
+                                                resPtr
+                                        )
+                                }
+                        }
+                }
+
+                if result.hit != 0 {
+                        tHit = Real(result.tHit)
+                        return result
+                }
+                return nil
+        }
+
+        func intersectBatchGPU(
+                scene: Scene,
+                rays: [Ray],
+                tHits: inout [Real]
+        ) -> [Intersection_C]? {
+                guard let handle = gpuSceneHandle else { return nil }
+
+                // Map payloads to flat buffers
+                let raysC = rays.map { ray in
+                        Ray_C(
+                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                                orgZ: Float(ray.origin.z),
+                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                                dirZ: Float(ray.direction.z)
+                        )
+                }
+                let tMaxValues = tHits.map { Float($0) }
+                var results = [Intersection_C](repeating: Intersection_C(), count: rays.count)
+
+                raysC.withUnsafeBufferPointer { raysPtr in
+                        tMaxValues.withUnsafeBufferPointer { tMaxPtr in
+                                results.withUnsafeMutableBufferPointer { resPtr in
+                                        mojo_gpu_traverse_batch(
+                                                handle,
+                                                raysPtr.baseAddress!,
+                                                tMaxPtr.baseAddress!,
+                                                Int64(rays.count),
+                                                resPtr.baseAddress!
+                                        )
+                                }
+                        }
+                }
+                return results
+        }
+
         deinit {
+                if let handle = gpuSceneHandle {
+                        mojo_gpu_free_scene(handle)
+                        gpuSceneHandle = nil
+                }
                 if bvh2NodesCount > 0 {
                         bvh2NodesPointer.deinitialize(count: bvh2NodesCount)
                 }
