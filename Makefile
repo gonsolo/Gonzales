@@ -167,9 +167,15 @@ em: editMakefile
 editMakefile:
 	@vim Makefile
 
+ifdef GITHUB_ACTIONS
+MOJO_BUILD_FLAGS = --emit shared-lib --target-accelerator sm_89
+else
+MOJO_BUILD_FLAGS = --emit shared-lib
+endif
+
 $(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml
 	@mkdir -p .build
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) --emit shared-lib
+	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS)
 	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
 
 r: release
