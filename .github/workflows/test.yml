@@ -39,4 +39,7 @@ jobs:
           enable-cache: true
 
       - name: Run tests
-        run: swift test
+        run: |
+          SWIFT_LIB_PATH=$(find /usr -name libsourcekitdInProc.so | head -n 1 | xargs dirname)
+          export LD_LIBRARY_PATH=$SWIFT_LIB_PATH:$LD_LIBRARY_PATH
+          swift test --jobs 2
