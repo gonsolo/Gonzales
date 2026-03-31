@@ -208,6 +208,9 @@ clean_all:
 	@rm -rf gonzales.xcodeproj flame.svg perf.data perf.data.old Package.resolved
 	@rm -f $(EMBEDDED_C) .build/devicePrograms.ptx
 
+clean-gh-runs:
+	gh run list --limit 200 --json databaseId --jq '.[8:] | .[].databaseId' | xargs -I {} gh run delete {}
+
 CONVERT = magick 
 DENOISE = oidnDenoise
 vn: view_denoised
