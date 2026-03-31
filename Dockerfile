@@ -17,6 +17,7 @@ RUN pacman -Syu --noconfirm && \
     fmt \
     glfw-x11 \
     vulkan-headers \
+    vulkan-icd-loader \
     inetutils
 
 # Setup builder user for AUR
