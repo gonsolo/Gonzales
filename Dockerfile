@@ -13,7 +13,10 @@ RUN pacman -Syu --noconfirm && \
     wget \
     unzip \
     sudo \
-    fmt
+    fmt \
+    glfw-x11 \
+    vulkan-headers \
+    inetutils
 
 # Setup builder user for AUR
 RUN useradd -m builder && \
