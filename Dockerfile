@@ -8,6 +8,7 @@ RUN pacman -Syu --noconfirm && \
     git \
     cmake \
     ninja \
+    openimagedenoise \
     openimageio \
     ptex \
     wget \
