@@ -1,6 +1,8 @@
 public protocol DistributionModel {
         func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal: Normal) -> RgbSpectrum
-        func sampleDistributionFunction(outgoing: Vector, normal: Normal, sampler: inout Sampler)
+        func sampleDistributionFunction(
+                outgoing: Vector, normal: Normal, sampler: inout Sampler
+        )
                 -> BsdfSample
         func evaluateProbabilityDensity(outgoing: Vector, incident: Vector) -> Real
 }

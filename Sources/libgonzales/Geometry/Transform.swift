@@ -80,7 +80,9 @@ extension Transform: CustomStringConvertible {
 }
 
 extension Transform {
-        static public func makePerspective(fov: Angle, near: Distance, far _: Distance) throws
+        static public func makePerspective(
+                fov: Angle, near: Distance, far _: Distance
+        ) throws
                 -> Transform
         {
                 let persp = Matrix(

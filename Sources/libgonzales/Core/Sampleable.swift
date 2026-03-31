@@ -7,11 +7,15 @@
 
 protocol Sampleable {
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(
+                samples: TwoRandomVariables, scene: Scene
+        ) -> (
                 interaction: SurfaceInteraction, pdf: Real
         )
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(
+                point: Point, samples: TwoRandomVariables, scene: Scene
+        ) -> (
                 SurfaceInteraction, Real
         )
 
@@ -26,7 +30,9 @@ protocol Sampleable {
 
 extension Sampleable {
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(
+                point: Point, samples: TwoRandomVariables, scene: Scene
+        ) -> (
                 SurfaceInteraction, Real
         ) {
                 var (intr, pdf) = sample(samples: samples, scene: scene)

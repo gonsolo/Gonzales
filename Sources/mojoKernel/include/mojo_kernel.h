@@ -67,45 +67,25 @@ bool mojo_gpu_available(void);
 // Opaque handle to GPU-resident scene data
 struct GpuSceneHandle;
 
-void *mojo_gpu_upload_scene(
-        const struct BVH2Node *bvh2Nodes,
-        int64_t bvh2NodesCount,
-        const struct PrimId_C *primIds,
-        int64_t primIdsCount,
-        const struct TriangleMesh_C *meshes,
-        int64_t meshCount,
-        const int64_t *meshPointsCounts,
-        const int64_t *meshFaceIndicesCounts,
-        const int64_t *meshVertexIndicesCounts,
-        const struct Material_C *materials,
-        int64_t materialCount);
+void *mojo_gpu_upload_scene(const struct BVH2Node *bvh2Nodes, int64_t bvh2NodesCount,
+                            const struct PrimId_C *primIds, int64_t primIdsCount,
+                            const struct TriangleMesh_C *meshes, int64_t meshCount,
+                            const int64_t *meshPointsCounts, const int64_t *meshFaceIndicesCounts,
+                            const int64_t *meshVertexIndicesCounts, const struct Material_C *materials,
+                            int64_t materialCount);
 
-void mojo_gpu_traverse_batch(
-        void *handle,
-        const struct Ray_C *rays,
-        const float *tMaxValues,
-        int64_t count,
-        struct Intersection_C *results);
+void mojo_gpu_traverse_batch(void *handle, const struct Ray_C *rays, const float *tMaxValues, int64_t count,
+                             struct Intersection_C *results);
 
-void mojo_gpu_shade_batch(
-        void *handle,
-        struct PathState_C *paths,
-        int64_t count,
-        const struct Intersection_C *intersections);
+void mojo_gpu_shade_batch(void *handle, struct PathState_C *paths, int64_t count,
+                          const struct Intersection_C *intersections);
 
 // CPU batch operations (parallelize over cores)
-void mojo_cpu_traverse_batch(
-        const struct SceneDescriptor2_C *scene,
-        const struct Ray_C *rays,
-        const float *tMaxValues,
-        int64_t count,
-        struct Intersection_C *results);
+void mojo_cpu_traverse_batch(const struct SceneDescriptor2_C *scene, const struct Ray_C *rays,
+                             const float *tMaxValues, int64_t count, struct Intersection_C *results);
 
-void mojo_cpu_shade_batch(
-        struct PathState_C *paths,
-        int64_t count,
-        const struct Intersection_C *intersections,
-        const struct TriangleMesh_C *meshes,
-        const struct Material_C *materials);
+void mojo_cpu_shade_batch(struct PathState_C *paths, int64_t count,
+                          const struct Intersection_C *intersections, const struct TriangleMesh_C *meshes,
+                          const struct Material_C *materials);
 
 void mojo_gpu_free_scene(void *handle);

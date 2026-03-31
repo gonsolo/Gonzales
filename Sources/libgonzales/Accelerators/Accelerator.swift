@@ -81,7 +81,8 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 var results = [SurfaceInteraction?]()
                 results.reserveCapacity(rays.count)
                 for i in 0..<rays.count {
-                        results.append(boundingHierarchy.intersect(scene: scene, ray: rays[i], tHit: &tHits[i]))
+                        results.append(
+                                boundingHierarchy.intersect(scene: scene, ray: rays[i], tHit: &tHits[i]))
                 }
                 return results
         }
@@ -92,8 +93,9 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 ray: Ray,
                 tHit: inout Real
         ) -> SurfaceInteraction? {
-                guard let result = boundingHierarchy.intersectGPU(
-                        scene: scene, ray: ray, tHit: &tHit)
+                guard
+                        let result = boundingHierarchy.intersectGPU(
+                                scene: scene, ray: ray, tHit: &tHit)
                 else {
                         return nil
                 }
@@ -138,8 +140,9 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 rays: [Ray],
                 tHits: inout [Real]
         ) -> [SurfaceInteraction?] {
-                guard let results = boundingHierarchy.intersectBatchGPU(
-                        scene: scene, rays: rays, tHits: &tHits)
+                guard
+                        let results = boundingHierarchy.intersectBatchGPU(
+                                scene: scene, rays: rays, tHits: &tHits)
                 else {
                         return Array(repeating: nil, count: rays.count)
                 }
@@ -185,7 +188,8 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                         )
                         tHits[i] = Real(result.tHit)
                         let interaction = scene.computeSurfaceInteraction(
-                                primId: PrimId(id1: id1, id2: rawId2, type: type), data: data, worldRay: rays[i])
+                                primId: PrimId(id1: id1, id2: rawId2, type: type), data: data,
+                                worldRay: rays[i])
                         interactions.append(interaction)
                 }
                 return interactions

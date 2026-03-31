@@ -98,39 +98,42 @@ struct Tile: Sendable {
                         stats.bvhTime += Date().timeIntervalSince(bvhStart)
 
                         let shadeStart = Date()
-                        
+
                         var pathStatesC = [PathState_C]()
                         pathStatesC.reserveCapacity(activePaths.count)
-                        
+
                         for i in 0..<activePaths.count {
                                 let path = activePaths[i]
                                 let r = path.state.ray
                                 let thru = path.state.throughput
                                 let est = path.state.estimate
                                 let alb = path.state.albedo
-                                
+
                                 let rayC = Ray_C(
-                                    orgX: Float(r.origin.x), orgY: Float(r.origin.y), orgZ: Float(r.origin.z),
-                                    dirX: Float(r.direction.x), dirY: Float(r.direction.y), dirZ: Float(r.direction.z)
+                                        orgX: Float(r.origin.x), orgY: Float(r.origin.y),
+                                        orgZ: Float(r.origin.z),
+                                        dirX: Float(r.direction.x), dirY: Float(r.direction.y),
+                                        dirZ: Float(r.direction.z)
                                 )
-                                
+
                                 let thruTup = (Float(thru.red), Float(thru.green), Float(thru.blue))
                                 let estTup = (Float(est.red), Float(est.green), Float(est.blue))
                                 let albTup = (Float(alb.red), Float(alb.green), Float(alb.blue))
                                 let pcg1 = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
                                 let pcg2 = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
-                                
-                                pathStatesC.append(PathState_C(
-                                    ray: rayC,
-                                    throughput: thruTup,
-                                    estimate: estTup,
-                                    albedo: albTup,
-                                    pcgState: pcg1,
-                                    pcgInc: pcg2,
-                                    active: 1
-                                ))
+
+                                pathStatesC.append(
+                                        PathState_C(
+                                                ray: rayC,
+                                                throughput: thruTup,
+                                                estimate: estTup,
+                                                albedo: albTup,
+                                                pcgState: pcg1,
+                                                pcgInc: pcg2,
+                                                active: 1
+                                        ))
                         }
-                        
+
                         if useGPU {
                                 let handle = integrator.accelerator.gpuSceneHandle!
                                 pathStatesC.withUnsafeMutableBufferPointer { pathsPtr in
@@ -150,22 +153,22 @@ struct Tile: Sendable {
                                         intersectionsC: intersectionsC
                                 )
                         }
-                        
+
                         for i in 0..<activePaths.count {
                                 let pC = pathStatesC[i]
                                 var path = activePaths[i]
-                                
+
                                 if pC.active == 0 {
                                         let estR = Real(pC.estimate.0)
                                         let estG = Real(pC.estimate.1)
                                         let estB = Real(pC.estimate.2)
                                         path.state.estimate = RgbSpectrum(red: estR, green: estG, blue: estB)
-                                        
+
                                         let albR = Real(pC.albedo.0)
                                         let albG = Real(pC.albedo.1)
                                         let albB = Real(pC.albedo.2)
                                         path.state.albedo = RgbSpectrum(red: albR, green: albG, blue: albB)
-                                        
+
                                         samples.append(
                                                 Sample(
                                                         light: path.state.estimate,
@@ -182,22 +185,25 @@ struct Tile: Sendable {
                                         let dirZ = Real(pC.ray.dirZ)
                                         let newOrigin = Point(x: orgX, y: orgY, z: orgZ)
                                         let newDirection = Vector(x: dirX, y: dirY, z: dirZ)
-                                        path.state.ray = Ray(origin: newOrigin, direction: newDirection, cameraSample: path.state.ray.cameraSample)
-                                        
+                                        path.state.ray = Ray(
+                                                origin: newOrigin, direction: newDirection,
+                                                cameraSample: path.state.ray.cameraSample)
+
                                         let thruR = Real(pC.throughput.0)
                                         let thruG = Real(pC.throughput.1)
                                         let thruB = Real(pC.throughput.2)
-                                        path.state.throughput = RgbSpectrum(red: thruR, green: thruG, blue: thruB)
-                                        
+                                        path.state.throughput = RgbSpectrum(
+                                                red: thruR, green: thruG, blue: thruB)
+
                                         let albR = Real(pC.albedo.0)
                                         let albG = Real(pC.albedo.1)
                                         let albB = Real(pC.albedo.2)
                                         path.state.albedo = RgbSpectrum(red: albR, green: albG, blue: albB)
-                                        
+
                                         nextActive.append(path)
                                 }
                         }
-                        
+
                         stats.shadeTime += Date().timeIntervalSince(shadeStart)
                         activePaths = nextActive
                 }

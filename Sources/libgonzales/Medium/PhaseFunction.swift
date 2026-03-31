@@ -5,7 +5,9 @@ protocol PhaseFunction: DistributionModel, Sendable {
 
 extension PhaseFunction {
 
-        func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal _: Normal = zeroNormal)
+        func evaluateDistributionFunction(
+                outgoing: Vector, incident: Vector, normal _: Normal = zeroNormal
+        )
                 -> RgbSpectrum
         {
                 let phase = evaluate(outgoing: outgoing, incident: incident)

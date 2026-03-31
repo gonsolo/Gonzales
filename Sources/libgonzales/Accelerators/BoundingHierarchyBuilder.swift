@@ -157,12 +157,13 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
 
         // --- Static Helper functions ---
 
-        private static func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool
-        {
+        private static func isSmaller(_ primitive: CachedPrimitive, _ pivot: Real, in dimension: Int) -> Bool {
                 return primitive.center[dimension] < pivot
         }
 
-        private static func isSmaller(_ first: CachedPrimitive, _ second: CachedPrimitive, in dimension: Int)
+        private static func isSmaller(
+                _ first: CachedPrimitive, _ second: CachedPrimitive, in dimension: Int
+        )
                 -> Bool
         {
                 return isSmaller(first, second.center[dimension], in: dimension)
@@ -262,7 +263,9 @@ final class BoundingHierarchyBuilder: @unchecked Sendable {
                 return (start, mid, end, Bounds3f())
         }
 
-        private static func build(range: Range<Int>, ptr: UnsafePrimitiveBuffer, primitivesPerNode: Int)
+        private static func build(
+                range: Range<Int>, ptr: UnsafePrimitiveBuffer, primitivesPerNode: Int
+        )
                 async throws -> BVHBuildNode
         {
                 if range.isEmpty { return BVHBuildNode(offset: 0, nPrimitives: 0, bounds: Bounds3f()) }

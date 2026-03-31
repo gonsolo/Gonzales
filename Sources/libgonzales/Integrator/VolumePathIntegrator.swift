@@ -266,7 +266,9 @@ extension VolumePathIntegrator {
         }
 
         // @doc:russian-roulette
-        private mutating func stopWithRussianRoulette(bounce: Int, pathThroughputWeight: inout RgbSpectrum)
+        private mutating func stopWithRussianRoulette(
+                bounce: Int, pathThroughputWeight: inout RgbSpectrum
+        )
                 -> Bool
         {
                 if pathThroughputWeight.maxValue < 1 && bounce > 1 {
@@ -437,7 +439,9 @@ extension VolumePathIntegrator {
                         scene: scene,
                         ray: state.ray,
                         tHit: &state.tHit)
-                return try shadeBounce(state: &state, sampler: &sampler, lightSampler: &lightSampler, immutableState: immutableState)
+                return try shadeBounce(
+                        state: &state, sampler: &sampler, lightSampler: &lightSampler,
+                        immutableState: immutableState)
         }
 
         // @doc:bounce-loop

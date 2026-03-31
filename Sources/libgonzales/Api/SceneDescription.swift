@@ -15,7 +15,9 @@ func makeAccelerator(
                 var useGPU = renderOptions.gpu
                 if useGPU {
                         if !mojo_gpu_available() {
-                                print("Warning: GPU requested but no compatible accelerator found. Falling back to CPU.")
+                                print(
+                                        "Warning: GPU requested but no compatible accelerator found. Falling back to CPU."
+                                )
                                 useGPU = false
                         }
                 }
@@ -412,8 +414,7 @@ extension SceneDescription {
                 // 1. Identify unique objects that need an accelerator
                 var uniqueNamesSet = Set<String>()
                 var uniqueNames = [String]()
-                for instanceDesc in uninstantiatedInstances where !uniqueNamesSet.contains(instanceDesc.name)
-                {
+                for instanceDesc in uninstantiatedInstances where !uniqueNamesSet.contains(instanceDesc.name) {
                         uniqueNamesSet.insert(instanceDesc.name)
                         uniqueNames.append(instanceDesc.name)
                 }
@@ -880,7 +881,9 @@ extension SceneDescription {
 
 }
 
-func getTextureFrom(name: String, type: String, sceneDirectory: String, arena: inout TextureArena) throws
+func getTextureFrom(
+        name: String, type: String, sceneDirectory: String, arena: inout TextureArena
+) throws
         -> Texture
 {
         let fileManager = FileManager.default

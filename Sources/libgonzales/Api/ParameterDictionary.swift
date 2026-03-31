@@ -6,7 +6,9 @@ typealias ParameterDictionary = [String: any Parameter]
 
 extension ParameterDictionary {
 
-        func findSpectrum(name: String, else spectrum: (any Spectrum)? = nil)
+        func findSpectrum(
+                name: String, else spectrum: (any Spectrum)? = nil
+        )
                 throws -> (any Spectrum)?
         {
                 let spectra = try findSpectra(name: name)

@@ -70,7 +70,9 @@ struct Disk: Shape {
                 return Real.pi * radius * radius
         }
 
-        func sample(samples: TwoRandomVariables, scene _: Scene) -> (
+        func sample(
+                samples: TwoRandomVariables, scene _: Scene
+        ) -> (
                 interaction: SurfaceInteraction, pdf: Real
         ) {
                 // Concentric disk sampling

@@ -27,12 +27,14 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                         let packed = (triangle.meshIndex << 32) | (triangle.triangleIndex / 3)
                                         let primId = PrimId(
                                                 id1: geometricPrimitive.idx, id2: packed,
-                                                type: .geometricPrimitive, materialIndex: geometricPrimitive.materialIndex)
+                                                type: .geometricPrimitive,
+                                                materialIndex: geometricPrimitive.materialIndex)
                                         ids.append(primId)
                                 } else {
                                         let primId = PrimId(
                                                 id1: geometricPrimitive.idx, id2: -1,
-                                                type: .geometricPrimitive, materialIndex: geometricPrimitive.materialIndex)
+                                                type: .geometricPrimitive,
+                                                materialIndex: geometricPrimitive.materialIndex)
                                         ids.append(primId)
                                 }
                         case .triangle(let triangle):
@@ -68,6 +70,24 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 print("LAYOUT: BVH2 memory=\(bvh2Nodes.count * MemoryLayout<BVH2Node>.stride) bytes")
         }
 
+        deinit {
+                if let handle = gpuSceneHandle {
+                        mojo_gpu_free_scene(handle)
+                        gpuSceneHandle = nil
+                }
+                if bvh2NodesCount > 0 {
+                        bvh2NodesPointer.deinitialize(count: bvh2NodesCount)
+                }
+                bvh2NodesPointer.deallocate()
+                if primIdsCount > 0 {
+                        primIdsPointer.deinitialize(count: primIdsCount)
+                }
+                primIdsPointer.deallocate()
+        }
+}
+
+extension BoundingHierarchy {
+
         func prepareMaterials(scene: Scene) {
                 guard materialsC.isEmpty else { return }
 
@@ -76,14 +96,18 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 var matTypeCounts = [String: Int]()
                 for material in scene.materials {
                         // Default to diffuse gray so paths always bounce
-                        var cMat = Material_C(type: 1, albedo: (0.5, 0.5, 0.5), emission: (0,0,0))
+                        var cMat = Material_C(type: 1, albedo: (0.5, 0.5, 0.5), emission: (0, 0, 0))
                         switch material {
                         case .diffuse(let diffuse):
                                 matTypeCounts["diffuse", default: 0] += 1
-                                let evaluation = diffuse.reflectance.evaluate(at: dummyInteraction, arena: scene.arena)
+                                let evaluation = diffuse.reflectance.evaluate(
+                                        at: dummyInteraction, arena: scene.arena)
                                 var rgb = RgbSpectrum(intensity: 0.0)
-                                if let float = evaluation as? Real { rgb = RgbSpectrum(intensity: float) }
-                                else if let spec = evaluation as? RgbSpectrum { rgb = spec }
+                                if let float = evaluation as? Real {
+                                        rgb = RgbSpectrum(intensity: float)
+                                } else if let spec = evaluation as? RgbSpectrum {
+                                        rgb = spec
+                                }
                                 cMat.albedo = (Float(rgb.red), Float(rgb.green), Float(rgb.blue))
                         case .coatedDiffuse:
                                 matTypeCounts["coatedDiffuse", default: 0] += 1
@@ -105,7 +129,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 }
                 print("Shading: Material distribution: \(matTypeCounts)")
                 for areaLight in scene.areaLights {
-                        var cMat = Material_C(type: 2, albedo: (0,0,0), emission: (0,0,0))
+                        var cMat = Material_C(type: 2, albedo: (0, 0, 0), emission: (0, 0, 0))
                         let rgb = areaLight.brightness
                         cMat.emission = (Float(rgb.red), Float(rgb.green), Float(rgb.blue))
                         mats.append(cMat)
@@ -318,21 +342,6 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                 }
                         }
                 }
-        }
-
-        deinit {
-                if let handle = gpuSceneHandle {
-                        mojo_gpu_free_scene(handle)
-                        gpuSceneHandle = nil
-                }
-                if bvh2NodesCount > 0 {
-                        bvh2NodesPointer.deinitialize(count: bvh2NodesCount)
-                }
-                bvh2NodesPointer.deallocate()
-                if primIdsCount > 0 {
-                        primIdsPointer.deinitialize(count: primIdsCount)
-                }
-                primIdsPointer.deallocate()
         }
 
         // --- Occlusion Query ---

@@ -50,7 +50,11 @@ struct TileRenderer: Renderer {
                 return tiles
         }
 
-        private func renderTile(tile: Tile, state: ImmutableState) throws -> (samples: [Sample], stats: RenderStats) {
+        private func renderTile(
+                tile: Tile, state: ImmutableState
+        ) throws -> (
+                samples: [Sample], stats: RenderStats
+        ) {
                 var tileSampler = self.sampler
                 var lightSampler = self.lightSampler
                 var tile = tile

@@ -127,7 +127,9 @@ class RenderConfiguration {
                 )
         }
 
-        func makeIntegrator(sampler _: Sampler, accelerator: Accelerator, scene: Scene) throws
+        func makeIntegrator(
+                sampler _: Sampler, accelerator: Accelerator, scene: Scene
+        ) throws
                 -> VolumePathIntegrator
         {
                 switch self.integratorName {

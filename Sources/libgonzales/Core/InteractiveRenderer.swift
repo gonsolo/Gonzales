@@ -107,7 +107,10 @@ struct InteractiveRenderer: Renderer {
                         frameStats.shadeTime += result.stats.shadeTime
                 }
 
-                print(String(format: "Interactive Frame - GPU BVH: %.3fs | CPU Shade: %.3fs", frameStats.bvhTime, frameStats.shadeTime))
+                print(
+                        String(
+                                format: "Interactive Frame - GPU BVH: %.3fs | CPU Shade: %.3fs",
+                                frameStats.bvhTime, frameStats.shadeTime))
                 return allSamples
         }
 

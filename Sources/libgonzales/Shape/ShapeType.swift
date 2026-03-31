@@ -55,7 +55,9 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(
+                samples: TwoRandomVariables, scene: Scene
+        ) -> (
                 interaction: SurfaceInteraction, pdf: Real
         ) {
                 return #dispatchShapeTypeNoThrow(shape: self) { (typedShape: Triangle) in
@@ -63,7 +65,9 @@ enum ShapeType: Shape {
                 }
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(
+                point: Point, samples: TwoRandomVariables, scene: Scene
+        ) -> (
                 SurfaceInteraction, Real
         ) {
                 return #dispatchShapeTypeNoThrow(shape: self) { (typedShape: Triangle) in

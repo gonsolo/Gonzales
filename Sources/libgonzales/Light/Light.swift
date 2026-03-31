@@ -1,7 +1,9 @@
 ///        A light source
 
 protocol LightSource: Sendable {
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
+        func sample(
+                point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene
+        )
                 -> LightSample
         func probabilityDensityFor<I: Interaction>(
                 scene: Scene, samplingDirection direction: Vector, from reference: I
@@ -19,7 +21,9 @@ enum Light: Sendable {
         case distant(DistantLight)
         case point(PointLight)
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene)
+        func sample(
+                point: Point, samples: TwoRandomVariables, accelerator: Accelerator, scene: Scene
+        )
                 -> LightSample
         {
                 switch self {

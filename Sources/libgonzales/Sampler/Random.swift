@@ -54,7 +54,9 @@ func createRandomSampler(parameters: ParameterDictionary, quick: Bool) throws ->
         return RandomSampler(numberOfSamples: samples)
 }
 
-func createZSobolSampler(parameters: ParameterDictionary, fullResolution: Point2i, quick: Bool) throws
+func createZSobolSampler(
+        parameters: ParameterDictionary, fullResolution: Point2i, quick: Bool
+) throws
         -> ZSobolSampler
 {
         var samples = try parameters.findOneInt(called: "pixelsamples", else: 1)

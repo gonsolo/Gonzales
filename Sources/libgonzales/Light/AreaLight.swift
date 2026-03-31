@@ -10,13 +10,17 @@ final class AreaLight: Boundable, Intersectable, LightSource {
                 self.idx = idx
         }
 
-        func emittedRadiance(from interaction: any Interaction, inDirection direction: Vector)
+        func emittedRadiance(
+                from interaction: any Interaction, inDirection direction: Vector
+        )
                 -> RgbSpectrum
         {
                 return dot(Vector(normal: interaction.normal), direction) > 0 ? brightness : black
         }
 
-        func sample(point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene: Scene)
+        func sample(
+                point: Point, samples: TwoRandomVariables, accelerator _: Accelerator, scene: Scene
+        )
                 -> LightSample
         {
                 let (shapeInteraction, pdf) = shape.sample(point: point, samples: samples, scene: scene)

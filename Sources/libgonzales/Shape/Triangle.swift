@@ -74,9 +74,12 @@ struct TriangleMesh {
                         faceIndices.withUnsafeBufferPointer { fBuf in
                                 vertexIndices.withUnsafeBufferPointer { vBuf in
                                         TriangleMesh_C(
-                                                points: UnsafeRawPointer(pBuf.baseAddress!).assumingMemoryBound(to: Float.self),
-                                                faceIndices: UnsafeRawPointer(fBuf.baseAddress!).assumingMemoryBound(to: Int64.self),
-                                                vertexIndices: UnsafeRawPointer(vBuf.baseAddress!).assumingMemoryBound(to: Int64.self)
+                                                points: UnsafeRawPointer(pBuf.baseAddress!)
+                                                        .assumingMemoryBound(to: Float.self),
+                                                faceIndices: UnsafeRawPointer(fBuf.baseAddress!)
+                                                        .assumingMemoryBound(to: Int64.self),
+                                                vertexIndices: UnsafeRawPointer(vBuf.baseAddress!)
+                                                        .assumingMemoryBound(to: Int64.self)
                                         )
                                 }
                         }
@@ -521,7 +524,9 @@ extension Triangle {
                 return 0.5 * length(cross(Vector(vector: (point1 - point0)), point2 - point0))
         }
 
-        func sample(samples: TwoRandomVariables, scene: Scene) -> (
+        func sample(
+                samples: TwoRandomVariables, scene: Scene
+        ) -> (
                 interaction: SurfaceInteraction, pdf: Real
         ) {
                 let barycentric = uniformSampleTriangle(samples: samples)

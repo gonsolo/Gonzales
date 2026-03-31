@@ -389,7 +389,9 @@ struct Curve: Shape {
                 return approxLength * avgWidth
         }
 
-        func sample<I: Interaction>(samples: TwoFloats, scene: Scene) -> (
+        func sample<I: Interaction>(
+                samples: TwoFloats, scene: Scene
+        ) -> (
                 interaction: I, pdf: Real
         ) {
                 let paramU = samples.0

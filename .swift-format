@@ -1,6 +1,7 @@
 {
         "version": 1,
-        "lineLength": 110,
+        "lineLength": 120,
+        "prioritizeKeepingFunctionOutputTogether": true,
         "indentation": {
                 "spaces": 8
         }

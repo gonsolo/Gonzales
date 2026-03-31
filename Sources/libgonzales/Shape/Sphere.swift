@@ -31,7 +31,9 @@ struct Sphere: Shape {
                 return Point(x: radiusValue * cos(phi), y: radiusValue * sin(phi), z: zComponent)
         }
 
-        func sample(samples: TwoRandomVariables, scene _: Scene) -> (
+        func sample(
+                samples: TwoRandomVariables, scene _: Scene
+        ) -> (
                 interaction: SurfaceInteraction, pdf: Real
         ) {
 
@@ -43,7 +45,9 @@ struct Sphere: Shape {
                 return (interaction, pdf)
         }
 
-        func sample(ref: any Interaction, samples: TwoRandomVariables, scene: Scene)
+        func sample(
+                ref: any Interaction, samples: TwoRandomVariables, scene: Scene
+        )
                 -> (interaction: any Interaction, pdf: Real)
         {
                 let center = objectToWorld * origin

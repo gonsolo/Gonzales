@@ -3,15 +3,21 @@
 
 public protocol FramedBsdf: BsdfFrameProtocol, DistributionModel, Bsdf, Sendable {
         func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector) -> RgbSpectrum
-        func probabilityDensityWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
+        func probabilityDensityWorldSpace(
+                outgoing outgoingWorld: Vector, incident incidentWorld: Vector
+        )
                 -> Real
-        func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
+        func sampleWorldSpace(
+                outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables
+        )
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
 }
 
 extension FramedBsdf {
 
-        public func evaluateWorldSpace(outgoing outgoingWorld: Vector, incident incidentWorld: Vector)
+        public func evaluateWorldSpace(
+                outgoing outgoingWorld: Vector, incident incidentWorld: Vector
+        )
                 -> RgbSpectrum
         {
                 var totalLightScattered = black
@@ -36,7 +42,9 @@ extension FramedBsdf {
                 return probabilityDensity(outgoing: outgoingLocal, incident: incidentLocal)
         }
 
-        public func sampleWorldSpace(outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables)
+        public func sampleWorldSpace(
+                outgoing outgoingWorld: Vector, uSample: ThreeRandomVariables
+        )
                 -> (bsdfSample: BsdfSample, isTransmissive: Bool)
         {
                 let outgoingLocal = worldToLocal(world: outgoingWorld)
@@ -48,7 +56,9 @@ extension FramedBsdf {
                 )
         }
 
-        public func evaluateDistributionFunction(outgoing: Vector, incident: Vector, normal: Normal)
+        public func evaluateDistributionFunction(
+                outgoing: Vector, incident: Vector, normal: Normal
+        )
                 -> RgbSpectrum
         {
                 let reflected = evaluateWorldSpace(outgoing: outgoing, incident: incident)
@@ -57,7 +67,9 @@ extension FramedBsdf {
                 return scatter
         }
 
-        public func sampleDistributionFunction(outgoing: Vector, normal: Normal, sampler: inout Sampler)
+        public func sampleDistributionFunction(
+                outgoing: Vector, normal: Normal, sampler: inout Sampler
+        )
                 -> BsdfSample
         {
                 var (bsdfSample, _) = sampleWorldSpace(outgoing: outgoing, uSample: sampler.get3D())

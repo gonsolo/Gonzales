@@ -7,7 +7,9 @@ struct DistantLight: LightSource {
                 self.direction = normalized(lightToWorld * direction)
         }
 
-        func sample(point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene)
+        func sample(
+                point: Point, samples _: TwoRandomVariables, accelerator _: Accelerator, scene _: Scene
+        )
                 -> LightSample
         {  // radiance: RgbSpectrum, direction: Vector, pdf: Real, visibility: Visibility
                 let outside = point + direction * 2 * worldRadius
@@ -37,7 +39,9 @@ struct DistantLight: LightSource {
 }
 
 extension DistantLight {
-        static func create(lightToWorld: Transform, parameters: ParameterDictionary) throws
+        static func create(
+                lightToWorld: Transform, parameters: ParameterDictionary
+        ) throws
                 -> DistantLight
         {
                 let from = try parameters.findOnePoint(name: "from", else: origin)

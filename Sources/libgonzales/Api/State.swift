@@ -32,7 +32,9 @@ struct State {
                 return Material.diffuse(diffuse)
         }
 
-        mutating func makeMaterial(type: String, parameters: ParameterDictionary, textures: [String: Texture])
+        mutating func makeMaterial(
+                type: String, parameters: ParameterDictionary, textures: [String: Texture]
+        )
                 throws -> Material
         {
 

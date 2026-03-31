@@ -85,7 +85,9 @@ public struct TrowbridgeReitzDistribution: MicrofacetDistribution {
                 return slope
         }
 
-        private func trowbridgeReitzSample(incident: Vector, alpha: (Real, Real), uSample: TwoRandomVariables)
+        private func trowbridgeReitzSample(
+                incident: Vector, alpha: (Real, Real), uSample: TwoRandomVariables
+        )
                 -> Vector
         {
                 let incidentStretched = normalized(
