@@ -10,6 +10,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
@@ -18,14 +19,14 @@ jobs:
       image: ghcr.io/${{ github.repository }}:latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Fix permissions
         run: |
           chown -R builder:builder .
 
       - name: Cache .build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .build
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') || hashFiles('Package.swift') }}
