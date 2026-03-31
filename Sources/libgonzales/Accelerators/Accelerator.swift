@@ -19,6 +19,42 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 boundingHierarchy.uploadToGPU(scene: scene)
         }
 
+        func prepareMaterials(scene: Scene) {
+                boundingHierarchy.prepareMaterials(scene: scene)
+        }
+
+        var gpuSceneHandle: UnsafeMutableRawPointer? {
+                return boundingHierarchy.gpuSceneHandle
+        }
+
+        func intersectBatchGPU(
+                scene: Scene,
+                rays: [Ray],
+                tHits: inout [Real]
+        ) -> [Intersection_C]? {
+                return boundingHierarchy.intersectBatchGPU(scene: scene, rays: rays, tHits: &tHits)
+        }
+
+        func intersectBatchCPU(
+                scene: Scene,
+                rays: [Ray],
+                tHits: inout [Real]
+        ) -> [Intersection_C] {
+                return boundingHierarchy.intersectBatchCPU(scene: scene, rays: rays, tHits: &tHits)
+        }
+
+        func cpuShadeBatch(
+                scene: Scene,
+                pathStatesC: inout [PathState_C],
+                intersectionsC: [Intersection_C]
+        ) {
+                boundingHierarchy.cpuShadeBatch(
+                        scene: scene,
+                        pathStatesC: &pathStatesC,
+                        intersectionsC: intersectionsC
+                )
+        }
+
         // --- Closest Hit Query ---
         func intersect(
                 scene: Scene,

@@ -95,11 +95,24 @@ fixed-size structs). The wavefront batch dispatch from Step 4b provides
 the host-side launch structure. SOA conversion happens here as needed
 for GPU-coalesced memory access.
 
-### Step 6: GPU Shading and Material Evaluation
+### Step 6: GPU Shading and Material Evaluation ✅ (2026-03-31)
 
 Port material and texture evaluation to GPU compute. The wavefront
 architecture naturally separates trace and shade phases, so each can be a
 distinct compute dispatch.
+
+**Evaluated Architecture Options:**
+
+1. **The Adapter Bridge**: Maintain legacy Swift looping. Map active paths to a `[PathState_C]` flat buffer, fire `mojo_gpu_shade_batch()`, and translate back to `ActivePath` in Swift. (Safest, slower due to host/device ping-ponging).
+2. **Pure Wavefront (Swift Redesign)**: Eradicate `ActivePath` and use `[PathState_C]` natively in `Tile.swift`, eliminating all translation overhead.
+3. **The Mega-Loop (GPU Only)**: Move the `for bounce in 0...maxDepth` loop deeply into `kernel.mojo`. The CPU only launches generating camera rays and awaits final pixel estimates.
+
+**Current Architectural Decision:**
+We are proceeding with an **Adapter Bridge (Option 1)** for the shading port.
+Instead of nuking the legacy `Tile.swift` looping structures, we will dynamically
+map `ActivePath` elements into a C-compatible contiguous `[PathState_C]` buffer.
+This allows us to maintain the existing Swift tracing pipeline for verification
+and safety while safely shifting the heaviest payload into the Mojo megakernel (`mojo_gpu_shade_batch`).
 
 ### Step 7: Interactive Viewer ✅ (2026-03-28)
 

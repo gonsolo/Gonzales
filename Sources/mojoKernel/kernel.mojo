@@ -1,13 +1,14 @@
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.math import ceildiv
+from std.math import ceildiv, sqrt, cos, sin
 from std.memory import alloc
 
 @fieldwise_init
 struct PrimId_C(TrivialRegisterPassable):
     var id1: Int64
     var id2: Int64
+    var materialIndex: Int64
     var type: Int8
     var _pad0: Int8
     var _pad1: Int8
@@ -16,6 +17,19 @@ struct PrimId_C(TrivialRegisterPassable):
     var _pad4: Int8
     var _pad5: Int8
     var _pad6: Int8
+
+@fieldwise_init
+struct Material_C(TrivialRegisterPassable):
+    var type: Int8
+    var _pad0: Int8
+    var _pad1: Int8
+    var _pad2: Int8
+    var albedoR: Float32
+    var albedoG: Float32
+    var albedoB: Float32
+    var emissionR: Float32
+    var emissionG: Float32
+    var emissionB: Float32
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
@@ -43,6 +57,30 @@ struct Intersection_C(TrivialRegisterPassable):
     var _pad1: Int8
     var _pad2: Int8
 
+@fieldwise_init
+struct PathState_C(TrivialRegisterPassable):
+    var ray: Ray_C
+    var throughputR: Float32
+    var throughputG: Float32
+    var throughputB: Float32
+    var estimateR: Float32
+    var estimateG: Float32
+    var estimateB: Float32
+    var albedoR: Float32
+    var albedoG: Float32
+    var albedoB: Float32
+    var _pad0: Int32
+    var pcgState: UInt64
+    var pcgInc: UInt64
+    var active: Int8
+    var _pad1: Int8
+    var _pad2: Int8
+    var _pad3: Int8
+    var _pad4: Int8
+    var _pad5: Int8
+    var _pad6: Int8
+    var _pad7: Int8
+
 @always_inline
 fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
     var a_yzx = SIMD[DType.float32, 3](a[1], a[2], a[0])
@@ -55,6 +93,31 @@ fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.flo
 fn dot(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
     var prod = a * b
     return prod[0] + prod[1] + prod[2]
+
+# ── Random Number Generation ────────────────────────────────────────
+
+struct PCG32:
+    var state: UInt64
+    var inc: UInt64
+
+    fn __init__(out self, initstate: UInt64, initseq: UInt64):
+        self.state = 0
+        self.inc = (initseq << 1) | 1
+        _ = self.next_uint()
+        self.state += initstate
+        _ = self.next_uint()
+
+    fn next_uint(mut self) -> UInt32:
+        var oldstate = self.state
+        self.state = oldstate * 6364136223846793005 + self.inc
+        var xorshifted = UInt32(((oldstate >> 18) ^ oldstate) >> 27)
+        var rot = UInt32(oldstate >> 59)
+        return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
+
+    fn next_float(mut self) -> Float32:
+        return Float32(self.next_uint() >> 8) * (1.0 / 16777216.0)
+
+# ── Ray Intersection Geometry ────────────────────────────────────────
 
 @always_inline
 fn intersect_triangle(
@@ -148,6 +211,8 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var primIds: UnsafePointer[PrimId_C, MutAnyOrigin]
     var meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin]
     var meshCount: Int64
+    var materials: UnsafePointer[Material_C, MutAnyOrigin]
+    var materialCount: Int64
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 #
@@ -295,7 +360,7 @@ fn traverse_bvh2_core(
     if hitIndex != -1:
         resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
-        var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0)
+        var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
@@ -306,6 +371,36 @@ fn mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     var scene = scenePtr[0]
     var ray = rayPtr[0]
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, ray, tMax, resultPtr)
+
+
+# ── CPU batch entry point (sequential loop, parallelism via Swift tasks) ───────
+
+@export
+fn mojo_cpu_traverse_batch(
+    scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
+    rays: UnsafePointer[Ray_C, MutAnyOrigin],
+    tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
+    count: Int64,
+    results: UnsafePointer[Intersection_C, MutAnyOrigin],
+):
+    var scene = scenePtr[0]
+    var n = Int(count)
+    for tid in range(n):
+        traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes,
+                          rays[tid], tMaxValues[tid], results + tid)
+
+
+@export
+fn mojo_cpu_shade_batch(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    count: Int64,
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+):
+    var n = Int(count)
+    for tid in range(n):
+        shade_core(paths, intersections, meshes, materials, tid)
 
 
 # ── GPU support ───────────────────────────────────────────────────────────────
@@ -325,6 +420,8 @@ struct GpuSceneHandle(Movable):
     # points/indices pointers inside them point to device memory.
     var meshes_buf: DeviceBuffer[DType.uint8]
     var mesh_count: Int
+    var materials_buf: DeviceBuffer[DType.uint8]
+    var material_count: Int
     # Keep all per-mesh device buffers alive
     var points_bufs: List[DeviceBuffer[DType.uint8]]
     var faceIndices_bufs: List[DeviceBuffer[DType.uint8]]
@@ -342,6 +439,8 @@ fn mojo_gpu_upload_scene(
     meshPointsCounts: UnsafePointer[Int64, MutAnyOrigin],       # number of Float32 elements in each mesh's points array
     meshFaceIndicesCounts: UnsafePointer[Int64, MutAnyOrigin],  # number of Int64 elements
     meshVertexIndicesCounts: UnsafePointer[Int64, MutAnyOrigin], # number of Int64 elements
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    materialCount: Int64,
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     try:
         var ctx = DeviceContext()
@@ -352,8 +451,9 @@ fn mojo_gpu_upload_scene(
         var total_bytes = mem_info[1]
 
         var bvh_bytes = Int(bvh2NodesCount) * 32  # sizeof(BVH2Node) = 32
-        var prim_bytes = Int(primIdsCount) * 24    # sizeof(PrimId_C) = 24 (8+8+1+7 padding)
+        var prim_bytes = Int(primIdsCount) * 32    # sizeof(PrimId_C) = 32 (8+8+8+1+7 padding)
         var mesh_struct_bytes = Int(meshCount) * 24  # sizeof(TriangleMesh_C) = 3 pointers
+        var material_struct_bytes = Int(materialCount) * 28 # sizeof(Material_C) = 1 int8 + 3 padding + 6 float32s
 
         # Estimate total mesh data
         var mesh_data_bytes = 0
@@ -450,6 +550,16 @@ fn mojo_gpu_upload_scene(
 
         mesh_structs_host.free()
 
+        # Upload materials array
+        var mat_bytes = Int(materialCount) * 28 # sizeof(Material_C) = 1 + 3 pad + 6 floats = 28
+        var mat_buf = ctx.enqueue_create_buffer[DType.uint8](mat_bytes)
+        if Int(materialCount) > 0:
+            with mat_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = materials.bitcast[UInt8]()
+                for j in range(mat_bytes):
+                    dst[j] = src[j]
+
         ctx.synchronize()
 
         # Allocate handle on heap
@@ -460,6 +570,8 @@ fn mojo_gpu_upload_scene(
             primIds_buf=prim_buf^,
             meshes_buf=meshes_buf^,
             mesh_count=Int(meshCount),
+            materials_buf=mat_buf^,
+            material_count=Int(materialCount),
             points_bufs=points_bufs^,
             faceIndices_bufs=face_bufs^,
             vertexIndices_bufs=vert_bufs^,
@@ -526,7 +638,7 @@ fn mojo_gpu_traverse_batch(
                 dst[i] = src[i]
 
         # Create output buffer
-        var result_bytes = n * 40  # sizeof(Intersection_C) = PrimId(24) + f32*3(12) + i8*4(4) = 40
+        var result_bytes = n * 48  # sizeof(Intersection_C) = PrimId(32) + f32*3(12) + i8*4(4) = 48
         var result_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](result_bytes)
 
         # Launch kernel
@@ -544,6 +656,8 @@ fn mojo_gpu_traverse_batch(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+        
+        handle[].ctx.synchronize()
 
         # Copy results back to host
         with result_buf.map_to_host() as host_buf:
@@ -554,6 +668,177 @@ fn mojo_gpu_traverse_batch(
     except e:
         print("GPU: Batch traversal failed: " + String(e))
 
+
+@always_inline
+fn shade_core(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    tid: Int,
+):
+    var path_ptr = paths + tid
+    if path_ptr[].active == 0:
+        return
+        
+    var inter = intersections[tid]
+    if inter.hit == 0:
+        path_ptr[].active = 0
+        return
+        
+    var mat_idx = Int(inter.primId.materialIndex)
+    var mat = materials[mat_idx]
+    
+    if mat.type == 2:
+        path_ptr[].estimateR += path_ptr[].throughputR * mat.emissionR
+        path_ptr[].estimateG += path_ptr[].throughputG * mat.emissionG
+        path_ptr[].estimateB += path_ptr[].throughputB * mat.emissionB
+        path_ptr[].active = 0
+        return
+        
+    if mat.type == 1:
+        # Construct Normal
+        var mesh_idx: Int = -1
+        var base_vidx: Int = -1
+        if inter.primId.type == 0:
+            mesh_idx = Int(inter.primId.id1)
+            base_vidx = Int(inter.primId.id2)
+        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+            mesh_idx = Int(inter.primId.id2 >> 32)
+            base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+        else:
+            path_ptr[].active = 0
+            return
+
+        var mesh = meshes[mesh_idx]
+        var v0_idx = Int(mesh.vertexIndices[base_vidx])
+        var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
+        var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
+
+        var p0 = SIMD[DType.float32, 3](mesh.points[v0_idx * 4], mesh.points[v0_idx * 4 + 1], mesh.points[v0_idx * 4 + 2])
+        var p1 = SIMD[DType.float32, 3](mesh.points[v1_idx * 4], mesh.points[v1_idx * 4 + 1], mesh.points[v1_idx * 4 + 2])
+        var p2 = SIMD[DType.float32, 3](mesh.points[v2_idx * 4], mesh.points[v2_idx * 4 + 1], mesh.points[v2_idx * 4 + 2])
+
+        var edge1 = p1 - p0
+        var edge2 = p2 - p0
+        var normal = cross(edge1, edge2)
+        var nlen = dot(normal, normal)
+        if nlen > 0:
+            normal = normal * (1.0 / sqrt(nlen))
+            
+        # Orient normal towards ray
+        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+        if dot(normal, ray_dir) > 0:
+            normal = normal * -1.0
+            
+        # Cosine weighted hemisphere sampling
+        var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+        var u1 = pcg.next_float()
+        var u2 = pcg.next_float()
+        path_ptr[].pcgState = pcg.state
+        
+        var r = sqrt(u1)
+        var theta = 2.0 * Float32(3.14159265359) * u2
+        var x = r * cos(theta)
+        var y = r * sin(theta)
+        var z2 = 1.0 - u1
+        var z = sqrt(z2 if z2 > 0.0 else Float32(0.0))
+        
+        # Build tangent basis
+        var sign = Float32(1.0) if normal[2] >= 0.0 else Float32(-1.0)
+        var a = Float32(-1.0) / (sign + normal[2])
+        var b = normal[0] * normal[1] * a
+        var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
+        var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+
+        var dir = tangent * x + bitangent * y + normal * z
+        var dlen = dot(dir, dir)
+        if dlen > 0:
+            dir = dir * (1.0 / sqrt(dlen))
+            
+        # Update Ray
+        var org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ) + ray_dir * inter.tHit + normal * 0.0001
+        path_ptr[].ray = Ray_C(org[0], org[1], org[2], dir[0], dir[1], dir[2])
+        
+        # Update Throughput (albedo)
+        path_ptr[].throughputR *= mat.albedoR
+        path_ptr[].throughputG *= mat.albedoG
+        path_ptr[].throughputB *= mat.albedoB
+    else:
+        # Unknown material type — deactivate to prevent infinite loops
+        path_ptr[].active = 0
+
+
+fn shade_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    shade_core(paths, intersections, meshes, materials, tid)
+
+@export
+fn mojo_gpu_shade_batch(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    count: Int64,
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin]
+):
+    if not handlePtr:
+        return
+    var handle = handlePtr
+    var n = Int(count)
+    if n == 0:
+        return
+
+    try:
+        # Create mapped unmanaged device buffers based on exact sizes
+        var path_bytes = n * 88 # sizeof(PathState_C) = 88
+        var inter_bytes = n * 48 # sizeof(Intersection_C) = 48
+        
+        var path_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](path_bytes)
+        with path_buf.map_to_host() as host_buf:
+            var dst = host_buf.unsafe_ptr()
+            var src = paths.bitcast[UInt8]()
+            for i in range(path_bytes):
+                dst[i] = src[i]
+                
+        var inter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](inter_bytes)
+        with inter_buf.map_to_host() as host_buf:
+            var dst = host_buf.unsafe_ptr()
+            var src = intersections.bitcast[UInt8]()
+            for i in range(inter_bytes):
+                dst[i] = src[i]
+                
+        # Launch shape kernel
+        comptime block_size = 256
+        var grid_dim = ceildiv(n, block_size)
+
+        handle[].ctx.enqueue_function[shade_gpu, shade_gpu](
+            path_buf.unsafe_ptr().bitcast[PathState_C](),
+            inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+            handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+            handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+            n,
+            grid_dim=grid_dim,
+            block_dim=block_size,
+        )
+        
+        handle[].ctx.synchronize()
+        
+        # Transfer path back (they were updated in-place on the device)
+        with path_buf.map_to_host() as host_buf:
+            var src = host_buf.unsafe_ptr()
+            var dst = paths.bitcast[UInt8]()
+            for i in range(path_bytes):
+                dst[i] = src[i]
+                
+    except e:
+        print("GPU: Batch shading failed: " + String(e))
 
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):

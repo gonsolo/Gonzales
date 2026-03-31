@@ -117,11 +117,11 @@ endif
 	#SWIFT_VERBOSE		= -v
 	#SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
 	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
-	SWIFT_LTO 		= --experimental-lto-mode full
+	#SWIFT_LTO 		= --experimental-lto-mode full
 	#SWIFT_DEBUG_INFO	= -Xswiftc -g
 	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
 	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
-	SWIFT_UNCHECKED		= -Xswiftc -Ounchecked
+	#SWIFT_UNCHECKED		= -Xswiftc -Ounchecked
 	SWIFT_OPTIMIZE		= $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA) $(SWIFT_LTO) $(SWIFT_UNCHECKED)
 
 	# Should not be needed since there is only one module
@@ -139,7 +139,7 @@ endif
 				  $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL) \
 				  $(WARNINGS_AS_ERRORS)
 	RELEASE_OPTIONS 	= $(DEBUG_OPTIONS) $(SWIFT_OPTIMIZE)
-	BUILD			= $(SWIFT) build
+	BUILD			= $(SWIFT) build --enable-experimental-prebuilts
 	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
 	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)
 
@@ -384,7 +384,7 @@ lldb_coated: debug
 	LD_LIBRARY_PATH=. $(LLDB) .build/debug/testCoated
 
 testsuite:
-	swift test
+	$(SWIFT) test --enable-experimental-prebuilts
 
 book:
 	python3 docs/build_book.py

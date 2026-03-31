@@ -7,6 +7,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
         let primIdsPointer: UnsafeMutablePointer<PrimId>
         let primIdsCount: Int
         var gpuSceneHandle: UnsafeMutableRawPointer?
+        var materialsC: [Material_C] = []
 
         init(primitives: [IntersectablePrimitive], bvh2Nodes: [BVH2Node]) {
                 self.bvh2NodesCount = bvh2Nodes.count
@@ -26,12 +27,12 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                                         let packed = (triangle.meshIndex << 32) | (triangle.triangleIndex / 3)
                                         let primId = PrimId(
                                                 id1: geometricPrimitive.idx, id2: packed,
-                                                type: .geometricPrimitive)
+                                                type: .geometricPrimitive, materialIndex: geometricPrimitive.materialIndex)
                                         ids.append(primId)
                                 } else {
                                         let primId = PrimId(
                                                 id1: geometricPrimitive.idx, id2: -1,
-                                                type: .geometricPrimitive)
+                                                type: .geometricPrimitive, materialIndex: geometricPrimitive.materialIndex)
                                         ids.append(primId)
                                 }
                         case .triangle(let triangle):
@@ -67,11 +68,70 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                 print("LAYOUT: BVH2 memory=\(bvh2Nodes.count * MemoryLayout<BVH2Node>.stride) bytes")
         }
 
+        func prepareMaterials(scene: Scene) {
+                guard materialsC.isEmpty else { return }
+
+                var mats = [Material_C]()
+                let dummyInteraction = SurfaceInteraction()
+                var matTypeCounts = [String: Int]()
+                for material in scene.materials {
+                        // Default to diffuse gray so paths always bounce
+                        var cMat = Material_C(type: 1, albedo: (0.5, 0.5, 0.5), emission: (0,0,0))
+                        switch material {
+                        case .diffuse(let diffuse):
+                                matTypeCounts["diffuse", default: 0] += 1
+                                let evaluation = diffuse.reflectance.evaluate(at: dummyInteraction, arena: scene.arena)
+                                var rgb = RgbSpectrum(intensity: 0.0)
+                                if let float = evaluation as? Real { rgb = RgbSpectrum(intensity: float) }
+                                else if let spec = evaluation as? RgbSpectrum { rgb = spec }
+                                cMat.albedo = (Float(rgb.red), Float(rgb.green), Float(rgb.blue))
+                        case .coatedDiffuse:
+                                matTypeCounts["coatedDiffuse", default: 0] += 1
+                        case .conductor:
+                                matTypeCounts["conductor", default: 0] += 1
+                                cMat.albedo = (0.7, 0.7, 0.7)
+                        case .coatedConductor:
+                                matTypeCounts["coatedConductor", default: 0] += 1
+                                cMat.albedo = (0.7, 0.7, 0.7)
+                        case .dielectric:
+                                matTypeCounts["dielectric", default: 0] += 1
+                                cMat.albedo = (0.9, 0.9, 0.9)
+                        case .diffuseTransmission:
+                                matTypeCounts["diffuseTransmission", default: 0] += 1
+                        default:
+                                matTypeCounts["other", default: 0] += 1
+                        }
+                        mats.append(cMat)
+                }
+                print("Shading: Material distribution: \(matTypeCounts)")
+                for areaLight in scene.areaLights {
+                        var cMat = Material_C(type: 2, albedo: (0,0,0), emission: (0,0,0))
+                        let rgb = areaLight.brightness
+                        cMat.emission = (Float(rgb.red), Float(rgb.green), Float(rgb.blue))
+                        mats.append(cMat)
+                }
+                let baseMatIndex = mats.count - scene.areaLights.count
+                for i in 0..<primIdsCount {
+                        if primIdsPointer[i].type == .areaLight {
+                                let lightIdx = primIdsPointer[i].id1
+                                primIdsPointer[i] = PrimId(
+                                        id1: lightIdx,
+                                        id2: primIdsPointer[i].id2,
+                                        type: .areaLight,
+                                        materialIndex: baseMatIndex + lightIdx
+                                )
+                        }
+                }
+                self.materialsC = mats
+        }
+
         func uploadToGPU(scene: Scene) {
                 guard bvh2NodesCount > 0 else {
                         print("GPU: No BVH nodes to upload")
                         return
                 }
+
+                prepareMaterials(scene: scene)
 
                 // Prepare per-mesh size arrays for the Mojo upload function
                 let meshCount = scene.meshesC.count
@@ -91,21 +151,25 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                         pointsCounts.withUnsafeBufferPointer { ptsPtr in
                                 faceIndicesCounts.withUnsafeBufferPointer { fiPtr in
                                         vertexIndicesCounts.withUnsafeBufferPointer { viPtr in
-                                                mojo_gpu_upload_scene(
-                                                        UnsafeRawPointer(bvh2NodesPointer)
-                                                                .assumingMemoryBound(
-                                                                        to: mojoKernel.BVH2Node.self),
-                                                        Int64(bvh2NodesCount),
-                                                        UnsafeRawPointer(primIdsPointer)
-                                                                .assumingMemoryBound(
-                                                                        to: PrimId_C.self),
-                                                        Int64(primIdsCount),
-                                                        meshesPtr.baseAddress,
-                                                        Int64(meshCount),
-                                                        ptsPtr.baseAddress,
-                                                        fiPtr.baseAddress,
-                                                        viPtr.baseAddress
-                                                )
+                                                self.materialsC.withUnsafeBufferPointer { matPtr in
+                                                        mojo_gpu_upload_scene(
+                                                                UnsafeRawPointer(bvh2NodesPointer)
+                                                                        .assumingMemoryBound(
+                                                                                to: mojoKernel.BVH2Node.self),
+                                                                Int64(bvh2NodesCount),
+                                                                UnsafeRawPointer(primIdsPointer)
+                                                                        .assumingMemoryBound(
+                                                                                to: PrimId_C.self),
+                                                                Int64(primIdsCount),
+                                                                meshesPtr.baseAddress,
+                                                                Int64(meshCount),
+                                                                ptsPtr.baseAddress,
+                                                                fiPtr.baseAddress,
+                                                                viPtr.baseAddress,
+                                                                matPtr.baseAddress,
+                                                                Int64(self.materialsC.count)
+                                                        )
+                                                }
                                         }
                                 }
                         }
@@ -184,6 +248,76 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
                         }
                 }
                 return results
+        }
+
+        // --- CPU Batch Intersect (parallelize via Mojo) ---
+        func intersectBatchCPU(
+                scene: Scene,
+                rays: [Ray],
+                tHits: inout [Real]
+        ) -> [Intersection_C] {
+                let raysC = rays.map { ray in
+                        Ray_C(
+                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                                orgZ: Float(ray.origin.z),
+                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                                dirZ: Float(ray.direction.z)
+                        )
+                }
+                let tMaxValues = tHits.map { Float($0) }
+                var results = [Intersection_C](repeating: Intersection_C(), count: rays.count)
+
+                scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                        var desc = SceneDescriptor2_C(
+                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                        .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                primIds: UnsafeRawPointer(primIdsPointer)
+                                        .assumingMemoryBound(to: PrimId_C.self),
+                                meshes: meshesPtr.baseAddress!,
+                                meshCount: Int64(scene.meshesC.count)
+                        )
+
+                        raysC.withUnsafeBufferPointer { raysPtr in
+                                tMaxValues.withUnsafeBufferPointer { tMaxPtr in
+                                        results.withUnsafeMutableBufferPointer { resPtr in
+                                                withUnsafePointer(to: &desc) { descPtr in
+                                                        mojo_cpu_traverse_batch(
+                                                                descPtr,
+                                                                raysPtr.baseAddress!,
+                                                                tMaxPtr.baseAddress!,
+                                                                Int64(rays.count),
+                                                                resPtr.baseAddress!
+                                                        )
+                                                }
+                                        }
+                                }
+                        }
+                }
+                return results
+        }
+
+        // --- CPU Batch Shade (parallelize via Mojo) ---
+        func cpuShadeBatch(
+                scene: Scene,
+                pathStatesC: inout [PathState_C],
+                intersectionsC: [Intersection_C]
+        ) {
+                let count = Int64(pathStatesC.count)
+                pathStatesC.withUnsafeMutableBufferPointer { pathsPtr in
+                        intersectionsC.withUnsafeBufferPointer { interPtr in
+                                scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                                        self.materialsC.withUnsafeBufferPointer { matPtr in
+                                                mojo_cpu_shade_batch(
+                                                        pathsPtr.baseAddress!,
+                                                        count,
+                                                        interPtr.baseAddress!,
+                                                        meshesPtr.baseAddress!,
+                                                        matPtr.baseAddress!
+                                                )
+                                        }
+                                }
+                        }
+                }
         }
 
         deinit {
@@ -344,15 +478,18 @@ struct PrimId {
         init() {
                 id1 = 0
                 id2 = 0
+                materialIndex = 0
                 type = .triangle
         }
-        init(id1: Int, id2: Int, type: PrimType) {
+        init(id1: Int, id2: Int, type: PrimType, materialIndex: Int = 0) {
                 self.id1 = id1
                 self.id2 = id2
+                self.materialIndex = materialIndex
                 self.type = type
         }
 
         let id1: Int
         let id2: Int
+        let materialIndex: Int
         let type: PrimType
 }

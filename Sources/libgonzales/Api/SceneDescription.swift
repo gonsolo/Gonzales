@@ -23,6 +23,9 @@ func makeAccelerator(
                 let accelerator = Accelerator(boundingHierarchy: boundingHierarchy, useGPU: useGPU)
                 if useGPU {
                         accelerator.uploadToGPU(scene: scene)
+                } else {
+                        // Still prepare materials for CPU shading path
+                        accelerator.prepareMaterials(scene: scene)
                 }
                 return accelerator
         default:
