@@ -40,6 +40,7 @@ jobs:
 
       - name: Run tests
         run: |
+          uv sync
           SWIFT_LIB_PATH=$(find /usr -name libsourcekitdInProc.so | head -n 1 | xargs dirname)
           export LD_LIBRARY_PATH=$SWIFT_LIB_PATH:$LD_LIBRARY_PATH
-          swift test --jobs 2
+          make testsuite SWIFT_TEST_OPTIONS="--jobs 2"

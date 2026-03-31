@@ -390,7 +390,7 @@ lldb_coated: debug
 	LD_LIBRARY_PATH=. $(LLDB) .build/debug/testCoated
 
 testsuite:
-	$(SWIFT) test --enable-experimental-prebuilts
+	$(SWIFT) test $(SWIFT_TEST_OPTIONS) --enable-experimental-prebuilts
 
 book:
 	python3 docs/build_book.py
