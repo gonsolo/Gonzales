@@ -175,7 +175,7 @@ endif
 
 $(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml
 	@mkdir -p .build
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS)
+	uv run --prerelease=allow mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS)
 	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
 
 r: release
