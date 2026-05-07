@@ -9,13 +9,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/gonzales
 
 jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/${{ github.repository }}:latest
+      image: ghcr.io/${{ github.repository_owner }}/gonzales:latest
 
     steps:
       - uses: actions/checkout@v6
