@@ -82,7 +82,7 @@ struct PathState_C(TrivialRegisterPassable):
     var _pad7: Int8
 
 @always_inline
-fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
+def cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
     var a_yzx = SIMD[DType.float32, 3](a[1], a[2], a[0])
     var b_zxy = SIMD[DType.float32, 3](b[2], b[0], b[1])
     var a_zxy = SIMD[DType.float32, 3](a[2], a[0], a[1])
@@ -90,7 +90,7 @@ fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.flo
     return a_yzx * b_zxy - a_zxy * b_yzx
 
 @always_inline
-fn dot(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
+def dot(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
     var prod = a * b
     return prod[0] + prod[1] + prod[2]
 
@@ -100,27 +100,27 @@ struct PCG32:
     var state: UInt64
     var inc: UInt64
 
-    fn __init__(out self, initstate: UInt64, initseq: UInt64):
+    def __init__(out self, initstate: UInt64, initseq: UInt64):
         self.state = 0
         self.inc = (initseq << 1) | 1
         _ = self.next_uint()
         self.state += initstate
         _ = self.next_uint()
 
-    fn next_uint(mut self) -> UInt32:
+    def next_uint(mut self) -> UInt32:
         var oldstate = self.state
         self.state = oldstate * 6364136223846793005 + self.inc
         var xorshifted = UInt32(((oldstate >> 18) ^ oldstate) >> 27)
         var rot = UInt32(oldstate >> 59)
         return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
 
-    fn next_float(mut self) -> Float32:
+    def next_float(mut self) -> Float32:
         return Float32(self.next_uint() >> 8) * (1.0 / 16777216.0)
 
 # ── Ray Intersection Geometry ────────────────────────────────────────
 
 @always_inline
-fn intersect_triangle(
+def intersect_triangle(
     ray_org: SIMD[DType.float32, 3],
     ray_dir: SIMD[DType.float32, 3],
     p0: SIMD[DType.float32, 3],
@@ -169,7 +169,7 @@ struct BVH2Node(TrivialRegisterPassable):
     var count: Int32        # 0 = interior, >0 = leaf primitive count
 
 @always_inline
-fn intersect_aabb(
+def intersect_aabb(
     boundsMinX: Float32, boundsMinY: Float32, boundsMinZ: Float32,
     boundsMaxX: Float32, boundsMaxY: Float32, boundsMaxZ: Float32,
     rdirX: Float32, rdirY: Float32, rdirZ: Float32,
@@ -221,7 +221,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
 # scene data, regardless of whether that data lives in host or device memory.
 
 @always_inline
-fn traverse_bvh2_core(
+def traverse_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -367,7 +367,7 @@ fn traverse_bvh2_core(
 # ── CPU entry point (called from Swift via C FFI) ─────────────────────────────
 
 @export
-fn mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
+def mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, ray, tMax, resultPtr)
@@ -376,7 +376,7 @@ fn mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
 # ── CPU batch entry point (sequential loop, parallelism via Swift tasks) ───────
 
 @export
-fn mojo_cpu_traverse_batch(
+def mojo_cpu_traverse_batch(
     scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
@@ -391,7 +391,7 @@ fn mojo_cpu_traverse_batch(
 
 
 @export
-fn mojo_cpu_shade_batch(
+def mojo_cpu_shade_batch(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     count: Int64,
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -406,7 +406,7 @@ fn mojo_cpu_shade_batch(
 # ── GPU support ───────────────────────────────────────────────────────────────
 
 @export
-fn mojo_gpu_available() -> Bool:
+def mojo_gpu_available() -> Bool:
     return has_accelerator()
 
 # GPU scene handle — holds DeviceContext and device-resident scene buffers.
@@ -428,7 +428,7 @@ struct GpuSceneHandle(Movable):
     var vertexIndices_bufs: List[DeviceBuffer[DType.uint8]]
 
 @export
-fn mojo_gpu_upload_scene(
+def mojo_gpu_upload_scene(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     bvh2NodesCount: Int64,
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
@@ -582,13 +582,13 @@ fn mojo_gpu_upload_scene(
             return handle.bitcast[GpuSceneHandle]()
         except e:
             print("GPU: Failed to upload scene: " + String(e))
-            return UnsafePointer[GpuSceneHandle, MutAnyOrigin]()
+            return UnsafePointer[GpuSceneHandle, MutAnyOrigin](_unsafe_null=())
     else:
-        return UnsafePointer[GpuSceneHandle, MutAnyOrigin]()
+        return UnsafePointer[GpuSceneHandle, MutAnyOrigin](_unsafe_null=())
 
 
 # GPU kernel function — one thread per ray
-fn traverse_bvh2_gpu(
+def traverse_bvh2_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -606,14 +606,14 @@ fn traverse_bvh2_gpu(
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, tMax, result_ptr)
 
 @export
-fn mojo_gpu_traverse_batch(
+def mojo_gpu_traverse_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
     count: Int64,
     results: UnsafePointer[Intersection_C, MutAnyOrigin],
 ):
-    if not handlePtr:
+    if Int(handlePtr) == 0:
         return
     var handle = handlePtr
 
@@ -674,7 +674,7 @@ fn mojo_gpu_traverse_batch(
 
 
 @always_inline
-fn shade_core(
+def shade_core(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -773,7 +773,7 @@ fn shade_core(
         path_ptr[].active = 0
 
 
-fn shade_gpu(
+def shade_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -786,13 +786,13 @@ fn shade_gpu(
     shade_core(paths, intersections, meshes, materials, tid)
 
 @export
-fn mojo_gpu_shade_batch(
+def mojo_gpu_shade_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     count: Int64,
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin]
 ):
-    if not handlePtr:
+    if Int(handlePtr) == 0:
         return
     var handle = handlePtr
     var n = Int(count)
@@ -846,8 +846,8 @@ fn mojo_gpu_shade_batch(
             print("GPU: Batch shading failed: " + String(e))
 
 @export
-fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
-    if not handlePtr:
+def mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
+    if Int(handlePtr) == 0:
         return
     handlePtr.destroy_pointee()
     handlePtr.bitcast[GpuSceneHandle]().free()
