@@ -1,4 +1,4 @@
-import Foundation  // InputStream, pow, EOF, exit
+import Foundation  // Data, URL, pow, EOF, exit
 
 final class PbrtScanner {
 
@@ -10,30 +10,29 @@ final class PbrtScanner {
 
         init(path: String) throws {
 
+                // Load the entire (decompressed) file into one contiguous buffer. This
+                // removes chunk-refill bookkeeping and lets the cursor be a plain index,
+                // which the Mojo numeric scanner can operate on directly (see roadmap 11b).
+                let data: Data
                 if path.hasSuffix(".gz") {
-                        let urlString = "file://" + path
-                        guard let url = URL(string: urlString) else {
+                        guard let url = URL(string: "file://" + path) else {
                                 throw PbrtScannerError.noFile
                         }
-                        let data = try Data(contentsOf: url)
-                        let decompressedData = try Compression.get(data: data)
-                        let inputStream = InputStream(data: decompressedData)
-                        self.stream = inputStream
+                        let raw = try Data(contentsOf: url)
+                        data = try Compression.get(data: raw)
                 } else {
-                        guard let inputStream = InputStream(fileAtPath: path) else {
+                        guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
                                 throw PbrtScannerError.noFile
                         }
-                        self.stream = inputStream
+                        data = d
                 }
-                stream.open()
-                if stream.streamStatus == .error {
-                        throw PbrtScannerError.noFile
+
+                totalBytes = data.count
+                buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: max(totalBytes, 1))
+                if totalBytes > 0 {
+                        data.copyBytes(to: buffer, count: totalBytes)
                 }
-                var bytes: [UInt8] = Array(repeating: 0, count: bufferLength)
-                buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferLength)
-                buffer.initialize(from: &bytes, count: bufferLength)
                 bufferIndex = 0
-                bytesRead = stream.read(buffer, maxLength: bufferLength)
                 currentByte = 0
         }
 
@@ -189,24 +188,21 @@ final class PbrtScanner {
         }
 
         private func peekOne() {
-                if bytesRead == 0 {
+                if bufferIndex >= totalBytes {
+                        currentByte = eofChar
                         return
                 }
                 currentByte = buffer[bufferIndex]
         }
 
         private func scanOne() {
-                if bytesRead == 0 {
+                if bufferIndex >= totalBytes {
                         currentByte = eofChar
                         return
                 }
                 currentByte = buffer[bufferIndex]
                 bufferIndex += 1
                 scanLocation += 1
-                if bufferIndex == bytesRead {
-                        bufferIndex = 0
-                        bytesRead = stream.read(buffer, maxLength: bufferLength)
-                }
         }
 
         private func isInteger(_ byte: UInt8) -> Bool {
@@ -246,10 +242,8 @@ final class PbrtScanner {
 
         var scanLocation = 0
         var isAtEnd = false
-        var bytesRead: Int
         var buffer: UnsafeMutablePointer<UInt8>
-        let bufferLength = 64 * 1024
+        let totalBytes: Int
         var bufferIndex: Int
-        var stream: InputStream
         var currentByte: UInt8
 }
