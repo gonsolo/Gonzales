@@ -135,6 +135,44 @@ final class PbrtScanner {
                 return filled == Int32(count) ? out : Array(out[0..<Int(filled)])
         }
 
+        // Read one complete quoted string "content" → returns content, or nil.
+        func parseQuotedString() -> String? {
+                var buf = [UInt8](repeating: 0, count: 1024)
+                var cursor = Int32(bufferIndex)
+                let written = buf.withUnsafeMutableBufferPointer { ptr in
+                        mojo_parse_quoted_string(buffer, Int32(totalBytes), &cursor,
+                                                 ptr.baseAddress, 1024)
+                }
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                guard written >= 0 else { return nil }
+                return buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        }
+
+        // Read parameter header "type name" and optional '['.
+        // Returns (type, name, isArray) or nil if no opening '"' found.
+        func parseParamHeader() -> (String, String, Bool)? {
+                var typeBuf = [UInt8](repeating: 0, count: 64)
+                var nameBuf = [UInt8](repeating: 0, count: 128)
+                var isArrayVal: Int32 = 0
+                var cursor = Int32(bufferIndex)
+                let found = typeBuf.withUnsafeMutableBufferPointer { typePtr in
+                        nameBuf.withUnsafeMutableBufferPointer { namePtr in
+                                mojo_parse_param_header(buffer, Int32(totalBytes), &cursor,
+                                                        typePtr.baseAddress, 64,
+                                                        namePtr.baseAddress, 128, &isArrayVal)
+                        }
+                }
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                guard found != 0 else { return nil }
+                let type = typeBuf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+                let name = nameBuf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+                return (type, name, isArrayVal != 0)
+        }
+
         func scanUpToCharactersList(from list: [String]) -> String? {
                 let delimBytes: [UInt8] = list.compactMap { $0.utf8.first }
                 var buf = [UInt8](repeating: 0, count: 1024)
