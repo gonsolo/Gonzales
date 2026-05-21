@@ -2161,6 +2161,130 @@ def mojo_render_tile(
     paths.free()
 
 
+# ── pbrt Lexer Helpers ────────────────────────────────────────────────
+# Pure functions over a contiguous byte buffer with a cursor index.
+# Called by the Swift PbrtScanner after step 11a loaded the whole file
+# into one buffer, enabling numeric parsing without buffer-boundary hazards.
+
+@always_inline
+fn _is_ws(b: UInt8) -> Bool:
+    return b == UInt8(32) or b == UInt8(9) or b == UInt8(10) or b == UInt8(13)
+
+@always_inline
+fn _is_digit(b: UInt8) -> Bool:
+    return b >= UInt8(48) and b <= UInt8(57)
+
+@export
+def mojo_scan_int(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    result: UnsafePointer[Int32, MutAnyOrigin],
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    if cur >= len:
+        return Int32(0)
+    var negative = False
+    if bytes[cur] == UInt8(45):       # '-'
+        negative = True
+        cur += 1
+    if cur >= len or not _is_digit(bytes[cur]):
+        return Int32(0)
+    var value = Int32(0)
+    while cur < len and _is_digit(bytes[cur]):
+        value = value * Int32(10) + Int32(bytes[cur]) - Int32(48)
+        cur += 1
+    if negative:
+        value = -value
+    cursor[0] = Int32(cur)
+    result[0] = value
+    return Int32(1)
+
+@export
+def mojo_scan_float(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    result: UnsafePointer[Float32, MutAnyOrigin],
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    if cur >= len:
+        return Int32(0)
+
+    # Remember whether a leading '-' was present for the sign fix-up below.
+    # (scanInt treats '-0' as 0, so '-0.5' needs special handling.)
+    var leading_negative = bytes[cur] == UInt8(45)
+
+    # --- integer part (includes its own sign handling, mirrors scanInt) ---
+    var int_negative = False
+    if cur < len and bytes[cur] == UInt8(45):
+        int_negative = True
+        cur += 1
+    var int_part = Int32(0)
+    var int_seen = False
+    while cur < len and _is_digit(bytes[cur]):
+        int_part = int_part * Int32(10) + Int32(bytes[cur]) - Int32(48)
+        cur += 1
+        int_seen = True
+    if int_negative:
+        int_part = -int_part
+
+    var dval = Float64(int_part)
+
+    # --- fractional part ---
+    if cur < len and bytes[cur] == UInt8(46):   # '.'
+        cur += 1
+        var tenth = Float64(0.1)
+        while cur < len and _is_digit(bytes[cur]):
+            var d = Float64(Int32(bytes[cur]) - Int32(48))
+            if dval < Float64(0.0):
+                dval -= tenth * d
+            else:
+                dval += tenth * d
+            tenth *= Float64(0.1)
+            cur += 1
+    elif not int_seen:
+        return Int32(0)
+
+    # --- exponent (mirrors calling scanInt for the exponent digits) ---
+    if cur < len and bytes[cur] == UInt8(101):  # 'e'
+        cur += 1
+        while cur < len and _is_ws(bytes[cur]):  # scanInt skips ws
+            cur += 1
+        var exp_negative = False
+        if cur < len and bytes[cur] == UInt8(45):
+            exp_negative = True
+            cur += 1
+        var exp_val = Int32(0)
+        while cur < len and _is_digit(bytes[cur]):
+            exp_val = exp_val * Int32(10) + Int32(bytes[cur]) - Int32(48)
+            cur += 1
+        if exp_negative:
+            exp_val = -exp_val
+        var factor = Float64(1.0)
+        var abs_exp = exp_val if exp_val >= 0 else -exp_val
+        for _ in range(Int(abs_exp)):
+            factor *= Float64(10.0)
+        if exp_val < 0:
+            dval /= factor
+        else:
+            dval *= factor
+
+    var f = Float32(dval)
+    if leading_negative and int_part == Int32(0):
+        f = -f
+
+    cursor[0] = Int32(cur)
+    result[0] = f
+    return Int32(1)
+
+
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
     if not handlePtr:

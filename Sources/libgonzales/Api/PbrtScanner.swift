@@ -1,4 +1,5 @@
 import Foundation  // Data, URL, pow, EOF, exit
+import mojoKernel
 
 final class PbrtScanner {
 
@@ -70,81 +71,28 @@ final class PbrtScanner {
         }
 
         func scanInt(_ intValue: inout Int) -> Bool {
-                skipWhitespace()
-                peekOne()
-                var isNegative = false
-                if currentByte == minusChar {
-                        isNegative = true
-                        scanOne()
-                }
-                peekOne()
-                if !isInteger(currentByte) {
+                var cursor = Int32(bufferIndex)
+                var result = Int32(0)
+                guard mojo_scan_int(buffer, Int32(totalBytes), &cursor, &result) != 0 else {
                         return false
                 }
-                intValue = 0
-                while isInteger(currentByte) {
-                        scanOne()
-                        intValue = 10 * intValue + (Int(currentByte) - 48)
-                        peekOne()
-                }
-                if isNegative {
-                        intValue = -intValue
-                }
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                intValue = Int(result)
                 return true
         }
 
         func scanFloat(_ float: inout Float) throws -> Bool {
-                var intPart = 0
-                // scanInt scans -0 as 0 so we have to remember whether we are negative
-                skipWhitespace()
+                var cursor = Int32(bufferIndex)
+                var result = Float32(0)
+                guard mojo_scan_float(buffer, Int32(totalBytes), &cursor, &result) != 0 else {
+                        return false
+                }
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
                 peekOne()
-                var isNegative = false
-                if currentByte == minusChar {
-                        isNegative = true
-                }
-
-                var doubleValue = 0.0
-                var intSeen = false
-                if scanInt(&intPart) {
-                        doubleValue = Double(intPart)
-                        intSeen = true
-                }
-                peekOne()
-                if currentByte == dotChar {
-                        scanOne()
-                        var tenth = 0.1
-                        peekOne()
-                        while isInteger(currentByte) {
-                                scanOne()
-                                if doubleValue < 0 {
-                                        doubleValue -= tenth * Double(currentByte - 48)
-                                } else {
-                                        doubleValue += tenth * Double(currentByte - 48)
-                                }
-                                tenth *= 0.1
-                                peekOne()
-                        }
-                } else {
-                        // If neither a number not a dot is seen this is not a floating point number
-                        if !intSeen {
-                                return false
-                        }
-                }
-                peekOne()
-                var exponent = 0
-                if currentByte == eChar {
-                        scanOne()
-                        if !scanInt(&exponent) {
-                                exponent = 0
-                        }
-                        doubleValue *= pow(Double(10), Double(exponent))
-                }
-
-                float = Real(doubleValue)
-
-                if isNegative && intPart == 0 {
-                        float = -float
-                }
+                float = result
                 return true
         }
 
@@ -205,14 +153,6 @@ final class PbrtScanner {
                 scanLocation += 1
         }
 
-        private func isInteger(_ byte: UInt8) -> Bool {
-                if byte >= 48 && byte <= 57 {
-                        return true
-                } else {
-                        return false
-                }
-        }
-
         private func isWhitespace(_ byte: UInt8) -> Bool {
                 switch byte {
                 case htabChar: return true
@@ -236,9 +176,6 @@ final class PbrtScanner {
         let htabChar: UInt8 = 9
         let newlineChar: UInt8 = 10
         let spaceChar: UInt8 = 32
-        let minusChar: UInt8 = 45
-        let dotChar: UInt8 = 46
-        let eChar: UInt8 = 101
 
         var scanLocation = 0
         var isAtEnd = false
