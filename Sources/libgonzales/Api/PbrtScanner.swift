@@ -42,32 +42,40 @@ final class PbrtScanner {
         }
 
         func peekString(_ expected: String) -> String? {
-                skipWhitespace()
-                peekOne()
-                let charString = ascii(currentByte)
-                if charString != expected {
+                guard expected.utf8.count == 1, let byte = expected.utf8.first else {
+                        // multi-char: old behaviour (effectively unreachable in practice)
+                        skipWhitespace()
+                        peekOne()
                         return nil
-                } else {
-                        return charString
                 }
+                var cursor = Int32(bufferIndex)
+                let matched = mojo_peek_char(buffer, Int32(totalBytes), &cursor, byte)
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                return matched != 0 ? expected : nil
         }
 
         func scanString(_ expected: String) -> String? {
-                skipWhitespace()
-                peekOne()
-                let charString = ascii(currentByte)
-                if charString != expected {
-                        return nil
-                } else {
+                guard expected.utf8.count == 1, let byte = expected.utf8.first else {
+                        // multi-char: old behaviour (used for "true"/"false", effectively dead)
+                        skipWhitespace()
+                        peekOne()
+                        let charString = ascii(currentByte)
+                        if charString != expected { return nil }
                         scanOne()
                         return charString
                 }
+                var cursor = Int32(bufferIndex)
+                let matched = mojo_scan_char(buffer, Int32(totalBytes), &cursor, byte)
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                return matched != 0 ? expected : nil
         }
 
         func scanUpToString(_ input: String) -> String? {
-                let scannedString = scanUpToCharactersList(from: [input])
-                return scannedString
-
+                return scanUpToCharactersList(from: [input])
         }
 
         func scanInt(_ intValue: inout Int) -> Bool {
@@ -128,22 +136,25 @@ final class PbrtScanner {
         }
 
         func scanUpToCharactersList(from list: [String]) -> String? {
-                var string = String()
-                skipWhitespace()
-                while true {
-                        peekOne()
-                        if currentByte == eofChar {
-                                isAtEnd = true
-                                return nil
+                let delimBytes: [UInt8] = list.compactMap { $0.utf8.first }
+                var buf = [UInt8](repeating: 0, count: 1024)
+                var cursor = Int32(bufferIndex)
+                let written: Int32 = delimBytes.withUnsafeBufferPointer { delimPtr in
+                        buf.withUnsafeMutableBufferPointer { bufPtr in
+                                mojo_scan_token(buffer, Int32(totalBytes), &cursor,
+                                                delimPtr.baseAddress, Int32(delimBytes.count),
+                                                bufPtr.baseAddress, 1024)
                         }
-                        let charString = ascii(currentByte)
-                        if list.contains(charString) {
-                                break
-                        }
-                        string.append(charString)
-                        scanOne()
                 }
-                return string
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                if written < 0 {
+                        isAtEnd = true
+                        return nil
+                }
+                if written == 0 { return bufferIndex >= totalBytes ? nil : "" }
+                return String(bytes: Array(buf[0..<Int(written)]), encoding: .utf8)
         }
 
         private func ascii(_ byte: UInt8) -> String {

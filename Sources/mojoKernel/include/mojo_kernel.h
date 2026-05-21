@@ -192,3 +192,18 @@ int32_t mojo_scan_floats(const uint8_t *bytes, int32_t len, int32_t *cursor,
 int32_t mojo_count_ints(const uint8_t *bytes, int32_t len, int32_t cursor);
 int32_t mojo_scan_ints(const uint8_t *bytes, int32_t len, int32_t *cursor,
                        int32_t *out, int32_t max_count);
+
+// pbrt lexer — token/keyword scanning (step 11d).
+// mojo_scan_char: skip ws, consume expected byte; returns 1 on match, 0 otherwise.
+//   *cursor is always advanced past leading whitespace.
+// mojo_peek_char: same but does NOT consume the matched byte.
+// mojo_scan_token: skip ws, read bytes into buf until a delimiter or EOF.
+//   Returns bytes written (>= 0) or -1 if EOF before any content.
+//   buf is null-terminated; at most max_buf-1 bytes are written.
+int32_t mojo_scan_char(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                       uint8_t expected);
+int32_t mojo_peek_char(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                       uint8_t expected);
+int32_t mojo_scan_token(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                        const uint8_t *delims, int32_t n_delims,
+                        uint8_t *buf, int32_t max_buf);
