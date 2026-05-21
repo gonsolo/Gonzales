@@ -51,6 +51,13 @@ final class PerspectiveCamera: Camera, Transformable, @unchecked Sendable {
                 return objectToWorld
         }
 
+        func cameraMatrices() -> (rasterToCamera: [Float], cameraToWorld: [Float]) {
+                return (
+                        rasterToCamera: cameraTransform.rasterToCamera.columnMajorFloats(),
+                        cameraToWorld: objectToWorld.columnMajorFloats()
+                )
+        }
+
         let fieldOfView: Angle
         let focalDistance: Distance
         let lensRadius: Distance

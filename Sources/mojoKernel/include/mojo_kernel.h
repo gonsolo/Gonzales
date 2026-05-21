@@ -95,3 +95,30 @@ void mojo_gpu_free_scene(void *handle);
 // Full multi-bounce CPU path trace for a batch of paths (replaces the Swift bounce loop)
 void mojo_render_paths(const struct SceneDescriptor2_C *scene, struct PathState_C *paths,
                        int64_t count, int32_t maxDepth);
+
+// Per-sample data from Swift's Sobol sampler
+struct PixelSample_C {
+        float filmX;
+        float filmY;
+        float filterWeight;
+        int32_t pixelX;
+        int32_t pixelY;
+        int32_t _pad;        /* align pcgState to 8 bytes */
+        uint64_t pcgState;
+        uint64_t pcgInc;
+};
+
+// Per-sample result returned to Swift for film accumulation
+struct TileResult_C {
+        float estimateR, estimateG, estimateB;
+        float albedoR, albedoG, albedoB;
+        float filterWeight;
+        int32_t pixelX, pixelY;
+};
+
+// Camera ray generation + full path trace in Mojo.
+// rasterToCamera and cameraToWorld are 16-element column-major float arrays.
+void mojo_render_tile(const float *rasterToCamera, const float *cameraToWorld,
+                      const struct PixelSample_C *samples, int64_t count,
+                      const struct SceneDescriptor2_C *scene,
+                      struct TileResult_C *results, int32_t maxDepth);
