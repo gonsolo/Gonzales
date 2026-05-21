@@ -2458,6 +2458,88 @@ def mojo_scan_ints(
     cursor[0] = Int32(cur)
     return count
 
+# Skip leading whitespace, check if next byte == expected, consume it on match.
+# Always advances *cursor past whitespace (even on failure).
+# Returns 1 on success, 0 otherwise.
+@export
+def mojo_scan_char(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    expected: UInt8,
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    cursor[0] = Int32(cur)
+    if cur >= len or bytes[cur] != expected:
+        return Int32(0)
+    cursor[0] = Int32(cur + 1)
+    return Int32(1)
+
+# Skip leading whitespace, check if next byte == expected (do NOT consume it).
+# Always advances *cursor past whitespace.  Returns 1 on match, 0 otherwise.
+@export
+def mojo_peek_char(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    expected: UInt8,
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    cursor[0] = Int32(cur)
+    if cur >= len or bytes[cur] != expected:
+        return Int32(0)
+    return Int32(1)
+
+# Skip leading whitespace then read bytes into buf until a delimiter or EOF.
+# Writes up to max_buf-1 bytes and null-terminates buf.
+# Advances *cursor to the stopping position (at the delimiter, or at len).
+# Returns bytes-written >= 0, or -1 if EOF was reached before any content.
+@export
+def mojo_scan_token(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    delims: UnsafePointer[UInt8, MutAnyOrigin],
+    n_delims: Int32,
+    buf: UnsafePointer[UInt8, MutAnyOrigin],
+    max_buf: Int32,
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    cursor[0] = Int32(cur)
+    if cur >= len:
+        if max_buf > 0:
+            buf[0] = UInt8(0)
+        return Int32(-1)
+    var n = Int(n_delims)
+    var written = Int32(0)
+    while cur < len:
+        var b = bytes[cur]
+        var is_delim = False
+        for i in range(n):
+            if delims[i] == b:
+                is_delim = True
+                break
+        if is_delim:
+            break
+        if written < max_buf - 1:
+            buf[Int(written)] = b
+        written += Int32(1)
+        cur += 1
+    var cap = Int(written) if Int(written) < Int(max_buf) - 1 else Int(max_buf) - 1
+    if max_buf > 0:
+        buf[cap] = UInt8(0)
+    cursor[0] = Int32(cur)
+    return written
+
 
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
