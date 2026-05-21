@@ -96,6 +96,37 @@ final class PbrtScanner {
                 return true
         }
 
+        // Bulk scan: parse all floats from current position up to ']' / EOF.
+        // Advances bufferIndex past the last parsed number (stops before ']').
+        func scanFloats() -> [Float] {
+                let count = Int(mojo_count_floats(buffer, Int32(totalBytes), Int32(bufferIndex)))
+                guard count > 0 else { return [] }
+                var out = [Float32](repeating: 0, count: count)
+                var cursor = Int32(bufferIndex)
+                let filled = out.withUnsafeMutableBufferPointer { ptr in
+                        mojo_scan_floats(buffer, Int32(totalBytes), &cursor, ptr.baseAddress, Int32(count))
+                }
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                return filled == Int32(count) ? out : Array(out[0..<Int(filled)])
+        }
+
+        // Bulk scan: parse all integers from current position up to ']' / EOF.
+        func scanInts() -> [Int32] {
+                let count = Int(mojo_count_ints(buffer, Int32(totalBytes), Int32(bufferIndex)))
+                guard count > 0 else { return [] }
+                var out = [Int32](repeating: 0, count: count)
+                var cursor = Int32(bufferIndex)
+                let filled = out.withUnsafeMutableBufferPointer { ptr in
+                        mojo_scan_ints(buffer, Int32(totalBytes), &cursor, ptr.baseAddress, Int32(count))
+                }
+                bufferIndex = Int(cursor)
+                scanLocation = bufferIndex
+                peekOne()
+                return filled == Int32(count) ? out : Array(out[0..<Int(filled)])
+        }
+
         func scanUpToCharactersList(from list: [String]) -> String? {
                 var string = String()
                 skipWhitespace()

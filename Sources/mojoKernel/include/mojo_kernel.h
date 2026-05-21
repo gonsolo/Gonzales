@@ -182,3 +182,13 @@ int32_t mojo_scan_int(const uint8_t *bytes, int32_t len,
                       int32_t *cursor, int32_t *result);
 int32_t mojo_scan_float(const uint8_t *bytes, int32_t len,
                         int32_t *cursor, float *result);
+
+// pbrt lexer — bulk array scan (step 11c).
+// mojo_count_* takes cursor by value (no side effects); returns element count.
+// mojo_scan_* fills out[], advances *cursor to the stop position, returns count written.
+int32_t mojo_count_floats(const uint8_t *bytes, int32_t len, int32_t cursor);
+int32_t mojo_scan_floats(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                         float *out, int32_t max_count);
+int32_t mojo_count_ints(const uint8_t *bytes, int32_t len, int32_t cursor);
+int32_t mojo_scan_ints(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                       int32_t *out, int32_t max_count);

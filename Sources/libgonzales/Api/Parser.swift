@@ -173,19 +173,11 @@ extension Parser {
         }
 
         private func parseReals() throws -> [Real] {
-                var values = [Real]()
-                while let value = try parseReal() {
-                        values.append(value)
-                }
-                return values
+                return scanner.scanFloats().map { Real($0) }
         }
 
         private func parseIntegers() -> [Int] {
-                var values = [Int]()
-                while let value = parseInteger() {
-                        values.append(value)
-                }
-                return values
+                return scanner.scanInts().map { Int($0) }
         }
 
         private func parseInteger() -> Int? {
@@ -262,9 +254,13 @@ extension Parser {
         }
 
         private func parsePoints() throws -> [Point] {
+                let raw = scanner.scanFloats()
                 var points = [Point]()
-                while let point = try parsePoint() {
-                        points.append(point)
+                points.reserveCapacity(raw.count / 3)
+                var i = 0
+                while i + 2 < raw.count {
+                        points.append(Point(xyz: (Real(raw[i]), Real(raw[i + 1]), Real(raw[i + 2]))))
+                        i += 3
                 }
                 return points
         }
@@ -277,10 +273,13 @@ extension Parser {
         }
 
         private func parseVectors() throws -> [Vector] {
+                let raw = scanner.scanFloats()
                 var vectors = [Vector]()
-                while let floats = try parseThreeReals() {
-                        let vector = Vector(xyz: floats)
-                        vectors.append(vector)
+                vectors.reserveCapacity(raw.count / 3)
+                var i = 0
+                while i + 2 < raw.count {
+                        vectors.append(Vector(xyz: (Real(raw[i]), Real(raw[i + 1]), Real(raw[i + 2]))))
+                        i += 3
                 }
                 return vectors
         }
@@ -293,9 +292,13 @@ extension Parser {
         }
 
         private func parseNormals() throws -> [Normal] {
+                let raw = scanner.scanFloats()
                 var normals = [Normal]()
-                while let normal = try parseNormal() {
-                        normals.append(normal)
+                normals.reserveCapacity(raw.count / 3)
+                var i = 0
+                while i + 2 < raw.count {
+                        normals.append(Normal(xyz: (Real(raw[i]), Real(raw[i + 1]), Real(raw[i + 2]))))
+                        i += 3
                 }
                 return normals
         }
