@@ -942,6 +942,10 @@ fn shade_core_cpu_nee(
         shade_dielectric(path_ptr, inter, meshes, mat)
         return
 
+    if mat.type == 5:
+        shade_coated_diffuse(path_ptr, inter, meshes, mat)
+        return
+
     if mat.type != 1:
         path_ptr[].active = 0
         return
@@ -1055,6 +1059,111 @@ fn shade_core_cpu_nee(
     path_ptr[].throughputR *= mat.albedoR
     path_ptr[].throughputG *= mat.albedoG
     path_ptr[].throughputB *= mat.albedoB
+    path_ptr[].bounce += 1
+
+    # Russian roulette after first bounce
+    if path_ptr[].bounce > 1:
+        var lum = Float32(0.2126) * path_ptr[].throughputR + Float32(0.7152) * path_ptr[].throughputG + Float32(0.0722) * path_ptr[].throughputB
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            var inv = Float32(1.0) / (Float32(1.0) - q)
+            path_ptr[].throughputR *= inv
+            path_ptr[].throughputG *= inv
+            path_ptr[].throughputB *= inv
+
+    path_ptr[].pcgState = pcg.state
+
+
+# ── CoatedDiffuse (plastic) branch — called from shade_core_cpu_nee ─────────
+# Fresnel coating over diffuse substrate. IOR stored in mat.emissionR.
+# Stochastically routes to specular reflection (Fresnel weight) or cosine
+# hemisphere diffuse bounce (throughput *= albedo).
+@always_inline
+fn shade_coated_diffuse(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var normal = cross(p1 - p0, p2 - p0)
+    var nlen = dot(normal, normal)
+    if nlen > Float32(0.0):
+        normal = normal * (Float32(1.0) / sqrt(nlen))
+
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    if dot(normal, ray_dir) > Float32(0.0):
+        normal = -normal
+
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    # Schlick Fresnel for the dielectric coating (IOR stored in emissionR)
+    var ior = mat.emissionR
+    var cos_i = -dot(ray_dir, normal)
+    var r0 = (Float32(1.0) - ior) / (Float32(1.0) + ior)
+    r0 = r0 * r0
+    var one_minus = Float32(1.0) - cos_i
+    var one_minus2 = one_minus * one_minus
+    var fresnel = r0 + (Float32(1.0) - r0) * one_minus2 * one_minus2 * one_minus
+
+    if pcg.next_float() < fresnel:
+        # Specular reflection from coating — throughput unchanged
+        var refl = ray_dir + normal * (Float32(2.0) * cos_i)
+        var rlen = dot(refl, refl)
+        if rlen > Float32(0.0):
+            refl = refl * (Float32(1.0) / sqrt(rlen))
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+    else:
+        # Diffuse bounce through coating
+        var u1 = pcg.next_float()
+        var u2 = pcg.next_float()
+        var r = sqrt(u1)
+        var theta = Float32(2.0) * Float32(3.14159265359) * u2
+        var x = r * cos(theta)
+        var y = r * sin(theta)
+        var z2 = Float32(1.0) - u1
+        var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
+
+        var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+        var a = Float32(-1.0) / (sign + normal[2])
+        var b = normal[0] * normal[1] * a
+        var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
+        var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+
+        var dir = tangent * x + bitangent * y + normal * z
+        var dlen = dot(dir, dir)
+        if dlen > Float32(0.0):
+            dir = dir * (Float32(1.0) / sqrt(dlen))
+
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+        path_ptr[].throughputR *= mat.albedoR
+        path_ptr[].throughputG *= mat.albedoG
+        path_ptr[].throughputB *= mat.albedoB
+
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce

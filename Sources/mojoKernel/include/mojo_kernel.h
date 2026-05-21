@@ -9,7 +9,7 @@ struct PrimId_C {
 };
 
 struct Material_C {
-        int8_t type; // 0=none, 1=diffuse, 2=arealight
+        int8_t type; // 0=none, 1=diffuse, 2=arealight, 3=conductor, 4=dielectric, 5=coatedDiffuse
         float albedo[3];
         float emission[3];
 };
