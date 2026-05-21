@@ -110,8 +110,23 @@ extension BoundingHierarchy {
                                         rgb = spec
                                 }
                                 cMat.albedo = (Float(rgb.red), Float(rgb.green), Float(rgb.blue))
-                        case .coatedDiffuse:
+                        case .coatedDiffuse(let coatedDiffuse):
                                 matTypeCounts["coatedDiffuse", default: 0] += 1
+                                var ior: Float = 1.5
+                                if let f = coatedDiffuse.refractiveIndex.evaluate(
+                                        at: dummyInteraction, arena: scene.arena) as? Real
+                                {
+                                        ior = Float(f)
+                                }
+                                let refl = coatedDiffuse.reflectance.evaluate(
+                                        at: dummyInteraction, arena: scene.arena)
+                                if let rgb = refl as? RgbSpectrum {
+                                        cMat.albedo = (Float(rgb.red), Float(rgb.green), Float(rgb.blue))
+                                } else if let f = refl as? Real {
+                                        cMat.albedo = (Float(f), Float(f), Float(f))
+                                }
+                                cMat.type = 5
+                                cMat.emission = (ior, 0, 0)
                         case .conductor:
                                 matTypeCounts["conductor", default: 0] += 1
                                 cMat.type = 3
