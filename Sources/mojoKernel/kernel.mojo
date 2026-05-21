@@ -2540,6 +2540,98 @@ def mojo_scan_token(
     cursor[0] = Int32(cur)
     return written
 
+# Read a complete quoted string: skip ws, consume '"', read content, consume '"'.
+# Writes content (without quotes) to buf, null-terminates.
+# Returns bytes written >= 0, or -1 if no opening '"' found.
+@export
+def mojo_parse_quoted_string(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    buf: UnsafePointer[UInt8, MutAnyOrigin],
+    max_buf: Int32,
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    cursor[0] = Int32(cur)
+    if cur >= len or bytes[cur] != UInt8(34):   # '"' = 34
+        return Int32(-1)
+    cur += 1  # opening '"'
+    var written = Int32(0)
+    while cur < len and bytes[cur] != UInt8(34):
+        if written < max_buf - 1:
+            buf[Int(written)] = bytes[cur]
+        written += Int32(1)
+        cur += 1
+    if cur < len:
+        cur += 1  # closing '"'
+    if max_buf > 0:
+        var cap = Int(written) if Int(written) < Int(max_buf) - 1 else Int(max_buf) - 1
+        buf[cap] = UInt8(0)
+    cursor[0] = Int32(cur)
+    return written
+
+# Read one pbrt parameter header: "type name" with optional leading '['.
+# Skips leading whitespace. Writes null-terminated type and name to their buffers.
+# Sets *is_array to 1 and consumes '[' if present, 0 otherwise.
+# Returns 1 if a header was found, 0 if the next non-ws token is not '"'.
+@export
+def mojo_parse_param_header(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    type_buf: UnsafePointer[UInt8, MutAnyOrigin],
+    type_max: Int32,
+    name_buf: UnsafePointer[UInt8, MutAnyOrigin],
+    name_max: Int32,
+    is_array: UnsafePointer[Int32, MutAnyOrigin],
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    cursor[0] = Int32(cur)
+    if cur >= len or bytes[cur] != UInt8(34):
+        return Int32(0)
+    cur += 1  # opening '"'
+    # type: read until whitespace or '"'
+    var t = Int32(0)
+    while cur < len and not _is_ws(bytes[cur]) and bytes[cur] != UInt8(34):
+        if t < type_max - 1:
+            type_buf[Int(t)] = bytes[cur]
+        t += Int32(1)
+        cur += 1
+    if type_max > 0:
+        var cap = Int(t) if Int(t) < Int(type_max) - 1 else Int(type_max) - 1
+        type_buf[cap] = UInt8(0)
+    # skip separator whitespace
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    # name: read until '"'
+    var n = Int32(0)
+    while cur < len and bytes[cur] != UInt8(34):
+        if n < name_max - 1:
+            name_buf[Int(n)] = bytes[cur]
+        n += Int32(1)
+        cur += 1
+    if name_max > 0:
+        var cap = Int(n) if Int(n) < Int(name_max) - 1 else Int(name_max) - 1
+        name_buf[cap] = UInt8(0)
+    if cur < len and bytes[cur] == UInt8(34):
+        cur += 1  # closing '"'
+    # skip ws, check for '['
+    while cur < len and _is_ws(bytes[cur]):
+        cur += 1
+    if cur < len and bytes[cur] == UInt8(91):   # '[' = 91
+        cur += 1
+        is_array[0] = Int32(1)
+    else:
+        is_array[0] = Int32(0)
+    cursor[0] = Int32(cur)
+    return Int32(1)
+
 
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):

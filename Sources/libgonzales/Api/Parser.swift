@@ -111,10 +111,7 @@ extension Parser {
 
         // Collides with parseTexture below
         private func parseParameterTexture() throws -> String? {
-                guard let string = try parseStringOpt() else {
-                        return nil
-                }
-                return string
+                return scanner.parseQuotedString()
         }
 
         private func parseTextures() throws -> [String] {
@@ -153,16 +150,7 @@ extension Parser {
         }
 
         private func parseStringOpt() throws -> String? {
-                guard scanner.scanString("\"") != nil else {
-                        return nil
-                }
-                guard let string = scanner.scanUpToString("\"") else {
-                        return nil
-                }
-                guard scanner.scanString("\"") != nil else {
-                        return nil
-                }
-                return string
+                return scanner.parseQuotedString()
         }
 
         private func parseString() throws -> String {
@@ -396,19 +384,9 @@ extension Parser {
 
         private func parseParameter() throws -> (String, any Parameter)? {
                 parseComments()
-                if scanner.scanString("\"") == nil { return nil }
-                guard let type = scanner.scanUpToCharactersList(from: ["\n", " "]) else {
-                        try bail()
-                }
-                guard let name = scanner.scanUpToCharactersList(from: ["\""]) else {
-                        try bail()
-                }
-                if scanner.scanString("\"") == nil {
-                        try bail()
-                }
-                let singleValue = scanner.scanString("[") == nil
-                let parameter = singleValue ? try parseValue(type: type) : try parseValues(type: type)
-                if !singleValue {
+                guard let (type, name, isArray) = scanner.parseParamHeader() else { return nil }
+                let parameter = isArray ? try parseValues(type: type) : try parseValue(type: type)
+                if isArray {
                         _ = scanner.scanString("]")
                 }
                 return (name, parameter)

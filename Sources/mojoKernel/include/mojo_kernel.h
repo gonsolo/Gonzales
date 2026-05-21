@@ -207,3 +207,16 @@ int32_t mojo_peek_char(const uint8_t *bytes, int32_t len, int32_t *cursor,
 int32_t mojo_scan_token(const uint8_t *bytes, int32_t len, int32_t *cursor,
                         const uint8_t *delims, int32_t n_delims,
                         uint8_t *buf, int32_t max_buf);
+
+// pbrt parser — directive-level (step 12).
+// mojo_parse_quoted_string: skip ws, read "content", write content to buf.
+//   Returns bytes written >= 0, or -1 if no opening '"'.
+// mojo_parse_param_header: read "type name" and optional '['.
+//   Writes null-terminated type and name; sets *is_array (1 if '[' consumed).
+//   Returns 1 if found, 0 if no opening '"'.
+int32_t mojo_parse_quoted_string(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                                 uint8_t *buf, int32_t max_buf);
+int32_t mojo_parse_param_header(const uint8_t *bytes, int32_t len, int32_t *cursor,
+                                uint8_t *type_buf, int32_t type_max,
+                                uint8_t *name_buf, int32_t name_max,
+                                int32_t *is_array);
