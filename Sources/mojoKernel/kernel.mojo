@@ -1822,19 +1822,30 @@ def mojo_render_tile_v2(
                                scene.meshes, scene.materials,
                                scene.areaLights, Int(scene.areaLightCount), i)
 
-    # Write results — pixel coords come from (iy, ix, si) ordering
+    # Accumulate the spp samples per pixel and emit one result per pixel.
+    # Matches the Swift Film accumulation: pixel = Σ light / Σ weight.
     idx = 0
+    var out = 0
     for iy in range(tileH):
         for ix in range(tileW):
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
+            var sumLR = Float32(0.0); var sumLG = Float32(0.0); var sumLB = Float32(0.0)
+            var sumAR = Float32(0.0); var sumAG = Float32(0.0); var sumAB = Float32(0.0)
+            var sumW = Float32(0.0)
             for _ in range(spp):
-                resultsPtr[idx] = TileResult_C(
-                    paths[idx].estimateR, paths[idx].estimateG, paths[idx].estimateB,
-                    paths[idx].albedoR, paths[idx].albedoG, paths[idx].albedoB,
-                    sp.filterWeight, px, py,
-                )
+                sumLR += paths[idx].estimateR
+                sumLG += paths[idx].estimateG
+                sumLB += paths[idx].estimateB
+                sumAR += paths[idx].albedoR
+                sumAG += paths[idx].albedoG
+                sumAB += paths[idx].albedoB
+                sumW += sp.filterWeight
                 idx += 1
+            resultsPtr[out] = TileResult_C(
+                sumLR, sumLG, sumLB, sumAR, sumAG, sumAB, sumW, px, py,
+            )
+            out += 1
 
     intersections.free()
     paths.free()
