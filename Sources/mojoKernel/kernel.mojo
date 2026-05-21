@@ -946,6 +946,10 @@ fn shade_core_cpu_nee(
         shade_coated_diffuse(path_ptr, inter, meshes, mat)
         return
 
+    if mat.type == 6:
+        shade_diffuse_transmission(path_ptr, inter, meshes, mat)
+        return
+
     if mat.type != 1:
         path_ptr[].active = 0
         return
@@ -1059,6 +1063,119 @@ fn shade_core_cpu_nee(
     path_ptr[].throughputR *= mat.albedoR
     path_ptr[].throughputG *= mat.albedoG
     path_ptr[].throughputB *= mat.albedoB
+    path_ptr[].bounce += 1
+
+    # Russian roulette after first bounce
+    if path_ptr[].bounce > 1:
+        var lum = Float32(0.2126) * path_ptr[].throughputR + Float32(0.7152) * path_ptr[].throughputG + Float32(0.0722) * path_ptr[].throughputB
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            var inv = Float32(1.0) / (Float32(1.0) - q)
+            path_ptr[].throughputR *= inv
+            path_ptr[].throughputG *= inv
+            path_ptr[].throughputB *= inv
+
+    path_ptr[].pcgState = pcg.state
+
+
+# ── DiffuseTransmission branch — called from shade_core_cpu_nee ──────────────
+# Stochastically reflects or transmits through the surface using the balance
+# heuristic. albedo = reflectance, emission = transmittance (both * scale).
+# Throughput is weighted by color / selection_probability so the estimator
+# remains unbiased. No NEE — direct light comes via random walk.
+@always_inline
+fn shade_diffuse_transmission(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var normal = cross(p1 - p0, p2 - p0)
+    var nlen = dot(normal, normal)
+    if nlen > Float32(0.0):
+        normal = normal * (Float32(1.0) / sqrt(nlen))
+
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    # Orient normal toward incoming ray
+    if dot(normal, ray_dir) > Float32(0.0):
+        normal = -normal
+
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    # Balance heuristic: choose reflect vs transmit proportional to luminance
+    var reflR = mat.albedoR;  var reflG = mat.albedoG;  var reflB = mat.albedoB
+    var transR = mat.emissionR; var transG = mat.emissionG; var transB = mat.emissionB
+    var pr = Float32(0.2126)*reflR  + Float32(0.7152)*reflG  + Float32(0.0722)*reflB
+    var pt = Float32(0.2126)*transR + Float32(0.7152)*transG + Float32(0.0722)*transB
+    var total = pr + pt
+    if total <= Float32(0.0):
+        path_ptr[].active = 0
+        return
+
+    var choose_reflect = pcg.next_float() < pr / total
+    # Bounce normal: same side for reflection, opposite for transmission
+    var bounce_normal = normal if choose_reflect else -normal
+
+    # Cosine-weighted hemisphere around bounce_normal
+    var u1 = pcg.next_float()
+    var u2 = pcg.next_float()
+    var r = sqrt(u1)
+    var theta = Float32(2.0) * Float32(3.14159265359) * u2
+    var x = r * cos(theta)
+    var y = r * sin(theta)
+    var z2 = Float32(1.0) - u1
+    var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
+
+    var sign = Float32(1.0) if bounce_normal[2] >= Float32(0.0) else Float32(-1.0)
+    var a = Float32(-1.0) / (sign + bounce_normal[2])
+    var b = bounce_normal[0] * bounce_normal[1] * a
+    var tangent  = SIMD[DType.float32, 3](Float32(1.0) + sign * bounce_normal[0] * bounce_normal[0] * a, sign * b, -sign * bounce_normal[0])
+    var bitangent = SIMD[DType.float32, 3](b, sign + bounce_normal[1] * bounce_normal[1] * a, -bounce_normal[1])
+
+    var dir = tangent * x + bitangent * y + bounce_normal * z
+    var dlen = dot(dir, dir)
+    if dlen > Float32(0.0):
+        dir = dir * (Float32(1.0) / sqrt(dlen))
+
+    # Offset along bounce_normal to avoid self-intersection
+    var hit_point = ray_org + ray_dir * inter.tHit + bounce_normal * Float32(0.0001)
+    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+
+    # Throughput weight = color / selection_probability = color * total / p_choice
+    if choose_reflect:
+        var w = total / pr
+        path_ptr[].throughputR *= reflR * w
+        path_ptr[].throughputG *= reflG * w
+        path_ptr[].throughputB *= reflB * w
+    else:
+        var w = total / pt
+        path_ptr[].throughputR *= transR * w
+        path_ptr[].throughputG *= transG * w
+        path_ptr[].throughputB *= transB * w
+
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce

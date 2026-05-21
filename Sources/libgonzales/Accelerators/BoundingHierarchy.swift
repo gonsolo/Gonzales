@@ -145,8 +145,27 @@ extension BoundingHierarchy {
                                 }
                                 cMat.type = 4
                                 cMat.albedo = (ior, 0, 0)
-                        case .diffuseTransmission:
+                        case .diffuseTransmission(let dt):
                                 matTypeCounts["diffuseTransmission", default: 0] += 1
+                                var reflR: Float = 1; var reflG: Float = 1; var reflB: Float = 1
+                                var transR: Float = 1; var transG: Float = 1; var transB: Float = 1
+                                var scale: Float = 1
+                                if let rgb = dt.reflectance.evaluate(at: dummyInteraction, arena: scene.arena) as? RgbSpectrum {
+                                        reflR = Float(rgb.red); reflG = Float(rgb.green); reflB = Float(rgb.blue)
+                                } else if let f = dt.reflectance.evaluate(at: dummyInteraction, arena: scene.arena) as? Real {
+                                        reflR = Float(f); reflG = Float(f); reflB = Float(f)
+                                }
+                                if let rgb = dt.transmittance.evaluate(at: dummyInteraction, arena: scene.arena) as? RgbSpectrum {
+                                        transR = Float(rgb.red); transG = Float(rgb.green); transB = Float(rgb.blue)
+                                } else if let f = dt.transmittance.evaluate(at: dummyInteraction, arena: scene.arena) as? Real {
+                                        transR = Float(f); transG = Float(f); transB = Float(f)
+                                }
+                                if let f = dt.scale.evaluate(at: dummyInteraction, arena: scene.arena) as? Real {
+                                        scale = Float(f)
+                                }
+                                cMat.type = 6
+                                cMat.albedo = (reflR * scale, reflG * scale, reflB * scale)
+                                cMat.emission = (transR * scale, transG * scale, transB * scale)
                         default:
                                 matTypeCounts["other", default: 0] += 1
                         }
