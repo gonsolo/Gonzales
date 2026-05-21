@@ -38,6 +38,7 @@ struct PathState_C {
         float throughput[3];
         float estimate[3];
         float albedo[3];
+        int32_t bounce;     /* path bounce counter; 0 = camera ray, incremented per diffuse hit */
         uint64_t pcgState;
         uint64_t pcgInc;
         int8_t active;
@@ -50,6 +51,14 @@ struct BVH2Node {
         int32_t count;  // 0 = interior, >0 = leaf primitive count
 };
 
+/* Emissive triangle for next-event estimation */
+struct AreaLight_C {
+        int32_t meshIdx;
+        int32_t triBaseVidx;   /* base index into vertexIndices (= triNum * 3) */
+        float emissionR, emissionG, emissionB;
+        int32_t _pad;
+};
+
 struct SceneDescriptor2_C {
         const struct BVH2Node *bvh2Nodes;
         const struct PrimId_C *primIds;
@@ -57,6 +66,8 @@ struct SceneDescriptor2_C {
         int64_t meshCount;
         const struct Material_C *materials;
         int64_t materialCount;
+        const struct AreaLight_C *areaLights;
+        int64_t areaLightCount;
 };
 
 // CPU traversal (single ray)

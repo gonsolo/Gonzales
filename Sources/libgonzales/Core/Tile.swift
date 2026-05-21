@@ -108,6 +108,7 @@ struct Tile: Sendable {
                                                 throughput: (Float(thru.red), Float(thru.green), Float(thru.blue)),
                                                 estimate: (Float(est.red), Float(est.green), Float(est.blue)),
                                                 albedo: (Float(alb.red), Float(alb.green), Float(alb.blue)),
+                                                bounce: 0,
                                                 pcgState: pcg1, pcgInc: pcg2, active: 1))
                                 }
                                 let handle = integrator.accelerator.gpuSceneHandle!

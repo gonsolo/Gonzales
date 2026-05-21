@@ -69,7 +69,7 @@ struct PathState_C(TrivialRegisterPassable):
     var albedoR: Float32
     var albedoG: Float32
     var albedoB: Float32
-    var _pad0: Int32
+    var bounce: Int32
     var pcgState: UInt64
     var pcgInc: UInt64
     var active: Int8
@@ -80,6 +80,15 @@ struct PathState_C(TrivialRegisterPassable):
     var _pad5: Int8
     var _pad6: Int8
     var _pad7: Int8
+
+@fieldwise_init
+struct AreaLight_C(TrivialRegisterPassable):
+    var meshIdx: Int32
+    var triBaseVidx: Int32
+    var emissionR: Float32
+    var emissionG: Float32
+    var emissionB: Float32
+    var _pad: Int32
 
 @fieldwise_init
 struct PixelSample_C(TrivialRegisterPassable):
@@ -236,6 +245,8 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var meshCount: Int64
     var materials: UnsafePointer[Material_C, MutAnyOrigin]
     var materialCount: Int64
+    var areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin]
+    var areaLightCount: Int64
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 #
@@ -385,6 +396,99 @@ fn traverse_bvh2_core(
     else:
         var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+
+
+# Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
+@always_inline
+fn any_hit_bvh2_core(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    ray: Ray_C,
+    tMax: Float32,
+) -> Bool:
+    var rdirX = Float32(1.0) / ray.dirX
+    var rdirY = Float32(1.0) / ray.dirY
+    var rdirZ = Float32(1.0) / ray.dirZ
+    var orgRdirX = ray.orgX * rdirX
+    var orgRdirY = ray.orgY * rdirY
+    var orgRdirZ = ray.orgZ * rdirZ
+    var nearXIsMin = rdirX >= Float32(0.0)
+    var nearYIsMin = rdirY >= Float32(0.0)
+    var nearZIsMin = rdirZ >= Float32(0.0)
+    var stack = InlineArray[Int, 64](fill=0)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+    var ray_org = SIMD[DType.float32, 3](ray.orgX, ray.orgY, ray.orgZ)
+    var ray_dir = SIMD[DType.float32, 3](ray.dirX, ray.dirY, ray.dirZ)
+    while True:
+        var node = bvh2Nodes[current]
+        if node.count > 0:
+            var offset = Int(node.offset)
+            var count = Int(node.count)
+            for j in range(count):
+                var prim = primIds[offset + j]
+                var mesh_idx: Int
+                var base_vidx: Int
+                if prim.type == 0:
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
+                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                    if prim.id2 == -1:
+                        continue
+                    mesh_idx = Int(prim.id2 >> 32)
+                    base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                else:
+                    continue
+                var mesh = meshes[mesh_idx]
+                var v0 = Int(mesh.vertexIndices[base_vidx])
+                var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+                var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+                var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+                var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+                var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+                if intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)[0]:
+                    return True
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = stack_ptr[toVisit]
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+            var leftNode = bvh2Nodes[leftIdx]
+            var rightNode = bvh2Nodes[rightIdx]
+            var leftHit = intersect_aabb(
+                leftNode.boundsMinX, leftNode.boundsMinY, leftNode.boundsMinZ,
+                leftNode.boundsMaxX, leftNode.boundsMaxY, leftNode.boundsMaxZ,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+            var rightHit = intersect_aabb(
+                rightNode.boundsMinX, rightNode.boundsMinY, rightNode.boundsMinZ,
+                rightNode.boundsMaxX, rightNode.boundsMaxY, rightNode.boundsMaxZ,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+            if leftIsHit and rightIsHit:
+                if leftHit[1] <= rightHit[1]:
+                    current = leftIdx
+                    stack_ptr[toVisit] = rightIdx
+                else:
+                    current = rightIdx
+                    stack_ptr[toVisit] = leftIdx
+                toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+            elif rightIsHit:
+                current = rightIdx
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = stack_ptr[toVisit]
+    return False
 
 
 # ── CPU entry point (called from Swift via C FFI) ─────────────────────────────
@@ -796,6 +900,157 @@ fn shade_core(
         path_ptr[].active = 0
 
 
+# CPU-only shading with next-event estimation (shadow rays via any_hit_bvh2_core).
+@always_inline
+fn shade_core_cpu_nee(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    tid: Int,
+):
+    var path_ptr = paths + tid
+    if path_ptr[].active == 0:
+        return
+
+    var inter = intersections[tid]
+    if inter.hit == 0:
+        path_ptr[].active = 0
+        return
+
+    var mat_idx = Int(inter.primId.materialIndex)
+    var mat = materials[mat_idx]
+
+    # Emissive hit: add emission only if camera ray directly sees the light (bounce 0)
+    if mat.type == 2:
+        if path_ptr[].bounce == 0:
+            path_ptr[].estimateR += path_ptr[].throughputR * mat.emissionR
+            path_ptr[].estimateG += path_ptr[].throughputG * mat.emissionG
+            path_ptr[].estimateB += path_ptr[].throughputB * mat.emissionB
+        path_ptr[].active = 0
+        return
+
+    if mat.type != 1:
+        path_ptr[].active = 0
+        return
+
+    # Resolve hit geometry
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0_idx = Int(mesh.vertexIndices[base_vidx])
+    var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0_idx*4], mesh.points[v0_idx*4+1], mesh.points[v0_idx*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1_idx*4], mesh.points[v1_idx*4+1], mesh.points[v1_idx*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2_idx*4], mesh.points[v2_idx*4+1], mesh.points[v2_idx*4+2])
+    var edge1 = p1 - p0
+    var edge2 = p2 - p0
+    var normal = cross(edge1, edge2)
+    var nlen = dot(normal, normal)
+    if nlen > Float32(0.0):
+        normal = normal * (Float32(1.0) / sqrt(nlen))
+
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    if dot(normal, ray_dir) > Float32(0.0):
+        normal = -normal
+
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+
+    # Single PCG instance for all sampling in this shade step
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    # ── Next-event estimation ──────────────────────────────────────────────────
+    if areaLightCount > 0:
+        var light_idx = Int(pcg.next_uint() % UInt32(areaLightCount))
+        var al = areaLights[light_idx]
+
+        var lmesh = meshes[Int(al.meshIdx)]
+        var lb = Int(al.triBaseVidx)
+        var lv0 = Int(lmesh.vertexIndices[lb])
+        var lv1 = Int(lmesh.vertexIndices[lb + 1])
+        var lv2 = Int(lmesh.vertexIndices[lb + 2])
+        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+
+        var r1 = pcg.next_float()
+        var r2 = pcg.next_float()
+        var sqrt_r1 = sqrt(r1)
+        var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
+
+        var ledge1 = lp1 - lp0
+        var ledge2 = lp2 - lp0
+        var lcross = cross(ledge1, ledge2)
+        var lcross_len = dot(lcross, lcross)
+        var light_area = Float32(0.5) * sqrt(lcross_len)
+        var light_normal = lcross
+        if lcross_len > Float32(0.0):
+            light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+
+        var to_light = light_point - hit_point
+        var dist_sq = dot(to_light, to_light)
+        var dist = sqrt(dist_sq)
+
+        if dist > Float32(0.0001) and light_area > Float32(0.0):
+            var shadow_dir = to_light * (Float32(1.0) / dist)
+            var cos_s = dot(normal, shadow_dir)
+            var cos_l = -dot(light_normal, shadow_dir)
+            if cos_s > Float32(0.0) and cos_l > Float32(0.0):
+                var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                      shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                    # pdf = 1 / (areaLightCount * light_area); G = cos_s * cos_l / dist_sq
+                    var weight = cos_s * cos_l * light_area * Float32(areaLightCount) / dist_sq
+                    path_ptr[].estimateR += path_ptr[].throughputR * mat.albedoR * al.emissionR * weight
+                    path_ptr[].estimateG += path_ptr[].throughputG * mat.albedoG * al.emissionG * weight
+                    path_ptr[].estimateB += path_ptr[].throughputB * mat.albedoB * al.emissionB * weight
+
+    # ── Indirect: cosine-weighted hemisphere bounce ────────────────────────────
+    var u1 = pcg.next_float()
+    var u2 = pcg.next_float()
+    path_ptr[].pcgState = pcg.state
+
+    var r = sqrt(u1)
+    var theta = Float32(2.0) * Float32(3.14159265359) * u2
+    var x = r * cos(theta)
+    var y = r * sin(theta)
+    var z2 = Float32(1.0) - u1
+    var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
+
+    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+    var a = Float32(-1.0) / (sign + normal[2])
+    var b = normal[0] * normal[1] * a
+    var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
+    var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+
+    var dir = tangent * x + bitangent * y + normal * z
+    var dlen = dot(dir, dir)
+    if dlen > Float32(0.0):
+        dir = dir * (Float32(1.0) / sqrt(dlen))
+
+    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+    path_ptr[].throughputR *= mat.albedoR
+    path_ptr[].throughputG *= mat.albedoG
+    path_ptr[].throughputB *= mat.albedoB
+    path_ptr[].bounce += 1
+
+
 fn shade_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -901,7 +1156,9 @@ def mojo_render_paths(
         for i in range(n):
             if paths[i].active == 0:
                 continue
-            shade_core(paths, intersections, scene.meshes, scene.materials, i)
+            shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
+                               scene.meshes, scene.materials,
+                               scene.areaLights, Int(scene.areaLightCount), i)
 
     intersections.free()
 
@@ -988,7 +1245,9 @@ def mojo_render_tile(
         for i in range(n):
             if paths[i].active == 0:
                 continue
-            shade_core(paths, intersections, scene.meshes, scene.materials, i)
+            shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
+                               scene.meshes, scene.materials,
+                               scene.areaLights, Int(scene.areaLightCount), i)
 
     # Write results for film accumulation
     for i in range(n):
