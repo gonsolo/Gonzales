@@ -114,9 +114,11 @@ extension BoundingHierarchy {
                                 matTypeCounts["coatedDiffuse", default: 0] += 1
                         case .conductor:
                                 matTypeCounts["conductor", default: 0] += 1
+                                cMat.type = 3
                                 cMat.albedo = (0.7, 0.7, 0.7)
                         case .coatedConductor:
                                 matTypeCounts["coatedConductor", default: 0] += 1
+                                cMat.type = 3
                                 cMat.albedo = (0.7, 0.7, 0.7)
                         case .dielectric:
                                 matTypeCounts["dielectric", default: 0] += 1
