@@ -938,6 +938,10 @@ fn shade_core_cpu_nee(
         shade_conductor(path_ptr, inter, meshes, mat)
         return
 
+    if mat.type == 4:
+        shade_dielectric(path_ptr, inter, meshes, mat)
+        return
+
     if mat.type != 1:
         path_ptr[].active = 0
         return
@@ -1054,6 +1058,95 @@ fn shade_core_cpu_nee(
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
+    if path_ptr[].bounce > 1:
+        var lum = Float32(0.2126) * path_ptr[].throughputR + Float32(0.7152) * path_ptr[].throughputG + Float32(0.0722) * path_ptr[].throughputB
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            var inv = Float32(1.0) / (Float32(1.0) - q)
+            path_ptr[].throughputR *= inv
+            path_ptr[].throughputG *= inv
+            path_ptr[].throughputB *= inv
+
+    path_ptr[].pcgState = pcg.state
+
+
+# ── Dielectric (glass) branch — called from shade_core_cpu_nee ──────────────
+@always_inline
+fn shade_dielectric(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var geom_normal = cross(p1 - p0, p2 - p0)
+    var nlen = dot(geom_normal, geom_normal)
+    if nlen > Float32(0.0):
+        geom_normal = geom_normal * (Float32(1.0) / sqrt(nlen))
+
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+
+    var ior = mat.albedoR
+    var entering = dot(ray_dir, geom_normal) < Float32(0.0)
+    var normal = geom_normal if entering else -geom_normal
+    var eta = (Float32(1.0) / ior) if entering else ior
+
+    var cos_i = -dot(ray_dir, normal)
+    var sin2_t = eta * eta * (Float32(1.0) - cos_i * cos_i)
+    var tir = sin2_t > Float32(1.0)
+
+    # Schlick Fresnel
+    var r0 = (Float32(1.0) - ior) / (Float32(1.0) + ior)
+    r0 = r0 * r0
+    var one_minus = Float32(1.0) - cos_i
+    var one_minus2 = one_minus * one_minus
+    var fresnel = r0 + (Float32(1.0) - r0) * one_minus2 * one_minus2 * one_minus
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    if tir or pcg.next_float() < fresnel:
+        # Reflect: r = d + 2*cos_i*n  (derived from r = d - 2(d·n)n, d·n = -cos_i)
+        var refl = ray_dir + normal * (Float32(2.0) * cos_i)
+        var rlen = dot(refl, refl)
+        if rlen > Float32(0.0):
+            refl = refl * (Float32(1.0) / sqrt(rlen))
+        var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+    else:
+        # Refract: t = eta*d + (eta*cos_i - sqrt(1 - sin2_t))*n
+        var cos_t = sqrt(Float32(1.0) - sin2_t)
+        var refr = ray_dir * eta + normal * (eta * cos_i - cos_t)
+        var rlen = dot(refr, refr)
+        if rlen > Float32(0.0):
+            refr = refr * (Float32(1.0) / sqrt(rlen))
+        var hit_point = ray_org + ray_dir * inter.tHit - normal * Float32(0.0001)
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refr[0], refr[1], refr[2])
+
+    path_ptr[].bounce += 1
+
+    # Russian roulette after first bounce (throughput unchanged for ideal glass)
     if path_ptr[].bounce > 1:
         var lum = Float32(0.2126) * path_ptr[].throughputR + Float32(0.7152) * path_ptr[].throughputG + Float32(0.0722) * path_ptr[].throughputB
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))

@@ -120,9 +120,16 @@ extension BoundingHierarchy {
                                 matTypeCounts["coatedConductor", default: 0] += 1
                                 cMat.type = 3
                                 cMat.albedo = (0.7, 0.7, 0.7)
-                        case .dielectric:
+                        case .dielectric(let dielectric):
                                 matTypeCounts["dielectric", default: 0] += 1
-                                cMat.albedo = (0.9, 0.9, 0.9)
+                                var ior: Float = 1.5
+                                if let f = dielectric.refractiveIndex.evaluate(
+                                        at: dummyInteraction, arena: scene.arena) as? Real
+                                {
+                                        ior = Float(f)
+                                }
+                                cMat.type = 4
+                                cMat.albedo = (ior, 0, 0)
                         case .diffuseTransmission:
                                 matTypeCounts["diffuseTransmission", default: 0] += 1
                         default:
