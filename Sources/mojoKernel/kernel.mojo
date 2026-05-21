@@ -934,6 +934,10 @@ fn shade_core_cpu_nee(
         path_ptr[].active = 0
         return
 
+    if mat.type == 3:
+        shade_conductor(path_ptr, inter, meshes, mat)
+        return
+
     if mat.type != 1:
         path_ptr[].active = 0
         return
@@ -1024,7 +1028,6 @@ fn shade_core_cpu_nee(
     # ── Indirect: cosine-weighted hemisphere bounce ────────────────────────────
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
-    path_ptr[].pcgState = pcg.state
 
     var r = sqrt(u1)
     var theta = Float32(2.0) * Float32(3.14159265359) * u2
@@ -1049,6 +1052,87 @@ fn shade_core_cpu_nee(
     path_ptr[].throughputG *= mat.albedoG
     path_ptr[].throughputB *= mat.albedoB
     path_ptr[].bounce += 1
+
+    # Russian roulette after first bounce
+    if path_ptr[].bounce > 1:
+        var lum = Float32(0.2126) * path_ptr[].throughputR + Float32(0.7152) * path_ptr[].throughputG + Float32(0.0722) * path_ptr[].throughputB
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            var inv = Float32(1.0) / (Float32(1.0) - q)
+            path_ptr[].throughputR *= inv
+            path_ptr[].throughputG *= inv
+            path_ptr[].throughputB *= inv
+
+    path_ptr[].pcgState = pcg.state
+
+
+# ── Conductor (perfect mirror) branch — called from shade_core_cpu_nee ──────
+@always_inline
+fn shade_conductor(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var normal = cross(p1 - p0, p2 - p0)
+    var nlen = dot(normal, normal)
+    if nlen > Float32(0.0):
+        normal = normal * (Float32(1.0) / sqrt(nlen))
+
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    if dot(normal, ray_dir) > Float32(0.0):
+        normal = -normal
+
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+
+    # Perfect specular reflection: r = d - 2(d·n)n
+    var refl = ray_dir - normal * (Float32(2.0) * dot(ray_dir, normal))
+    var rlen = dot(refl, refl)
+    if rlen > Float32(0.0):
+        refl = refl * (Float32(1.0) / sqrt(rlen))
+
+    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+    path_ptr[].throughputR *= mat.albedoR
+    path_ptr[].throughputG *= mat.albedoG
+    path_ptr[].throughputB *= mat.albedoB
+    path_ptr[].bounce += 1
+
+    # Russian roulette after first bounce
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    if path_ptr[].bounce > 1:
+        var lum = Float32(0.2126) * path_ptr[].throughputR + Float32(0.7152) * path_ptr[].throughputG + Float32(0.0722) * path_ptr[].throughputB
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            var inv = Float32(1.0) / (Float32(1.0) - q)
+            path_ptr[].throughputR *= inv
+            path_ptr[].throughputG *= inv
+            path_ptr[].throughputB *= inv
+    path_ptr[].pcgState = pcg.state
 
 
 fn shade_gpu(
