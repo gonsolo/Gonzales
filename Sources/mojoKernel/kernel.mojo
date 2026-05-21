@@ -2284,6 +2284,180 @@ def mojo_scan_float(
     result[0] = f
     return Int32(1)
 
+# Count floats in bytes[cursor..] without advancing the caller's cursor.
+# Stops at ']', EOF, or any non-numeric token — same stopping condition as
+# the per-float mojo_scan_float loop that parseReals() used to drive.
+@export
+def mojo_count_floats(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: Int32,
+) -> Int32:
+    var cur = Int(cursor)
+    var len = Int(length)
+    var count = Int32(0)
+    while True:
+        while cur < len and _is_ws(bytes[cur]):
+            cur += 1
+        if cur >= len:
+            break
+        if cur < len and bytes[cur] == UInt8(45):   # optional '-'
+            cur += 1
+        var int_seen = False
+        while cur < len and _is_digit(bytes[cur]):
+            int_seen = True
+            cur += 1
+        if cur < len and bytes[cur] == UInt8(46):   # '.'
+            cur += 1
+            while cur < len and _is_digit(bytes[cur]):
+                cur += 1
+        elif not int_seen:
+            break
+        if cur < len and bytes[cur] == UInt8(101):  # 'e'
+            cur += 1
+            if cur < len and bytes[cur] == UInt8(45):
+                cur += 1
+            while cur < len and _is_digit(bytes[cur]):
+                cur += 1
+        count += Int32(1)
+    return count
+
+# Fill out[0..max_count) with floats parsed from bytes[*cursor..].
+# Advances *cursor to the position where scanning stopped (at ']' or EOF).
+# Returns the number of values written (== mojo_count_floats result when
+# max_count >= that value).
+@export
+def mojo_scan_floats(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    result: UnsafePointer[Float32, MutAnyOrigin],
+    max_count: Int32,
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    var count = Int32(0)
+    while count < max_count:
+        while cur < len and _is_ws(bytes[cur]):
+            cur += 1
+        if cur >= len:
+            break
+        var leading_negative = bytes[cur] == UInt8(45)
+        var int_negative = False
+        if cur < len and bytes[cur] == UInt8(45):
+            int_negative = True
+            cur += 1
+        var int_part = Int32(0)
+        var int_seen = False
+        while cur < len and _is_digit(bytes[cur]):
+            int_part = int_part * Int32(10) + Int32(bytes[cur]) - Int32(48)
+            cur += 1
+            int_seen = True
+        if int_negative:
+            int_part = -int_part
+        var dval = Float64(int_part)
+        if cur < len and bytes[cur] == UInt8(46):
+            cur += 1
+            var tenth = Float64(0.1)
+            while cur < len and _is_digit(bytes[cur]):
+                var d = Float64(Int32(bytes[cur]) - Int32(48))
+                if dval < Float64(0.0):
+                    dval -= tenth * d
+                else:
+                    dval += tenth * d
+                tenth *= Float64(0.1)
+                cur += 1
+        elif not int_seen:
+            break
+        if cur < len and bytes[cur] == UInt8(101):
+            cur += 1
+            while cur < len and _is_ws(bytes[cur]):
+                cur += 1
+            var exp_negative = False
+            if cur < len and bytes[cur] == UInt8(45):
+                exp_negative = True
+                cur += 1
+            var exp_val = Int32(0)
+            while cur < len and _is_digit(bytes[cur]):
+                exp_val = exp_val * Int32(10) + Int32(bytes[cur]) - Int32(48)
+                cur += 1
+            if exp_negative:
+                exp_val = -exp_val
+            var factor = Float64(1.0)
+            var abs_exp = exp_val if exp_val >= 0 else -exp_val
+            for _ in range(Int(abs_exp)):
+                factor *= Float64(10.0)
+            if exp_val < 0:
+                dval /= factor
+            else:
+                dval *= factor
+        var f = Float32(dval)
+        if leading_negative and int_part == Int32(0):
+            f = -f
+        result[Int(count)] = f
+        count += Int32(1)
+    cursor[0] = Int32(cur)
+    return count
+
+# Count integers in bytes[cursor..] without advancing the caller's cursor.
+@export
+def mojo_count_ints(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: Int32,
+) -> Int32:
+    var cur = Int(cursor)
+    var len = Int(length)
+    var count = Int32(0)
+    while True:
+        while cur < len and _is_ws(bytes[cur]):
+            cur += 1
+        if cur >= len:
+            break
+        if cur < len and bytes[cur] == UInt8(45):
+            cur += 1
+        if cur >= len or not _is_digit(bytes[cur]):
+            break
+        while cur < len and _is_digit(bytes[cur]):
+            cur += 1
+        count += Int32(1)
+    return count
+
+# Fill out[0..max_count) with integers from bytes[*cursor..].
+# Advances *cursor to where scanning stopped.
+@export
+def mojo_scan_ints(
+    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    length: Int32,
+    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    result: UnsafePointer[Int32, MutAnyOrigin],
+    max_count: Int32,
+) -> Int32:
+    var cur = Int(cursor[0])
+    var len = Int(length)
+    var count = Int32(0)
+    while count < max_count:
+        while cur < len and _is_ws(bytes[cur]):
+            cur += 1
+        if cur >= len:
+            break
+        var negative = False
+        if bytes[cur] == UInt8(45):
+            negative = True
+            cur += 1
+        if cur >= len or not _is_digit(bytes[cur]):
+            break
+        var value = Int32(0)
+        while cur < len and _is_digit(bytes[cur]):
+            value = value * Int32(10) + Int32(bytes[cur]) - Int32(48)
+            cur += 1
+        if negative:
+            value = -value
+        result[Int(count)] = value
+        count += Int32(1)
+    cursor[0] = Int32(cur)
+    return count
+
 
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
