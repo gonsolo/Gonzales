@@ -69,6 +69,28 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                         samples: samples, scene: scene, results: &results, maxDepth: maxDepth)
         }
 
+        func renderTileV2(
+                rasterToCamera: [Float], cameraToWorld: [Float],
+                bounds: Bounds2i,
+                sobolSeed: Int32, log2SamplesPerPixel: Int32, nBase4Digits: Int32,
+                samplesPerPixel: Int32,
+                filterSigma: Float, filterSupportX: Float, filterSupportY: Float,
+                filterNormX: Float, filterNormY: Float, filterWeight: Float,
+                rngSeed: UInt64,
+                scene: Scene, results: inout [TileResult_C], maxDepth: Int
+        ) {
+                boundingHierarchy.renderTileV2(
+                        rasterToCamera: rasterToCamera, cameraToWorld: cameraToWorld,
+                        bounds: bounds,
+                        sobolSeed: sobolSeed, log2SamplesPerPixel: log2SamplesPerPixel,
+                        nBase4Digits: nBase4Digits, samplesPerPixel: samplesPerPixel,
+                        filterSigma: filterSigma, filterSupportX: filterSupportX,
+                        filterSupportY: filterSupportY,
+                        filterNormX: filterNormX, filterNormY: filterNormY,
+                        filterWeight: filterWeight, rngSeed: rngSeed,
+                        scene: scene, results: &results, maxDepth: maxDepth)
+        }
+
         // --- Closest Hit Query ---
         func intersect(
                 scene: Scene,

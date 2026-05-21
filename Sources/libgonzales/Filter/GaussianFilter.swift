@@ -120,6 +120,19 @@ struct GaussianFilter: Filter {
                 return FilterSample(location: location, probabilityDensity: probabilityDensity)
         }
 
+        // Pre-computed params for mojo_render_tile_v2.
+        // filterNorm{X,Y} = 0.5*(1+erf(support/(sigma*sqrt(2)))).
+        // filterWeight    = (2*normX-1)*(2*normY-1) — the constant importance-sampling weight.
+        func mojoParams() -> (sigma: Float, supportX: Float, supportY: Float,
+                              normX: Float, normY: Float, weight: Float) {
+                let s = Float(sigma)
+                let rx = Float(support.x)
+                let ry = Float(support.y)
+                let nx = Float(0.5 * (1.0 + erf(Double(rx) / (Double(s) * 2.0.squareRoot()))))
+                let ny = Float(0.5 * (1.0 + erf(Double(ry) / (Double(s) * 2.0.squareRoot()))))
+                return (s, rx, ry, nx, ny, (2*nx - 1) * (2*ny - 1))
+        }
+
         let sigma: Real
         var exponent: (Real, Real) = (0, 0)
         var support: Vector2F

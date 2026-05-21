@@ -127,6 +127,38 @@ struct TileResult_C {
         int32_t pixelX, pixelY;
 };
 
+// Parameters for mojo_render_tile_v2: Sobol sampler + Gaussian filter, all evaluated in Mojo.
+// sobolMatrices must point to NSobolDimensions * SobolMatrixSize uint32 values (standard Joe-Kuo table).
+// filterNorm{X,Y} = 0.5*(1+erf(support/(sigma*sqrt(2)))), pre-computed by Swift using Foundation.erf.
+// filterWeight   = (2*filterNormX-1)*(2*filterNormY-1) — the constant importance-sampling weight.
+// rngSeed is hashed with pixel coords + sample index to derive per-path PCG seeds.
+struct TileSamplerParams_C {
+        const uint32_t *sobolMatrices;
+        uint64_t rngSeed;
+        int32_t sobolSeed;
+        int32_t log2SamplesPerPixel;
+        int32_t nBase4Digits;
+        int32_t samplesPerPixel;
+        float filterSigma;
+        float filterSupportX;
+        float filterSupportY;
+        float filterNormX;
+        float filterNormY;
+        float filterWeight;
+};
+
+// Camera ray generation + full path trace + Sobol film sampling — all in Mojo.
+// results must be pre-allocated to (tileMaxX-tileMinX)*(tileMaxY-tileMinY)*samplesPerPixel entries,
+// filled in order [iy][ix][si] with pixel coords and filterWeight already written.
+void mojo_render_tile_v2(
+        const float *rasterToCamera, const float *cameraToWorld,
+        int32_t tileMinX, int32_t tileMinY, int32_t tileMaxX, int32_t tileMaxY,
+        const struct TileSamplerParams_C *samplerParams,
+        const struct SceneDescriptor2_C *scene,
+        struct TileResult_C *results,
+        int32_t maxDepth
+);
+
 // Camera ray generation + full path trace in Mojo.
 // rasterToCamera and cameraToWorld are 16-element column-major float arrays.
 void mojo_render_tile(const float *rasterToCamera, const float *cameraToWorld,

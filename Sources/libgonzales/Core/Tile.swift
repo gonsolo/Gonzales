@@ -163,53 +163,82 @@ struct Tile: Sendable {
                                         pixel: path.state.pixel))
                         }
                 } else {
-                        // CPU path: build PixelSample_C array, Mojo generates rays + traces all bounces
                         let (rasterToCamera, cameraToWorld) = camera.cameraMatrices()
-                        var pixelSamples = [PixelSample_C]()
-                        for pixel in bounds {
-                                for sampleIndex in 0..<sampler.samplesPerPixel {
-                                        var pathSampler = sampler
-                                        pathSampler.startPixelSample(pixel: pixel, index: sampleIndex)
-                                        let cameraSample = pathSampler.getCameraSample(
-                                                pixel: pixel, filter: camera.film.filter)
-
-                                        let deltaX = cameraSample.film.0 - (Real(pixel.x) + 0.5)
-                                        let deltaY = cameraSample.film.1 - (Real(pixel.y) + 0.5)
-                                        let filterLocation = Point2f(x: deltaX, y: deltaY)
-                                        let filterValue = camera.film.filter.evaluate(atLocation: filterLocation)
-                                        let filterWeight = filterValue / cameraSample.filterWeight
-
-                                        let pcg1 = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
-                                        let pcg2 = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
-                                        pixelSamples.append(PixelSample_C(
-                                                filmX: Float(cameraSample.film.0),
-                                                filmY: Float(cameraSample.film.1),
-                                                filterWeight: Float(filterWeight),
-                                                pixelX: Int32(pixel.x),
-                                                pixelY: Int32(pixel.y),
-                                                _pad: 0,
-                                                pcgState: pcg1,
-                                                pcgInc: pcg2))
-                                }
-                        }
-
+                        let spp = sampler.samplesPerPixel
+                        let tileW = bounds.pMax.x - bounds.pMin.x
+                        let tileH = bounds.pMax.y - bounds.pMin.y
+                        let resultCount = tileW * tileH * spp
                         let zero = TileResult_C(
                                 estimateR: 0, estimateG: 0, estimateB: 0,
                                 albedoR: 0, albedoG: 0, albedoB: 0,
                                 filterWeight: 0, pixelX: 0, pixelY: 0)
-                        var results = [TileResult_C](repeating: zero, count: pixelSamples.count)
-
+                        var results = [TileResult_C](repeating: zero, count: resultCount)
                         let shadeStart = Date()
-                        integrator.accelerator.renderTile(
-                                rasterToCamera: rasterToCamera,
-                                cameraToWorld: cameraToWorld,
-                                samples: pixelSamples,
-                                scene: integrator.scene,
-                                results: &results,
-                                maxDepth: integrator.maxDepth)
-                        stats.shadeTime += Date().timeIntervalSince(shadeStart)
 
-                        samples.reserveCapacity(results.count)
+                        // Fast path: Sobol sampler + Gaussian filter — sampling done entirely in Mojo
+                        if case .sobol(let zSobol) = sampler,
+                           let gaussianFilter = camera.film.filter as? GaussianFilter {
+                                let fp = gaussianFilter.mojoParams()
+                                let rngSeed = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
+                                integrator.accelerator.renderTileV2(
+                                        rasterToCamera: rasterToCamera,
+                                        cameraToWorld: cameraToWorld,
+                                        bounds: bounds,
+                                        sobolSeed: Int32(zSobol.seed),
+                                        log2SamplesPerPixel: Int32(zSobol.log2SamplesPerPixel),
+                                        nBase4Digits: Int32(zSobol.nBase4Digits),
+                                        samplesPerPixel: Int32(spp),
+                                        filterSigma: fp.sigma,
+                                        filterSupportX: fp.supportX,
+                                        filterSupportY: fp.supportY,
+                                        filterNormX: fp.normX,
+                                        filterNormY: fp.normY,
+                                        filterWeight: fp.weight,
+                                        rngSeed: rngSeed,
+                                        scene: integrator.scene,
+                                        results: &results,
+                                        maxDepth: integrator.maxDepth)
+                        } else {
+                                // Fallback: Swift builds PixelSample_C (other sampler/filter types)
+                                var pixelSamples = [PixelSample_C]()
+                                pixelSamples.reserveCapacity(resultCount)
+                                for pixel in bounds {
+                                        for sampleIndex in 0..<spp {
+                                                var pathSampler = sampler
+                                                pathSampler.startPixelSample(pixel: pixel, index: sampleIndex)
+                                                let cameraSample = pathSampler.getCameraSample(
+                                                        pixel: pixel, filter: camera.film.filter)
+                                                let deltaX = cameraSample.film.0 - (Real(pixel.x) + 0.5)
+                                                let deltaY = cameraSample.film.1 - (Real(pixel.y) + 0.5)
+                                                let filterLocation = Point2f(x: deltaX, y: deltaY)
+                                                let filterValue = camera.film.filter.evaluate(atLocation: filterLocation)
+                                                let filterWeight = filterValue / cameraSample.filterWeight
+                                                let pcg1 = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
+                                                let pcg2 = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
+                                                pixelSamples.append(PixelSample_C(
+                                                        filmX: Float(cameraSample.film.0),
+                                                        filmY: Float(cameraSample.film.1),
+                                                        filterWeight: Float(filterWeight),
+                                                        pixelX: Int32(pixel.x),
+                                                        pixelY: Int32(pixel.y),
+                                                        _pad: 0,
+                                                        pcgState: pcg1,
+                                                        pcgInc: pcg2))
+                                        }
+                                }
+                                var fallbackResults = [TileResult_C](repeating: zero, count: pixelSamples.count)
+                                integrator.accelerator.renderTile(
+                                        rasterToCamera: rasterToCamera,
+                                        cameraToWorld: cameraToWorld,
+                                        samples: pixelSamples,
+                                        scene: integrator.scene,
+                                        results: &fallbackResults,
+                                        maxDepth: integrator.maxDepth)
+                                results = fallbackResults
+                        }
+
+                        stats.shadeTime += Date().timeIntervalSince(shadeStart)
+                        samples.reserveCapacity(resultCount)
                         for r in results {
                                 samples.append(Sample(
                                         light: RgbSpectrum(
