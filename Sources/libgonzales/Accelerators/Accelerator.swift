@@ -55,6 +55,10 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 )
         }
 
+        func renderPaths(scene: Scene, pathStatesC: inout [PathState_C], maxDepth: Int) {
+                boundingHierarchy.renderPaths(scene: scene, pathStatesC: &pathStatesC, maxDepth: maxDepth)
+        }
+
         // --- Closest Hit Query ---
         func intersect(
                 scene: Scene,

@@ -1,4 +1,4 @@
-all: debug
+all: test_release
 
 #SINGLERAY = --single 32 58
 #SYNC = --sync
@@ -35,8 +35,8 @@ PBRT_SCENES_DIR = Scenes/pbrt-v4-scenes
 #SCENE_DIR = bunny-fur
 #SCENE_DIR = clouds
 #SCENE_DIR = contemporary-bathroom
-SCENE_DIR = crown
-SCENE_NAME = crown.pbrt
+#SCENE_DIR = crown
+#SCENE_NAME = crown.pbrt
 #SCENE_DIR = disney-cloud 			10/27
 #IMAGE = disney-cloud-720p.exr
 #SCENE_DIR = explosion
@@ -71,8 +71,8 @@ SCENE_NAME = crown.pbrt
 #SCENE_DIR = zero-day 				27/27
 #SCENE_NAME = frame120.pbrt
 #SCENE_NAME ?= $(SCENE_DIR).pbrt
-SCENE = $(PBRT_SCENES_DIR)/$(strip $(SCENE_DIR))/$(SCENE_NAME)
-IMAGE =  $(SCENE_NAME:.pbrt=.exr)
+SCENE = Scenes/cornell-box.pbrt
+IMAGE = cornell-box.exr
 IMAGE_PBRT = $(IMAGE)
 
 #SCENE = ~/src/moana/island/pbrt-v4/island.pbrt

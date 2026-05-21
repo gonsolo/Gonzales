@@ -846,6 +846,44 @@ fn mojo_gpu_shade_batch(
             print("GPU: Batch shading failed: " + String(e))
 
 @export
+def mojo_render_paths(
+    scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    count: Int64,
+    maxDepth: Int32,
+):
+    var scene = scenePtr[0]
+    var n = Int(count)
+    var maxD = Int(maxDepth)
+
+    var intersections = alloc[Intersection_C](n)
+
+    for bounce in range(maxD + 1):
+        var anyActive = False
+        for i in range(n):
+            if paths[i].active != 0:
+                anyActive = True
+                break
+        if not anyActive:
+            break
+
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            traverse_bvh2_core(
+                scene.bvh2Nodes, scene.primIds, scene.meshes,
+                paths[i].ray, Float32(1.0e38), intersections + i,
+            )
+
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            shade_core(paths, intersections, scene.meshes, scene.materials, i)
+
+    intersections.free()
+
+
+@export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
     if not handlePtr:
         return
