@@ -147,9 +147,19 @@ struct TileSamplerParams_C {
         float filterWeight;
 };
 
+// Build a depth-first BVH2 over `primCount` primitive AABBs (primBounds: 6 floats
+// per prim — minX,minY,minZ,maxX,maxY,maxZ). outNodes must hold >= 2*primCount nodes,
+// outOrder >= primCount int32s. Writes the node array and the primitive permutation
+// (outOrder[k] = original index now at leaf position k); returns the node count.
+int32_t mojo_build_bvh2(
+        const float *primBounds, int32_t primCount,
+        struct BVH2Node *outNodes, int32_t *outOrder
+);
+
 // Camera ray generation + full path trace + Sobol film sampling — all in Mojo.
-// results must be pre-allocated to (tileMaxX-tileMinX)*(tileMaxY-tileMinY)*samplesPerPixel entries,
-// filled in order [iy][ix][si] with pixel coords and filterWeight already written.
+// Samples are accumulated per pixel inside the kernel, so results must be pre-allocated
+// to (tileMaxX-tileMinX)*(tileMaxY-tileMinY) entries (one per pixel), filled in [iy][ix]
+// order with pixel coords and the summed filterWeight written.
 void mojo_render_tile_v2(
         const float *rasterToCamera, const float *cameraToWorld,
         int32_t tileMinX, int32_t tileMinY, int32_t tileMaxX, int32_t tileMaxY,
