@@ -168,16 +168,19 @@ struct Tile: Sendable {
                         let tileW = bounds.pMax.x - bounds.pMin.x
                         let tileH = bounds.pMax.y - bounds.pMin.y
                         let resultCount = tileW * tileH * spp
+                        let pixelCount = tileW * tileH
                         let zero = TileResult_C(
                                 estimateR: 0, estimateG: 0, estimateB: 0,
                                 albedoR: 0, albedoG: 0, albedoB: 0,
                                 filterWeight: 0, pixelX: 0, pixelY: 0)
-                        var results = [TileResult_C](repeating: zero, count: resultCount)
+                        var results: [TileResult_C]
                         let shadeStart = Date()
 
-                        // Fast path: Sobol sampler + Gaussian filter — sampling done entirely in Mojo
+                        // Fast path: Sobol sampler + Gaussian filter — sampling and
+                        // per-pixel accumulation done entirely in Mojo (one result per pixel).
                         if case .sobol(let zSobol) = sampler,
                            let gaussianFilter = camera.film.filter as? GaussianFilter {
+                                results = [TileResult_C](repeating: zero, count: pixelCount)
                                 let fp = gaussianFilter.mojoParams()
                                 let rngSeed = UInt64.random(in: 0...UInt64.max, using: &integrator.xoshiro)
                                 integrator.accelerator.renderTileV2(
@@ -238,7 +241,7 @@ struct Tile: Sendable {
                         }
 
                         stats.shadeTime += Date().timeIntervalSince(shadeStart)
-                        samples.reserveCapacity(resultCount)
+                        samples.reserveCapacity(results.count)
                         for r in results {
                                 samples.append(Sample(
                                         light: RgbSpectrum(
