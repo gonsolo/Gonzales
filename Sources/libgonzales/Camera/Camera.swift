@@ -10,6 +10,9 @@ protocol Camera: Sendable {
         func getSampleBounds() -> Bounds2i
 
         var film: Film { get }
+
+        // Returns (rasterToCamera, cameraToWorld) as 16-element column-major float arrays.
+        func cameraMatrices() -> (rasterToCamera: [Float], cameraToWorld: [Float])
 }
 
 extension Camera {

@@ -81,6 +81,29 @@ struct PathState_C(TrivialRegisterPassable):
     var _pad6: Int8
     var _pad7: Int8
 
+@fieldwise_init
+struct PixelSample_C(TrivialRegisterPassable):
+    var filmX: Float32
+    var filmY: Float32
+    var filterWeight: Float32
+    var pixelX: Int32
+    var pixelY: Int32
+    var _pad: Int32
+    var pcgState: UInt64
+    var pcgInc: UInt64
+
+@fieldwise_init
+struct TileResult_C(TrivialRegisterPassable):
+    var estimateR: Float32
+    var estimateG: Float32
+    var estimateB: Float32
+    var albedoR: Float32
+    var albedoG: Float32
+    var albedoB: Float32
+    var filterWeight: Float32
+    var pixelX: Int32
+    var pixelY: Int32
+
 @always_inline
 fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
     var a_yzx = SIMD[DType.float32, 3](a[1], a[2], a[0])
@@ -881,6 +904,103 @@ def mojo_render_paths(
             shade_core(paths, intersections, scene.meshes, scene.materials, i)
 
     intersections.free()
+
+
+@export
+def mojo_render_tile(
+    rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
+    cameraToWorld: UnsafePointer[Float32, MutAnyOrigin],
+    samplesPtr: UnsafePointer[PixelSample_C, MutAnyOrigin],
+    count: Int64,
+    scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
+    resultsPtr: UnsafePointer[TileResult_C, MutAnyOrigin],
+    maxDepth: Int32,
+):
+    var scene = scenePtr[0]
+    var n = Int(count)
+    var maxD = Int(maxDepth)
+
+    # World-space camera origin = translation column of cameraToWorld (col 3)
+    var orgX = cameraToWorld[12]
+    var orgY = cameraToWorld[13]
+    var orgZ = cameraToWorld[14]
+
+    var paths = alloc[PathState_C](n)
+    var intersections = alloc[Intersection_C](n)
+
+    # Generate primary rays from film samples
+    for i in range(n):
+        var s = samplesPtr[i]
+        var fX = s.filmX
+        var fY = s.filmY
+
+        # rasterToCamera * (fX, fY, 0, 1) — column-major: M[r,c] = flat[c*4+r]
+        var cx = rasterToCamera[0]*fX + rasterToCamera[4]*fY + rasterToCamera[12]
+        var cy = rasterToCamera[1]*fX + rasterToCamera[5]*fY + rasterToCamera[13]
+        var cz = rasterToCamera[2]*fX + rasterToCamera[6]*fY + rasterToCamera[14]
+        var cw = rasterToCamera[3]*fX + rasterToCamera[7]*fY + rasterToCamera[15]
+        if cw != Float32(0.0) and cw != Float32(1.0):
+            cx = cx / cw; cy = cy / cw; cz = cz / cw
+
+        # Normalize camera-space direction
+        var camDir = SIMD[DType.float32, 3](cx, cy, cz)
+        var camLen = dot(camDir, camDir)
+        if camLen > Float32(0.0):
+            camDir = camDir * (Float32(1.0) / sqrt(camLen))
+
+        # cameraToWorld * direction (3x3 part only, no translation)
+        var dx = cameraToWorld[0]*camDir[0] + cameraToWorld[4]*camDir[1] + cameraToWorld[8]*camDir[2]
+        var dy = cameraToWorld[1]*camDir[0] + cameraToWorld[5]*camDir[1] + cameraToWorld[9]*camDir[2]
+        var dz = cameraToWorld[2]*camDir[0] + cameraToWorld[6]*camDir[1] + cameraToWorld[10]*camDir[2]
+        var worldDir = SIMD[DType.float32, 3](dx, dy, dz)
+        var dirLen = dot(worldDir, worldDir)
+        if dirLen > Float32(0.0):
+            worldDir = worldDir * (Float32(1.0) / sqrt(dirLen))
+
+        paths[i] = PathState_C(
+            Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
+            Float32(1.0), Float32(1.0), Float32(1.0),
+            Float32(0.0), Float32(0.0), Float32(0.0),
+            Float32(0.0), Float32(0.0), Float32(0.0),
+            Int32(0),
+            s.pcgState, s.pcgInc,
+            Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+        )
+
+    # Multi-bounce path trace
+    for bounce in range(maxD + 1):
+        var anyActive = False
+        for i in range(n):
+            if paths[i].active != 0:
+                anyActive = True
+                break
+        if not anyActive:
+            break
+
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            traverse_bvh2_core(
+                scene.bvh2Nodes, scene.primIds, scene.meshes,
+                paths[i].ray, Float32(1.0e38), intersections + i,
+            )
+
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            shade_core(paths, intersections, scene.meshes, scene.materials, i)
+
+    # Write results for film accumulation
+    for i in range(n):
+        var s = samplesPtr[i]
+        resultsPtr[i] = TileResult_C(
+            paths[i].estimateR, paths[i].estimateG, paths[i].estimateB,
+            paths[i].albedoR, paths[i].albedoG, paths[i].albedoB,
+            s.filterWeight, s.pixelX, s.pixelY,
+        )
+
+    intersections.free()
+    paths.free()
 
 
 @export

@@ -467,6 +467,48 @@ extension BoundingHierarchy {
                 return nil
         }
 
+        // --- Camera ray generation + full path trace in Mojo ---
+        func renderTile(
+                rasterToCamera: [Float], cameraToWorld: [Float],
+                samples: [PixelSample_C], scene: Scene,
+                results: inout [TileResult_C], maxDepth: Int
+        ) {
+                let count = Int64(samples.count)
+                samples.withUnsafeBufferPointer { samplesPtr in
+                        scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                                self.materialsC.withUnsafeBufferPointer { matPtr in
+                                        var desc = SceneDescriptor2_C(
+                                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                                        .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                                primIds: UnsafeRawPointer(primIdsPointer)
+                                                        .assumingMemoryBound(to: PrimId_C.self),
+                                                meshes: meshesPtr.baseAddress!,
+                                                meshCount: Int64(scene.meshesC.count),
+                                                materials: matPtr.baseAddress,
+                                                materialCount: Int64(self.materialsC.count)
+                                        )
+                                        results.withUnsafeMutableBufferPointer { resPtr in
+                                                rasterToCamera.withUnsafeBufferPointer { rtcPtr in
+                                                        cameraToWorld.withUnsafeBufferPointer { ctwPtr in
+                                                                withUnsafePointer(to: &desc) { descPtr in
+                                                                        mojo_render_tile(
+                                                                                rtcPtr.baseAddress!,
+                                                                                ctwPtr.baseAddress!,
+                                                                                samplesPtr.baseAddress!,
+                                                                                count,
+                                                                                descPtr,
+                                                                                resPtr.baseAddress!,
+                                                                                Int32(maxDepth)
+                                                                        )
+                                                                }
+                                                        }
+                                                }
+                                        }
+                                }
+                        }
+                }
+        }
+
         // --- Full multi-bounce CPU render (all bounces in Mojo) ---
         func renderPaths(scene: Scene, pathStatesC: inout [PathState_C], maxDepth: Int) {
                 let count = Int64(pathStatesC.count)

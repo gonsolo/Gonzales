@@ -59,6 +59,16 @@ struct Accelerator: Boundable, Intersectable, Sendable {
                 boundingHierarchy.renderPaths(scene: scene, pathStatesC: &pathStatesC, maxDepth: maxDepth)
         }
 
+        func renderTile(
+                rasterToCamera: [Float], cameraToWorld: [Float],
+                samples: [PixelSample_C], scene: Scene,
+                results: inout [TileResult_C], maxDepth: Int
+        ) {
+                boundingHierarchy.renderTile(
+                        rasterToCamera: rasterToCamera, cameraToWorld: cameraToWorld,
+                        samples: samples, scene: scene, results: &results, maxDepth: maxDepth)
+        }
+
         // --- Closest Hit Query ---
         func intersect(
                 scene: Scene,
