@@ -55,6 +55,8 @@ struct SceneDescriptor2_C {
         const struct PrimId_C *primIds;
         const struct TriangleMesh_C *meshes;
         int64_t meshCount;
+        const struct Material_C *materials;
+        int64_t materialCount;
 };
 
 // CPU traversal (single ray)
@@ -89,3 +91,7 @@ void mojo_cpu_shade_batch(struct PathState_C *paths, int64_t count,
                           const struct Material_C *materials);
 
 void mojo_gpu_free_scene(void *handle);
+
+// Full multi-bounce CPU path trace for a batch of paths (replaces the Swift bounce loop)
+void mojo_render_paths(const struct SceneDescriptor2_C *scene, struct PathState_C *paths,
+                       int64_t count, int32_t maxDepth);

@@ -292,26 +292,30 @@ extension BoundingHierarchy {
                 var results = [Intersection_C](repeating: Intersection_C(), count: rays.count)
 
                 scene.meshesC.withUnsafeBufferPointer { meshesPtr in
-                        var desc = SceneDescriptor2_C(
-                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
-                                        .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
-                                primIds: UnsafeRawPointer(primIdsPointer)
-                                        .assumingMemoryBound(to: PrimId_C.self),
-                                meshes: meshesPtr.baseAddress!,
-                                meshCount: Int64(scene.meshesC.count)
-                        )
+                        self.materialsC.withUnsafeBufferPointer { matPtr in
+                                var desc = SceneDescriptor2_C(
+                                        bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                                .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                        primIds: UnsafeRawPointer(primIdsPointer)
+                                                .assumingMemoryBound(to: PrimId_C.self),
+                                        meshes: meshesPtr.baseAddress!,
+                                        meshCount: Int64(scene.meshesC.count),
+                                        materials: matPtr.baseAddress,
+                                        materialCount: Int64(self.materialsC.count)
+                                )
 
-                        raysC.withUnsafeBufferPointer { raysPtr in
-                                tMaxValues.withUnsafeBufferPointer { tMaxPtr in
-                                        results.withUnsafeMutableBufferPointer { resPtr in
-                                                withUnsafePointer(to: &desc) { descPtr in
-                                                        mojo_cpu_traverse_batch(
-                                                                descPtr,
-                                                                raysPtr.baseAddress!,
-                                                                tMaxPtr.baseAddress!,
-                                                                Int64(rays.count),
-                                                                resPtr.baseAddress!
-                                                        )
+                                raysC.withUnsafeBufferPointer { raysPtr in
+                                        tMaxValues.withUnsafeBufferPointer { tMaxPtr in
+                                                results.withUnsafeMutableBufferPointer { resPtr in
+                                                        withUnsafePointer(to: &desc) { descPtr in
+                                                                mojo_cpu_traverse_batch(
+                                                                        descPtr,
+                                                                        raysPtr.baseAddress!,
+                                                                        tMaxPtr.baseAddress!,
+                                                                        Int64(rays.count),
+                                                                        resPtr.baseAddress!
+                                                                )
+                                                        }
                                                 }
                                         }
                                 }
@@ -353,33 +357,37 @@ extension BoundingHierarchy {
                 if bvh2NodesCount == 0 { return false }
 
                 return scene.meshesC.withUnsafeBufferPointer { meshesPtr in
-                        var desc = SceneDescriptor2_C(
-                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(
-                                        to: mojoKernel.BVH2Node.self),
-                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(
-                                        to: PrimId_C.self),
-                                meshes: meshesPtr.baseAddress,
-                                meshCount: Int64(scene.meshesC.count)
-                        )
-                        var rayC = Ray_C(
-                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
-                                orgZ: Float(ray.origin.z),
-                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
-                                dirZ: Float(ray.direction.z)
-                        )
-                        var result = Intersection_C()
-                        withUnsafePointer(to: &desc) { descP in
-                                withUnsafePointer(to: &rayC) { rayP in
-                                        withUnsafeMutablePointer(to: &result) { resP in
-                                                mojo_traverse_bvh2(descP, rayP, Float(tHit), resP)
+                        self.materialsC.withUnsafeBufferPointer { matPtr in
+                                var desc = SceneDescriptor2_C(
+                                        bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(
+                                                to: mojoKernel.BVH2Node.self),
+                                        primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(
+                                                to: PrimId_C.self),
+                                        meshes: meshesPtr.baseAddress,
+                                        meshCount: Int64(scene.meshesC.count),
+                                        materials: matPtr.baseAddress,
+                                        materialCount: Int64(self.materialsC.count)
+                                )
+                                var rayC = Ray_C(
+                                        orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                                        orgZ: Float(ray.origin.z),
+                                        dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                                        dirZ: Float(ray.direction.z)
+                                )
+                                var result = Intersection_C()
+                                withUnsafePointer(to: &desc) { descP in
+                                        withUnsafePointer(to: &rayC) { rayP in
+                                                withUnsafeMutablePointer(to: &result) { resP in
+                                                        mojo_traverse_bvh2(descP, rayP, Float(tHit), resP)
+                                                }
                                         }
                                 }
+                                if result.hit != 0 {
+                                        tHit = Real(result.tHit)
+                                        return true
+                                }
+                                return false
                         }
-                        if result.hit != 0 {
-                                tHit = Real(result.tHit)
-                                return true
-                        }
-                        return false
                 }
         }
 
@@ -392,29 +400,33 @@ extension BoundingHierarchy {
                 if bvh2NodesCount == 0 { return nil }
 
                 let result = scene.meshesC.withUnsafeBufferPointer { meshesPtr in
-                        var desc = SceneDescriptor2_C(
-                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(
-                                        to: mojoKernel.BVH2Node.self),
-                                primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(
-                                        to: PrimId_C.self),
-                                meshes: meshesPtr.baseAddress,
-                                meshCount: Int64(scene.meshesC.count)
-                        )
-                        var rayC = Ray_C(
-                                orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
-                                orgZ: Float(ray.origin.z),
-                                dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
-                                dirZ: Float(ray.direction.z)
-                        )
-                        var result = Intersection_C()
-                        withUnsafePointer(to: &desc) { descP in
-                                withUnsafePointer(to: &rayC) { rayP in
-                                        withUnsafeMutablePointer(to: &result) { resP in
-                                                mojo_traverse_bvh2(descP, rayP, Float(tHit), resP)
+                        self.materialsC.withUnsafeBufferPointer { matPtr in
+                                var desc = SceneDescriptor2_C(
+                                        bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer).assumingMemoryBound(
+                                                to: mojoKernel.BVH2Node.self),
+                                        primIds: UnsafeRawPointer(primIdsPointer).assumingMemoryBound(
+                                                to: PrimId_C.self),
+                                        meshes: meshesPtr.baseAddress,
+                                        meshCount: Int64(scene.meshesC.count),
+                                        materials: matPtr.baseAddress,
+                                        materialCount: Int64(self.materialsC.count)
+                                )
+                                var rayC = Ray_C(
+                                        orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
+                                        orgZ: Float(ray.origin.z),
+                                        dirX: Float(ray.direction.x), dirY: Float(ray.direction.y),
+                                        dirZ: Float(ray.direction.z)
+                                )
+                                var result = Intersection_C()
+                                withUnsafePointer(to: &desc) { descP in
+                                        withUnsafePointer(to: &rayC) { rayP in
+                                                withUnsafeMutablePointer(to: &result) { resP in
+                                                        mojo_traverse_bvh2(descP, rayP, Float(tHit), resP)
+                                                }
                                         }
                                 }
+                                return result
                         }
-                        return result
                 }
 
                 if result.hit != 0 {
@@ -453,6 +465,35 @@ extension BoundingHierarchy {
                 }
 
                 return nil
+        }
+
+        // --- Full multi-bounce CPU render (all bounces in Mojo) ---
+        func renderPaths(scene: Scene, pathStatesC: inout [PathState_C], maxDepth: Int) {
+                let count = Int64(pathStatesC.count)
+                pathStatesC.withUnsafeMutableBufferPointer { pathsPtr in
+                        scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                                self.materialsC.withUnsafeBufferPointer { matPtr in
+                                        var desc = SceneDescriptor2_C(
+                                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                                        .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                                primIds: UnsafeRawPointer(primIdsPointer)
+                                                        .assumingMemoryBound(to: PrimId_C.self),
+                                                meshes: meshesPtr.baseAddress!,
+                                                meshCount: Int64(scene.meshesC.count),
+                                                materials: matPtr.baseAddress,
+                                                materialCount: Int64(self.materialsC.count)
+                                        )
+                                        withUnsafePointer(to: &desc) { descPtr in
+                                                mojo_render_paths(
+                                                        descPtr,
+                                                        pathsPtr.baseAddress!,
+                                                        count,
+                                                        Int32(maxDepth)
+                                                )
+                                        }
+                                }
+                        }
+                }
         }
 
         func objectBound(scene: Scene) -> Bounds3f {
