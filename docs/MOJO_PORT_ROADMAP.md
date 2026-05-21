@@ -102,7 +102,7 @@ Mojo can run the whole pipeline behind the ABI.
 ## Progress
 
 - [x] 11a — whole-file scanner buffer
-- [ ] 11b — numeric scan in Mojo
+- [x] 11b — numeric scan in Mojo
 - [ ] 11c — bulk array scan in Mojo
 - [ ] 11d — token/keyword scan in Mojo
 - [ ] 12 — directive interpreter in Mojo

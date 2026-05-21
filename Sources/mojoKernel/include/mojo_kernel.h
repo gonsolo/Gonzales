@@ -175,3 +175,10 @@ void mojo_render_tile(const float *rasterToCamera, const float *cameraToWorld,
                       const struct PixelSample_C *samples, int64_t count,
                       const struct SceneDescriptor2_C *scene,
                       struct TileResult_C *results, int32_t maxDepth);
+
+// pbrt lexer — numeric scanning over a whole-file byte buffer (step 11b).
+// cursor is read and updated in place. Returns 1 on success, 0 if no number found.
+int32_t mojo_scan_int(const uint8_t *bytes, int32_t len,
+                      int32_t *cursor, int32_t *result);
+int32_t mojo_scan_float(const uint8_t *bytes, int32_t len,
+                        int32_t *cursor, float *result);
