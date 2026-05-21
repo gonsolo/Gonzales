@@ -1851,6 +1851,217 @@ def mojo_render_tile_v2(
     paths.free()
 
 
+# ── BVH2 Construction (SAH) ───────────────────────────────────────────
+# Builds a depth-first BVH2 node array from per-primitive AABBs, matching
+# the Swift BoundingHierarchyBuilder layout: left child is at index+1, the
+# right-child index is stored in .offset, leaves carry count>0 / offset=start.
+# The working arrays widx/wmin/wmax are reordered in place; widx ends up
+# holding the primitive permutation in leaf order.
+
+@always_inline
+fn _bvh_swap(
+    widx: UnsafePointer[Int32, MutAnyOrigin],
+    wmin: UnsafePointer[Float32, MutAnyOrigin],
+    wmax: UnsafePointer[Float32, MutAnyOrigin],
+    i: Int, j: Int,
+):
+    var ti = widx[i]; widx[i] = widx[j]; widx[j] = ti
+    for a in range(3):
+        var mn = wmin[i*3+a]; wmin[i*3+a] = wmin[j*3+a]; wmin[j*3+a] = mn
+        var mx = wmax[i*3+a]; wmax[i*3+a] = wmax[j*3+a]; wmax[j*3+a] = mx
+
+fn build_bvh2_node(
+    widx: UnsafePointer[Int32, MutAnyOrigin],
+    wmin: UnsafePointer[Float32, MutAnyOrigin],
+    wmax: UnsafePointer[Float32, MutAnyOrigin],
+    start: Int, end: Int,
+    out_nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    node_count: UnsafePointer[Int32, MutAnyOrigin],
+    prims_per_node: Int,
+) -> Int32:
+    var my = Int(node_count[0])
+    node_count[0] = node_count[0] + 1
+    var count = end - start
+
+    var INF = Float32(3.0e38)
+    var bminx = INF; var bminy = INF; var bminz = INF
+    var bmaxx = -INF; var bmaxy = -INF; var bmaxz = -INF
+    var cminx = INF; var cminy = INF; var cminz = INF
+    var cmaxx = -INF; var cmaxy = -INF; var cmaxz = -INF
+    for i in range(start, end):
+        var mnx = wmin[i*3+0]; var mny = wmin[i*3+1]; var mnz = wmin[i*3+2]
+        var mxx = wmax[i*3+0]; var mxy = wmax[i*3+1]; var mxz = wmax[i*3+2]
+        bminx = min(bminx, mnx); bminy = min(bminy, mny); bminz = min(bminz, mnz)
+        bmaxx = max(bmaxx, mxx); bmaxy = max(bmaxy, mxy); bmaxz = max(bmaxz, mxz)
+        var cx = Float32(0.5)*(mnx+mxx); var cy = Float32(0.5)*(mny+mxy)
+        var cz = Float32(0.5)*(mnz+mxz)
+        cminx = min(cminx, cx); cminy = min(cminy, cy); cminz = min(cminz, cz)
+        cmaxx = max(cmaxx, cx); cmaxy = max(cmaxy, cy); cmaxz = max(cmaxz, cz)
+
+    # Centroid bounds: pick maximum-extent axis.
+    var cex = cmaxx - cminx; var cey = cmaxy - cminy; var cez = cmaxz - cminz
+    var dim = 0
+    if cey > cex and cey >= cez:
+        dim = 1
+    elif cez > cex and cez > cey:
+        dim = 2
+    var cmin_d = cminx if dim == 0 else (cminy if dim == 1 else cminz)
+    var cmax_d = cmaxx if dim == 0 else (cmaxy if dim == 1 else cmaxz)
+
+    var dxb = bmaxx - bminx; var dyb = bmaxy - bminy; var dzb = bmaxz - bminz
+    if dxb < 0: dxb = 0
+    if dyb < 0: dyb = 0
+    if dzb < 0: dzb = 0
+    var sa = Float32(2.0) * (dxb*dyb + dyb*dzb + dzb*dxb)
+
+    # Leaf when geometry is degenerate or a single primitive.
+    if sa == Float32(0.0) or count == 1 or cmax_d == cmin_d:
+        out_nodes[my] = BVH2Node(bminx, bminy, bminz, bmaxx, bmaxy, bmaxz,
+                                 Int32(start), Int32(count))
+        return Int32(my)
+
+    # Compute the split index `mid` (-1 => fall back to a leaf).
+    var mid = -1
+    if count <= 2:
+        # Order the (at most two) primitives along `dim`; split in the middle.
+        if count == 2:
+            var c0 = Float32(0.5)*(wmin[start*3+dim] + wmax[start*3+dim])
+            var c1 = Float32(0.5)*(wmin[(start+1)*3+dim] + wmax[(start+1)*3+dim])
+            if c1 < c0:
+                _bvh_swap(widx, wmin, wmax, start, start+1)
+        mid = start + count // 2
+    else:
+        comptime nBuckets = 12
+        var bk_cnt = InlineArray[Int32, nBuckets](fill=Int32(0))
+        var bk_minx = InlineArray[Float32, nBuckets](fill=INF)
+        var bk_miny = InlineArray[Float32, nBuckets](fill=INF)
+        var bk_minz = InlineArray[Float32, nBuckets](fill=INF)
+        var bk_maxx = InlineArray[Float32, nBuckets](fill=-INF)
+        var bk_maxy = InlineArray[Float32, nBuckets](fill=-INF)
+        var bk_maxz = InlineArray[Float32, nBuckets](fill=-INF)
+        var inv_d = Float32(1.0) / (cmax_d - cmin_d)
+        for i in range(start, end):
+            var ci = Float32(0.5)*(wmin[i*3+dim] + wmax[i*3+dim])
+            var b = Int(Float32(nBuckets) * ((ci - cmin_d) * inv_d))
+            if b == nBuckets: b = nBuckets - 1
+            if b < 0: b = 0
+            bk_cnt[b] += 1
+            bk_minx[b] = min(bk_minx[b], wmin[i*3+0])
+            bk_miny[b] = min(bk_miny[b], wmin[i*3+1])
+            bk_minz[b] = min(bk_minz[b], wmin[i*3+2])
+            bk_maxx[b] = max(bk_maxx[b], wmax[i*3+0])
+            bk_maxy[b] = max(bk_maxy[b], wmax[i*3+1])
+            bk_maxz[b] = max(bk_maxz[b], wmax[i*3+2])
+
+        comptime nSplits = nBuckets - 1
+        var costs = InlineArray[Float32, nSplits](fill=Float32(0.0))
+        # Prefix pass: cost of the "below" set for each split.
+        var cntBelow = 0
+        var pminx = INF; var pminy = INF; var pminz = INF
+        var pmaxx = -INF; var pmaxy = -INF; var pmaxz = -INF
+        for i in range(nSplits):
+            pminx = min(pminx, bk_minx[i]); pminy = min(pminy, bk_miny[i])
+            pminz = min(pminz, bk_minz[i])
+            pmaxx = max(pmaxx, bk_maxx[i]); pmaxy = max(pmaxy, bk_maxy[i])
+            pmaxz = max(pmaxz, bk_maxz[i])
+            cntBelow += Int(bk_cnt[i])
+            var ex = pmaxx - pminx; var ey = pmaxy - pminy; var ez = pmaxz - pminz
+            if ex < 0: ex = 0
+            if ey < 0: ey = 0
+            if ez < 0: ez = 0
+            costs[i] += Float32(cntBelow) * Float32(2.0) * (ex*ey + ey*ez + ez*ex)
+        # Suffix pass: cost of the "above" set.
+        var cntAbove = 0
+        var qminx = INF; var qminy = INF; var qminz = INF
+        var qmaxx = -INF; var qmaxy = -INF; var qmaxz = -INF
+        for i in range(nSplits, 0, -1):
+            qminx = min(qminx, bk_minx[i]); qminy = min(qminy, bk_miny[i])
+            qminz = min(qminz, bk_minz[i])
+            qmaxx = max(qmaxx, bk_maxx[i]); qmaxy = max(qmaxy, bk_maxy[i])
+            qmaxz = max(qmaxz, bk_maxz[i])
+            cntAbove += Int(bk_cnt[i])
+            var ex = qmaxx - qminx; var ey = qmaxy - qminy; var ez = qmaxz - qminz
+            if ex < 0: ex = 0
+            if ey < 0: ey = 0
+            if ez < 0: ez = 0
+            costs[i-1] += Float32(cntAbove) * Float32(2.0) * (ex*ey + ey*ez + ez*ex)
+
+        var minBucket = -1
+        var minCost = Float32(3.0e38)
+        for i in range(nSplits):
+            if costs[i] < minCost:
+                minCost = costs[i]
+                minBucket = i
+
+        var leafCost = Float32(count)
+        var splitCost = Float32(0.5) + minCost / sa
+        if count > prims_per_node or splitCost < leafCost:
+            # Partition: "below" (bucket <= minBucket) first, "above" after.
+            var l = start
+            for r in range(start, end):
+                var ci = Float32(0.5)*(wmin[r*3+dim] + wmax[r*3+dim])
+                var b = Int(Float32(nBuckets) * ((ci - cmin_d) * inv_d))
+                if b == nBuckets: b = nBuckets - 1
+                if b < 0: b = 0
+                if b <= minBucket:           # predicate false => "below"
+                    if r != l:
+                        _bvh_swap(widx, wmin, wmax, l, r)
+                    l += 1
+            mid = l
+            if mid == start or mid == end:
+                mid = -1                     # degenerate split => leaf
+        # else: leave mid = -1 (leaf)
+
+    if mid < 0:
+        out_nodes[my] = BVH2Node(bminx, bminy, bminz, bmaxx, bmaxy, bmaxz,
+                                 Int32(start), Int32(count))
+        return Int32(my)
+
+    # Interior node: left child is the next reserved slot (my+1).
+    _ = build_bvh2_node(widx, wmin, wmax, start, mid,
+                        out_nodes, node_count, prims_per_node)
+    var right = build_bvh2_node(widx, wmin, wmax, mid, end,
+                                out_nodes, node_count, prims_per_node)
+    out_nodes[my] = BVH2Node(bminx, bminy, bminz, bmaxx, bmaxy, bmaxz,
+                             right, Int32(0))
+    return Int32(my)
+
+
+@export
+def mojo_build_bvh2(
+    primBounds: UnsafePointer[Float32, MutAnyOrigin],   # 6 floats per prim
+    primCount: Int32,
+    outNodes: UnsafePointer[BVH2Node, MutAnyOrigin],     # capacity >= 2*n
+    outOrder: UnsafePointer[Int32, MutAnyOrigin],        # capacity >= n
+) -> Int32:
+    var n = Int(primCount)
+    if n <= 0:
+        return Int32(0)
+
+    var widx = alloc[Int32](n)
+    var wmin = alloc[Float32](n * 3)
+    var wmax = alloc[Float32](n * 3)
+    for i in range(n):
+        widx[i] = Int32(i)
+        wmin[i*3+0] = primBounds[i*6+0]
+        wmin[i*3+1] = primBounds[i*6+1]
+        wmin[i*3+2] = primBounds[i*6+2]
+        wmax[i*3+0] = primBounds[i*6+3]
+        wmax[i*3+1] = primBounds[i*6+4]
+        wmax[i*3+2] = primBounds[i*6+5]
+
+    var node_count = alloc[Int32](1)
+    node_count[0] = 0
+    _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4)
+
+    for k in range(n):
+        outOrder[k] = widx[k]
+
+    var result = node_count[0]
+    widx.free(); wmin.free(); wmax.free(); node_count.free()
+    return result
+
+
 @export
 def mojo_render_tile(
     rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
