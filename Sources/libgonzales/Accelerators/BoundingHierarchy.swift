@@ -8,6 +8,7 @@ final class BoundingHierarchy: Boundable, Intersectable, @unchecked Sendable {
         let primIdsCount: Int
         var gpuSceneHandle: UnsafeMutableRawPointer?
         var materialsC: [Material_C] = []
+        var areaLightsC: [AreaLight_C] = []
 
         init(primitives: [IntersectablePrimitive], bvh2Nodes: [BVH2Node]) {
                 self.bvh2NodesCount = bvh2Nodes.count
@@ -147,6 +148,22 @@ extension BoundingHierarchy {
                         }
                 }
                 self.materialsC = mats
+
+                // Build emissive triangle list for Mojo NEE
+                var alights = [AreaLight_C]()
+                for areaLight in scene.areaLights {
+                        if case .triangle(let triangle) = areaLight.shape {
+                                let brightness = areaLight.brightness
+                                alights.append(AreaLight_C(
+                                        meshIdx: Int32(triangle.meshIndex),
+                                        triBaseVidx: Int32(triangle.triangleIndex),
+                                        emissionR: Float(brightness.red),
+                                        emissionG: Float(brightness.green),
+                                        emissionB: Float(brightness.blue),
+                                        _pad: 0))
+                        }
+                }
+                self.areaLightsC = alights
         }
 
         func uploadToGPU(scene: Scene) {
@@ -301,7 +318,9 @@ extension BoundingHierarchy {
                                         meshes: meshesPtr.baseAddress!,
                                         meshCount: Int64(scene.meshesC.count),
                                         materials: matPtr.baseAddress,
-                                        materialCount: Int64(self.materialsC.count)
+                                        materialCount: Int64(self.materialsC.count),
+                                        areaLights: nil,
+                                        areaLightCount: 0
                                 )
 
                                 raysC.withUnsafeBufferPointer { raysPtr in
@@ -366,7 +385,9 @@ extension BoundingHierarchy {
                                         meshes: meshesPtr.baseAddress,
                                         meshCount: Int64(scene.meshesC.count),
                                         materials: matPtr.baseAddress,
-                                        materialCount: Int64(self.materialsC.count)
+                                        materialCount: Int64(self.materialsC.count),
+                                        areaLights: nil,
+                                        areaLightCount: 0
                                 )
                                 var rayC = Ray_C(
                                         orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
@@ -409,7 +430,9 @@ extension BoundingHierarchy {
                                         meshes: meshesPtr.baseAddress,
                                         meshCount: Int64(scene.meshesC.count),
                                         materials: matPtr.baseAddress,
-                                        materialCount: Int64(self.materialsC.count)
+                                        materialCount: Int64(self.materialsC.count),
+                                        areaLights: nil,
+                                        areaLightCount: 0
                                 )
                                 var rayC = Ray_C(
                                         orgX: Float(ray.origin.x), orgY: Float(ray.origin.y),
@@ -477,29 +500,33 @@ extension BoundingHierarchy {
                 samples.withUnsafeBufferPointer { samplesPtr in
                         scene.meshesC.withUnsafeBufferPointer { meshesPtr in
                                 self.materialsC.withUnsafeBufferPointer { matPtr in
-                                        var desc = SceneDescriptor2_C(
-                                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
-                                                        .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
-                                                primIds: UnsafeRawPointer(primIdsPointer)
-                                                        .assumingMemoryBound(to: PrimId_C.self),
-                                                meshes: meshesPtr.baseAddress!,
-                                                meshCount: Int64(scene.meshesC.count),
-                                                materials: matPtr.baseAddress,
-                                                materialCount: Int64(self.materialsC.count)
-                                        )
-                                        results.withUnsafeMutableBufferPointer { resPtr in
-                                                rasterToCamera.withUnsafeBufferPointer { rtcPtr in
-                                                        cameraToWorld.withUnsafeBufferPointer { ctwPtr in
-                                                                withUnsafePointer(to: &desc) { descPtr in
-                                                                        mojo_render_tile(
-                                                                                rtcPtr.baseAddress!,
-                                                                                ctwPtr.baseAddress!,
-                                                                                samplesPtr.baseAddress!,
-                                                                                count,
-                                                                                descPtr,
-                                                                                resPtr.baseAddress!,
-                                                                                Int32(maxDepth)
-                                                                        )
+                                        self.areaLightsC.withUnsafeBufferPointer { alPtr in
+                                                var desc = SceneDescriptor2_C(
+                                                        bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                                                .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                                        primIds: UnsafeRawPointer(primIdsPointer)
+                                                                .assumingMemoryBound(to: PrimId_C.self),
+                                                        meshes: meshesPtr.baseAddress!,
+                                                        meshCount: Int64(scene.meshesC.count),
+                                                        materials: matPtr.baseAddress,
+                                                        materialCount: Int64(self.materialsC.count),
+                                                        areaLights: alPtr.baseAddress,
+                                                        areaLightCount: Int64(self.areaLightsC.count)
+                                                )
+                                                results.withUnsafeMutableBufferPointer { resPtr in
+                                                        rasterToCamera.withUnsafeBufferPointer { rtcPtr in
+                                                                cameraToWorld.withUnsafeBufferPointer { ctwPtr in
+                                                                        withUnsafePointer(to: &desc) { descPtr in
+                                                                                mojo_render_tile(
+                                                                                        rtcPtr.baseAddress!,
+                                                                                        ctwPtr.baseAddress!,
+                                                                                        samplesPtr.baseAddress!,
+                                                                                        count,
+                                                                                        descPtr,
+                                                                                        resPtr.baseAddress!,
+                                                                                        Int32(maxDepth)
+                                                                                )
+                                                                        }
                                                                 }
                                                         }
                                                 }
@@ -515,23 +542,27 @@ extension BoundingHierarchy {
                 pathStatesC.withUnsafeMutableBufferPointer { pathsPtr in
                         scene.meshesC.withUnsafeBufferPointer { meshesPtr in
                                 self.materialsC.withUnsafeBufferPointer { matPtr in
-                                        var desc = SceneDescriptor2_C(
-                                                bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
-                                                        .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
-                                                primIds: UnsafeRawPointer(primIdsPointer)
-                                                        .assumingMemoryBound(to: PrimId_C.self),
-                                                meshes: meshesPtr.baseAddress!,
-                                                meshCount: Int64(scene.meshesC.count),
-                                                materials: matPtr.baseAddress,
-                                                materialCount: Int64(self.materialsC.count)
-                                        )
-                                        withUnsafePointer(to: &desc) { descPtr in
-                                                mojo_render_paths(
-                                                        descPtr,
-                                                        pathsPtr.baseAddress!,
-                                                        count,
-                                                        Int32(maxDepth)
+                                        self.areaLightsC.withUnsafeBufferPointer { alPtr in
+                                                var desc = SceneDescriptor2_C(
+                                                        bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                                                .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                                        primIds: UnsafeRawPointer(primIdsPointer)
+                                                                .assumingMemoryBound(to: PrimId_C.self),
+                                                        meshes: meshesPtr.baseAddress!,
+                                                        meshCount: Int64(scene.meshesC.count),
+                                                        materials: matPtr.baseAddress,
+                                                        materialCount: Int64(self.materialsC.count),
+                                                        areaLights: alPtr.baseAddress,
+                                                        areaLightCount: Int64(self.areaLightsC.count)
                                                 )
+                                                withUnsafePointer(to: &desc) { descPtr in
+                                                        mojo_render_paths(
+                                                                descPtr,
+                                                                pathsPtr.baseAddress!,
+                                                                count,
+                                                                Int32(maxDepth)
+                                                        )
+                                                }
                                         }
                                 }
                         }
