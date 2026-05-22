@@ -111,19 +111,45 @@ struct TileRenderer: Renderer {
                 print(String(format: "Telemetry - CPU Shade Time: %.2fs",
                              Date().timeIntervalSince(shadeStart)))
 
-                let allSamples: [Sample] = results.map { r in
-                        Sample(
-                                light: RgbSpectrum(
-                                        red: Real(r.estimateR), green: Real(r.estimateG),
-                                        blue: Real(r.estimateB)),
-                                albedo: RgbSpectrum(
-                                        red: Real(r.albedoR), green: Real(r.albedoG),
-                                        blue: Real(r.albedoB)),
-                                normal: zeroNormal,
-                                weight: Real(r.filterWeight),
-                                pixel: Point2i(x: Int(r.pixelX), y: Int(r.pixelY)))
+                var beautyRGB = [Float](repeating: 0, count: pixelCount * 3)
+                var albedoRGB = [Float](repeating: 0, count: pixelCount * 3)
+                results.withUnsafeBufferPointer { rPtr in
+                        beautyRGB.withUnsafeMutableBufferPointer { bPtr in
+                                albedoRGB.withUnsafeMutableBufferPointer { aPtr in
+                                        mojo_normalize_film(
+                                                rPtr.baseAddress,
+                                                Int32(pixelCount),
+                                                Float(camera.film.iso),
+                                                Float(camera.film.maxComponentValue),
+                                                bPtr.baseAddress!,
+                                                aPtr.baseAddress!)
+                                }
+                        }
                 }
-                try await camera.film.writeImages(samples: allSamples, tileSize: tileSize)
+
+                var beautyImage = Image(resolution: camera.film.resolution)
+                var albedoImage = Image(resolution: camera.film.resolution)
+                let normalImage = Image(resolution: camera.film.resolution)
+                for i in 0..<pixelCount {
+                        let r = results[i]
+                        let pixel = Point2i(x: Int(r.pixelX), y: Int(r.pixelY))
+                        let bi = i * 3
+                        beautyImage.setPixel(
+                                color: RgbSpectrum(
+                                        red: Real(beautyRGB[bi]),
+                                        green: Real(beautyRGB[bi + 1]),
+                                        blue: Real(beautyRGB[bi + 2])),
+                                atLocation: pixel)
+                        albedoImage.setPixel(
+                                color: RgbSpectrum(
+                                        red: Real(albedoRGB[bi]),
+                                        green: Real(albedoRGB[bi + 1]),
+                                        blue: Real(albedoRGB[bi + 2])),
+                                atLocation: pixel)
+                }
+                try await camera.film.writeNormalizedImages(
+                        beauty: &beautyImage, albedo: albedoImage, normal: normalImage,
+                        tileSize: tileSize)
         }
 
         private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {
