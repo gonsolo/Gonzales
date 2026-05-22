@@ -106,8 +106,8 @@ Mojo can run the whole pipeline behind the ABI.
 - [x] 11c — bulk array scan in Mojo
 - [x] 11d — token/keyword scan in Mojo
 - [x] 12 — directive interpreter in Mojo
-- [ ] 13 — transforms + shape construction in Mojo
-- [ ] 14 — material/light/camera/sampler/filter construction in Mojo
+- [x] 13 — transforms + shape construction in Mojo
+- [x] 14 — material/light/camera/sampler/filter construction in Mojo
 - [ ] 15 — tile generation + scheduling in Mojo
 - [ ] 16 — film buffer + normalize in Mojo
 - [ ] 17 — denoise via OIDN C API from Mojo
