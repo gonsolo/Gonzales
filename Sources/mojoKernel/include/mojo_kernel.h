@@ -240,3 +240,16 @@ void mojo_transform_normals(const float *inv_matrix, const float *normals_in,
 // Gaussian filter normalization (step 14).
 // Returns 0.5*(1+erf(support/(sigma*sqrt(2)))), matching GaussianFilter.mojoParams().
 float mojo_gaussian_norm(float support, float sigma);
+
+// Tile scheduling (step 15). Renders every tile of the image sequentially in Mojo
+// (parallelism will be added when Mojo owns main()). Results buffer must hold
+// (max_x-min_x)*(max_y-min_y) TileResult_C entries, one per pixel in [py][px] order.
+void mojo_render_all_tiles(
+    const float *raster_to_camera, const float *camera_to_world,
+    int32_t min_x, int32_t min_y, int32_t max_x, int32_t max_y,
+    int32_t tile_w, int32_t tile_h,
+    const struct TileSamplerParams_C *sampler_params,
+    const struct SceneDescriptor2_C *scene,
+    struct TileResult_C *results,
+    int32_t max_depth
+);
