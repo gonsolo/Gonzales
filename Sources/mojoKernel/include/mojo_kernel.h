@@ -281,3 +281,44 @@ void mojo_denoise(
     float *output,
     int32_t radius, float sigma_s, float sigma_r
 );
+
+// PbrtScanner handle-based API (step 19).
+// Opaque handle type — allocates buffer + state on heap.
+typedef struct PbrtScanner_Mojo PbrtScanner_Mojo;
+
+PbrtScanner_Mojo *mojo_scanner_new(const uint8_t *path);
+PbrtScanner_Mojo *mojo_scanner_new_from_bytes(const uint8_t *bytes, int32_t length);
+void               mojo_scanner_free(PbrtScanner_Mojo *handle);
+
+int32_t mojo_scanner_is_at_end(PbrtScanner_Mojo *handle);
+int32_t mojo_scanner_scan_location(PbrtScanner_Mojo *handle);
+
+int32_t mojo_scanner_peek_char(PbrtScanner_Mojo *handle, uint8_t expected);
+int32_t mojo_scanner_scan_char(PbrtScanner_Mojo *handle, uint8_t expected);
+
+int32_t mojo_scanner_scan_int(PbrtScanner_Mojo *handle, int32_t *result);
+int32_t mojo_scanner_scan_float(PbrtScanner_Mojo *handle, float *result);
+
+int32_t mojo_scanner_count_floats(PbrtScanner_Mojo *handle);
+int32_t mojo_scanner_scan_floats(PbrtScanner_Mojo *handle, float *out, int32_t max_count);
+
+int32_t mojo_scanner_count_ints(PbrtScanner_Mojo *handle);
+int32_t mojo_scanner_scan_ints(PbrtScanner_Mojo *handle, int32_t *out, int32_t max_count);
+
+// Returns bytes written into buf (excl. NUL), or -1 on failure.
+int32_t mojo_scanner_parse_quoted_string(PbrtScanner_Mojo *handle, uint8_t *buf, int32_t max_buf);
+
+// Returns 1 if header found, 0 otherwise. Sets *is_array if '[' follows.
+int32_t mojo_scanner_parse_param_header(
+    PbrtScanner_Mojo *handle,
+    uint8_t *type_buf, int32_t type_max,
+    uint8_t *name_buf, int32_t name_max,
+    int32_t *is_array
+);
+
+// Returns bytes written, 0 for empty token, <0 at end-of-file.
+int32_t mojo_scanner_scan_token(
+    PbrtScanner_Mojo *handle,
+    const uint8_t *delims, int32_t n_delims,
+    uint8_t *buf, int32_t max_buf
+);

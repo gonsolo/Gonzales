@@ -1,4 +1,4 @@
-import Foundation  // Data, URL, pow, EOF, exit
+import Foundation  // Data, URL, Compression
 import mojoKernel
 
 final class PbrtScanner {
@@ -10,68 +10,41 @@ final class PbrtScanner {
         }
 
         init(path: String) throws {
-
-                // Load the entire (decompressed) file into one contiguous buffer. This
-                // removes chunk-refill bookkeeping and lets the cursor be a plain index,
-                // which the Mojo numeric scanner can operate on directly (see roadmap 11b).
-                let data: Data
                 if path.hasSuffix(".gz") {
                         guard let url = URL(string: "file://" + path) else {
                                 throw PbrtScannerError.noFile
                         }
                         let raw = try Data(contentsOf: url)
-                        data = try Compression.get(data: raw)
-                } else {
-                        guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-                                throw PbrtScannerError.noFile
+                        let data = try Compression.get(data: raw)
+                        handle = data.withUnsafeBytes { ptr in
+                                let p = ptr.bindMemory(to: UInt8.self).baseAddress!
+                                return mojo_scanner_new_from_bytes(p, Int32(data.count))
                         }
-                        data = d
+                } else {
+                        handle = path.withCString { cStr in
+                                let p = UnsafeRawPointer(cStr).assumingMemoryBound(to: UInt8.self)
+                                return mojo_scanner_new(p)
+                        }
                 }
-
-                totalBytes = data.count
-                buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: max(totalBytes, 1))
-                if totalBytes > 0 {
-                        data.copyBytes(to: buffer, count: totalBytes)
-                }
-                bufferIndex = 0
-                currentByte = 0
+                guard let h = handle else { throw PbrtScannerError.noFile }
+                if mojo_scanner_is_at_end(h) != 0 { throw PbrtScannerError.noFile }
         }
 
         deinit {
-                buffer.deallocate()
+                if let h = handle { mojo_scanner_free(h) }
         }
 
+        var isAtEnd: Bool { mojo_scanner_is_at_end(handle) != 0 }
+        var scanLocation: Int { Int(mojo_scanner_scan_location(handle)) }
+
         func peekString(_ expected: String) -> String? {
-                guard expected.utf8.count == 1, let byte = expected.utf8.first else {
-                        // multi-char: old behaviour (effectively unreachable in practice)
-                        skipWhitespace()
-                        peekOne()
-                        return nil
-                }
-                var cursor = Int32(bufferIndex)
-                let matched = mojo_peek_char(buffer, Int32(totalBytes), &cursor, byte)
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
-                return matched != 0 ? expected : nil
+                guard expected.utf8.count == 1, let byte = expected.utf8.first else { return nil }
+                return mojo_scanner_peek_char(handle, byte) != 0 ? expected : nil
         }
 
         func scanString(_ expected: String) -> String? {
-                guard expected.utf8.count == 1, let byte = expected.utf8.first else {
-                        // multi-char: old behaviour (used for "true"/"false", effectively dead)
-                        skipWhitespace()
-                        peekOne()
-                        let charString = ascii(currentByte)
-                        if charString != expected { return nil }
-                        scanOne()
-                        return charString
-                }
-                var cursor = Int32(bufferIndex)
-                let matched = mojo_scan_char(buffer, Int32(totalBytes), &cursor, byte)
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
-                return matched != 0 ? expected : nil
+                guard expected.utf8.count == 1, let byte = expected.utf8.first else { return nil }
+                return mojo_scanner_scan_char(handle, byte) != 0 ? expected : nil
         }
 
         func scanUpToString(_ input: String) -> String? {
@@ -79,94 +52,61 @@ final class PbrtScanner {
         }
 
         func scanInt(_ intValue: inout Int) -> Bool {
-                var cursor = Int32(bufferIndex)
                 var result = Int32(0)
-                guard mojo_scan_int(buffer, Int32(totalBytes), &cursor, &result) != 0 else {
-                        return false
-                }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
+                guard mojo_scanner_scan_int(handle, &result) != 0 else { return false }
                 intValue = Int(result)
                 return true
         }
 
         func scanFloat(_ float: inout Float) throws -> Bool {
-                var cursor = Int32(bufferIndex)
                 var result = Float32(0)
-                guard mojo_scan_float(buffer, Int32(totalBytes), &cursor, &result) != 0 else {
-                        return false
-                }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
+                guard mojo_scanner_scan_float(handle, &result) != 0 else { return false }
                 float = result
                 return true
         }
 
-        // Bulk scan: parse all floats from current position up to ']' / EOF.
-        // Advances bufferIndex past the last parsed number (stops before ']').
         func scanFloats() -> [Float] {
-                let count = Int(mojo_count_floats(buffer, Int32(totalBytes), Int32(bufferIndex)))
+                let count = Int(mojo_scanner_count_floats(handle))
                 guard count > 0 else { return [] }
                 var out = [Float32](repeating: 0, count: count)
-                var cursor = Int32(bufferIndex)
                 let filled = out.withUnsafeMutableBufferPointer { ptr in
-                        mojo_scan_floats(buffer, Int32(totalBytes), &cursor, ptr.baseAddress, Int32(count))
+                        mojo_scanner_scan_floats(handle, ptr.baseAddress, Int32(count))
                 }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
                 return filled == Int32(count) ? out : Array(out[0..<Int(filled)])
         }
 
-        // Bulk scan: parse all integers from current position up to ']' / EOF.
         func scanInts() -> [Int32] {
-                let count = Int(mojo_count_ints(buffer, Int32(totalBytes), Int32(bufferIndex)))
+                let count = Int(mojo_scanner_count_ints(handle))
                 guard count > 0 else { return [] }
                 var out = [Int32](repeating: 0, count: count)
-                var cursor = Int32(bufferIndex)
                 let filled = out.withUnsafeMutableBufferPointer { ptr in
-                        mojo_scan_ints(buffer, Int32(totalBytes), &cursor, ptr.baseAddress, Int32(count))
+                        mojo_scanner_scan_ints(handle, ptr.baseAddress, Int32(count))
                 }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
                 return filled == Int32(count) ? out : Array(out[0..<Int(filled)])
         }
 
-        // Read one complete quoted string "content" → returns content, or nil.
         func parseQuotedString() -> String? {
                 var buf = [UInt8](repeating: 0, count: 1024)
-                var cursor = Int32(bufferIndex)
                 let written = buf.withUnsafeMutableBufferPointer { ptr in
-                        mojo_parse_quoted_string(buffer, Int32(totalBytes), &cursor,
-                                                 ptr.baseAddress, 1024)
+                        mojo_scanner_parse_quoted_string(handle, ptr.baseAddress, 1024)
                 }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
                 guard written >= 0 else { return nil }
                 return buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
         }
 
-        // Read parameter header "type name" and optional '['.
-        // Returns (type, name, isArray) or nil if no opening '"' found.
         func parseParamHeader() -> (String, String, Bool)? {
                 var typeBuf = [UInt8](repeating: 0, count: 64)
                 var nameBuf = [UInt8](repeating: 0, count: 128)
                 var isArrayVal: Int32 = 0
-                var cursor = Int32(bufferIndex)
                 let found = typeBuf.withUnsafeMutableBufferPointer { typePtr in
                         nameBuf.withUnsafeMutableBufferPointer { namePtr in
-                                mojo_parse_param_header(buffer, Int32(totalBytes), &cursor,
-                                                        typePtr.baseAddress, 64,
-                                                        namePtr.baseAddress, 128, &isArrayVal)
+                                mojo_scanner_parse_param_header(
+                                        handle,
+                                        typePtr.baseAddress, 64,
+                                        namePtr.baseAddress, 128,
+                                        &isArrayVal)
                         }
                 }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
                 guard found != 0 else { return nil }
                 let type = typeBuf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
                 let name = nameBuf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
@@ -176,91 +116,18 @@ final class PbrtScanner {
         func scanUpToCharactersList(from list: [String]) -> String? {
                 let delimBytes: [UInt8] = list.compactMap { $0.utf8.first }
                 var buf = [UInt8](repeating: 0, count: 1024)
-                var cursor = Int32(bufferIndex)
                 let written: Int32 = delimBytes.withUnsafeBufferPointer { delimPtr in
                         buf.withUnsafeMutableBufferPointer { bufPtr in
-                                mojo_scan_token(buffer, Int32(totalBytes), &cursor,
-                                                delimPtr.baseAddress, Int32(delimBytes.count),
-                                                bufPtr.baseAddress, 1024)
+                                mojo_scanner_scan_token(
+                                        handle,
+                                        delimPtr.baseAddress, Int32(delimBytes.count),
+                                        bufPtr.baseAddress, 1024)
                         }
                 }
-                bufferIndex = Int(cursor)
-                scanLocation = bufferIndex
-                peekOne()
-                if written < 0 {
-                        isAtEnd = true
-                        return nil
-                }
-                if written == 0 { return bufferIndex >= totalBytes ? nil : "" }
+                if written < 0 { return nil }
+                if written == 0 { return isAtEnd ? nil : "" }
                 return String(bytes: Array(buf[0..<Int(written)]), encoding: .utf8)
         }
 
-        private func ascii(_ byte: UInt8) -> String {
-                return ascii(Int32(byte))
-        }
-
-        private func ascii(_ charCode: Int32) -> String {
-                switch charCode {
-                case EOF: return "EOF"
-                case 0: return "EOF"
-                case 9: return "\t"
-                case 10: return "\n"
-                case 13: return "\r"
-                default:
-                        guard let scalar = UnicodeScalar(Int(charCode)) else {
-                                print(#function, "Unknown: ", charCode)
-                                exit(0)
-                        }
-                        return String(scalar)
-                }
-        }
-
-        private func peekOne() {
-                if bufferIndex >= totalBytes {
-                        currentByte = eofChar
-                        return
-                }
-                currentByte = buffer[bufferIndex]
-        }
-
-        private func scanOne() {
-                if bufferIndex >= totalBytes {
-                        currentByte = eofChar
-                        return
-                }
-                currentByte = buffer[bufferIndex]
-                bufferIndex += 1
-                scanLocation += 1
-        }
-
-        private func isWhitespace(_ byte: UInt8) -> Bool {
-                switch byte {
-                case htabChar: return true
-                case newlineChar: return true
-                case spaceChar: return true
-                default: return false
-                }
-        }
-
-        private func skipWhitespace() {
-                while true {
-                        peekOne()
-                        if !isWhitespace(currentByte) {
-                                return
-                        }
-                        scanOne()
-                }
-        }
-
-        let eofChar: UInt8 = 0
-        let htabChar: UInt8 = 9
-        let newlineChar: UInt8 = 10
-        let spaceChar: UInt8 = 32
-
-        var scanLocation = 0
-        var isAtEnd = false
-        var buffer: UnsafeMutablePointer<UInt8>
-        let totalBytes: Int
-        var bufferIndex: Int
-        var currentByte: UInt8
+        private let handle: OpaquePointer?
 }
