@@ -109,7 +109,7 @@ Mojo can run the whole pipeline behind the ABI.
 - [x] 13 — transforms + shape construction in Mojo
 - [x] 14 — material/light/camera/sampler/filter construction in Mojo
 - [x] 15 — tile generation + scheduling in Mojo
-- [ ] 16 — film buffer + normalize in Mojo
+- [x] 16 — film buffer + normalize in Mojo
 - [ ] 17 — denoise via OIDN C API from Mojo
 - [ ] 18 — image write via OpenImageIO C API from Mojo
 - [ ] 19 — Mojo CLI + `main`, Mojo executable target
