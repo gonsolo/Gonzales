@@ -228,3 +228,11 @@ void mojo_matrix_multiply(const float *a, const float *b, float *out);
 // Invert a 4x4 matrix (Gauss-Jordan, full pivoting). Returns 1 on success;
 // on a singular matrix writes the identity and returns 0.
 int32_t mojo_matrix_invert(const float *m, float *out);
+
+// Bulk geometry transform (step 13b).
+// Points are 4 floats each (SIMD4 layout: x,y,z,w=1); normals are 3 floats each.
+// matrix / inv_matrix are column-major (flat[col*4+row] = m[row,col]).
+void mojo_transform_points(const float *matrix, const float *points_in,
+                           int32_t count, float *points_out);
+void mojo_transform_normals(const float *inv_matrix, const float *normals_in,
+                            int32_t count, float *normals_out);
