@@ -2633,6 +2633,101 @@ def mojo_parse_param_header(
     return Int32(1)
 
 
+# Matrix math (step 13a). 4x4 matrices are 16 Float32 in column-major order:
+# flat[col*4 + row] = matrix[row, col], matching Transform.columnMajorFloats().
+
+fn _write_identity(result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+    for i in range(16):
+        result[i] = Float32(0)
+    result[0] = Float32(1)
+    result[5] = Float32(1)
+    result[10] = Float32(1)
+    result[15] = Float32(1)
+    return Int32(0)
+
+
+@export
+fn mojo_matrix_multiply(
+    a: UnsafePointer[Float32, MutAnyOrigin],
+    b: UnsafePointer[Float32, MutAnyOrigin],
+    result: UnsafePointer[Float32, MutAnyOrigin],
+):
+    # result[i, j] = sum_k a[i, k] * b[k, j]   (column-major)
+    for j in range(4):
+        for i in range(4):
+            var s = Float32(0)
+            for k in range(4):
+                s += a[k * 4 + i] * b[j * 4 + k]
+            result[j * 4 + i] = s
+
+
+@export
+fn mojo_matrix_invert(
+    m: UnsafePointer[Float32, MutAnyOrigin],
+    result: UnsafePointer[Float32, MutAnyOrigin],
+) -> Int32:
+    # Gauss-Jordan elimination with full pivoting (mirrors Matrix.invert).
+    # On a singular matrix, writes the identity and returns 0.
+    var minv = InlineArray[Float32, 16](fill=0)
+    for i in range(16):
+        minv[i] = m[i]
+    var indxc = InlineArray[Int, 4](fill=0)
+    var indxr = InlineArray[Int, 4](fill=0)
+    var ipiv = InlineArray[Int, 4](fill=0)
+
+    for iteration in range(4):
+        var big = Float32(0)
+        var irow = 0
+        var icol = 0
+        for row in range(4):
+            if ipiv[row] != 1:
+                for col in range(4):
+                    if ipiv[col] == 0:
+                        var v = minv[col * 4 + row]
+                        if v < Float32(0):
+                            v = -v
+                        if v >= big:
+                            big = v
+                            irow = row
+                            icol = col
+                    elif ipiv[col] > 1:
+                        return _write_identity(result)
+        ipiv[icol] += 1
+        if irow != icol:
+            for colIndex in range(4):
+                var tmp = minv[colIndex * 4 + irow]
+                minv[colIndex * 4 + irow] = minv[colIndex * 4 + icol]
+                minv[colIndex * 4 + icol] = tmp
+        indxr[iteration] = irow
+        indxc[iteration] = icol
+        if minv[icol * 4 + icol] == Float32(0):
+            return _write_identity(result)
+        var pivinv = Float32(1) / minv[icol * 4 + icol]
+        minv[icol * 4 + icol] = Float32(1)
+        for colIndex in range(4):
+            minv[colIndex * 4 + icol] *= pivinv
+        for rowIndex in range(4):
+            if rowIndex != icol:
+                var save = minv[icol * 4 + rowIndex]
+                minv[icol * 4 + rowIndex] = Float32(0)
+                for colIndex in range(4):
+                    minv[colIndex * 4 + rowIndex] -= minv[colIndex * 4 + icol] * save
+
+    for ci in range(4):
+        var colIndex = 3 - ci
+        if indxr[colIndex] != indxc[colIndex]:
+            var rs = indxr[colIndex]
+            var cs = indxc[colIndex]
+            for rowIndex in range(4):
+                var tmp = minv[rs * 4 + rowIndex]
+                minv[rs * 4 + rowIndex] = minv[cs * 4 + rowIndex]
+                minv[cs * 4 + rowIndex] = tmp
+
+    for i in range(16):
+        result[i] = minv[i]
+    return Int32(1)
+
+
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
     if not handlePtr:
