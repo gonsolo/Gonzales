@@ -2743,6 +2743,209 @@ def mojo_parse_param_header(
     return Int32(1)
 
 
+# PbrtScanner in Mojo (step 19). Replaces PbrtScanner.swift.
+# File is loaded into a heap buffer; all scanning delegates to the existing
+# mojo_scan_* / mojo_parse_* primitives.
+
+struct PbrtScanner_Mojo:
+    var buffer: UnsafePointer[UInt8, MutAnyOrigin]
+    var total_bytes: Int32
+    var cursor: Int32
+    var is_at_end: Int32
+
+
+@always_inline
+fn _scanner_cursor_ptr(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> UnsafePointer[Int32, MutAnyOrigin]:
+    # cursor is the third field; layout: ptr(8) + total_bytes(4) + pad(4) + cursor(4)
+    # Use alloc/copy-out/copy-back instead of field address arithmetic.
+    # (Field-address trick is fragile; callers use _scanner_call instead.)
+    return UnsafePointer[Int32, MutAnyOrigin]()
+
+
+@always_inline
+fn _scanner_call_int(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_scan_int(handle[0].buffer, handle[0].total_bytes, cur, result)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@always_inline
+fn _scanner_call_float(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_scan_float(handle[0].buffer, handle[0].total_bytes, cur, result)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_new(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]:
+    var mode = alloc[UInt8](3)
+    mode[0] = UInt8(114)   # 'r'
+    mode[1] = UInt8(98)    # 'b'
+    mode[2] = UInt8(0)
+    var fp = external_call["fopen", UnsafePointer[UInt8, MutAnyOrigin],
+        UnsafePointer[UInt8, MutAnyOrigin], UnsafePointer[UInt8, MutAnyOrigin]](path, mode)
+    mode.free()
+    var handle = alloc[PbrtScanner_Mojo](1)
+    if not fp:
+        handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin]()
+        handle[0].total_bytes = Int32(0)
+        handle[0].cursor = Int32(0)
+        handle[0].is_at_end = Int32(1)
+        return handle
+    _ = external_call["fseek", Int32, UnsafePointer[UInt8, MutAnyOrigin], Int64, Int32](fp, Int64(0), Int32(2))
+    var size = external_call["ftell", Int64, UnsafePointer[UInt8, MutAnyOrigin]](fp)
+    _ = external_call["fseek", Int32, UnsafePointer[UInt8, MutAnyOrigin], Int64, Int32](fp, Int64(0), Int32(0))
+    var buf = alloc[UInt8](Int(size) + 1)
+    _ = external_call["fread", Int, UnsafePointer[UInt8, MutAnyOrigin], Int, Int, UnsafePointer[UInt8, MutAnyOrigin]](buf, 1, Int(size), fp)
+    _ = external_call["fclose", Int32, UnsafePointer[UInt8, MutAnyOrigin]](fp)
+    buf[Int(size)] = UInt8(0)
+    handle[0].buffer = buf
+    handle[0].total_bytes = Int32(size)
+    handle[0].cursor = Int32(0)
+    handle[0].is_at_end = Int32(0)
+    return handle
+
+
+@export
+fn mojo_scanner_new_from_bytes(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int32) -> UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]:
+    var handle = alloc[PbrtScanner_Mojo](1)
+    var buf = alloc[UInt8](Int(length) + 1)
+    for i in range(Int(length)):
+        buf[i] = bytes[i]
+    buf[Int(length)] = UInt8(0)
+    handle[0].buffer = buf
+    handle[0].total_bytes = length
+    handle[0].cursor = Int32(0)
+    handle[0].is_at_end = Int32(0)
+    return handle
+
+
+@export
+fn mojo_scanner_free(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]):
+    if handle[0].buffer:
+        handle[0].buffer.free()
+    handle.free()
+
+
+@export
+fn mojo_scanner_is_at_end(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
+    return handle[0].is_at_end
+
+
+@export
+fn mojo_scanner_scan_location(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
+    return handle[0].cursor
+
+
+@export
+fn mojo_scanner_peek_char(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], expected: UInt8) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_peek_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_scan_char(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], expected: UInt8) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_scan_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_scan_int(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
+    return _scanner_call_int(handle, result)
+
+
+@export
+fn mojo_scanner_scan_float(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+    return _scanner_call_float(handle, result)
+
+
+@export
+fn mojo_scanner_count_floats(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
+    return mojo_count_floats(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
+
+
+@export
+fn mojo_scanner_scan_floats(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], dst: UnsafePointer[Float32, MutAnyOrigin], max_count: Int32) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_scan_floats(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_count_ints(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
+    return mojo_count_ints(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
+
+
+@export
+fn mojo_scanner_scan_ints(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], dst: UnsafePointer[Int32, MutAnyOrigin], max_count: Int32) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_scan_ints(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_parse_quoted_string(handle[0].buffer, handle[0].total_bytes, cur, buf, max_buf)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_parse_param_header(
+    handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+    type_buf: UnsafePointer[UInt8, MutAnyOrigin], type_max: Int32,
+    name_buf: UnsafePointer[UInt8, MutAnyOrigin], name_max: Int32,
+    is_array: UnsafePointer[Int32, MutAnyOrigin],
+) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_parse_param_header(handle[0].buffer, handle[0].total_bytes, cur,
+                                      type_buf, type_max, name_buf, name_max, is_array)
+    handle[0].cursor = cur[0]
+    cur.free()
+    return ret
+
+
+@export
+fn mojo_scanner_scan_token(
+    handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+    delims: UnsafePointer[UInt8, MutAnyOrigin], n_delims: Int32,
+    buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32,
+) -> Int32:
+    var cur = alloc[Int32](1)
+    cur[0] = handle[0].cursor
+    var ret = mojo_scan_token(handle[0].buffer, handle[0].total_bytes, cur,
+                              delims, n_delims, buf, max_buf)
+    handle[0].cursor = cur[0]
+    if ret < 0:
+        handle[0].is_at_end = Int32(1)
+    cur.free()
+    return ret
+
+
 # Matrix math (step 13a). 4x4 matrices are 16 Float32 in column-major order:
 # flat[col*4 + row] = matrix[row, col], matching Transform.columnMajorFloats().
 
