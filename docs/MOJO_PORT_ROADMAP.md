@@ -112,7 +112,7 @@ Mojo can run the whole pipeline behind the ABI.
 - [x] 16 — film buffer + normalize in Mojo
 - [x] 17 — denoise via Mojo joint bilateral filter (OIDN removed)
 - [x] 18 — image write via OpenImageIO bridge from Mojo (mojo_write_exr)
-- [ ] 19 — Mojo CLI + `main`, Mojo executable target
+- [x] 19 — PbrtScanner ported to Mojo (handle-based API; gzip decompression stays in Swift)
 - [ ] 20 — remove Swift, regression suite
 - [ ] 21 — textures + Ptex
 - [ ] 22 — volumetric media
