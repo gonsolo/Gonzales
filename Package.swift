@@ -30,7 +30,6 @@ let package = Package(
                                 "ptexBridge",
                                 "DevirtualizeMacro",
                                 "mojoKernel",
-                                "openimagedenoise",
                                 "vulkanViewer",
                         ],
                         resources: [
@@ -93,7 +92,6 @@ let package = Package(
                 ),
                 .systemLibrary(name: "openimageio", pkgConfig: "OpenImageIO"),
                 .systemLibrary(name: "ptex", pkgConfig: "ptex"),
-                .systemLibrary(name: "openimagedenoise"),
                 .target(
                         name: "vulkanViewer",
                         path: "Sources/vulkanViewer",
