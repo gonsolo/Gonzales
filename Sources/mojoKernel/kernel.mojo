@@ -1,7 +1,7 @@
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.math import ceildiv, sqrt, cos, sin, log
+from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
 
 @fieldwise_init
@@ -1708,6 +1708,27 @@ fn gaussian_sample_1d(u: Float32, norm: Float32, sigma: Float32, radius: Float32
     var u_s = (Float32(1.0) - norm) + u * (Float32(2.0) * norm - Float32(1.0))
     var x = sigma * sqrt(Float32(2.0)) * gaussian_erfinv(Float32(2.0) * u_s - Float32(1.0))
     return max(-radius, min(radius, x))
+
+# erf via Abramowitz & Stegun 7.1.26 (max error ≤ 1.5e-7).
+fn _erf(x: Float32) -> Float32:
+    var sign = Float32(1) if x >= Float32(0) else Float32(-1)
+    var ax = x if x >= Float32(0) else -x
+    var t = Float32(1) / (Float32(1) + Float32(0.3275911) * ax)
+    var poly = ((((Float32(1.061405429) * t
+                - Float32(1.453152027)) * t
+               + Float32(1.421413741)) * t
+              - Float32(0.284496736)) * t
+             + Float32(0.254829592)) * t
+    return sign * (Float32(1) - poly * exp(-ax * ax))
+
+
+# Gaussian filter normalization for mojo_render_tile_v2 (step 14).
+# Returns 0.5*(1+erf(support/(sigma*sqrt(2)))), matching GaussianFilter.mojoParams().
+@export
+fn mojo_gaussian_norm(support: Float32, sigma: Float32) -> Float32:
+    var x = support / (sigma * sqrt(Float32(2)))
+    return Float32(0.5) * (Float32(1) + _erf(x))
+
 
 # Hash pixel + sample index into a unique PCG (state, inc) pair.
 @always_inline
