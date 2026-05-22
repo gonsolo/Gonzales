@@ -111,11 +111,14 @@ func main() async {
                         let currentDirectory = fileManager.currentDirectoryPath
                         absoluteSceneName = currentDirectory + "/" + sceneName
                 }
-                let url = URL(fileURLWithPath: absoluteSceneName).deletingLastPathComponent()
-                renderOptions.sceneDirectory = url.path
-                let sceneDescription = SceneDescription(renderOptions: renderOptions)
-                sceneDescription.start()
-                try await sceneDescription.include(file: sceneNameLast, render: true)
+
+                // Step 20: default path uses Mojo parser + renderer.
+                absoluteSceneName.withCString { cStr in
+                        let pathPtr = UnsafeRawPointer(cStr).assumingMemoryBound(to: UInt8.self)
+                        sobolMatrices.withUnsafeBufferPointer { matPtr in
+                                _ = mojo_parse_and_render(pathPtr, matPtr.baseAddress!)
+                        }
+                }
         } catch let error {
                 handle(error)
         }

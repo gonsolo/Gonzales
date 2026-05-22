@@ -322,3 +322,37 @@ int32_t mojo_scanner_scan_token(
     const uint8_t *delims, int32_t n_delims,
     uint8_t *buf, int32_t max_buf
 );
+
+// Full .pbrt scene parse + BVH build (step 20).
+// Returns an opaque handle; caller must call mojo_parsed_free when done.
+typedef struct ParsedScene_Mojo ParsedScene_Mojo;
+
+ParsedScene_Mojo *mojo_parse_scene(const uint8_t *path);
+void              mojo_parsed_free(ParsedScene_Mojo *handle);
+
+// Build SceneDescriptor2_C from a parsed scene. Caller must free the returned pointer.
+struct SceneDescriptor2_C *mojo_parsed_scene_descriptor(ParsedScene_Mojo *handle);
+
+// Getters for render parameters from a parsed scene.
+void    mojo_parsed_raster_to_camera(ParsedScene_Mojo *handle, float *out16);
+void    mojo_parsed_camera_to_world (ParsedScene_Mojo *handle, float *out16);
+int32_t mojo_parsed_film_w          (ParsedScene_Mojo *handle);
+int32_t mojo_parsed_film_h          (ParsedScene_Mojo *handle);
+float   mojo_parsed_film_iso        (ParsedScene_Mojo *handle);
+float   mojo_parsed_film_max_comp   (ParsedScene_Mojo *handle);
+void    mojo_parsed_film_filename   (ParsedScene_Mojo *handle, char *buf, int32_t max_buf);
+float   mojo_parsed_filter_sigma    (ParsedScene_Mojo *handle);
+float   mojo_parsed_filter_support_x(ParsedScene_Mojo *handle);
+float   mojo_parsed_filter_support_y(ParsedScene_Mojo *handle);
+float   mojo_parsed_filter_norm_x   (ParsedScene_Mojo *handle);
+float   mojo_parsed_filter_norm_y   (ParsedScene_Mojo *handle);
+float   mojo_parsed_filter_weight   (ParsedScene_Mojo *handle);
+int32_t mojo_parsed_samples_per_pixel(ParsedScene_Mojo *handle);
+int32_t mojo_parsed_log2_spp        (ParsedScene_Mojo *handle);
+int32_t mojo_parsed_n_base4_digits  (ParsedScene_Mojo *handle);
+int32_t mojo_parsed_max_depth       (ParsedScene_Mojo *handle);
+uint64_t mojo_parsed_rng_seed       (ParsedScene_Mojo *handle);
+
+// Parse .pbrt file and render to EXR in one call.
+// sobol_matrices must point to 21201*52 uint32 values (Joe-Kuo table).
+int32_t mojo_parse_and_render(const uint8_t *path, const uint32_t *sobol_matrices);
