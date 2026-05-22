@@ -262,3 +262,14 @@ void mojo_normalize_film(
     float iso, float max_component_value,
     float *beauty_out, float *albedo_out
 );
+
+// Joint bilateral denoiser guided by albedo (step 17).
+// beauty and albedo are width*height*3 float arrays (R,G,B interleaved, row-major).
+// output must hold width*height*3 floats.
+// radius: filter half-width; sigma_s: spatial sigma; sigma_r: albedo-range sigma.
+void mojo_denoise(
+    const float *beauty, const float *albedo,
+    int32_t width, int32_t height,
+    float *output,
+    int32_t radius, float sigma_s, float sigma_r
+);
