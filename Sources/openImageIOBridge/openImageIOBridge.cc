@@ -87,7 +87,21 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
 }
 
-// writeTiledImageBody and writeImage are removed.
+// Simple float RGB writer for the Mojo path (step 18).
+// Writes a width*height*3 float array as an RGB EXR with the given tile size.
+// Returns 1 on success, 0 on failure.
+int write_exr_rgb(const char *filename, const float *rgb, int width, int height,
+                  int tile_w, int tile_h) {
+        auto out = OIIO::ImageOutput::create(filename);
+        if (!out) return 0;
+        OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::FLOAT);
+        spec.tile_width = tile_w;
+        spec.tile_height = tile_h;
+        if (!out->open(filename, spec)) return 0;
+        out->write_image(OIIO::TypeDesc::FLOAT, rgb);
+        out->close();
+        return 1;
+}
 
 #ifdef __cplusplus
 }
