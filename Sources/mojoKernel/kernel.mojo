@@ -2183,6 +2183,52 @@ def mojo_render_tile(
 
 
 # ── pbrt Lexer Helpers ────────────────────────────────────────────────
+# Tile scheduling (step 15). Renders the full image by iterating over
+# tiles sequentially; each tile is rendered by the existing mojo_render_tile_v2
+# subroutine. CPU parallelism will be added in Step 19 when Mojo owns main().
+# Results are written to a flat buffer: results[py*resX + px] for each pixel.
+
+@export
+def mojo_render_all_tiles(
+    raster_to_camera: UnsafePointer[Float32, MutAnyOrigin],
+    camera_to_world: UnsafePointer[Float32, MutAnyOrigin],
+    min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
+    tile_w: Int32, tile_h: Int32,
+    sampler_params: UnsafePointer[TileSamplerParams_C, MutAnyOrigin],
+    scene: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
+    results: UnsafePointer[TileResult_C, MutAnyOrigin],
+    max_depth: Int32,
+):
+    var res_x = Int(max_x - min_x)
+    var tw = Int(tile_w)
+    var th = Int(tile_h)
+    var max_tile_pixels = tw * th
+    var tile_buf = alloc[TileResult_C](max_tile_pixels)
+
+    var ty = Int(min_y)
+    while ty < Int(max_y):
+        var tx = Int(min_x)
+        while tx < Int(max_x):
+            var tx_max = Int32(min(tx + tw, Int(max_x)))
+            var ty_max = Int32(min(ty + th, Int(max_y)))
+            var tw_actual = Int(tx_max) - tx
+            var th_actual = Int(ty_max) - ty
+            mojo_render_tile_v2(
+                raster_to_camera, camera_to_world,
+                Int32(tx), Int32(ty), tx_max, ty_max,
+                sampler_params, scene, tile_buf, max_depth)
+            # Copy tile results into global buffer using absolute pixel coords.
+            for iy in range(th_actual):
+                for ix in range(tw_actual):
+                    var src = iy * tw_actual + ix
+                    var dst = (ty + iy - Int(min_y)) * res_x + (tx + ix - Int(min_x))
+                    results[dst] = tile_buf[src]
+            tx += tw
+        ty += th
+
+    tile_buf.free()
+
+
 # Pure functions over a contiguous byte buffer with a cursor index.
 # Called by the Swift PbrtScanner after step 11a loaded the whole file
 # into one buffer, enabling numeric parsing without buffer-boundary hazards.

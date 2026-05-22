@@ -641,6 +641,73 @@ extension BoundingHierarchy {
                 }
         }
 
+        // --- All-tiles Mojo render (step 15) ---
+        // Renders the full image in one call; Mojo handles tile iteration.
+        func renderAllTilesMojo(
+                rasterToCamera: [Float], cameraToWorld: [Float],
+                bounds: Bounds2i, tileW: Int, tileH: Int,
+                sobolSeed: Int32, log2SamplesPerPixel: Int32, nBase4Digits: Int32,
+                samplesPerPixel: Int32,
+                filterSigma: Float, filterSupportX: Float, filterSupportY: Float,
+                filterNormX: Float, filterNormY: Float, filterWeight: Float,
+                rngSeed: UInt64,
+                scene: Scene, results: inout [TileResult_C], maxDepth: Int
+        ) {
+                sobolMatrices.withUnsafeBufferPointer { matPtr in
+                        var sp = TileSamplerParams_C(
+                                sobolMatrices: matPtr.baseAddress!,
+                                rngSeed: rngSeed,
+                                sobolSeed: sobolSeed,
+                                log2SamplesPerPixel: log2SamplesPerPixel,
+                                nBase4Digits: nBase4Digits,
+                                samplesPerPixel: samplesPerPixel,
+                                filterSigma: filterSigma,
+                                filterSupportX: filterSupportX,
+                                filterSupportY: filterSupportY,
+                                filterNormX: filterNormX,
+                                filterNormY: filterNormY,
+                                filterWeight: filterWeight)
+                        scene.meshesC.withUnsafeBufferPointer { meshesPtr in
+                                materialsC.withUnsafeBufferPointer { matPtr2 in
+                                        areaLightsC.withUnsafeBufferPointer { alPtr in
+                                                var desc = SceneDescriptor2_C(
+                                                        bvh2Nodes: UnsafeRawPointer(bvh2NodesPointer)
+                                                                .assumingMemoryBound(to: mojoKernel.BVH2Node.self),
+                                                        primIds: UnsafeRawPointer(primIdsPointer)
+                                                                .assumingMemoryBound(to: PrimId_C.self),
+                                                        meshes: meshesPtr.baseAddress!,
+                                                        meshCount: Int64(scene.meshesC.count),
+                                                        materials: matPtr2.baseAddress,
+                                                        materialCount: Int64(materialsC.count),
+                                                        areaLights: alPtr.baseAddress,
+                                                        areaLightCount: Int64(areaLightsC.count))
+                                                results.withUnsafeMutableBufferPointer { resPtr in
+                                                        rasterToCamera.withUnsafeBufferPointer { rtcPtr in
+                                                                cameraToWorld.withUnsafeBufferPointer { ctwPtr in
+                                                                        withUnsafePointer(to: &sp) { spPtr in
+                                                                                withUnsafePointer(to: &desc) { descPtr in
+                                                                                        mojo_render_all_tiles(
+                                                                                                rtcPtr.baseAddress!,
+                                                                                                ctwPtr.baseAddress!,
+                                                                                                Int32(bounds.pMin.x),
+                                                                                                Int32(bounds.pMin.y),
+                                                                                                Int32(bounds.pMax.x),
+                                                                                                Int32(bounds.pMax.y),
+                                                                                                Int32(tileW), Int32(tileH),
+                                                                                                spPtr, descPtr,
+                                                                                                resPtr.baseAddress!,
+                                                                                                Int32(maxDepth))
+                                                                                }
+                                                                        }
+                                                                }
+                                                        }
+                                                }
+                                        }
+                                }
+                        }
+                }
+        }
+
         // --- Full multi-bounce CPU render (all bounces in Mojo) ---
         func renderPaths(scene: Scene, pathStatesC: inout [PathState_C], maxDepth: Int) {
                 let count = Int64(pathStatesC.count)
