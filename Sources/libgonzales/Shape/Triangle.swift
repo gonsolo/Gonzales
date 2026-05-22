@@ -25,10 +25,44 @@ struct TriangleMesh {
                 self.objectToWorld = objectToWorld
                 self.vertexIndices = vertexIndices
                 self.numberTriangles = numberTriangles
-                self.points = points.map { objectToWorld * $0 }
-                self.normals = normals.map { objectToWorld * $0 }
                 self.uvs = uvs
                 self.faceIndices = faceIndices
+
+                // Transform points (stride 4: SIMD4<Float32> layout).
+                let fwdMat = objectToWorld.columnMajorFloats()
+                var outPoints = [Point](repeating: Point(), count: points.count)
+                if !points.isEmpty {
+                        points.withUnsafeBytes { pIn in
+                                outPoints.withUnsafeMutableBytes { pOut in
+                                        fwdMat.withUnsafeBufferPointer { mPtr in
+                                                mojo_transform_points(
+                                                        mPtr.baseAddress,
+                                                        pIn.baseAddress!.assumingMemoryBound(to: Float.self),
+                                                        Int32(points.count),
+                                                        pOut.baseAddress!.assumingMemoryBound(to: Float.self))
+                                        }
+                                }
+                        }
+                }
+                self.points = outPoints
+
+                // Transform normals (stride 3: x,y,z Float32 layout).
+                let invMat = objectToWorld.inverse.columnMajorFloats()
+                var outNormals = [Normal](repeating: Normal(), count: normals.count)
+                if !normals.isEmpty {
+                        normals.withUnsafeBytes { nIn in
+                                outNormals.withUnsafeMutableBytes { nOut in
+                                        invMat.withUnsafeBufferPointer { mPtr in
+                                                mojo_transform_normals(
+                                                        mPtr.baseAddress,
+                                                        nIn.baseAddress!.assumingMemoryBound(to: Float.self),
+                                                        Int32(normals.count),
+                                                        nOut.baseAddress!.assumingMemoryBound(to: Float.self))
+                                        }
+                                }
+                        }
+                }
+                self.normals = outNormals
         }
 
         func getVertexIndex(at index: Int) -> Int {

@@ -2728,6 +2728,54 @@ fn mojo_matrix_invert(
     return Int32(1)
 
 
+# Bulk geometry transform (step 13b).
+# Points are 4 floats each (SIMD4 layout: x,y,z,w=1). Normals are 3 floats each.
+# matrix / inv_matrix are 16-float column-major (flat[col*4+row] = m[row,col]).
+
+@export
+fn mojo_transform_points(
+    matrix: UnsafePointer[Float32, MutAnyOrigin],
+    points_in: UnsafePointer[Float32, MutAnyOrigin],
+    count: Int32,
+    points_out: UnsafePointer[Float32, MutAnyOrigin],
+):
+    var m0 = matrix[0];  var m1 = matrix[1];  var m2 = matrix[2];  var m3 = matrix[3]
+    var m4 = matrix[4];  var m5 = matrix[5];  var m6 = matrix[6];  var m7 = matrix[7]
+    var m8 = matrix[8];  var m9 = matrix[9];  var m10 = matrix[10]; var m11 = matrix[11]
+    var m12 = matrix[12]; var m13 = matrix[13]; var m14 = matrix[14]; var m15 = matrix[15]
+    for i in range(Int(count)):
+        var b = i * 4
+        var px = points_in[b];  var py = points_in[b+1];  var pz = points_in[b+2]
+        var rx = m0*px + m4*py + m8*pz + m12
+        var ry = m1*px + m5*py + m9*pz + m13
+        var rz = m2*px + m6*py + m10*pz + m14
+        var rw = m3*px + m7*py + m11*pz + m15
+        if rw != Float32(1) and rw != Float32(0):
+            var inv_rw = Float32(1) / rw
+            rx *= inv_rw; ry *= inv_rw; rz *= inv_rw
+        points_out[b] = rx;  points_out[b+1] = ry;  points_out[b+2] = rz;  points_out[b+3] = Float32(1)
+
+
+@export
+fn mojo_transform_normals(
+    inv_matrix: UnsafePointer[Float32, MutAnyOrigin],
+    normals_in: UnsafePointer[Float32, MutAnyOrigin],
+    count: Int32,
+    normals_out: UnsafePointer[Float32, MutAnyOrigin],
+):
+    # Normals transform by the transpose of the inverse 3×3.
+    # result[i] = sum_j inv[j*4+i] * n[j]  for i,j in 0..2
+    var i0 = inv_matrix[0]; var i1 = inv_matrix[1]; var i2 = inv_matrix[2]
+    var i4 = inv_matrix[4]; var i5 = inv_matrix[5]; var i6 = inv_matrix[6]
+    var i8 = inv_matrix[8]; var i9 = inv_matrix[9]; var i10 = inv_matrix[10]
+    for i in range(Int(count)):
+        var b = i * 3
+        var nx = normals_in[b];  var ny = normals_in[b+1];  var nz = normals_in[b+2]
+        normals_out[b]   = i0*nx + i4*ny + i8*nz
+        normals_out[b+1] = i1*nx + i5*ny + i9*nz
+        normals_out[b+2] = i2*nx + i6*ny + i10*nz
+
+
 @export
 fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
     if not handlePtr:
