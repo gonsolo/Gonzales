@@ -111,7 +111,7 @@ Mojo can run the whole pipeline behind the ABI.
 - [x] 15 — tile generation + scheduling in Mojo
 - [x] 16 — film buffer + normalize in Mojo
 - [x] 17 — denoise via Mojo joint bilateral filter (OIDN removed)
-- [ ] 18 — image write via OpenImageIO C API from Mojo
+- [x] 18 — image write via OpenImageIO bridge from Mojo (mojo_write_exr)
 - [ ] 19 — Mojo CLI + `main`, Mojo executable target
 - [ ] 20 — remove Swift, regression suite
 - [ ] 21 — textures + Ptex
