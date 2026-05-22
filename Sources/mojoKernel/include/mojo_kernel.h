@@ -236,3 +236,7 @@ void mojo_transform_points(const float *matrix, const float *points_in,
                            int32_t count, float *points_out);
 void mojo_transform_normals(const float *inv_matrix, const float *normals_in,
                             int32_t count, float *normals_out);
+
+// Gaussian filter normalization (step 14).
+// Returns 0.5*(1+erf(support/(sigma*sqrt(2)))), matching GaussianFilter.mojoParams().
+float mojo_gaussian_norm(float support, float sigma);

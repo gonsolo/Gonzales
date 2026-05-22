@@ -1,8 +1,5 @@
-#if os(Linux)
-        import Glibc
-#else
-        import Darwin
-#endif
+import Foundation  // erf, exp, sqrt for Swift sample() path
+import mojoKernel
 
 struct GaussianFilter: Filter {
 
@@ -128,8 +125,8 @@ struct GaussianFilter: Filter {
                 let s = Float(sigma)
                 let rx = Float(support.x)
                 let ry = Float(support.y)
-                let nx = Float(0.5 * (1.0 + erf(Double(rx) / (Double(s) * 2.0.squareRoot()))))
-                let ny = Float(0.5 * (1.0 + erf(Double(ry) / (Double(s) * 2.0.squareRoot()))))
+                let nx = mojo_gaussian_norm(rx, s)
+                let ny = mojo_gaussian_norm(ry, s)
                 return (s, rx, ry, nx, ny, (2*nx - 1) * (2*ny - 1))
         }
 
