@@ -253,3 +253,12 @@ void mojo_render_all_tiles(
     struct TileResult_C *results,
     int32_t max_depth
 );
+
+// Film normalization (step 16). Converts TileResult_C[] → per-pixel float RGB arrays.
+// beauty_out and albedo_out must each hold count*3 floats (R,G,B interleaved).
+// Applies iso/100 scaling and optional maxComponentValue clamping to beauty.
+void mojo_normalize_film(
+    const struct TileResult_C *results, int32_t count,
+    float iso, float max_component_value,
+    float *beauty_out, float *albedo_out
+);

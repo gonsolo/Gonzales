@@ -38,6 +38,28 @@ struct Film {
                 }
         }
 
+        func writeNormalizedImages(
+                beauty: inout Image, albedo: Image, normal: Image, tileSize: (Int, Int)
+        ) async throws {
+                Denoiser.denoise(beauty: &beauty, albedo: albedo, normal: normal)
+                let finalBeauty = beauty
+                let finalAlbedo = albedo
+                let finalNormal = normal
+                let writeImage: @Sendable (_ fileName: String, _ image: Image) async throws -> Void = {
+                        fileName, image in
+                        let imageWriter = try self.chooseWriter(name: fileName)
+                        try await imageWriter.write(
+                                fileName: fileName, crop: self.crop, image: image,
+                                tileSize: tileSize)
+                }
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                        group.addTask { try await writeImage(self.name, finalBeauty) }
+                        group.addTask { try await writeImage("albedo.exr", finalAlbedo) }
+                        group.addTask { try await writeImage("normal.exr", finalNormal) }
+                        try await group.waitForAll()
+                }
+        }
+
         func writeImages(samples: [Sample], tileSize: (Int, Int)) async throws {
 
                 // 1. Build all three images from samples

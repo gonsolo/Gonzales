@@ -2229,6 +2229,48 @@ def mojo_render_all_tiles(
     tile_buf.free()
 
 
+# Normalize TileResult_C[] → per-pixel float RGB arrays.
+# beauty_out and albedo_out must each hold count*3 floats (R,G,B interleaved).
+# Applies iso/100 scaling and optional maxComponentValue clamping to beauty.
+@export
+fn mojo_normalize_film(
+    results: UnsafePointer[TileResult_C, MutAnyOrigin],
+    count: Int32,
+    iso: Float32,
+    max_component_value: Float32,
+    beauty_out: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_out: UnsafePointer[Float32, MutAnyOrigin],
+):
+    var scale = iso / Float32(100)
+    for i in range(Int(count)):
+        var r = results[i]
+        var w = r.filterWeight
+        if w == Float32(0):
+            beauty_out[i * 3 + 0] = Float32(0)
+            beauty_out[i * 3 + 1] = Float32(0)
+            beauty_out[i * 3 + 2] = Float32(0)
+            albedo_out[i * 3 + 0] = Float32(0)
+            albedo_out[i * 3 + 1] = Float32(0)
+            albedo_out[i * 3 + 2] = Float32(0)
+            continue
+        var br = r.estimateR / w * scale
+        var bg = r.estimateG / w * scale
+        var bb = r.estimateB / w * scale
+        if max_component_value > Float32(0):
+            var mx = max(br, max(bg, bb))
+            if mx > max_component_value:
+                var s = max_component_value / mx
+                br *= s
+                bg *= s
+                bb *= s
+        beauty_out[i * 3 + 0] = br
+        beauty_out[i * 3 + 1] = bg
+        beauty_out[i * 3 + 2] = bb
+        albedo_out[i * 3 + 0] = r.albedoR / w
+        albedo_out[i * 3 + 1] = r.albedoG / w
+        albedo_out[i * 3 + 2] = r.albedoB / w
+
+
 # Pure functions over a contiguous byte buffer with a cursor index.
 # Called by the Swift PbrtScanner after step 11a loaded the whole file
 # into one buffer, enabling numeric parsing without buffer-boundary hazards.
