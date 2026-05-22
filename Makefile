@@ -167,15 +167,24 @@ em: editMakefile
 editMakefile:
 	@vim Makefile
 
+OIIO_BRIDGE_SRC = Sources/openImageIOBridge/openImageIOBridge.cc
+OIIO_BRIDGE_INC = Sources/openImageIOBridge/include
+OIIO_BRIDGE_LIB = $(BUILD_DIRECTORY)/liboiiobridge.so
+
+$(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/openImageIOBridge.h
+	@mkdir -p $(BUILD_DIRECTORY)
+	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
+
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --emit shared-lib --target-accelerator sm_89
 else
 MOJO_BUILD_FLAGS = --emit shared-lib
 endif
+MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIRECTORY) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIRECTORY)
 
-$(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml
+$(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
 	@mkdir -p .build
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS)
+	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
 
 r: release

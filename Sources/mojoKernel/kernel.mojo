@@ -1,3 +1,4 @@
+from std.ffi import external_call
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
@@ -2954,6 +2955,24 @@ fn mojo_denoise(
                 output[ci + 2] = beauty[ci + 2]
 
     sw.free()
+
+
+# Write a float RGB buffer to an EXR file via the OpenImageIO bridge (step 18).
+# pixels must hold width*height*3 floats (R,G,B interleaved, row-major).
+# filename must be a null-terminated UTF-8 string.
+# Returns 1 on success, 0 on failure.
+@export
+fn mojo_write_exr(
+    pixels: UnsafePointer[Float32, MutAnyOrigin],
+    width: Int32, height: Int32,
+    filename: UnsafePointer[UInt8, MutAnyOrigin],
+    tile_w: Int32, tile_h: Int32,
+) -> Int32:
+    return external_call["write_exr_rgb", Int32,
+        UnsafePointer[UInt8, MutAnyOrigin],
+        UnsafePointer[Float32, MutAnyOrigin],
+        Int32, Int32, Int32, Int32,
+    ](filename, pixels, width, height, tile_w, tile_h)
 
 
 @export

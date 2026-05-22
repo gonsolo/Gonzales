@@ -159,7 +159,7 @@ struct Film {
                 return resolution
         }
 
-        private let name: String
+        let name: String
         private let fileName: String
         let filter: any Filter
         let resolution: Point2i

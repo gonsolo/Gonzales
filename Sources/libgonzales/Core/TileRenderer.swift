@@ -127,29 +127,34 @@ struct TileRenderer: Renderer {
                         }
                 }
 
-                var beautyImage = Image(resolution: camera.film.resolution)
-                var albedoImage = Image(resolution: camera.film.resolution)
-                let normalImage = Image(resolution: camera.film.resolution)
-                for i in 0..<pixelCount {
-                        let r = results[i]
-                        let pixel = Point2i(x: Int(r.pixelX), y: Int(r.pixelY))
-                        let bi = i * 3
-                        beautyImage.setPixel(
-                                color: RgbSpectrum(
-                                        red: Real(beautyRGB[bi]),
-                                        green: Real(beautyRGB[bi + 1]),
-                                        blue: Real(beautyRGB[bi + 2])),
-                                atLocation: pixel)
-                        albedoImage.setPixel(
-                                color: RgbSpectrum(
-                                        red: Real(albedoRGB[bi]),
-                                        green: Real(albedoRGB[bi + 1]),
-                                        blue: Real(albedoRGB[bi + 2])),
-                                atLocation: pixel)
+                var denoisedRGB = [Float](repeating: 0, count: pixelCount * 3)
+                beautyRGB.withUnsafeBufferPointer { bPtr in
+                        albedoRGB.withUnsafeBufferPointer { aPtr in
+                                denoisedRGB.withUnsafeMutableBufferPointer { dPtr in
+                                        mojo_denoise(
+                                                bPtr.baseAddress!,
+                                                aPtr.baseAddress!,
+                                                Int32(resX), Int32(resY),
+                                                dPtr.baseAddress!,
+                                                7, 5.0, 0.2)
+                                }
+                        }
                 }
-                try await camera.film.writeNormalizedImages(
-                        beauty: &beautyImage, albedo: albedoImage, normal: normalImage,
-                        tileSize: tileSize)
+
+                let beautyFile = camera.film.name
+                let tw = Int32(tileSize.0)
+                let th = Int32(tileSize.1)
+                func writeExr(_ pixels: [Float], _ filename: String) {
+                        pixels.withUnsafeBufferPointer { pPtr in
+                                filename.withCString { cStr in
+                                        let namePtr = UnsafeRawPointer(cStr).assumingMemoryBound(to: UInt8.self)
+                                        _ = mojo_write_exr(pPtr.baseAddress!, Int32(resX), Int32(resY),
+                                                           namePtr, tw, th)
+                                }
+                        }
+                }
+                writeExr(denoisedRGB, beautyFile)
+                writeExr(albedoRGB, "albedo.exr")
         }
 
         private func renderImage(bounds: Bounds2i, immutableState: ImmutableState) async throws {

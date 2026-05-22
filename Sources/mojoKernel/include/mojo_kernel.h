@@ -257,6 +257,14 @@ void mojo_render_all_tiles(
 // Film normalization (step 16). Converts TileResult_C[] → per-pixel float RGB arrays.
 // beauty_out and albedo_out must each hold count*3 floats (R,G,B interleaved).
 // Applies iso/100 scaling and optional maxComponentValue clamping to beauty.
+// Image write via OpenImageIO bridge (step 18).
+// pixels: width*height*3 floats (R,G,B interleaved). filename: null-terminated UTF-8.
+// Returns 1 on success, 0 on failure.
+int32_t mojo_write_exr(
+    const float *pixels, int32_t width, int32_t height,
+    const uint8_t *filename, int32_t tile_w, int32_t tile_h
+);
+
 void mojo_normalize_film(
     const struct TileResult_C *results, int32_t count,
     float iso, float max_component_value,
