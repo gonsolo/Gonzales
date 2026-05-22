@@ -1,3 +1,5 @@
+import mojoKernel
+
 private nonisolated(unsafe) var hasPrintedSingularMatrixWarning = false
 
 public struct Matrix: Sendable {
@@ -54,107 +56,51 @@ public struct Matrix: Sendable {
                 }
         }
 
+        // Flat 16-float column-major view (col0.x..col0.w, col1..., col2..., col3...),
+        // the layout the Mojo matrix kernels operate on.
+        func columnMajorFloats() -> [Float] {
+                return [
+                        col0.x, col0.y, col0.z, col0.w,
+                        col1.x, col1.y, col1.z, col1.w,
+                        col2.x, col2.y, col2.z, col2.w,
+                        col3.x, col3.y, col3.z, col3.w,
+                ]
+        }
+
+        init(columnMajorFloats f: [Float]) {
+                col0 = SIMD4<Real>(f[0], f[1], f[2], f[3])
+                col1 = SIMD4<Real>(f[4], f[5], f[6], f[7])
+                col2 = SIMD4<Real>(f[8], f[9], f[10], f[11])
+                col3 = SIMD4<Real>(f[12], f[13], f[14], f[15])
+        }
+
         public static func * (left: Matrix, right: Matrix) -> Matrix {
-                var result = Matrix()
-                result.col0 =
-                        left.col0 * right.col0.x + left.col1 * right.col0.y + left.col2 * right.col0.z + left
-                        .col3 * right.col0.w
-                result.col1 =
-                        left.col0 * right.col1.x + left.col1 * right.col1.y + left.col2 * right.col1.z + left
-                        .col3 * right.col1.w
-                result.col2 =
-                        left.col0 * right.col2.x + left.col1 * right.col2.y + left.col2 * right.col2.z + left
-                        .col3 * right.col2.w
-                result.col3 =
-                        left.col0 * right.col3.x + left.col1 * right.col3.y + left.col2 * right.col3.z + left
-                        .col3 * right.col3.w
-                return result
+                let a = left.columnMajorFloats()
+                let b = right.columnMajorFloats()
+                var out = [Float](repeating: 0, count: 16)
+                a.withUnsafeBufferPointer { ap in
+                        b.withUnsafeBufferPointer { bp in
+                                out.withUnsafeMutableBufferPointer { op in
+                                        mojo_matrix_multiply(ap.baseAddress, bp.baseAddress, op.baseAddress)
+                                }
+                        }
+                }
+                return Matrix(columnMajorFloats: out)
         }
 
         public func invert(m _: Matrix) throws -> Matrix {
-
-                var indxc = [0, 0, 0, 0]
-                var indxr = [0, 0, 0, 0]
-                var ipiv = [0, 0, 0, 0]
-                var minv = self
-
-                func choosePivot(irow: inout Int, icol: inout Int) throws {
-                        var big: Real = 0.0
-                        for row in 0..<4 where ipiv[row] != 1 {
-                                for col in 0..<4 {
-                                        if ipiv[col] == 0 {
-                                                if abs(minv[row, col]) >= big {
-                                                        big = abs(minv[row, col])
-                                                        irow = row
-                                                        icol = col
-                                                }
-                                        } else if ipiv[col] > 1 {
-                                                throw MatrixError.singularMatrix
-                                        }
-                                }
+                let input = columnMajorFloats()
+                var out = [Float](repeating: 0, count: 16)
+                let ok = input.withUnsafeBufferPointer { ip in
+                        out.withUnsafeMutableBufferPointer { op in
+                                mojo_matrix_invert(ip.baseAddress, op.baseAddress)
                         }
                 }
-
-                func swapColumns() {
-                        for colIndex in (0..<4).reversed() where indxr[colIndex] != indxc[colIndex] {
-                                for rowIndex in 0..<4 {
-                                        let rowSwap = indxr[colIndex]
-                                        let colSwap = indxc[colIndex]
-                                        let tmp = minv[rowIndex, rowSwap]
-                                        minv[rowIndex, rowSwap] = minv[rowIndex, colSwap]
-                                        minv[rowIndex, colSwap] = tmp
-                                }
-                        }
+                if ok == 0 && !hasPrintedSingularMatrixWarning {
+                        print("Warning: Singular matrix encountered! \(self)")
+                        hasPrintedSingularMatrixWarning = true
                 }
-
-                func subtractRow(icol: inout Int) {
-                        for rowIndex in 0..<4 where rowIndex != icol {
-                                let save = minv[rowIndex, icol]
-                                minv[rowIndex, icol] = 0
-                                for colIndex in 0..<4 {
-                                        minv[rowIndex, colIndex] -= minv[icol, colIndex] * save
-                                }
-                        }
-                }
-
-                func reduce(_ iteration: Int) throws {
-                        var irow = 0
-                        var icol = 0
-                        try choosePivot(irow: &irow, icol: &icol)
-                        ipiv[icol] += 1
-                        if irow != icol {
-                                for colIndex in 0..<4 {
-                                        let tmp = minv[irow, colIndex]
-                                        minv[irow, colIndex] = minv[icol, colIndex]
-                                        minv[icol, colIndex] = tmp
-                                }
-                        }
-                        indxr[iteration] = irow
-                        indxc[iteration] = icol
-                        if minv[icol, icol] == 0 {
-                                throw MatrixError.singularMatrix
-                        }
-                        let pivinv = 1 / minv[icol, icol]
-                        minv[icol, icol] = 1
-                        for colIndex in 0..<4 {
-                                minv[icol, colIndex] *= pivinv
-                        }
-                        subtractRow(icol: &icol)
-                }
-
-                do {
-                        for iteration in 0..<4 { try reduce(iteration) }
-                        swapColumns()
-                        return minv
-                } catch MatrixError.singularMatrix {
-                        if !hasPrintedSingularMatrixWarning {
-                                print("Warning: Singular matrix encountered! \(self)")
-                                hasPrintedSingularMatrixWarning = true
-                        }
-                        return Matrix()
-                } catch {
-                        throw error
-                }
+                return Matrix(columnMajorFloats: out)
         }
 
         func transpose() -> Matrix {

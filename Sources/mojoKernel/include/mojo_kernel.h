@@ -220,3 +220,11 @@ int32_t mojo_parse_param_header(const uint8_t *bytes, int32_t len, int32_t *curs
                                 uint8_t *type_buf, int32_t type_max,
                                 uint8_t *name_buf, int32_t name_max,
                                 int32_t *is_array);
+
+// Matrix math (step 13a). 4x4 matrices are 16 floats in column-major order
+// (col0[0..3], col1[0..3], col2[0..3], col3[0..3]), matching
+// Transform.columnMajorFloats(). out may not alias a or b.
+void mojo_matrix_multiply(const float *a, const float *b, float *out);
+// Invert a 4x4 matrix (Gauss-Jordan, full pivoting). Returns 1 on success;
+// on a singular matrix writes the identity and returns 0.
+int32_t mojo_matrix_invert(const float *m, float *out);
