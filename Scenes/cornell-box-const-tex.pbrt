@@ -4,7 +4,7 @@ Sampler "sobol" "integer pixelsamples" [ 8 ]
 PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
 Accelerator "bvh"
 Film "rgb"
-    "string filename" [ "cornell-box-checker.exr" ]
+    "string filename" [ "cornell-box-imagemap.exr" ]
     "integer xresolution" [ 512 ] "integer yresolution" [ 512 ]
 Camera "perspective" "float fov" [ 19.5 ]
 
@@ -22,6 +22,10 @@ Texture "tex_checker" "rgb" "checkerboard"
     "rgb tex1"    [ 0.1 0.1 0.1 ]
     "rgb tex2"    [ 0.9 0.9 0.9 ]
     "float uscale" [ 4 ]
+
+# Imagemap texture: wood grain on the tall box
+Texture "tex_wood" "rgb" "imagemap"
+    "string filename" [ "Scenes/wood.tga" ]
 
 MakeNamedMaterial "LeftWall"
     "string type" [ "diffuse" ]
@@ -43,7 +47,7 @@ MakeNamedMaterial "ShortBox"
     "texture reflectance" [ "tex_blue" ]
 MakeNamedMaterial "TallBox"
     "string type" [ "diffuse" ]
-    "texture reflectance" [ "tex_white" ]
+    "texture reflectance" [ "tex_wood" ]
 MakeNamedMaterial "Light"
     "string type" [ "diffuse" ]
     "texture reflectance" [ "tex_black" ]
