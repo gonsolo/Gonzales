@@ -38,15 +38,22 @@ of scope unless decided otherwise.
 
 ## Status snapshot
 
-Already in Mojo (`Sources/mojoKernel/kernel.mojo`, ~2170 lines): BVH2 traversal
-& triangle intersection, path tracing loop, 6 material shaders (diffuse,
-conductor, dielectric, coatedDiffuse, diffuseTransmission, arealight), NEE,
-Russian roulette, ZSobol sampling, Gaussian filter importance sampling,
-per-pixel film accumulation, BVH2 construction (SAH).
+**Phase C complete — pure Mojo CLI renderer shipped.**
 
-Swift is ~15k lines across 18 `libgonzales` subsystems plus C/C++ glue
-(`openImageIOBridge`, `ptexBridge`, `exr`, `vulkanViewer`) and build tooling
-(`DevirtualizeMacro`, `SobolGenerator`).
+`Sources/mojoKernel/kernel.mojo` (~4700 lines) now owns the entire pipeline:
+CLI entry point, `.pbrt` parsing, scene construction, BVH2 build (SAH),
+path tracing loop, 6 material shaders (diffuse, conductor, dielectric,
+coatedDiffuse, diffuseTransmission, arealight), NEE, Russian roulette,
+ZSobol sampling, Gaussian filter, per-pixel film accumulation, tile
+scheduling, joint-bilateral denoising, EXR output via OpenImageIO FFI.
+
+`Sources/SobolGenerator/gen_sobol.mojo` generates the Sobol matrix binary
+at build time, replacing the Swift `SobolGenerator` tool and plugin.
+
+Swift (`libgonzales`, ~17k lines) is kept as **read-only reference** for
+unported Phase D subsystems (textures, volumes, Vulkan viewer). It is no
+longer part of the build. `make wc` now reports: Mojo 4711 / Swift 17551 /
+C++ 1910 lines.
 
 ## Phase A — Parsing & scene construction into Mojo
 
@@ -77,8 +84,8 @@ Mojo can run the whole pipeline behind the ABI.
 
 | Step | Scope | Verify |
 |------|-------|--------|
-| 19 | CLI/arg parsing → Mojo; add a thin Mojo `main` (executable target, not just shared lib) | binary renders cornell-box identically |
-| 20 | Delete `libgonzales`, the Swift `gonzales` target, `DevirtualizeMacro`; replace `SobolGenerator` with a Mojo/data step | regression: cornell-box + several pbrt-v4 scenes match |
+| 19 | `PbrtScanner` ported to Mojo (handle-based API; gzip decompression stays in Swift) | identical render |
+| 20 | `fn main()` in kernel.mojo (argv, sobol load, timing); `gen_sobol.mojo` replaces Swift tool; Makefile drops Swift build; delete `gonzales`, `DevirtualizeMacro`, `SobolGenerator/main.swift`, `Plugins`, stale bridges — `libgonzales` kept as reference | cornell-box renders from pure Mojo binary |
 
 ## Phase D — Remaining / optional subsystems
 
@@ -112,8 +119,8 @@ Mojo can run the whole pipeline behind the ABI.
 - [x] 16 — film buffer + normalize in Mojo
 - [x] 17 — denoise via Mojo joint bilateral filter (OIDN removed)
 - [x] 18 — image write via OpenImageIO bridge from Mojo (mojo_write_exr)
-- [x] 19 — PbrtScanner ported to Mojo (handle-based API; gzip decompression stays in Swift)
-- [x] 20 — remove Swift, regression suite
+- [x] 19 — PbrtScanner ported to Mojo (handle-based API)
+- [x] 20 — pure Mojo binary: fn main(), gen_sobol.mojo, Makefile rewrite, Swift build tooling deleted
 - [ ] 21 — textures + Ptex
 - [ ] 22 — volumetric media
 - [ ] 23 — GPU path consolidation
