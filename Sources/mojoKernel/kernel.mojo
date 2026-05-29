@@ -3190,12 +3190,12 @@ fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
 # === ParsedScene: full .pbrt parse + scene build (step 20) ===
 # Replaces Parser.swift, SceneDescription.swift, State.swift, RenderConfiguration.swift.
 
-alias PSC_MAX_MESHES = 64
-alias PSC_MAX_NAMED  = 64
-alias PSC_CTM_DEPTH  = 16
-alias PSC_ATTR_DEPTH = 8
-alias PSC_NAME_MAX   = 64
-alias PSC_FILE_MAX   = 256
+comptime PSC_MAX_MESHES = 64
+comptime PSC_MAX_NAMED  = 64
+comptime PSC_CTM_DEPTH  = 16
+comptime PSC_ATTR_DEPTH = 8
+comptime PSC_NAME_MAX   = 64
+comptime PSC_FILE_MAX   = 256
 
 # --- Output struct (returned to caller) ---
 
@@ -3303,7 +3303,6 @@ fn _psc_streq(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral) -> Bool:
         if ai == UInt8(0):
             return True
         i += 1
-    return False
 
 fn _psc_strncpy(dst: UnsafePointer[UInt8, MutAnyOrigin],
                 src: UnsafePointer[UInt8, MutAnyOrigin], n: Int32):
@@ -4452,3 +4451,98 @@ fn mojo_parse_and_render(
     sd.free()
     mojo_parsed_free(psc)
     return Int32(0)
+
+
+# ── Mojo standalone entry point ───────────────────────────────────────────────
+
+from std.sys import argv as _sys_argv
+
+fn _make_cstr_main(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
+    var n = len(s)
+    var buf = alloc[UInt8](n + 1)
+    var src = s.unsafe_ptr()
+    for i in range(n):
+        buf[i] = src[i]
+    buf[n] = UInt8(0)
+    return buf
+
+fn _load_sobol_cstr(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[UInt32, MutAnyOrigin]:
+    var mode = alloc[UInt8](3)
+    mode[0] = UInt8(114); mode[1] = UInt8(98); mode[2] = UInt8(0)  # "rb"
+    var fp = external_call["fopen", UnsafePointer[UInt8, MutAnyOrigin],
+        UnsafePointer[UInt8, MutAnyOrigin], UnsafePointer[UInt8, MutAnyOrigin]](path, mode)
+    mode.free()
+    if not fp:
+        return UnsafePointer[UInt32, MutAnyOrigin]()
+    var n = 1024 * 52
+    var matrices = alloc[UInt32](n)
+    var nread = external_call["fread", Int,
+        UnsafePointer[UInt32, MutAnyOrigin], Int, Int, UnsafePointer[UInt8, MutAnyOrigin]](
+        matrices, 4, n, fp)
+    _ = external_call["fclose", Int32, UnsafePointer[UInt8, MutAnyOrigin]](fp)
+    if nread != n:
+        matrices.free()
+        return UnsafePointer[UInt32, MutAnyOrigin]()
+    return matrices
+
+fn _mono_secs() -> Float64:
+    # clock_gettime(CLOCK_MONOTONIC=1, &ts); ts = {tv_sec, tv_nsec}
+    var ts = alloc[Int64](2)
+    _ = external_call["clock_gettime", Int32, Int32, UnsafePointer[Int64, MutAnyOrigin]](
+        Int32(1), ts)
+    var s = Float64(ts[0]) + Float64(ts[1]) * 1e-9
+    ts.free()
+    return s
+
+fn main():
+    var args = _sys_argv()
+    var scene_path = String("")
+    var i = 1
+    while i < len(args):
+        var arg = args[i]
+        if arg == "--help" or arg == "-h":
+            print("Usage: gonzales scene.pbrt")
+            return
+        else:
+            scene_path = arg
+        i += 1
+
+    if len(scene_path) == 0:
+        print("Usage: gonzales scene.pbrt")
+        _ = external_call["exit", Int32, Int32](Int32(1))
+        return
+
+    # Find sobol_matrices.bin in the same directory as the binary (argv[0]).
+    var bin_path = args[0]
+    var bin_len = len(bin_path)
+    var bp = bin_path.unsafe_ptr()
+    var last_slash = -1
+    for k in range(bin_len):
+        if bp[k] == UInt8(47):  # '/'
+            last_slash = k
+    var dir_len = last_slash + 1  # 0 if no slash (binary in CWD)
+    var sobol_name = "sobol_matrices.bin"
+    var sn_len = len(sobol_name)
+    var sobol_cstr = alloc[UInt8](dir_len + sn_len + 1)
+    for k in range(dir_len):
+        sobol_cstr[k] = bp[k]
+    var sn_ptr = sobol_name.unsafe_ptr()
+    for k in range(sn_len):
+        sobol_cstr[dir_len + k] = sn_ptr[k]
+    sobol_cstr[dir_len + sn_len] = UInt8(0)
+
+    var matrices = _load_sobol_cstr(sobol_cstr)
+    sobol_cstr.free()
+    if not matrices:
+        print("Error: cannot load sobol_matrices.bin")
+        _ = external_call["exit", Int32, Int32](Int32(1))
+        return
+
+    var path_cstr = _make_cstr_main(scene_path)
+    var t0 = _mono_secs()
+    _ = mojo_parse_and_render(path_cstr, matrices)
+    var elapsed = _mono_secs() - t0
+    path_cstr.free()
+    matrices.free()
+
+    print("Gonzales Total Execution Time:", elapsed, "s")
