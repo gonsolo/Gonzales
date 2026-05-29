@@ -4,17 +4,24 @@ Sampler "sobol" "integer pixelsamples" [ 8 ]
 PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
 Accelerator "bvh"
 Film "rgb"
-    "string filename" [ "cornell-box-const-tex.exr" ]
+    "string filename" [ "cornell-box-checker.exr" ]
     "integer xresolution" [ 512 ] "integer yresolution" [ 512 ]
 Camera "perspective" "float fov" [ 19.5 ]
 
 WorldBegin
 
-# Constant textures — same RGB values as direct reflectances in cornell-box.pbrt
+# Constant textures
 Texture "tex_left"    "rgb" "constant" "rgb value" [ 0.63 0.065 0.05 ]
 Texture "tex_right"   "rgb" "constant" "rgb value" [ 0.14 0.45 0.091 ]
 Texture "tex_white"   "rgb" "constant" "rgb value" [ 0.725 0.71 0.68 ]
 Texture "tex_black"   "rgb" "constant" "rgb value" [ 0 0 0 ]
+Texture "tex_blue"    "rgb" "constant" "rgb value" [ 0.05 0.1 0.8 ]
+
+# Checkerboard texture: dark grey / light grey tiles, 4 tiles across the box
+Texture "tex_checker" "rgb" "checkerboard"
+    "rgb tex1"    [ 0.1 0.1 0.1 ]
+    "rgb tex2"    [ 0.9 0.9 0.9 ]
+    "float uscale" [ 4 ]
 
 MakeNamedMaterial "LeftWall"
     "string type" [ "diffuse" ]
@@ -24,7 +31,7 @@ MakeNamedMaterial "RightWall"
     "texture reflectance" [ "tex_right" ]
 MakeNamedMaterial "Floor"
     "string type" [ "diffuse" ]
-    "texture reflectance" [ "tex_white" ]
+    "texture reflectance" [ "tex_checker" ]
 MakeNamedMaterial "Ceiling"
     "string type" [ "diffuse" ]
     "texture reflectance" [ "tex_white" ]
@@ -33,7 +40,7 @@ MakeNamedMaterial "BackWall"
     "texture reflectance" [ "tex_white" ]
 MakeNamedMaterial "ShortBox"
     "string type" [ "diffuse" ]
-    "texture reflectance" [ "tex_white" ]
+    "texture reflectance" [ "tex_blue" ]
 MakeNamedMaterial "TallBox"
     "string type" [ "diffuse" ]
     "texture reflectance" [ "tex_white" ]
