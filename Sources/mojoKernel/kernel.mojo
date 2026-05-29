@@ -21,16 +21,20 @@ struct PrimId_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct Material_C(TrivialRegisterPassable):
-    var type: Int8
+    var type: Int8       # 1=diffuse, 2=emissive, 3=conductor, 4=dielectric, 5=coated, 6=difftrans
+    var tex_type: Int8   # 0=constant, 1=checkerboard (world-space)
     var _pad0: Int8
     var _pad1: Int8
-    var _pad2: Int8
     var albedoR: Float32
     var albedoG: Float32
     var albedoB: Float32
     var emissionR: Float32
     var emissionG: Float32
     var emissionB: Float32
+    var albedo2R: Float32   # checker: second color
+    var albedo2G: Float32
+    var albedo2B: Float32
+    var tex_scale: Float32  # checker: world-space cell size
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
@@ -1032,11 +1036,20 @@ fn shade_core_cpu_nee(
                 var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
                                       shadow_dir[0], shadow_dir[1], shadow_dir[2])
                 if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
-                    # pdf = 1 / (areaLightCount * light_area); G = cos_s * cos_l / dist_sq
                     var weight = cos_s * cos_l * light_area * Float32(areaLightCount) / dist_sq
-                    path_ptr[].estimateR += path_ptr[].throughputR * mat.albedoR * al.emissionR * weight
-                    path_ptr[].estimateG += path_ptr[].throughputG * mat.albedoG * al.emissionG * weight
-                    path_ptr[].estimateB += path_ptr[].throughputB * mat.albedoB * al.emissionB * weight
+                    # Re-use checker-evaluated albedo (computed below before indirect bounce)
+                    var nR = mat.albedoR; var nG = mat.albedoG; var nB = mat.albedoB
+                    if mat.tex_type == Int8(1):
+                        var sc2 = mat.tex_scale if mat.tex_scale > Float32(0) else Float32(0.25)
+                        var ix2 = Int(hit_point[0]/sc2); var iy2 = Int(hit_point[1]/sc2); var iz2 = Int(hit_point[2]/sc2)
+                        if hit_point[0] < Float32(0): ix2 -= 1
+                        if hit_point[1] < Float32(0): iy2 -= 1
+                        if hit_point[2] < Float32(0): iz2 -= 1
+                        if (ix2 ^ iy2 ^ iz2) & 1 == 1:
+                            nR = mat.albedo2R; nG = mat.albedo2G; nB = mat.albedo2B
+                    path_ptr[].estimateR += path_ptr[].throughputR * nR * al.emissionR * weight
+                    path_ptr[].estimateG += path_ptr[].throughputG * nG * al.emissionG * weight
+                    path_ptr[].estimateB += path_ptr[].throughputB * nB * al.emissionB * weight
 
     # ── Indirect: cosine-weighted hemisphere bounce ────────────────────────────
     var u1 = pcg.next_float()
@@ -1061,9 +1074,21 @@ fn shade_core_cpu_nee(
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-    path_ptr[].throughputR *= mat.albedoR
-    path_ptr[].throughputG *= mat.albedoG
-    path_ptr[].throughputB *= mat.albedoB
+
+    # Evaluate texture at hit point
+    var aR = mat.albedoR; var aG = mat.albedoG; var aB = mat.albedoB
+    if mat.tex_type == Int8(1):  # checkerboard (world-space)
+        var sc = mat.tex_scale if mat.tex_scale > Float32(0) else Float32(0.25)
+        var ix = Int(hit_point[0] / sc); var iy = Int(hit_point[1] / sc); var iz = Int(hit_point[2] / sc)
+        if hit_point[0] < Float32(0): ix -= 1
+        if hit_point[1] < Float32(0): iy -= 1
+        if hit_point[2] < Float32(0): iz -= 1
+        if (ix ^ iy ^ iz) & 1 == 1:
+            aR = mat.albedo2R; aG = mat.albedo2G; aB = mat.albedo2B
+
+    path_ptr[].throughputR *= aR
+    path_ptr[].throughputG *= aG
+    path_ptr[].throughputB *= aB
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
@@ -3254,10 +3279,18 @@ struct _PscState:
     var named_albedo: UnsafePointer[Float32, MutAnyOrigin]
     var n_named:      Int32
 
-    # Constant textures: names (PSC_MAX_TEX * PSC_NAME_MAX bytes) + rgb (PSC_MAX_TEX * 3)
-    var tex_names: UnsafePointer[UInt8, MutAnyOrigin]
-    var tex_rgb:   UnsafePointer[Float32, MutAnyOrigin]
-    var n_tex:     Int32
+    # Texture table: names + color1 + color2 + scale + type
+    var tex_names:    UnsafePointer[UInt8, MutAnyOrigin]   # PSC_MAX_TEX * PSC_NAME_MAX
+    var tex_rgb:      UnsafePointer[Float32, MutAnyOrigin] # PSC_MAX_TEX * 3  (color 1)
+    var tex_rgb2:     UnsafePointer[Float32, MutAnyOrigin] # PSC_MAX_TEX * 3  (color 2 / checker)
+    var tex_scale:    UnsafePointer[Float32, MutAnyOrigin] # PSC_MAX_TEX      (checker cell size)
+    var tex_type_arr: UnsafePointer[Int8, MutAnyOrigin]    # PSC_MAX_TEX      (0=const 1=checker)
+    var n_tex:        Int32
+
+    # Named material extended table (parallel to named_names/named_albedo)
+    var named_albedo2:    UnsafePointer[Float32, MutAnyOrigin] # PSC_MAX_NAMED * 3
+    var named_tex_scale:  UnsafePointer[Float32, MutAnyOrigin] # PSC_MAX_NAMED
+    var named_tex_type:   UnsafePointer[Int8, MutAnyOrigin]    # PSC_MAX_NAMED
 
     # Current rendering state
     var cur_mat_idx: Int32   # index into named_names, -1 = default
@@ -3479,9 +3512,16 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].named_albedo = alloc[Float32](PSC_MAX_NAMED * 3)
     s[0].n_named      = Int32(0)
 
-    s[0].tex_names = alloc[UInt8](PSC_MAX_TEX * PSC_NAME_MAX)
-    s[0].tex_rgb   = alloc[Float32](PSC_MAX_TEX * 3)
-    s[0].n_tex     = Int32(0)
+    s[0].tex_names    = alloc[UInt8](PSC_MAX_TEX * PSC_NAME_MAX)
+    s[0].tex_rgb      = alloc[Float32](PSC_MAX_TEX * 3)
+    s[0].tex_rgb2     = alloc[Float32](PSC_MAX_TEX * 3)
+    s[0].tex_scale    = alloc[Float32](PSC_MAX_TEX)
+    s[0].tex_type_arr = alloc[Int8](PSC_MAX_TEX)
+    s[0].n_tex        = Int32(0)
+
+    s[0].named_albedo2   = alloc[Float32](PSC_MAX_NAMED * 3)
+    s[0].named_tex_scale = alloc[Float32](PSC_MAX_NAMED)
+    s[0].named_tex_type  = alloc[Int8](PSC_MAX_NAMED)
 
     s[0].cur_mat_idx = Int32(-1)
     s[0].in_alight   = Int32(0)
@@ -3529,6 +3569,12 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].named_albedo.free()
     s[0].tex_names.free()
     s[0].tex_rgb.free()
+    s[0].tex_rgb2.free()
+    s[0].tex_scale.free()
+    s[0].tex_type_arr.free()
+    s[0].named_albedo2.free()
+    s[0].named_tex_scale.free()
+    s[0].named_tex_type.free()
     s[0].film_filename.free()
     s[0].cam2w_raw.free()
     # mesh arrays of pointers (per-mesh data freed separately by finalize)
@@ -3701,8 +3747,12 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = mojo_scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
 
-    var rgb = alloc[Float32](3)
-    rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    var rgb  = alloc[Float32](3)
+    var rgb2 = alloc[Float32](3)
+    rgb[0]  = Float32(0.5); rgb[1]  = Float32(0.5); rgb[2]  = Float32(0.5)
+    rgb2[0] = Float32(0.9); rgb2[1] = Float32(0.9); rgb2[2] = Float32(0.9)
+    var mat_tex_type  = Int8(0)
+    var mat_tex_scale = Float32(0.25)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
@@ -3713,14 +3763,18 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         if _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         elif _psc_streq(name_buf, "reflectance") and _psc_type_is_str(type_buf):
-            # texture reference: value is a quoted texture name
             var tname = alloc[UInt8](PSC_NAME_MAX)
             _psc_scan_one_str(handle, tname, PSC_NAME_MAX, is_array)
             for ti in range(Int(s[0].n_tex)):
                 if _psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, tname) == 0:
-                    rgb[0] = s[0].tex_rgb[ti * 3 + 0]
-                    rgb[1] = s[0].tex_rgb[ti * 3 + 1]
-                    rgb[2] = s[0].tex_rgb[ti * 3 + 2]
+                    rgb[0]       = s[0].tex_rgb[ti * 3 + 0]
+                    rgb[1]       = s[0].tex_rgb[ti * 3 + 1]
+                    rgb[2]       = s[0].tex_rgb[ti * 3 + 2]
+                    rgb2[0]      = s[0].tex_rgb2[ti * 3 + 0]
+                    rgb2[1]      = s[0].tex_rgb2[ti * 3 + 1]
+                    rgb2[2]      = s[0].tex_rgb2[ti * 3 + 2]
+                    mat_tex_type  = s[0].tex_type_arr[ti]
+                    mat_tex_scale = s[0].tex_scale[ti]
                     break
             tname.free()
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
@@ -3736,12 +3790,17 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var idx = Int(s[0].n_named)
     if idx < PSC_MAX_NAMED:
         _psc_strncpy(s[0].named_names + idx * PSC_NAME_MAX, mat_name, PSC_NAME_MAX)
-        s[0].named_albedo[idx * 3 + 0] = rgb[0]
-        s[0].named_albedo[idx * 3 + 1] = rgb[1]
-        s[0].named_albedo[idx * 3 + 2] = rgb[2]
+        s[0].named_albedo[idx * 3 + 0]   = rgb[0]
+        s[0].named_albedo[idx * 3 + 1]   = rgb[1]
+        s[0].named_albedo[idx * 3 + 2]   = rgb[2]
+        s[0].named_albedo2[idx * 3 + 0]  = rgb2[0]
+        s[0].named_albedo2[idx * 3 + 1]  = rgb2[1]
+        s[0].named_albedo2[idx * 3 + 2]  = rgb2[2]
+        s[0].named_tex_type[idx]  = mat_tex_type
+        s[0].named_tex_scale[idx] = mat_tex_scale
         s[0].n_named += 1
 
-    mat_name.free(); type_buf.free(); name_buf.free(); rgb.free()
+    mat_name.free(); type_buf.free(); name_buf.free(); rgb.free(); rgb2.free()
 
 fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                        s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -3752,9 +3811,13 @@ fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     _ = mojo_scanner_parse_quoted_string(handle, tex_type, 64)
     _ = mojo_scanner_parse_quoted_string(handle, tex_variant, 64)
 
-    var rgb = alloc[Float32](3)
-    rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    var rgb  = alloc[Float32](3)
+    var rgb2 = alloc[Float32](3)
+    rgb[0]  = Float32(0.5); rgb[1]  = Float32(0.5); rgb[2]  = Float32(0.5)
+    rgb2[0] = Float32(0.9); rgb2[1] = Float32(0.9); rgb2[2] = Float32(0.9)
     var is_float_tex = (tex_type[0] == UInt8(102))  # 'f' → float
+    var t_type = Int8(0)   # 0=constant
+    var t_scale = Float32(0.25)
 
     if _psc_streq(tex_variant, "constant"):
         var type_buf = alloc[UInt8](64)
@@ -3777,18 +3840,49 @@ fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             ia[0] = Int32(0)
             found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
         ia.free(); type_buf.free(); name_buf.free()
+
+    elif _psc_streq(tex_variant, "checkerboard"):
+        t_type = Int8(1)
+        var type_buf = alloc[UInt8](64)
+        var name_buf = alloc[UInt8](128)
+        var ia = alloc[Int32](1)
+        ia[0] = Int32(0)
+        var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        while found != 0:
+            var is_array = ia[0]
+            if _psc_streq(name_buf, "tex1") and _psc_type_is_float(type_buf):
+                _psc_scan_rgb(handle, rgb, is_array)
+            elif _psc_streq(name_buf, "tex2") and _psc_type_is_float(type_buf):
+                _psc_scan_rgb(handle, rgb2, is_array)
+            elif _psc_streq(name_buf, "uscale") and _psc_type_is_float(type_buf):
+                var sc = _psc_scan_one_float(handle, is_array)
+                if sc > Float32(0):
+                    t_scale = Float32(1) / sc   # uscale is frequency; scale is cell size
+            else:
+                _psc_skip_value(handle, type_buf, is_array)
+                if is_array:
+                    _ = mojo_scanner_scan_char(handle, UInt8(93))
+            ia[0] = Int32(0)
+            found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        ia.free(); type_buf.free(); name_buf.free()
+
     else:
         _psc_skip_params(handle)
 
     var idx = Int(s[0].n_tex)
     if idx < PSC_MAX_TEX:
         _psc_strncpy(s[0].tex_names + idx * PSC_NAME_MAX, tex_name, PSC_NAME_MAX)
-        s[0].tex_rgb[idx * 3 + 0] = rgb[0]
-        s[0].tex_rgb[idx * 3 + 1] = rgb[1]
-        s[0].tex_rgb[idx * 3 + 2] = rgb[2]
+        s[0].tex_rgb[idx * 3 + 0]  = rgb[0]
+        s[0].tex_rgb[idx * 3 + 1]  = rgb[1]
+        s[0].tex_rgb[idx * 3 + 2]  = rgb[2]
+        s[0].tex_rgb2[idx * 3 + 0] = rgb2[0]
+        s[0].tex_rgb2[idx * 3 + 1] = rgb2[1]
+        s[0].tex_rgb2[idx * 3 + 2] = rgb2[2]
+        s[0].tex_scale[idx]    = t_scale
+        s[0].tex_type_arr[idx] = t_type
         s[0].n_tex += 1
 
-    tex_name.free(); tex_type.free(); tex_variant.free(); rgb.free()
+    tex_name.free(); tex_type.free(); tex_variant.free(); rgb.free(); rgb2.free()
 
 fn _psc_handle_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                                s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -4104,13 +4198,18 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var n_mats = n_regular + Int(n_al)
     var mats = alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
-        mats[i].type = Int8(1)  # diffuse
-        mats[i].albedoR = s[0].named_albedo[i*3+0]
-        mats[i].albedoG = s[0].named_albedo[i*3+1]
-        mats[i].albedoB = s[0].named_albedo[i*3+2]
-        mats[i].emissionR = Float32(0)
-        mats[i].emissionG = Float32(0)
-        mats[i].emissionB = Float32(0)
+        mats[i].type     = Int8(1)  # diffuse
+        mats[i].tex_type = s[0].named_tex_type[i]
+        mats[i].albedoR  = s[0].named_albedo[i*3+0]
+        mats[i].albedoG  = s[0].named_albedo[i*3+1]
+        mats[i].albedoB  = s[0].named_albedo[i*3+2]
+        mats[i].albedo2R = s[0].named_albedo2[i*3+0]
+        mats[i].albedo2G = s[0].named_albedo2[i*3+1]
+        mats[i].albedo2B = s[0].named_albedo2[i*3+2]
+        mats[i].tex_scale  = s[0].named_tex_scale[i]
+        mats[i].emissionR  = Float32(0)
+        mats[i].emissionG  = Float32(0)
+        mats[i].emissionB  = Float32(0)
 
     # ---- Meshes + area lights ----
     var n_meshes = Int(s[0].n_meshes)
@@ -4150,10 +4249,15 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             al_list[al_idx]._pad        = Int32(0)
 
             # Area-light material
-            mats[al_mat_base + al_idx].type = Int8(2)  # arealight
-            mats[al_mat_base + al_idx].albedoR = Float32(0)
-            mats[al_mat_base + al_idx].albedoG = Float32(0)
-            mats[al_mat_base + al_idx].albedoB = Float32(0)
+            mats[al_mat_base + al_idx].type      = Int8(2)  # arealight
+            mats[al_mat_base + al_idx].tex_type  = Int8(0)
+            mats[al_mat_base + al_idx].albedoR   = Float32(0)
+            mats[al_mat_base + al_idx].albedoG   = Float32(0)
+            mats[al_mat_base + al_idx].albedoB   = Float32(0)
+            mats[al_mat_base + al_idx].albedo2R  = Float32(0)
+            mats[al_mat_base + al_idx].albedo2G  = Float32(0)
+            mats[al_mat_base + al_idx].albedo2B  = Float32(0)
+            mats[al_mat_base + al_idx].tex_scale = Float32(0)
             mats[al_mat_base + al_idx].emissionR = er
             mats[al_mat_base + al_idx].emissionG = eg
             mats[al_mat_base + al_idx].emissionB = eb
