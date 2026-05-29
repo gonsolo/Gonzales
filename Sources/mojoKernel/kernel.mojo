@@ -3192,6 +3192,7 @@ fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
 
 comptime PSC_MAX_MESHES = 64
 comptime PSC_MAX_NAMED  = 64
+comptime PSC_MAX_TEX    = 64
 comptime PSC_CTM_DEPTH  = 16
 comptime PSC_ATTR_DEPTH = 8
 comptime PSC_NAME_MAX   = 64
@@ -3252,6 +3253,11 @@ struct _PscState:
     var named_names:  UnsafePointer[UInt8, MutAnyOrigin]
     var named_albedo: UnsafePointer[Float32, MutAnyOrigin]
     var n_named:      Int32
+
+    # Constant textures: names (PSC_MAX_TEX * PSC_NAME_MAX bytes) + rgb (PSC_MAX_TEX * 3)
+    var tex_names: UnsafePointer[UInt8, MutAnyOrigin]
+    var tex_rgb:   UnsafePointer[Float32, MutAnyOrigin]
+    var n_tex:     Int32
 
     # Current rendering state
     var cur_mat_idx: Int32   # index into named_names, -1 = default
@@ -3473,6 +3479,10 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].named_albedo = alloc[Float32](PSC_MAX_NAMED * 3)
     s[0].n_named      = Int32(0)
 
+    s[0].tex_names = alloc[UInt8](PSC_MAX_TEX * PSC_NAME_MAX)
+    s[0].tex_rgb   = alloc[Float32](PSC_MAX_TEX * 3)
+    s[0].n_tex     = Int32(0)
+
     s[0].cur_mat_idx = Int32(-1)
     s[0].in_alight   = Int32(0)
     s[0].al_r = Float32(0); s[0].al_g = Float32(0); s[0].al_b = Float32(0)
@@ -3517,6 +3527,8 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].attr_al_rgb.free()
     s[0].named_names.free()
     s[0].named_albedo.free()
+    s[0].tex_names.free()
+    s[0].tex_rgb.free()
     s[0].film_filename.free()
     s[0].cam2w_raw.free()
     # mesh arrays of pointers (per-mesh data freed separately by finalize)
@@ -3700,6 +3712,17 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         var is_array = ia[0]
         if _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
+        elif _psc_streq(name_buf, "reflectance") and _psc_type_is_str(type_buf):
+            # texture reference: value is a quoted texture name
+            var tname = alloc[UInt8](PSC_NAME_MAX)
+            _psc_scan_one_str(handle, tname, PSC_NAME_MAX, is_array)
+            for ti in range(Int(s[0].n_tex)):
+                if _psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, tname) == 0:
+                    rgb[0] = s[0].tex_rgb[ti * 3 + 0]
+                    rgb[1] = s[0].tex_rgb[ti * 3 + 1]
+                    rgb[2] = s[0].tex_rgb[ti * 3 + 2]
+                    break
+            tname.free()
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         else:
@@ -3719,6 +3742,53 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         s[0].n_named += 1
 
     mat_name.free(); type_buf.free(); name_buf.free(); rgb.free()
+
+fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                       s: UnsafePointer[_PscState, MutAnyOrigin]):
+    var tex_name    = alloc[UInt8](PSC_NAME_MAX)
+    var tex_type    = alloc[UInt8](64)   # "rgb", "spectrum", "float"
+    var tex_variant = alloc[UInt8](64)   # "constant", "imagemap", …
+    _ = mojo_scanner_parse_quoted_string(handle, tex_name, PSC_NAME_MAX)
+    _ = mojo_scanner_parse_quoted_string(handle, tex_type, 64)
+    _ = mojo_scanner_parse_quoted_string(handle, tex_variant, 64)
+
+    var rgb = alloc[Float32](3)
+    rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    var is_float_tex = (tex_type[0] == UInt8(102))  # 'f' → float
+
+    if _psc_streq(tex_variant, "constant"):
+        var type_buf = alloc[UInt8](64)
+        var name_buf = alloc[UInt8](128)
+        var ia = alloc[Int32](1)
+        ia[0] = Int32(0)
+        var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        while found != 0:
+            var is_array = ia[0]
+            if _psc_streq(name_buf, "value") and _psc_type_is_float(type_buf):
+                if is_float_tex:
+                    var v = _psc_scan_one_float(handle, is_array)
+                    rgb[0] = v; rgb[1] = v; rgb[2] = v
+                else:
+                    _psc_scan_rgb(handle, rgb, is_array)
+            else:
+                _psc_skip_value(handle, type_buf, is_array)
+                if is_array:
+                    _ = mojo_scanner_scan_char(handle, UInt8(93))
+            ia[0] = Int32(0)
+            found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        ia.free(); type_buf.free(); name_buf.free()
+    else:
+        _psc_skip_params(handle)
+
+    var idx = Int(s[0].n_tex)
+    if idx < PSC_MAX_TEX:
+        _psc_strncpy(s[0].tex_names + idx * PSC_NAME_MAX, tex_name, PSC_NAME_MAX)
+        s[0].tex_rgb[idx * 3 + 0] = rgb[0]
+        s[0].tex_rgb[idx * 3 + 1] = rgb[1]
+        s[0].tex_rgb[idx * 3 + 2] = rgb[2]
+        s[0].n_tex += 1
+
+    tex_name.free(); tex_type.free(); tex_variant.free(); rgb.free()
 
 fn _psc_handle_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                                s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -3924,6 +3994,8 @@ fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             _psc_handle_world_begin(s)
         elif _psc_streq(kw_buf, "WorldEnd"):
             break
+        elif _psc_streq(kw_buf, "Texture"):
+            _psc_handle_texture(handle, s)
         elif _psc_streq(kw_buf, "MakeNamedMaterial"):
             _psc_handle_make_named_material(handle, s)
         elif _psc_streq(kw_buf, "NamedMaterial"):
