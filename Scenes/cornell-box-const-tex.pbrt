@@ -1,11 +1,11 @@
 Integrator "path" "integer maxdepth" [ 4 ]
 Transform [ 1 -0 -0 -0 -0 1 -0 -0 -0 -0 -1 -0 -0 -1 6.8 1  ]
-Sampler "sobol" "integer pixelsamples" [ 8 ]
-PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
+Sampler "sobol" "integer pixelsamples" [ 64 ]
+PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ] "float sigma" [0.5]
 Accelerator "bvh"
 Film "rgb"
     "string filename" [ "cornell-box-imagemap.exr" ]
-    "integer xresolution" [ 512 ] "integer yresolution" [ 512 ]
+    "integer xresolution" [ 1024 ] "integer yresolution" [ 1024 ]
 Camera "perspective" "float fov" [ 19.5 ]
 
 WorldBegin
@@ -41,7 +41,7 @@ MakeNamedMaterial "Ceiling"
     "texture reflectance" [ "tex_white" ]
 MakeNamedMaterial "BackWall"
     "string type" [ "diffuse" ]
-    "texture reflectance" [ "tex_white" ]
+    "texture reflectance" [ "tex_wood" ]
 MakeNamedMaterial "ShortBox"
     "string type" [ "diffuse" ]
     "texture reflectance" [ "tex_blue" ]

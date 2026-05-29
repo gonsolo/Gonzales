@@ -920,6 +920,7 @@ fn shade_core_cpu_nee(
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
     tid: Int,
+    tex_scratch: UnsafePointer[Float32, MutAnyOrigin],  # caller-owned 3-float buffer for texture()
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -1001,6 +1002,23 @@ fn shade_core_cpu_nee(
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
+    # Evaluate surface albedo once — shared by NEE and indirect, avoids duplicate lookup
+    var aR = mat.albedoR; var aG = mat.albedoG; var aB = mat.albedoB
+    if mat.tex_type == Int8(1):  # checker
+        var sc = mat.tex_scale if mat.tex_scale > Float32(0) else Float32(0.25)
+        var ix = Int(hit_point[0] / sc); var iy = Int(hit_point[1] / sc); var iz = Int(hit_point[2] / sc)
+        if hit_point[0] < Float32(0): ix -= 1
+        if hit_point[1] < Float32(0): iy -= 1
+        if hit_point[2] < Float32(0): iz -= 1
+        if (ix ^ iy ^ iz) & 1 == 1:
+            aR = mat.albedo2R; aG = mat.albedo2G; aB = mat.albedo2B
+    elif mat.tex_type == Int8(2) and mat.tex_filename:  # imagemap (uses caller-provided scratch)
+        tex_scratch[0] = aR; tex_scratch[1] = aG; tex_scratch[2] = aB
+        if external_call["texture", Bool,
+                UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+                UnsafePointer[Float32, MutAnyOrigin]](mat.tex_filename, uv_s, uv_t, tex_scratch):
+            aR = tex_scratch[0]; aG = tex_scratch[1]; aB = tex_scratch[2]
+
     # Single PCG instance for all sampling in this shade step
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -1045,27 +1063,9 @@ fn shade_core_cpu_nee(
                                       shadow_dir[0], shadow_dir[1], shadow_dir[2])
                 if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                     var weight = cos_s * cos_l * light_area * Float32(areaLightCount) / dist_sq
-                    # Re-use checker-evaluated albedo (computed below before indirect bounce)
-                    var nR = mat.albedoR; var nG = mat.albedoG; var nB = mat.albedoB
-                    if mat.tex_type == Int8(1):
-                        var sc2 = mat.tex_scale if mat.tex_scale > Float32(0) else Float32(0.25)
-                        var ix2 = Int(hit_point[0]/sc2); var iy2 = Int(hit_point[1]/sc2); var iz2 = Int(hit_point[2]/sc2)
-                        if hit_point[0] < Float32(0): ix2 -= 1
-                        if hit_point[1] < Float32(0): iy2 -= 1
-                        if hit_point[2] < Float32(0): iz2 -= 1
-                        if (ix2 ^ iy2 ^ iz2) & 1 == 1:
-                            nR = mat.albedo2R; nG = mat.albedo2G; nB = mat.albedo2B
-                    elif mat.tex_type == Int8(2) and mat.tex_filename:
-                        var res2 = alloc[Float32](3)
-                        res2[0] = nR; res2[1] = nG; res2[2] = nB
-                        if external_call["texture", Bool,
-                                UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-                                UnsafePointer[Float32, MutAnyOrigin]](mat.tex_filename, uv_s, uv_t, res2):
-                            nR = res2[0]; nG = res2[1]; nB = res2[2]
-                        res2.free()
-                    path_ptr[].estimateR += path_ptr[].throughputR * nR * al.emissionR * weight
-                    path_ptr[].estimateG += path_ptr[].throughputG * nG * al.emissionG * weight
-                    path_ptr[].estimateB += path_ptr[].throughputB * nB * al.emissionB * weight
+                    path_ptr[].estimateR += path_ptr[].throughputR * aR * al.emissionR * weight
+                    path_ptr[].estimateG += path_ptr[].throughputG * aG * al.emissionG * weight
+                    path_ptr[].estimateB += path_ptr[].throughputB * aB * al.emissionB * weight
 
     # ── Indirect: cosine-weighted hemisphere bounce ────────────────────────────
     var u1 = pcg.next_float()
@@ -1090,26 +1090,6 @@ fn shade_core_cpu_nee(
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-
-    # Evaluate texture at hit point
-    var aR = mat.albedoR; var aG = mat.albedoG; var aB = mat.albedoB
-    if mat.tex_type == Int8(1):  # checkerboard (world-space)
-        var sc = mat.tex_scale if mat.tex_scale > Float32(0) else Float32(0.25)
-        var ix = Int(hit_point[0] / sc); var iy = Int(hit_point[1] / sc); var iz = Int(hit_point[2] / sc)
-        if hit_point[0] < Float32(0): ix -= 1
-        if hit_point[1] < Float32(0): iy -= 1
-        if hit_point[2] < Float32(0): iz -= 1
-        if (ix ^ iy ^ iz) & 1 == 1:
-            aR = mat.albedo2R; aG = mat.albedo2G; aB = mat.albedo2B
-    elif mat.tex_type == Int8(2) and mat.tex_filename:  # imagemap via OpenImageIO
-        var res = alloc[Float32](3)
-        res[0] = aR; res[1] = aG; res[2] = aB
-        if external_call["texture", Bool,
-                UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-                UnsafePointer[Float32, MutAnyOrigin]](mat.tex_filename, uv_s, uv_t, res):
-            aR = res[0]; aG = res[1]; aB = res[2]
-        res.free()
-
     path_ptr[].throughputR *= aR
     path_ptr[].throughputG *= aG
     path_ptr[].throughputB *= aB
@@ -1588,6 +1568,7 @@ def mojo_render_paths(
     var maxD = Int(maxDepth)
 
     var intersections = alloc[Intersection_C](n)
+    var tex_scratch = alloc[Float32](3)
 
     for bounce in range(maxD + 1):
         var anyActive = False
@@ -1611,8 +1592,9 @@ def mojo_render_paths(
                 continue
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.materials,
-                               scene.areaLights, Int(scene.areaLightCount), i)
+                               scene.areaLights, Int(scene.areaLightCount), i, tex_scratch)
 
+    tex_scratch.free()
     intersections.free()
 
 
@@ -1822,6 +1804,7 @@ def mojo_render_tile_v2(
 
     var paths = alloc[PathState_C](n)
     var intersections = alloc[Intersection_C](n)
+    var tex_scratch = alloc[Float32](3)
 
     # Generate primary rays from Sobol film samples
     var idx = 0
@@ -1891,7 +1874,9 @@ def mojo_render_tile_v2(
                 continue
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.materials,
-                               scene.areaLights, Int(scene.areaLightCount), i)
+                               scene.areaLights, Int(scene.areaLightCount), i, tex_scratch)
+
+    tex_scratch.free()
 
     # Accumulate the spp samples per pixel and emit one result per pixel.
     # Matches the Swift Film accumulation: pixel = Σ light / Σ weight.
@@ -2154,6 +2139,7 @@ def mojo_render_tile(
 
     var paths = alloc[PathState_C](n)
     var intersections = alloc[Intersection_C](n)
+    var tex_scratch = alloc[Float32](3)
 
     # Generate primary rays from film samples
     for i in range(n):
@@ -2217,7 +2203,9 @@ def mojo_render_tile(
                 continue
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.materials,
-                               scene.areaLights, Int(scene.areaLightCount), i)
+                               scene.areaLights, Int(scene.areaLightCount), i, tex_scratch)
+
+    tex_scratch.free()
 
     # Write results for film accumulation
     for i in range(n):
