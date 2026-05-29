@@ -144,11 +144,10 @@ endif
 	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)
 
 	BUILD_DIRECTORY 	= .build
-	MOJO_LIB			= $(BUILD_DIRECTORY)/libmojo.so
-	RELEASE_DIRECTORY 	= $(BUILD_DIRECTORY)/release
-	DEBUG_DIRECTORY 	= $(BUILD_DIRECTORY)/debug
-	GONZALES_RELEASE 	= $(RELEASE_DIRECTORY)/gonzales
-	GONZALES_DEBUG		= $(DEBUG_DIRECTORY)/gonzales
+	SOBOL_BIN			= $(BUILD_DIRECTORY)/sobol_matrices.bin
+	GONZALES_BIN		= $(BUILD_DIRECTORY)/gonzales
+	GONZALES_RELEASE 	= $(GONZALES_BIN)
+	GONZALES_DEBUG		= $(GONZALES_BIN)
 endif
 RUN_DEBUG	= @ $(GONZALES_DEBUG) $(OPTIONS) $(SCENE)
 RUN_RELEASE	= @ $(GONZALES_RELEASE) $(OPTIONS) $(SCENE)
@@ -176,23 +175,24 @@ $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/openImageIOBridge.h
 	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
 ifdef GITHUB_ACTIONS
-MOJO_BUILD_FLAGS = --emit shared-lib --target-accelerator sm_89
+MOJO_BUILD_FLAGS = --target-accelerator sm_89
 else
-MOJO_BUILD_FLAGS = --emit shared-lib
+MOJO_BUILD_FLAGS =
 endif
-MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIRECTORY) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIRECTORY)
+MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIRECTORY) -Xlinker -loiiobridge -Xlinker -lm -Xlinker -rpath -Xlinker $(BUILD_DIRECTORY)
 
-$(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
-	@mkdir -p .build
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
-	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
+$(SOBOL_BIN): Sources/SobolGenerator/gen_sobol.mojo Sources/libgonzales/Resources/new-joe-kuo-6.21201
+	@mkdir -p $(BUILD_DIRECTORY)
+	uv run mojo run Sources/SobolGenerator/gen_sobol.mojo \
+		Sources/libgonzales/Resources/new-joe-kuo-6.21201 $(SOBOL_BIN)
+
+$(GONZALES_BIN): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(SOBOL_BIN)
+	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(GONZALES_BIN) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
 r: release
-release: $(MOJO_LIB)
-	@$(BUILD_RELEASE)
+release: $(GONZALES_BIN)
 d: debug
-debug: $(MOJO_LIB)
-	@$(BUILD_DEBUG)
+debug: $(GONZALES_BIN)
 t: test
 td: test_debug
 test_debug: debug
@@ -207,12 +207,12 @@ tags:
 
 c: clean
 clean:
-	@rm -rf .build/debug .build/release
+	@rm -f $(GONZALES_BIN) $(SOBOL_BIN)
 	@rm -f cornell-box.png cornell-box.exr cornell-box.hpm cornell-box.tiff tags
 
 ca: clean_all
 clean_all:
-	@$(SWIFT) package clean
+	@rm -rf .build
 	@rm -f cornell-box.png cornell-box.exr cornell-box.hpm cornell-box.tiff tags
 	@rm -rf gonzales.xcodeproj flame.svg perf.data perf.data.old Package.resolved
 	@rm -f $(EMBEDDED_C) .build/devicePrograms.ptx
@@ -337,7 +337,7 @@ xcode:
 	$(SWIFT) package generate-xcodeproj --xcconfig-overrides Config.xcconfig
 
 FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| grep -Ev \.build | wc -l)
-LINES=$(shell wc -l $$(find Sources -name \*.swift -not -name SobolMatrices.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
+LINES=$(shell wc -l $$(find Sources -name \*.mojo -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
 	@echo $(LINES) "lines"
@@ -359,8 +359,7 @@ perf_report:
 
 # Check for memory leaks
 leak:
-	#valgrind --suppressions=valgrind.supp --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
-	valgrind --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
+	valgrind --gen-suppressions=yes --leak-check=full $(GONZALES_BIN) $(OPTIONS) $(SCENE)
 
 # Check memory usage
 MASSIF_OUT=massif.out.gonzales
@@ -384,8 +383,7 @@ lint:
 codespell:
 	codespell -L inout Sources
 lldb:
-	#$(LLDB) .build/release/gonzales -- $(SINGLERAY) $(SCENE)
-	$(LLDB) .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
+	$(LLDB) $(GONZALES_BIN) -- $(SINGLERAY) $(SCENE)
 
 heaptrack:
 	heaptrack $(GONZALES_RELEASE) $(SCENE)
