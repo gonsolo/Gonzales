@@ -181,10 +181,10 @@ MOJO_BUILD_FLAGS =
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIRECTORY) -Xlinker -loiiobridge -Xlinker -lm -Xlinker -rpath -Xlinker $(BUILD_DIRECTORY)
 
-$(SOBOL_BIN): Sources/SobolGenerator/gen_sobol.mojo Sources/libgonzales/Resources/new-joe-kuo-6.21201
+$(SOBOL_BIN): Sources/SobolGenerator/gen_sobol.mojo Sources/SobolGenerator/new-joe-kuo-6.21201
 	@mkdir -p $(BUILD_DIRECTORY)
 	uv run mojo run Sources/SobolGenerator/gen_sobol.mojo \
-		Sources/libgonzales/Resources/new-joe-kuo-6.21201 $(SOBOL_BIN)
+		Sources/SobolGenerator/new-joe-kuo-6.21201 $(SOBOL_BIN)
 
 $(GONZALES_BIN): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(SOBOL_BIN)
 	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(GONZALES_BIN) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
