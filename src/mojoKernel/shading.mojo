@@ -269,8 +269,12 @@ fn shade_diffuse_transmission(
 fn shade_coated_diffuse[use_gpu: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
@@ -328,7 +332,42 @@ fn shade_coated_diffuse[use_gpu: Bool](
             refl = refl * (Float32(1.0) / sqrt(rlen))
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
     else:
-        # Diffuse bounce through coating
+        # Diffuse bounce through coating — NEE direct light sampling
+        if areaLightCount > 0:
+            var light_idx = Int(pcg.next_uint() % UInt32(areaLightCount))
+            var al = areaLights[light_idx]
+            var lmesh = meshes[Int(al.meshIdx)]
+            var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+            var lb = lti * 3
+            var lv0 = Int(lmesh.vertexIndices[lb])
+            var lv1 = Int(lmesh.vertexIndices[lb + 1])
+            var lv2 = Int(lmesh.vertexIndices[lb + 2])
+            var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+            var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+            var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+            var r1 = pcg.next_float()
+            var r2 = pcg.next_float()
+            var sqrt_r1 = sqrt(r1)
+            var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
+            var lcross = cross(lp1 - lp0, lp2 - lp0)
+            var light_normal = lcross
+            var lcross_len = dot(lcross, lcross)
+            if lcross_len > Float32(0.0):
+                light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+            var to_light = light_point - hit_point
+            var dist_sq = dot(to_light, to_light)
+            var dist = sqrt(dist_sq)
+            if dist > Float32(0.0001) and al.total_area > Float32(0.0):
+                var shadow_dir = to_light * (Float32(1.0) / dist)
+                var cos_s = dot(normal, shadow_dir)
+                var cos_l = -dot(light_normal, shadow_dir)
+                if cos_s > Float32(0.0) and cos_l > Float32(0.0):
+                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                          shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                        var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
+                        path_ptr[].estimate += path_ptr[].throughput * alb * al.emission * weight
+
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
         var r = sqrt(u1)
@@ -547,7 +586,7 @@ fn shade_nee_core[use_gpu: Bool](
         return
 
     if mat.type == 5:
-        shade_coated_diffuse[use_gpu](path_ptr, inter, meshes, mat, tex_filenames, textures, n_textures)
+        shade_coated_diffuse[use_gpu](path_ptr, inter, bvh2Nodes, primIds, meshes, mat, areaLights, areaLightCount, tex_filenames, textures, n_textures)
         return
 
     if mat.type == 6:
