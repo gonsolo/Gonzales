@@ -114,8 +114,8 @@ em: editMakefile
 editMakefile:
 	@vim Makefile
 
-OIIO_BRIDGE_SRC = Sources/openImageIOBridge/openImageIOBridge.cc
-OIIO_BRIDGE_INC = Sources/openImageIOBridge/include
+OIIO_BRIDGE_SRC = src/openImageIOBridge/openImageIOBridge.cc
+OIIO_BRIDGE_INC = src/openImageIOBridge/include
 OIIO_BRIDGE_LIB = $(BUILD_DIR)/liboiiobridge.so
 
 $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/openImageIOBridge.h
@@ -129,9 +129,9 @@ MOJO_BUILD_FLAGS =
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-$(GONZALES): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
+$(GONZALES): src/mojoKernel/__init__.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+	uv run mojo build src/mojoKernel/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
 r: release
 release: $(GONZALES)
@@ -145,7 +145,7 @@ tr: test_release
 test_release: release
 	@$(RUN_RELEASE)
 tags:
-	ctags -R Sources
+	ctags -R src
 	
 
 
@@ -274,8 +274,8 @@ tp: test_pbrt
 test_pbrt:
 	$(PBRT) $(PBRT_OPTIONS) $(SCENE)
 
-FILES=$(shell find Sources -name \*.mojo -o -name \*.h -o -name \*.cc | wc -l)
-LINES=$(shell wc -l $$(find Sources -name \*.mojo -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
+FILES=$(shell find src -name \*.mojo -o -name \*.h -o -name \*.cc | wc -l)
+LINES=$(shell wc -l $$(find src -name \*.mojo -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
 	@echo $(LINES) "lines"
@@ -314,9 +314,9 @@ flame:
 	eog -f flame.svg
 
 format:
-	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
+	@clang-format -i $(shell find src -name \*.h -o -name \*.cc)
 codespell:
-	codespell -L inout Sources
+	codespell -L inout src
 lldb:
 	$(LLDB) $(GONZALES) -- $(SINGLERAY) $(SCENE)
 
