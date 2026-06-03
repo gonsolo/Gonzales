@@ -3,6 +3,8 @@
 Package.resolved
 /*.exr
 /*.pfm
+/diff.png
+/regression-test.png
 /perf.data
 /perf.data.old
 tags
