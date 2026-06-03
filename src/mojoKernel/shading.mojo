@@ -33,9 +33,7 @@ fn shade_core(
     var mat = materials[mat_idx]
 
     if mat.type == 2:
-        path_ptr[].estimate.r += path_ptr[].throughput.r * mat.emission.r
-        path_ptr[].estimate.g += path_ptr[].throughput.g * mat.emission.g
-        path_ptr[].estimate.b += path_ptr[].throughput.b * mat.emission.b
+        path_ptr[].estimate += path_ptr[].throughput * mat.emission
         path_ptr[].active = 0
         return
 
@@ -104,9 +102,7 @@ fn shade_core(
         path_ptr[].ray = Ray_C(org[0], org[1], org[2], dir[0], dir[1], dir[2])
 
         # Update Throughput (albedo)
-        path_ptr[].throughput.r *= mat.albedo.r
-        path_ptr[].throughput.g *= mat.albedo.g
-        path_ptr[].throughput.b *= mat.albedo.b
+        path_ptr[].throughput *= mat.albedo
     else:
         # Unknown material type — deactivate to prevent infinite loops
         path_ptr[].active = 0
@@ -154,10 +150,10 @@ fn shade_diffuse_transmission(
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     # Balance heuristic: choose reflect vs transmit proportional to luminance
-    var reflR = mat.albedo.r;  var reflG = mat.albedo.g;  var reflB = mat.albedo.b
-    var transR = mat.emission.r; var transG = mat.emission.g; var transB = mat.emission.b
-    var pr = Float32(0.2126)*reflR  + Float32(0.7152)*reflG  + Float32(0.0722)*reflB
-    var pt = Float32(0.2126)*transR + Float32(0.7152)*transG + Float32(0.0722)*transB
+    var refl = mat.albedo
+    var trans = mat.emission
+    var pr = refl.luma()
+    var pt = trans.luma()
     var total = pr + pt
     if total <= Float32(0.0):
         path_ptr[].active = 0
@@ -195,28 +191,21 @@ fn shade_diffuse_transmission(
     # Throughput weight = color / selection_probability = color * total / p_choice
     if choose_reflect:
         var w = total / pr
-        path_ptr[].throughput.r *= reflR * w
-        path_ptr[].throughput.g *= reflG * w
-        path_ptr[].throughput.b *= reflB * w
+        path_ptr[].throughput *= refl * w
     else:
         var w = total / pt
-        path_ptr[].throughput.r *= transR * w
-        path_ptr[].throughput.g *= transG * w
-        path_ptr[].throughput.b *= transB * w
+        path_ptr[].throughput *= trans * w
 
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
     if path_ptr[].bounce > 1:
-        var lum = Float32(0.2126) * path_ptr[].throughput.r + Float32(0.7152) * path_ptr[].throughput.g + Float32(0.0722) * path_ptr[].throughput.b
+        var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
         if pcg.next_float() < q:
             path_ptr[].active = 0
         else:
-            var inv = Float32(1.0) / (Float32(1.0) - q)
-            path_ptr[].throughput.r *= inv
-            path_ptr[].throughput.g *= inv
-            path_ptr[].throughput.b *= inv
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
 
     path_ptr[].pcgState = pcg.state
 
@@ -251,9 +240,7 @@ fn shade_coated_diffuse(
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
     # Texture lookup
-    var alb_r = mat.albedo.r
-    var alb_g = mat.albedo.g
-    var alb_b = mat.albedo.b
+    var alb = mat.albedo
     if Int(mat.tex_idx) >= 0 and tex_filenames:
         var filename = tex_filenames[Int(mat.tex_idx)]
         if filename and mesh.uvs:
@@ -269,9 +256,7 @@ fn shade_coated_diffuse(
             _ = external_call["texture", Bool,
                 UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
                 UnsafePointer[Float32, MutAnyOrigin]](filename, s_uv, t_uv, tr)
-            alb_r = _srgb_to_linear(tr[0])
-            alb_g = _srgb_to_linear(tr[1])
-            alb_b = _srgb_to_linear(tr[2])
+            alb = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
             tr.free()
 
     var normal = cross(p1 - p0, p2 - p0)
@@ -327,23 +312,18 @@ fn shade_coated_diffuse(
             dir = dir * (Float32(1.0) / sqrt(dlen))
 
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-        path_ptr[].throughput.r *= alb_r
-        path_ptr[].throughput.g *= alb_g
-        path_ptr[].throughput.b *= alb_b
+        path_ptr[].throughput *= alb
 
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
     if path_ptr[].bounce > 1:
-        var lum = Float32(0.2126) * path_ptr[].throughput.r + Float32(0.7152) * path_ptr[].throughput.g + Float32(0.0722) * path_ptr[].throughput.b
+        var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
         if pcg.next_float() < q:
             path_ptr[].active = 0
         else:
-            var inv = Float32(1.0) / (Float32(1.0) - q)
-            path_ptr[].throughput.r *= inv
-            path_ptr[].throughput.g *= inv
-            path_ptr[].throughput.b *= inv
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
 
     path_ptr[].pcgState = pcg.state
 
@@ -424,15 +404,12 @@ fn shade_dielectric(
 
     # Russian roulette after first bounce (throughput unchanged for ideal glass)
     if path_ptr[].bounce > 1:
-        var lum = Float32(0.2126) * path_ptr[].throughput.r + Float32(0.7152) * path_ptr[].throughput.g + Float32(0.0722) * path_ptr[].throughput.b
+        var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
         if pcg.next_float() < q:
             path_ptr[].active = 0
         else:
-            var inv = Float32(1.0) / (Float32(1.0) - q)
-            path_ptr[].throughput.r *= inv
-            path_ptr[].throughput.g *= inv
-            path_ptr[].throughput.b *= inv
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
 
     path_ptr[].pcgState = pcg.state
 
@@ -484,23 +461,18 @@ fn shade_conductor(
         refl = refl * (Float32(1.0) / sqrt(rlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
-    path_ptr[].throughput.r *= mat.albedo.r
-    path_ptr[].throughput.g *= mat.albedo.g
-    path_ptr[].throughput.b *= mat.albedo.b
+    path_ptr[].throughput *= mat.albedo
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     if path_ptr[].bounce > 1:
-        var lum = Float32(0.2126) * path_ptr[].throughput.r + Float32(0.7152) * path_ptr[].throughput.g + Float32(0.0722) * path_ptr[].throughput.b
+        var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
         if pcg.next_float() < q:
             path_ptr[].active = 0
         else:
-            var inv = Float32(1.0) / (Float32(1.0) - q)
-            path_ptr[].throughput.r *= inv
-            path_ptr[].throughput.g *= inv
-            path_ptr[].throughput.b *= inv
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
     path_ptr[].pcgState = pcg.state
 
 
@@ -533,9 +505,7 @@ fn shade_core_cpu_nee(
     # Emissive hit: add emission only if camera ray directly sees the light (bounce 0)
     if mat.type == 2:
         if path_ptr[].bounce == 0:
-            path_ptr[].estimate.r += path_ptr[].throughput.r * mat.emission.r
-            path_ptr[].estimate.g += path_ptr[].throughput.g * mat.emission.g
-            path_ptr[].estimate.b += path_ptr[].throughput.b * mat.emission.b
+            path_ptr[].estimate += path_ptr[].throughput * mat.emission
         path_ptr[].active = 0
         return
 
@@ -594,9 +564,7 @@ fn shade_core_cpu_nee(
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     # ── Texture lookup ─────────────────────────────────────────────────────────
-    var alb_r = mat.albedo.r
-    var alb_g = mat.albedo.g
-    var alb_b = mat.albedo.b
+    var alb = mat.albedo
     if mat.tex_idx >= 0 and tex_filenames:
         var filename = tex_filenames[Int(mat.tex_idx)]
         if filename and mesh.uvs:
@@ -619,9 +587,7 @@ fn shade_core_cpu_nee(
             _ = external_call["texture", Bool,
                 UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
                 UnsafePointer[Float32, MutAnyOrigin]](filename, s_uv, t_uv, tex_result)
-            alb_r = _srgb_to_linear(tex_result[0])
-            alb_g = _srgb_to_linear(tex_result[1])
-            alb_b = _srgb_to_linear(tex_result[2])
+            alb = RGB(_srgb_to_linear(tex_result[0]), _srgb_to_linear(tex_result[1]), _srgb_to_linear(tex_result[2]))
             tex_result.free()
 
     # Single PCG instance for all sampling in this shade step
@@ -669,9 +635,7 @@ fn shade_core_cpu_nee(
                 if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                     # pdf = 1 / (areaLightCount * light_area); G = cos_s * cos_l / dist_sq
                     var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
-                    path_ptr[].estimate.r += path_ptr[].throughput.r * alb_r * al.emission.r * weight
-                    path_ptr[].estimate.g += path_ptr[].throughput.g * alb_g * al.emission.g * weight
-                    path_ptr[].estimate.b += path_ptr[].throughput.b * alb_b * al.emission.b * weight
+                    path_ptr[].estimate += path_ptr[].throughput * alb * al.emission * weight
 
     # ── Indirect: cosine-weighted hemisphere bounce ────────────────────────────
     var u1 = pcg.next_float()
@@ -696,22 +660,17 @@ fn shade_core_cpu_nee(
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-    path_ptr[].throughput.r *= alb_r
-    path_ptr[].throughput.g *= alb_g
-    path_ptr[].throughput.b *= alb_b
+    path_ptr[].throughput *= alb
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
     if path_ptr[].bounce > 1:
-        var lum = Float32(0.2126) * path_ptr[].throughput.r + Float32(0.7152) * path_ptr[].throughput.g + Float32(0.0722) * path_ptr[].throughput.b
+        var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
         if pcg.next_float() < q:
             path_ptr[].active = 0
         else:
-            var inv = Float32(1.0) / (Float32(1.0) - q)
-            path_ptr[].throughput.r *= inv
-            path_ptr[].throughput.g *= inv
-            path_ptr[].throughput.b *= inv
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
 
     path_ptr[].pcgState = pcg.state
 

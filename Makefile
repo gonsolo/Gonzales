@@ -135,7 +135,7 @@ $(VIEWER_LIB): $(VIEWER_SRC) $(VIEWER_INC)/viewer.h
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89
 else
-MOJO_BUILD_FLAGS =
+MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm

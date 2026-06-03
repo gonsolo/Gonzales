@@ -7,6 +7,30 @@ struct RGB(TrivialRegisterPassable):
     var g: Float32
     var b: Float32
 
+    @always_inline
+    fn __mul__(self, o: RGB) -> RGB:
+        return RGB(self.r * o.r, self.g * o.g, self.b * o.b)
+
+    @always_inline
+    fn __mul__(self, s: Float32) -> RGB:
+        return RGB(self.r * s, self.g * s, self.b * s)
+
+    @always_inline
+    fn __imul__(mut self, o: RGB):
+        self.r *= o.r; self.g *= o.g; self.b *= o.b
+
+    @always_inline
+    fn __imul__(mut self, s: Float32):
+        self.r *= s; self.g *= s; self.b *= s
+
+    @always_inline
+    fn __iadd__(mut self, o: RGB):
+        self.r += o.r; self.g += o.g; self.b += o.b
+
+    @always_inline
+    fn luma(self) -> Float32:
+        return Float32(0.2126)*self.r + Float32(0.7152)*self.g + Float32(0.0722)*self.b
+
 @fieldwise_init
 struct PrimId_C(TrivialRegisterPassable):
     var id1: Int64

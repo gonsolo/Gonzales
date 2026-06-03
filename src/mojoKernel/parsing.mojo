@@ -13,6 +13,21 @@ from .sampling import mojo_gaussian_norm
 fn _is_ws(b: UInt8) -> Bool:
     return b == UInt8(32) or b == UInt8(9) or b == UInt8(10) or b == UInt8(13)
 
+# Skip whitespace and pbrt line comments (# … \n).
+@always_inline
+fn _skip_ws_comments(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int, pos: Int) -> Int:
+    var cur = pos
+    while cur < length:
+        var b = bytes[cur]
+        if _is_ws(b):
+            cur += 1
+        elif b == UInt8(35):  # '#'
+            while cur < length and bytes[cur] != UInt8(10):
+                cur += 1
+        else:
+            break
+    return cur
+
 @always_inline
 fn _is_digit(b: UInt8) -> Bool:
     return b >= UInt8(48) and b <= UInt8(57)
@@ -323,8 +338,7 @@ fn mojo_scan_token(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
-        cur += 1
+    cur = _skip_ws_comments(bytes, len, cur)
     cursor[0] = Int32(cur)
     if cur >= len:
         if max_buf > 0:
@@ -392,8 +406,7 @@ fn mojo_parse_param_header(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
-        cur += 1
+    cur = _skip_ws_comments(bytes, len, cur)
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != UInt8(34):
         return Int32(0)
