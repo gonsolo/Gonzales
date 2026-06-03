@@ -247,8 +247,10 @@ fn mojo_render_interactive(
     for i in range(16):
         c2w_buf[i] = c2w[i]
 
-    var sp_ptr = alloc[TileSamplerParams_C](1)
-    var accum  = alloc[Float32](n_pixels * 3)
+    var sp_ptr      = alloc[TileSamplerParams_C](1)
+    var accum       = alloc[Float32](n_pixels * 3)
+    var albedo_acc  = alloc[Float32](n_pixels * 3)
+    var denoised    = alloc[Float32](n_pixels * 3)
     var frame_count = 0
 
     var zero = TileResult_C(
@@ -263,7 +265,8 @@ fn mojo_render_interactive(
         if cam_buf[0].cameraChanged != Int32(0):
             frame_count = 0
             for i in range(n_pixels * 3):
-                accum[i] = Float32(0)
+                accum[i]      = Float32(0)
+                albedo_acc[i] = Float32(0)
             build_camera_to_world(cam_buf, c2w_buf)
 
         # Build 1-spp sampler params; vary rngSeed per frame for diversity.
@@ -298,22 +301,27 @@ fn mojo_render_interactive(
                             psc[0].film_iso, psc[0].film_max_comp,
                             beauty, albedo)
         results.free()
-        albedo.free()
 
         # Progressive accumulation: running average over frames.
         frame_count += 1
+        var w = Float32(1) / Float32(frame_count)
         if frame_count == 1:
             for i in range(n_pixels * 3):
-                accum[i] = beauty[i]
+                accum[i]      = beauty[i]
+                albedo_acc[i] = albedo[i]
         else:
-            var w = Float32(1) / Float32(frame_count)
             for i in range(n_pixels * 3):
-                accum[i] += (beauty[i] - accum[i]) * w
+                accum[i]      += (beauty[i]      - accum[i])      * w
+                albedo_acc[i] += (albedo[i]       - albedo_acc[i]) * w
         beauty.free()
+        albedo.free()
 
-        viewer_update_framebuffer(v, accum, fw, fh)
+        mojo_denoise(accum, albedo_acc, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
+        viewer_update_framebuffer(v, denoised, fw, fh)
 
     accum.free()
+    albedo_acc.free()
+    denoised.free()
     c2w_buf.free()
     sp_ptr.free()
     cam_buf.free()
