@@ -1,6 +1,7 @@
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
+from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log
 from std.memory import alloc
 from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, dot, cross
@@ -36,6 +37,9 @@ struct GpuSceneHandle(Movable):
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × sizeof(Intersection_C) = 48
     var film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × sizeof(Float32) = 12
     var n_pixels: Int
+    # Material sorting buffers (compact atomic queues)
+    var mat_counts_buf: DeviceBuffer[DType.uint8]  # 6 × Int32 atomic counters
+    var mat_queue_buf: DeviceBuffer[DType.uint8]   # 6 × n_pixels × Int32 path-index queues
     # Camera and sampling data for GPU-side ray generation
     var sobol_buf: DeviceBuffer[DType.uint8]  # 2 dims × 52 UInt32 = 416 bytes
     var r2c_buf: DeviceBuffer[DType.uint8]    # raster_to_camera: 16 Float32 = 64 bytes
@@ -228,6 +232,8 @@ fn mojo_gpu_upload_scene(
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 88)
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_mat_counts_buf = ctx.enqueue_create_buffer[DType.uint8](6 * 4)
+            var r_mat_queue_buf  = ctx.enqueue_create_buffer[DType.uint8](6 * n_pix * 4)
             with r_film_buf.map_to_host() as h:
                 var p = h.unsafe_ptr()
                 for i in range(n_pix * 12):
@@ -317,6 +323,8 @@ fn mojo_gpu_upload_scene(
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
                 n_pixels=n_pix,
+                mat_counts_buf=r_mat_counts_buf^,
+                mat_queue_buf=r_mat_queue_buf^,
                 sobol_buf=sobol_gpu_buf^,
                 r2c_buf=r2c_gpu_buf^,
                 c2w_buf=c2w_gpu_buf^,
@@ -435,6 +443,67 @@ fn shade_gpu(
     if tid >= count:
         return
     shade_core(paths, intersections, meshes, materials, tid)
+
+
+fn clear_mat_counts_gpu(mat_counts: UnsafePointer[Int32, MutAnyOrigin]):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid < 6:
+        mat_counts[tid] = Int32(0)
+
+
+fn classify_materials_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    mat_counts: UnsafePointer[Int32, MutAnyOrigin],
+    mat_queue: UnsafePointer[Int32, MutAnyOrigin],
+    n_pixels: Int,
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var path_ptr = paths + tid
+    if path_ptr[].active == 0:
+        return
+    var inter = intersections[tid]
+    if inter.hit == 0:
+        path_ptr[].active = 0
+        return
+    var mat = materials[Int(inter.primId.materialIndex)]
+    if mat.type == 2:
+        if path_ptr[].bounce == 0:
+            path_ptr[].estimate += path_ptr[].throughput * mat.emission
+        path_ptr[].active = 0
+        return
+    var type_idx = Int(mat.type) - 1
+    var slot = Int(Atomic.fetch_add(mat_counts + type_idx, Int32(1)))
+    mat_queue[type_idx * n_pixels + slot] = Int32(tid)
+
+
+fn shade_material_gpu[mat_type: Int](
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    queue: UnsafePointer[Int32, MutAnyOrigin],
+    counts: UnsafePointer[Int32, MutAnyOrigin],
+):
+    var count = Int(counts[mat_type - 1])
+    var qtid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if qtid >= count:
+        return
+    var tid = Int(queue[qtid])
+    var path_ptr = paths + tid
+    var inter = intersections[tid]
+    shade_nee_core[True](path_ptr, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures)
 
 
 fn shade_nee_gpu(
@@ -675,18 +744,61 @@ fn mojo_gpu_render_sample(
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
-                handle[].ctx.enqueue_function[shade_nee_gpu, shade_nee_gpu](
-                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
-                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
-                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-                    handle[].n_area_lights,
-                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-                    handle[].n_textures,
-                    n_int,
+                var paths_ptr  = handle[].path_buf.unsafe_ptr().bitcast[PathState_C]()
+                var inter_ptr  = handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]()
+                var bvh_ptr    = handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node]()
+                var prim_ptr   = handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C]()
+                var mesh_ptr   = handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C]()
+                var mat_ptr    = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
+                var al_ptr     = handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C]()
+                var tex_ptr    = handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C]()
+                var counts_ptr = handle[].mat_counts_buf.unsafe_ptr().bitcast[Int32]()
+                var queue_ptr  = handle[].mat_queue_buf.unsafe_ptr().bitcast[Int32]()
+                # 1. Clear 6 material counters
+                handle[].ctx.enqueue_function[clear_mat_counts_gpu, clear_mat_counts_gpu](
+                    counts_ptr,
+                    grid_dim=1,
+                    block_dim=32,
+                )
+                # 2. Classify paths into per-material queues
+                handle[].ctx.enqueue_function[classify_materials_gpu, classify_materials_gpu](
+                    paths_ptr, inter_ptr, mat_ptr, counts_ptr, queue_ptr, n_int, n_int,
+                    grid_dim=grid_dim,
+                    block_dim=block_size,
+                )
+                # 3. Shade each material queue; each kernel reads its own count from GPU memory — no CPU sync
+                handle[].ctx.enqueue_function[shade_material_gpu[1], shade_material_gpu[1]](
+                    paths_ptr, inter_ptr, bvh_ptr, prim_ptr, mesh_ptr, mat_ptr,
+                    al_ptr, handle[].n_area_lights, tex_ptr, handle[].n_textures,
+                    queue_ptr + 0 * n_int, counts_ptr,
+                    grid_dim=grid_dim,
+                    block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_material_gpu[3], shade_material_gpu[3]](
+                    paths_ptr, inter_ptr, bvh_ptr, prim_ptr, mesh_ptr, mat_ptr,
+                    al_ptr, handle[].n_area_lights, tex_ptr, handle[].n_textures,
+                    queue_ptr + 2 * n_int, counts_ptr,
+                    grid_dim=grid_dim,
+                    block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_material_gpu[4], shade_material_gpu[4]](
+                    paths_ptr, inter_ptr, bvh_ptr, prim_ptr, mesh_ptr, mat_ptr,
+                    al_ptr, handle[].n_area_lights, tex_ptr, handle[].n_textures,
+                    queue_ptr + 3 * n_int, counts_ptr,
+                    grid_dim=grid_dim,
+                    block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_material_gpu[5], shade_material_gpu[5]](
+                    paths_ptr, inter_ptr, bvh_ptr, prim_ptr, mesh_ptr, mat_ptr,
+                    al_ptr, handle[].n_area_lights, tex_ptr, handle[].n_textures,
+                    queue_ptr + 4 * n_int, counts_ptr,
+                    grid_dim=grid_dim,
+                    block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_material_gpu[6], shade_material_gpu[6]](
+                    paths_ptr, inter_ptr, bvh_ptr, prim_ptr, mesh_ptr, mat_ptr,
+                    al_ptr, handle[].n_area_lights, tex_ptr, handle[].n_textures,
+                    queue_ptr + 5 * n_int, counts_ptr,
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
