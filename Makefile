@@ -88,70 +88,17 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
-OS = $(shell uname)
-HOSTNAME = $(shell hostname)
+VIEWER			= loupe
+PBRT			= ~/src/pbrt-v4/gonsolo/pbrt
+LLDB			= lldb
 
-ifeq ($(OS), Darwin)
-	SWIFT			= /usr/bin/swift
-	VIEWER			= open
-	PBRT			= ../../src/pbrt-v3/build/Release/pbrt
-	DERIVED_DATA		= ~/Library/Developer/Xcode/DerivedData
-	DESTINATION_DIRECTORY   = $(lastword $(shell ls -ltrh $(DERIVED_DATA)|tail -n1))
-	BUILD_DIRECTORY = $(DERIVED_DATA)/$(DESTINATION_DIRECTORY)/Build
-	RELEASE_DIRECTORY = $(BUILD_DIRECTORY)/Products/Release
-	DEBUG_DIRECTORY = $(BUILD_DIRECTORY)/Products/Debug
-	GONZALES_RELEASE = $(RELEASE_DIRECTORY)/gonzales
-	GONZALES_DEBUG = $(DEBUG_DIRECTORY)/gonzales
-	BUILD_DEBUG = xcodebuild -configuration Debug -scheme gonzales -destination 'platform=OS X,arch=x86_64' build
-	BUILD_RELEASE = xcodebuild -configuration Release -scheme gonzales -destination 'platform=OS X,arch=x86_64' build
-else
-	VIEWER 			= loupe
-	PBRT 			= ~/src/pbrt-v4/gonsolo/pbrt
-	LLDB 			= /usr/lib/swift/bin/lldb
-	#LLDB 			= lldb
-	ifeq ($(HOSTNAME), Limone)
-		SWIFT		= ~/bin/swift
-	else
-		SWIFT		= swift
-endif
-	#SWIFT_VERBOSE		= -v
-	#SWIFT_EXPORT_DYNAMIC	= -Xlinker --export-dynamic # For stack traces
-	#SWIFT_NO_WHOLE_MODULE	= -Xswiftc -no-whole-module-optimization
-	#SWIFT_LTO 		= --experimental-lto-mode full
-	#SWIFT_DEBUG_INFO	= -Xswiftc -g
-	#OSSA 			= -Xswiftc -Xfrontend -Xswiftc -enable-ossa-modules
-	#SWIFT_ANNOTATIONS 	= -Xswiftc -experimental-performance-annotations
-	#SWIFT_UNCHECKED		= -Xswiftc -Ounchecked
-	SWIFT_OPTIMIZE		= $(SWIFT_NO_WHOLE_MODULE) $(SWIFT_DEBUG_INFO) $(OSSA) $(SWIFT_LTO) $(SWIFT_UNCHECKED)
+BUILD_DIR		= build
+GONZALES		= $(BUILD_DIR)/gonzales
+GONZALES_RELEASE	= $(GONZALES)
+GONZALES_DEBUG		= $(GONZALES)
 
-	# Should not be needed since there is only one module
-	# CROSS 			= -Xswiftc -cross-module-optimization
-
-	#CXX_INTEROP 		= -Xswiftc -cxx-interoperability-mode=default
-	#EXPERIMENTAL 		= -Xswiftc -enable-experimental-feature -Xswiftc ExistentialAny
-
-	#SWIFT_CONCURRENCY 	= -Xswiftc -swift-version -Xswiftc 6
-
-
-	#SWIFT_SUPPRESS 		= -Xswiftc -suppress-warnings
-	#WARNINGS_AS_ERRORS 	= -Xswiftc -warnings-as-errors
-	DEBUG_OPTIONS   	= $(UPCOMING_FEATURE) $(SWIFT_CONCURRENCY) $(SWIFT_SUPPRESS) $(SWIFT_VERBOSE) \
-				  $(SWIFT_EXPORT_DYNAMIC) $(SWIFT_ANNOTATIONS) $(CXX_INTEROP) $(EXPERIMENTAL) \
-				  $(WARNINGS_AS_ERRORS)
-	RELEASE_OPTIONS 	= $(DEBUG_OPTIONS) $(SWIFT_OPTIMIZE)
-	BUILD			= $(SWIFT) build --enable-experimental-prebuilts
-	BUILD_DEBUG		= $(BUILD) -c debug $(DEBUG_OPTIONS)
-	BUILD_RELEASE		= $(BUILD) -c release $(RELEASE_OPTIONS)
-
-	BUILD_DIRECTORY 	= .build
-	MOJO_LIB			= $(BUILD_DIRECTORY)/libmojo.so
-	RELEASE_DIRECTORY 	= $(BUILD_DIRECTORY)/release
-	DEBUG_DIRECTORY 	= $(BUILD_DIRECTORY)/debug
-	GONZALES_RELEASE 	= $(RELEASE_DIRECTORY)/gonzales
-	GONZALES_DEBUG		= $(DEBUG_DIRECTORY)/gonzales
-endif
-RUN_DEBUG	= @ $(GONZALES_DEBUG) $(OPTIONS) $(SCENE)
-RUN_RELEASE	= @ $(GONZALES_RELEASE) $(OPTIONS) $(SCENE)
+RUN_DEBUG	= @ $(GONZALES) $(OPTIONS) $(SCENE)
+RUN_RELEASE	= @ $(GONZALES) $(OPTIONS) $(SCENE)
 
 test: test_debug
 v: view
@@ -169,30 +116,27 @@ editMakefile:
 
 OIIO_BRIDGE_SRC = Sources/openImageIOBridge/openImageIOBridge.cc
 OIIO_BRIDGE_INC = Sources/openImageIOBridge/include
-OIIO_BRIDGE_LIB = $(BUILD_DIRECTORY)/liboiiobridge.so
+OIIO_BRIDGE_LIB = $(BUILD_DIR)/liboiiobridge.so
 
 $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/openImageIOBridge.h
-	@mkdir -p $(BUILD_DIRECTORY)
+	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
 ifdef GITHUB_ACTIONS
-MOJO_BUILD_FLAGS = --emit shared-lib --target-accelerator sm_89
+MOJO_BUILD_FLAGS = --target-accelerator sm_89
 else
-MOJO_BUILD_FLAGS = --emit shared-lib
+MOJO_BUILD_FLAGS =
 endif
-MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIRECTORY) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIRECTORY)
+MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-$(MOJO_LIB): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
-	@mkdir -p .build
-	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(MOJO_LIB) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
-	@rm -f $(GONZALES_DEBUG) $(GONZALES_RELEASE)
+$(GONZALES): Sources/mojoKernel/kernel.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
+	@mkdir -p $(BUILD_DIR)
+	uv run mojo build Sources/mojoKernel/kernel.mojo -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
 r: release
-release: $(MOJO_LIB)
-	@$(BUILD_RELEASE)
+release: $(GONZALES)
 d: debug
-debug: $(MOJO_LIB)
-	@$(BUILD_DEBUG)
+debug: $(GONZALES)
 t: test
 td: test_debug
 test_debug: debug
@@ -207,15 +151,12 @@ tags:
 
 c: clean
 clean:
-	@rm -rf .build/debug .build/release
+	@rm -rf $(BUILD_DIR)
 	@rm -f cornell-box.png cornell-box.exr cornell-box.hpm cornell-box.tiff tags
 
 ca: clean_all
-clean_all:
-	@$(SWIFT) package clean
-	@rm -f cornell-box.png cornell-box.exr cornell-box.hpm cornell-box.tiff tags
-	@rm -rf gonzales.xcodeproj flame.svg perf.data perf.data.old Package.resolved
-	@rm -f $(EMBEDDED_C) .build/devicePrograms.ptx
+clean_all: clean
+	@rm -rf flame.svg perf.data perf.data.old
 
 clean-gh-runs:
 	gh run list --limit 200 --json databaseId --jq '.[8:] | .[].databaseId' | xargs -I {} gh run delete {}
@@ -333,11 +274,8 @@ tp: test_pbrt
 test_pbrt:
 	$(PBRT) $(PBRT_OPTIONS) $(SCENE)
 
-xcode:
-	$(SWIFT) package generate-xcodeproj --xcconfig-overrides Config.xcconfig
-
-FILES=$(shell find Sources -name \*.swift -o -name \*.h -o -name \*.cc| grep -Ev \.build | wc -l)
-LINES=$(shell wc -l $$(find Sources -name \*.swift -not -name SobolMatrices.swift -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
+FILES=$(shell find Sources -name \*.mojo -o -name \*.h -o -name \*.cc | wc -l)
+LINES=$(shell wc -l $$(find Sources -name \*.mojo -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
 	@echo $(FILES) "files"
 	@echo $(LINES) "lines"
@@ -359,8 +297,7 @@ perf_report:
 
 # Check for memory leaks
 leak:
-	#valgrind --suppressions=valgrind.supp --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
-	valgrind --gen-suppressions=yes --leak-check=full .build/release/gonzales $(OPTIONS) $(SCENE)
+	valgrind --gen-suppressions=yes --leak-check=full $(GONZALES) $(OPTIONS) $(SCENE)
 
 # Check memory usage
 MASSIF_OUT=massif.out.gonzales
@@ -373,19 +310,15 @@ memcheck: release
 # while true; do ps aux|grep gonzales|grep -Ev grep|awk '{print $5}' >> gonzales_memory; sleep 5; done
 
 flame:
-	perf script | stackcollapse-perf.pl | swift demangle | flamegraph.pl --width 10000 --height 48 > flame.svg
+	perf script | stackcollapse-perf.pl | flamegraph.pl --width 10000 --height 48 > flame.svg
 	eog -f flame.svg
 
 format:
 	@clang-format -i $(shell find Sources -name \*.h -o -name \*.cc)
-	@swift-format -i -p $(shell find Sources Tests -name \*.swift -not -name SobolMatrices.swift)
-lint:
-	swiftlint Sources
 codespell:
 	codespell -L inout Sources
 lldb:
-	#$(LLDB) .build/release/gonzales -- $(SINGLERAY) $(SCENE)
-	$(LLDB) .build/debug/gonzales -- $(SINGLERAY) $(SCENE)
+	$(LLDB) $(GONZALES) -- $(SINGLERAY) $(SCENE)
 
 heaptrack:
 	heaptrack $(GONZALES_RELEASE) $(SCENE)
@@ -396,14 +329,6 @@ open_trace_in_ui:
 	curl -OL https://github.com/google/perfetto/raw/main/tools/open_trace_in_ui
 perfetto: gonzales.perfscript open_trace_in_ui
 	python open_trace_in_ui -i $<
-
-coated: debug
-	.build/debug/testCoated
-lldb_coated: debug
-	LD_LIBRARY_PATH=. $(LLDB) .build/debug/testCoated
-
-testsuite:
-	$(SWIFT) test $(SWIFT_TEST_OPTIONS) --enable-experimental-prebuilts
 
 book:
 	python3 docs/build_book.py

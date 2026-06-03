@@ -1,9 +1,11 @@
 from std.ffi import external_call
-from std.sys import has_accelerator, has_nvidia_gpu_accelerator
+from std.sys import has_accelerator, has_nvidia_gpu_accelerator, argv
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv, sqrt, cos, sin, log, exp, tan
 from std.memory import alloc
+from std.time import perf_counter_ns
+from std.os import getenv
 
 @fieldwise_init
 struct PrimId_C(TrivialRegisterPassable):
@@ -4452,3 +4454,100 @@ fn mojo_parse_and_render(
     sd.free()
     mojo_parsed_free(psc)
     return Int32(0)
+
+
+fn _generate_sobol_matrices(dir_numbers_path: String) -> UnsafePointer[UInt32, MutAnyOrigin]:
+    comptime N_DIMS = 1024
+    comptime MAT_SIZE = 52
+    var matrices = alloc[UInt32](N_DIMS * MAT_SIZE)
+    for i in range(N_DIMS * MAT_SIZE):
+        matrices[i] = UInt32(0)
+
+    # Dimension 0: Van der Corput identity matrix
+    for i in range(32):
+        matrices[i] = UInt32(1) << UInt32(31 - i)
+
+    try:
+        var f = open(dir_numbers_path, "r")
+        var content = f.read()
+        f.close()
+
+        var dim = 1
+        var lines = content.splitlines()
+        for line in lines:
+            var l = String(line)
+            if len(l) == 0 or l.startswith("d"):
+                continue
+            var parts = l.split()
+            if len(parts) < 4:
+                continue
+            var s = Int(atol(parts[1]))
+            var a = Int(atol(parts[2]))
+
+            var v = alloc[UInt32](MAT_SIZE + 1)
+            for i in range(MAT_SIZE + 1):
+                v[i] = UInt32(0)
+
+            # Seed from Joe-Kuo m values
+            for i in range(1, min(s, MAT_SIZE) + 1):
+                if 2 + i < len(parts):
+                    v[i] = UInt32(atol(parts[2 + i])) << UInt32(32 - i)
+
+            # Gray-code recurrence
+            for i in range(s + 1, MAT_SIZE + 1):
+                v[i] = v[i - s] ^ (v[i - s] >> UInt32(s))
+                for j in range(1, s):
+                    if (a >> (s - 1 - j)) & 1 == 1:
+                        v[i] ^= v[i - j]
+
+            for i in range(MAT_SIZE):
+                matrices[dim * MAT_SIZE + i] = v[i + 1]
+            v.free()
+
+            dim += 1
+            if dim >= N_DIMS:
+                break
+    except e:
+        print("ERROR: could not generate Sobol matrices from", dir_numbers_path, ":", e)
+        matrices.free()
+        return UnsafePointer[UInt32, MutAnyOrigin]()
+
+    return matrices
+
+
+fn main() raises:
+    var t0 = perf_counter_ns()
+
+    var args = argv()
+    var scene_path = String("")
+    var i = 1
+    while i < len(args):
+        var arg = String(args[i])
+        if arg == "--help" or arg == "-h":
+            print("Usage: gonzales scene.pbrt")
+            return
+        scene_path = arg
+        i += 1
+
+    if len(scene_path) == 0:
+        print("Usage: gonzales scene.pbrt")
+        return
+
+    var data_dir = getenv("GONZALES_DATA_DIR", "Sources/mojoKernel/data")
+    var sobol = _generate_sobol_matrices(data_dir + "/new-joe-kuo-6.21201")
+    if not sobol:
+        return
+
+    var path_len = len(scene_path)
+    var path_cstr = alloc[UInt8](path_len + 1)
+    for k in range(path_len):
+        path_cstr[k] = scene_path.as_bytes()[k]
+    path_cstr[path_len] = UInt8(0)
+
+    _ = mojo_parse_and_render(path_cstr, sobol)
+
+    path_cstr.free()
+    sobol.free()
+
+    var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
+    print("Gonzales Total Execution Time:", elapsed_s, "s")
