@@ -90,6 +90,44 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
 }
 
+int load_texture_rgb(const char *filename, float **data, int *width, int *height) {
+        auto in = OIIO::ImageInput::open(filename);
+        if (!in) return 0;
+        const OIIO::ImageSpec &spec = in->spec();
+        *width  = spec.width;
+        *height = spec.height;
+        int n = spec.width * spec.height;
+        int nc = spec.nchannels;
+        std::vector<float> buf(n * nc);
+        in->read_image(0, 0, 0, nc, OIIO::TypeDesc::FLOAT, buf.data());
+        in->close();
+        *data = (float *)malloc(n * 3 * sizeof(float));
+        if (!*data) return 0;
+        bool hdr = strstr(filename, ".exr") != nullptr || strstr(filename, ".hdr") != nullptr;
+        for (int i = 0; i < n; ++i) {
+                float r = nc > 0 ? buf[i * nc + 0] : 0.0f;
+                float g = nc > 1 ? buf[i * nc + 1] : r;
+                float b = nc > 2 ? buf[i * nc + 2] : r;
+                if (!hdr) {
+                        // sRGB → linear (same conversion as CPU shader's _srgb_to_linear)
+                        auto cvt = [](float c) {
+                                return c <= 0.04045f ? c / 12.92f
+                                                     : std::pow((c + 0.055f) / 1.055f, 2.4f);
+                        };
+                        r = cvt(r); g = cvt(g); b = cvt(b);
+                }
+                (*data)[i * 3 + 0] = r;
+                (*data)[i * 3 + 1] = g;
+                (*data)[i * 3 + 2] = b;
+        }
+        return 1;
+}
+
+int free_texture_rgb(float *data) {
+        free(data);
+        return 0;
+}
+
 static bool is_hdr_ext(const char *filename) {
         const char *dot = strrchr(filename, '.');
         if (!dot) return true;

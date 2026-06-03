@@ -650,6 +650,7 @@ struct ParsedScene_Mojo:
     var mesh_fis:         UnsafePointer[UnsafePointer[Int64, MutAnyOrigin], MutAnyOrigin]
     var mesh_n_verts:     UnsafePointer[Int32, MutAnyOrigin]
     var mesh_n_tris:      UnsafePointer[Int32, MutAnyOrigin]
+    var mesh_uv_n_verts:  UnsafePointer[Int32, MutAnyOrigin]  # per-mesh UV vertex count; 0 = no UVs
     var mesh_count:       Int32
     var bvh_nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
     var prim_ids:         UnsafePointer[PrimId_C, MutAnyOrigin]
@@ -719,6 +720,7 @@ struct _PscState:
     var mesh_is_al:    UnsafePointer[Int32, MutAnyOrigin]
     var mesh_al_rgb:   UnsafePointer[RGB, MutAnyOrigin]
     var mesh_uvs_list: UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin]
+    var mesh_has_uvs:  UnsafePointer[Int8, MutAnyOrigin]
     var scene_dir:     UnsafePointer[UInt8, MutAnyOrigin]
 
     var named_tex_idx: UnsafePointer[Int32, MutAnyOrigin]
@@ -939,8 +941,10 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].mesh_is_al    = alloc[Int32](PSC_MAX_MESHES)
     s[0].mesh_al_rgb   = alloc[RGB](PSC_MAX_MESHES)
     s[0].mesh_uvs_list = alloc[UnsafePointer[Float32, MutAnyOrigin]](PSC_MAX_MESHES)
+    s[0].mesh_has_uvs  = alloc[Int8](PSC_MAX_MESHES)
     for i in range(PSC_MAX_MESHES):
         s[0].mesh_uvs_list[i] = UnsafePointer[Float32, MutAnyOrigin]()
+        s[0].mesh_has_uvs[i]  = Int8(0)
     s[0].scene_dir     = alloc[UInt8](PSC_FILE_MAX * 2)
     s[0].scene_dir[0]  = UInt8(0)
 
@@ -974,6 +978,7 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].mesh_is_al.free()
     s[0].mesh_al_rgb.free()
     s[0].mesh_uvs_list.free()
+    s[0].mesh_has_uvs.free()
     s[0].scene_dir.free()
     s[0].named_tex_idx.free()
     s[0].tex_names.free()
@@ -1373,6 +1378,7 @@ fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         var cur_mesh_idx = Int(s[0].n_meshes) - 1
         if ply_has_uvs[0] != 0:
             s[0].mesh_uvs_list[cur_mesh_idx] = ply_uvs[0]
+            s[0].mesh_has_uvs[cur_mesh_idx]  = Int8(1)
         else:
             s[0].mesh_uvs_list[cur_mesh_idx] = UnsafePointer[Float32, MutAnyOrigin]()
         tmp_f2.free(); tmp_i2.free()
@@ -1443,6 +1449,7 @@ fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         for ui in range(Int(n_verts) * 2):
             uv_copy[ui] = tmp_uv[ui]
         s[0].mesh_uvs_list[cur_mesh_idx] = uv_copy
+        s[0].mesh_has_uvs[cur_mesh_idx]  = Int8(1)
     else:
         s[0].mesh_uvs_list[cur_mesh_idx] = UnsafePointer[Float32, MutAnyOrigin]()
     tmp_f.free(); tmp_i.free(); tmp_uv.free()
@@ -1652,8 +1659,9 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var out_pts = alloc[UnsafePointer[Float32, MutAnyOrigin]](max(n_meshes, 1))
     var out_vis = alloc[UnsafePointer[Int64, MutAnyOrigin]](max(n_meshes, 1))
     var out_fis = alloc[UnsafePointer[Int64, MutAnyOrigin]](max(n_meshes, 1))
-    var out_nv  = alloc[Int32](max(n_meshes, 1))
-    var out_nt  = alloc[Int32](max(n_meshes, 1))
+    var out_nv    = alloc[Int32](max(n_meshes, 1))
+    var out_nt    = alloc[Int32](max(n_meshes, 1))
+    var out_uv_nv = alloc[Int32](max(n_meshes, 1))
 
     var al_list = alloc[AreaLight_C](max(Int(n_al), 1))
     var al_count = Int32(0)
@@ -1666,10 +1674,11 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         out_fis[i] = s[0].mesh_fis_list[i]
         out_nv[i]  = s[0].mesh_nv[i]
         out_nt[i]  = s[0].mesh_nt[i]
-        meshes[i].points       = out_pts[i]
+        meshes[i].points        = out_pts[i]
         meshes[i].vertexIndices = out_vis[i]
         meshes[i].faceIndices   = out_fis[i]
         meshes[i].uvs           = s[0].mesh_uvs_list[i]
+        out_uv_nv[i] = s[0].mesh_nv[i] if s[0].mesh_has_uvs[i] != Int8(0) else Int32(0)
 
         if s[0].mesh_is_al[i] != 0:
             var al_idx = Int(al_count)
@@ -1833,6 +1842,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     psc[0].mesh_fis         = out_fis
     psc[0].mesh_n_verts     = out_nv
     psc[0].mesh_n_tris      = out_nt
+    psc[0].mesh_uv_n_verts  = out_uv_nv
     psc[0].mesh_count       = Int32(n_meshes)
     psc[0].bvh_nodes        = bvh_nodes
     psc[0].prim_ids         = prim_ids
@@ -1908,6 +1918,7 @@ fn mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].mesh_fis.free()
         psc[0].mesh_n_verts.free()
         psc[0].mesh_n_tris.free()
+        psc[0].mesh_uv_n_verts.free()
     if psc[0].meshes:
         psc[0].meshes.free()
     if psc[0].materials:

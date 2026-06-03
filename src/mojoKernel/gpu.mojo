@@ -3,7 +3,8 @@ from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv, sqrt, cos, sin, log
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, dot, cross
+from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, dot, cross
+from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
 from .shading import shade_core, shade_conductor, shade_dielectric, shade_diffuse_transmission
@@ -24,6 +25,10 @@ struct GpuSceneHandle(Movable):
     var points_bufs: List[DeviceBuffer[DType.uint8]]
     var faceIndices_bufs: List[DeviceBuffer[DType.uint8]]
     var vertexIndices_bufs: List[DeviceBuffer[DType.uint8]]
+    var uv_bufs: List[DeviceBuffer[DType.uint8]]
+    var tex_data_bufs: List[DeviceBuffer[DType.uint8]]
+    var textures_buf: DeviceBuffer[DType.uint8]  # array of GpuTexture_C
+    var n_textures: Int
     var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C) = 24
     var n_area_lights: Int
     # Persistent render buffers — sized for n_pixels, reused across all spp passes
@@ -58,6 +63,9 @@ fn mojo_gpu_upload_scene(
     meshPointsCounts: UnsafePointer[Int64, MutAnyOrigin],
     meshFaceIndicesCounts: UnsafePointer[Int64, MutAnyOrigin],
     meshVertexIndicesCounts: UnsafePointer[Int64, MutAnyOrigin],
+    meshUvNVerts: UnsafePointer[Int64, MutAnyOrigin],
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
+    n_tex: Int32,
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     materialCount: Int64,
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
@@ -116,10 +124,11 @@ fn mojo_gpu_upload_scene(
                 for i in range(prim_bytes):
                     dst[i] = src[i]
 
-            # Upload per-mesh vertex/index data and build device-side mesh structs
+            # Upload per-mesh vertex/index/uv data and build device-side mesh structs
             var points_bufs = List[DeviceBuffer[DType.uint8]]()
             var face_bufs = List[DeviceBuffer[DType.uint8]]()
             var vert_bufs = List[DeviceBuffer[DType.uint8]]()
+            var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
 
             var mesh_structs_host = alloc[TriangleMesh_C](Int(meshCount))
 
@@ -156,17 +165,31 @@ fn mojo_gpu_upload_scene(
                     for j in range(vi_bytes):
                         dst[j] = src[j]
 
-                # Build mesh struct with device pointers (uvs not uploaded — shade_core doesn't use them)
+                # Upload UVs (2 floats per vertex; zeros if mesh has no UVs)
+                var uv_n = Int(meshUvNVerts[i])
+                var uv_bytes = max(uv_n * 2 * 4, 4)
+                var uv_buf = ctx.enqueue_create_buffer[DType.uint8](uv_bytes)
+                with uv_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    if uv_n > 0:
+                        var src = host_mesh.uvs.bitcast[UInt8]()
+                        for j in range(uv_n * 2 * 4):
+                            dst[j] = src[j]
+                    else:
+                        for j in range(uv_bytes):
+                            dst[j] = UInt8(0)
+
                 mesh_structs_host[i] = TriangleMesh_C(
                     pts_buf.unsafe_ptr().bitcast[Float32](),
                     fi_buf.unsafe_ptr().bitcast[Int64](),
                     vi_buf.unsafe_ptr().bitcast[Int64](),
-                    UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+                    uv_buf.unsafe_ptr().bitcast[Float32](),
                 )
 
                 points_bufs.append(pts_buf^)
                 face_bufs.append(fi_buf^)
                 vert_bufs.append(vi_buf^)
+                uv_bufs.append(uv_buf^)
 
             # Upload mesh struct array
             var meshes_buf = ctx.enqueue_create_buffer[DType.uint8](mesh_struct_bytes)
@@ -210,6 +233,46 @@ fn mojo_gpu_upload_scene(
                 for i in range(n_pix * 12):
                     p[i] = UInt8(0)
 
+            # Load and upload textures
+            var n_textures_int = Int(n_tex)
+            var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
+            var gpu_textures_host = alloc[GpuTexture_C](max(n_textures_int, 1))
+            for ti in range(n_textures_int):
+                var filename = tex_filenames[ti]
+                var data_out = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
+                var w_out = alloc[Int32](1)
+                var h_out = alloc[Int32](1)
+                w_out[0] = Int32(0); h_out[0] = Int32(0)
+                var ok = external_call["load_texture_rgb", Int32,
+                    UnsafePointer[UInt8, MutAnyOrigin],
+                    UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
+                    UnsafePointer[Int32, MutAnyOrigin],
+                    UnsafePointer[Int32, MutAnyOrigin]](filename, data_out, w_out, h_out)
+                if ok != 0 and Int(w_out[0]) > 0:
+                    var tw = Int(w_out[0]); var th = Int(h_out[0])
+                    var tex_bytes = tw * th * 3 * 4
+                    var tex_buf = ctx.enqueue_create_buffer[DType.uint8](tex_bytes)
+                    with tex_buf.map_to_host() as h:
+                        var dst = h.unsafe_ptr().bitcast[Float32]()
+                        var src = data_out[0]
+                        for j in range(tw * th * 3):
+                            dst[j] = src[j]
+                    gpu_textures_host[ti] = GpuTexture_C(tex_buf.unsafe_ptr().bitcast[Float32](), Int32(tw), Int32(th))
+                    _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutAnyOrigin]](data_out[0])
+                    tex_data_bufs.append(tex_buf^)
+                else:
+                    gpu_textures_host[ti] = GpuTexture_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0))
+                data_out.free(); w_out.free(); h_out.free()
+            var tex_struct_bytes = max(n_textures_int, 1) * 16  # sizeof(GpuTexture_C) = 16
+            var textures_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](tex_struct_bytes)
+            with textures_gpu_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr()
+                var src = gpu_textures_host.bitcast[UInt8]()
+                for j in range(tex_struct_bytes):
+                    dst[j] = src[j]
+            gpu_textures_host.free()
+            print("GPU: " + String(n_textures_int) + " texture(s) uploaded")
+
             # Upload Sobol matrices: first 2 dimensions × 52 UInt32 = 416 bytes
             var sobol_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](416)
             with sobol_gpu_buf.map_to_host() as h:
@@ -244,6 +307,10 @@ fn mojo_gpu_upload_scene(
                 points_bufs=points_bufs^,
                 faceIndices_bufs=face_bufs^,
                 vertexIndices_bufs=vert_bufs^,
+                uv_bufs=uv_bufs^,
+                tex_data_bufs=tex_data_bufs^,
+                textures_buf=textures_gpu_buf^,
+                n_textures=n_textures_int,
                 area_lights_buf=al_buf^,
                 n_area_lights=Int(areaLightCount),
                 path_buf=r_path_buf^,
@@ -371,11 +438,47 @@ fn shade_gpu(
 
 
 @always_inline
+fn _sample_tex_gpu(
+    tex: GpuTexture_C,
+    u: Float32, v: Float32,
+) -> RGB:
+    var tw = Int(tex.width); var th = Int(tex.height)
+    var s = u - Float32(Int(u))
+    if s < Float32(0.0): s += Float32(1.0)
+    var t = v - Float32(Int(v))
+    if t < Float32(0.0): t += Float32(1.0)
+    var px = min(Int(s * Float32(tw)), tw - 1)
+    var py = min(Int(t * Float32(th)), th - 1)
+    var idx = (py * tw + px) * 3
+    return RGB(tex.data[idx], tex.data[idx+1], tex.data[idx+2])
+
+@always_inline
+fn _tex_lookup_gpu(
+    mat: Material_C,
+    inter: Intersection_C,
+    v0: Int, v1: Int, v2: Int,
+    mesh: TriangleMesh_C,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+) -> RGB:
+    var ti = Int(mat.tex_idx)
+    if ti >= 0 and ti < n_textures:
+        var tex = textures[ti]
+        if Int(tex.width) > 0:
+            var w0 = Float32(1.0) - inter.u - inter.v
+            var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
+            var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+            return _sample_tex_gpu(tex, su, tv)
+    return mat.albedo
+
+@always_inline
 fn shade_coated_diffuse_gpu(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
 ):
     var mesh_idx: Int
     var base_vidx: Int
@@ -396,6 +499,8 @@ fn shade_coated_diffuse_gpu(
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var alb = _tex_lookup_gpu(mat, inter, v0, v1, v2, mesh, textures, n_textures)
 
     var normal = cross(p1 - p0, p2 - p0)
     var nlen = dot(normal, normal)
@@ -444,7 +549,7 @@ fn shade_coated_diffuse_gpu(
         if dlen > Float32(0.0):
             dir = dir * (Float32(1.0) / sqrt(dlen))
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-        path_ptr[].throughput *= mat.albedo
+        path_ptr[].throughput *= alb
 
     path_ptr[].bounce += 1
     if path_ptr[].bounce > 1:
@@ -467,6 +572,8 @@ fn shade_nee_core_gpu(
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
 ):
     var mat = materials[Int(inter.primId.materialIndex)]
 
@@ -485,7 +592,7 @@ fn shade_nee_core_gpu(
         return
 
     if mat.type == 5:
-        shade_coated_diffuse_gpu(path_ptr, inter, meshes, mat)
+        shade_coated_diffuse_gpu(path_ptr, inter, meshes, mat, textures, n_textures)
         return
 
     if mat.type == 6:
@@ -526,7 +633,7 @@ fn shade_nee_core_gpu(
 
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-    var alb = mat.albedo  # no texture lookup on GPU
+    var alb = _tex_lookup_gpu(mat, inter, Int(mesh.vertexIndices[base_vidx]), Int(mesh.vertexIndices[base_vidx+1]), Int(mesh.vertexIndices[base_vidx+2]), mesh, textures, n_textures)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -605,6 +712,8 @@ fn shade_nee_gpu(
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -617,7 +726,7 @@ fn shade_nee_gpu(
     if inter.hit == 0:
         path_ptr[].active = 0
         return
-    shade_nee_core_gpu(path_ptr, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount)
+    shade_nee_core_gpu(path_ptr, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount, textures, n_textures)
 
 
 fn accumulate_film_gpu(
@@ -840,6 +949,8 @@ fn mojo_gpu_render_sample(
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
                     n_int,
                     grid_dim=grid_dim,
                     block_dim=block_size,
