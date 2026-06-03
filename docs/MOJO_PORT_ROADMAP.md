@@ -38,15 +38,27 @@ of scope unless decided otherwise.
 
 ## Status snapshot
 
-Already in Mojo (`Sources/mojoKernel/kernel.mojo`, ~2170 lines): BVH2 traversal
-& triangle intersection, path tracing loop, 6 material shaders (diffuse,
-conductor, dielectric, coatedDiffuse, diffuseTransmission, arealight), NEE,
-Russian roulette, ZSobol sampling, Gaussian filter importance sampling,
-per-pixel film accumulation, BVH2 construction (SAH).
+**Phases A–C complete — pure Mojo CLI renderer shipped and cleaned up.**
 
-Swift is ~15k lines across 18 `libgonzales` subsystems plus C/C++ glue
-(`openImageIOBridge`, `ptexBridge`, `exr`, `vulkanViewer`) and build tooling
-(`DevirtualizeMacro`, `SobolGenerator`).
+`Sources/mojoKernel/kernel.mojo` (~4800 lines) now owns the entire pipeline:
+CLI entry point, `.pbrt` parsing, scene construction, BVH2 build (SAH),
+path tracing loop, 6 material shaders (diffuse, conductor, dielectric,
+coatedDiffuse, diffuseTransmission, arealight), NEE, Russian roulette,
+ZSobol sampling, Gaussian filter, per-pixel film accumulation, parallel tile
+scheduling (all logical cores via `std.algorithm.parallelize`),
+joint-bilateral denoising, EXR output via OpenImageIO FFI, and three texture
+types: constant, checkerboard (world-space 3D), and imagemap (via OIIO FFI).
+
+`Sources/SobolGenerator/gen_sobol.mojo` generates the Sobol matrix binary
+at build time.
+
+Swift (`libgonzales`, ~17k lines) and all stale C bridges (`ptexBridge`,
+`vulkanViewer`, `openimageio`, `ptex` raw headers, `mojo_kernel.h`,
+`dummy.c`) have been deleted. `Sources/` now contains only three directories:
+`mojoKernel/`, `openImageIOBridge/`, and `SobolGenerator/`.
+
+1024×1024 / 64 spp Cornell box with imagemap textures renders in ~20 s on
+8 logical cores (was ~79 s single-threaded).
 
 ## Phase A — Parsing & scene construction into Mojo
 
@@ -77,14 +89,17 @@ Mojo can run the whole pipeline behind the ABI.
 
 | Step | Scope | Verify |
 |------|-------|--------|
-| 19 | CLI/arg parsing → Mojo; add a thin Mojo `main` (executable target, not just shared lib) | binary renders cornell-box identically |
-| 20 | Delete `libgonzales`, the Swift `gonzales` target, `DevirtualizeMacro`; replace `SobolGenerator` with a Mojo/data step | regression: cornell-box + several pbrt-v4 scenes match |
+| 19 | `PbrtScanner` ported to Mojo (handle-based API; gzip decompression stays in Swift) | identical render |
+| 20 | `fn main()` in kernel.mojo (argv, sobol load, timing); `gen_sobol.mojo` replaces Swift tool; Makefile drops Swift build; delete `gonzales`, `DevirtualizeMacro`, `SobolGenerator/main.swift`, `Plugins`, stale bridges — `libgonzales` kept as reference | cornell-box renders from pure Mojo binary |
 
 ## Phase D — Remaining / optional subsystems
 
 | Step | Scope | Notes |
 |------|-------|-------|
-| 21 | Textures + Ptex (FFI) | needed for textured scenes |
+| 21a | Constant textures | done |
+| 21b | Checkerboard texture (world-space 3D) | done |
+| 21c | Imagemap texture via OIIO FFI | done |
+| 21d | Ptex (FFI) | for subdivision-surface scenes |
 | 22 | Volumetric media / `Medium` | not in kernel yet |
 | 23 | GPU path consolidation | a GPU traversal path already exists |
 | 24 | Vulkan interactive viewer (FFI) | largest C++ chunk; lowest priority |
@@ -112,9 +127,14 @@ Mojo can run the whole pipeline behind the ABI.
 - [x] 16 — film buffer + normalize in Mojo
 - [x] 17 — denoise via Mojo joint bilateral filter (OIDN removed)
 - [x] 18 — image write via OpenImageIO bridge from Mojo (mojo_write_exr)
-- [x] 19 — PbrtScanner ported to Mojo (handle-based API; gzip decompression stays in Swift)
-- [x] 20 — remove Swift, regression suite
-- [ ] 21 — textures + Ptex
+- [x] 19 — PbrtScanner ported to Mojo (handle-based API)
+- [x] 20 — pure Mojo binary: fn main(), gen_sobol.mojo, Makefile rewrite, Swift build tooling deleted
+- [x] cleanup — libgonzales Swift reference deleted; stale bridges removed; Sources/ down to 3 directories
+- [x] 21a — constant textures
+- [x] 21b — checkerboard texture (world-space 3D XOR)
+- [x] 21c — imagemap texture via OpenImageIO FFI
+- [x] parallelism — tile dispatch parallelized over all logical cores (~4× on 8-core machine)
+- [ ] 21d — Ptex (FFI)
 - [ ] 22 — volumetric media
 - [ ] 23 — GPU path consolidation
 - [ ] 24 — Vulkan viewer

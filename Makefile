@@ -289,8 +289,9 @@ test_pbrt:
 FILES=$(shell find src -name \*.mojo -o -name \*.h -o -name \*.cc | wc -l)
 LINES=$(shell wc -l $$(find src -name \*.mojo -o -name \*.h -o -name \*.cc) | tail -n1 | awk '{ print $$1 }')
 wc:
-	@echo $(FILES) "files"
-	@echo $(LINES) "lines"
+	@echo "Mojo:  $$(find Sources Tests -name '*.mojo' | xargs wc -l 2>/dev/null | tail -1 | awk '{print $$1}') lines"
+	@echo "Swift: $$(find Sources Tests -name '*.swift' | xargs wc -l 2>/dev/null | tail -1 | awk '{print $$1}') lines"
+	@echo "C++:   $$(find Sources Tests -name '*.cc' -o -name '*.cpp' -o -name '*.h' | xargs wc -l 2>/dev/null | tail -1 | awk '{print $$1}') lines"
 
 # To be able to use perf the following has to be done:
 # sudo sysctl -w kernel.perf_event_paranoid=0
