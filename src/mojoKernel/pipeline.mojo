@@ -238,83 +238,30 @@ fn mojo_parse_and_render_gpu(
         psc[0].materials,      Int64(psc[0].material_count),
         psc[0].area_lights,    Int64(psc[0].area_light_count),
         Int64(n_pixels),
+        sobol_matrices,
+        psc[0].raster_to_camera, psc[0].camera_to_world,
+        psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
+        psc[0].filter_norm_x, psc[0].filter_norm_y,
+        fw, fh,
     )
     pts_counts.free(); fi_counts.free(); vi_counts.free()
 
-    var sp = TileSamplerParams_C(
-        sobolMatrices=sobol_matrices,
-        rngSeed=psc[0].rng_seed,
-        sobolSeed=Int32(0),
-        log2SamplesPerPixel=psc[0].log2_spp,
-        nBase4Digits=psc[0].n_base4_digits,
-        samplesPerPixel=psc[0].samples_per_pixel,
-        filterSigma=psc[0].filter_sigma,
-        filterSupportX=psc[0].filter_support_x,
-        filterSupportY=psc[0].filter_support_y,
-        filterNormX=psc[0].filter_norm_x,
-        filterNormY=psc[0].filter_norm_y,
-        filterWeight=psc[0].filter_weight,
-    )
-
-    var orgX = psc[0].camera_to_world[12]
-    var orgY = psc[0].camera_to_world[13]
-    var orgZ = psc[0].camera_to_world[14]
-    var paths = alloc[PathState_C](n_pixels)
-
-    var hash_bits = UInt64(mix_bits_u64(UInt64(0) ^ UInt64(sp.sobolSeed)))
+    var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
     var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
     var seed_dim1 = UInt32(0)
 
     mojo_gpu_clear_film(handle, Int64(n_pixels))
 
     for si in range(spp):
-        for iy in range(Int(fh)):
-            for ix in range(Int(fw)):
-                var px = Int32(ix)
-                var py = Int32(iy)
-                var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
-                var morton_idx = morton_base | UInt64(si)
-                var sobol_idx = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
-                var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
-                var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
-                var deltaX = gaussian_sample_1d(u0, sp.filterNormX, sp.filterSigma, sp.filterSupportX)
-                var deltaY = gaussian_sample_1d(u1, sp.filterNormY, sp.filterSigma, sp.filterSupportY)
-                var filmX = Float32(ix) + Float32(0.5) + deltaX
-                var filmY = Float32(iy) + Float32(0.5) + deltaY
-
-                var cx = psc[0].raster_to_camera[0]*filmX + psc[0].raster_to_camera[4]*filmY + psc[0].raster_to_camera[12]
-                var cy = psc[0].raster_to_camera[1]*filmX + psc[0].raster_to_camera[5]*filmY + psc[0].raster_to_camera[13]
-                var cz = psc[0].raster_to_camera[2]*filmX + psc[0].raster_to_camera[6]*filmY + psc[0].raster_to_camera[14]
-                var cw = psc[0].raster_to_camera[3]*filmX + psc[0].raster_to_camera[7]*filmY + psc[0].raster_to_camera[15]
-                if cw != Float32(0.0) and cw != Float32(1.0):
-                    cx /= cw; cy /= cw; cz /= cw
-                var camDir = SIMD[DType.float32, 3](cx, cy, cz)
-                var camLen = dot(camDir, camDir)
-                if camLen > Float32(0.0):
-                    camDir = camDir * (Float32(1.0) / sqrt(camLen))
-
-                var dx = psc[0].camera_to_world[0]*camDir[0] + psc[0].camera_to_world[4]*camDir[1] + psc[0].camera_to_world[8]*camDir[2]
-                var dy = psc[0].camera_to_world[1]*camDir[0] + psc[0].camera_to_world[5]*camDir[1] + psc[0].camera_to_world[9]*camDir[2]
-                var dz = psc[0].camera_to_world[2]*camDir[0] + psc[0].camera_to_world[6]*camDir[1] + psc[0].camera_to_world[10]*camDir[2]
-                var worldDir = SIMD[DType.float32, 3](dx, dy, dz)
-                var dirLen = dot(worldDir, worldDir)
-                if dirLen > Float32(0.0):
-                    worldDir = worldDir * (Float32(1.0) / sqrt(dirLen))
-
-                var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, Int32(si), sp.rngSeed)
-                var idx = iy * Int(fw) + ix
-                paths[idx] = PathState_C(
-                    Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
-                    RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
-                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-                    Int32(0), pcg_state, pcg_inc,
-                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-                )
-
-        mojo_gpu_render_sample(handle, paths, Int64(n_pixels), psc[0].max_depth)
-
-    paths.free()
+        mojo_gpu_render_sample(
+            handle,
+            psc[0].camera_to_world,
+            Int32(si), psc[0].log2_spp, psc[0].n_base4_digits,
+            seed_dim0, seed_dim1,
+            UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
+            UInt32(psc[0].rng_seed >> UInt64(32)),
+            Int64(n_pixels), psc[0].max_depth,
+        )
 
     # Download film once (n_pixels × 3 floats = sum of estimates over all spp passes)
     var gpu_film = alloc[Float32](n_pixels * 3)
@@ -526,6 +473,11 @@ fn mojo_render_interactive_gpu(
         psc[0].materials,   Int64(psc[0].material_count),
         psc[0].area_lights, Int64(psc[0].area_light_count),
         Int64(n_pixels),
+        sobol,
+        psc[0].raster_to_camera, psc[0].camera_to_world,
+        psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
+        psc[0].filter_norm_x, psc[0].filter_norm_y,
+        fw, fh,
     )
     pts_counts.free(); fi_counts.free(); vi_counts.free()
 
@@ -563,7 +515,6 @@ fn mojo_render_interactive_gpu(
     for i in range(16):
         c2w_buf[i] = c2w[i]
 
-    var paths    = alloc[PathState_C](n_pixels)
     var gpu_film = alloc[Float32](n_pixels * 3)
     var results  = alloc[TileResult_C](n_pixels)
     var beauty   = alloc[Float32](n_pixels * 3)
@@ -582,60 +533,19 @@ fn mojo_render_interactive_gpu(
             mojo_gpu_clear_film(handle, Int64(n_pixels))
             build_camera_to_world(cam_buf, c2w_buf)
 
-        # Vary samples across frames using Sobol with frame_count as sample index.
-        # log2spp=16 → 65536 virtual samples before wrapping.
+        # log2spp=16 → 65536 Sobol samples before wrapping; varies film jitter each frame.
         comptime log2spp_i = 16
         comptime n_base4_i = 8
-        var si = frame_count % 65536
-        var seed_dim0 = UInt32(0)
-        var seed_dim1 = UInt32(0)
-        var orgX = c2w_buf[12]; var orgY = c2w_buf[13]; var orgZ = c2w_buf[14]
-        var rng_seed = UInt64(frame_count)
+        var si = Int32(frame_count % 65536)
 
-        for iy in range(Int(fh)):
-            for ix in range(Int(fw)):
-                var px = Int32(ix); var py = Int32(iy)
-                var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp_i)
-                var morton_idx  = morton_base | UInt64(si)
-                var sobol_idx   = sobol_get_sample_index(morton_idx, 0, log2spp_i, n_base4_i)
-                var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol)
-                var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol)
-                var deltaX = gaussian_sample_1d(u0, psc[0].filter_norm_x, psc[0].filter_sigma, psc[0].filter_support_x)
-                var deltaY = gaussian_sample_1d(u1, psc[0].filter_norm_y, psc[0].filter_sigma, psc[0].filter_support_y)
-                var filmX = Float32(ix) + Float32(0.5) + deltaX
-                var filmY = Float32(iy) + Float32(0.5) + deltaY
-
-                var cx = psc[0].raster_to_camera[0]*filmX + psc[0].raster_to_camera[4]*filmY + psc[0].raster_to_camera[12]
-                var cy = psc[0].raster_to_camera[1]*filmX + psc[0].raster_to_camera[5]*filmY + psc[0].raster_to_camera[13]
-                var cz = psc[0].raster_to_camera[2]*filmX + psc[0].raster_to_camera[6]*filmY + psc[0].raster_to_camera[14]
-                var cw_v = psc[0].raster_to_camera[3]*filmX + psc[0].raster_to_camera[7]*filmY + psc[0].raster_to_camera[15]
-                if cw_v != Float32(0.0) and cw_v != Float32(1.0):
-                    cx /= cw_v; cy /= cw_v; cz /= cw_v
-                var camDir = SIMD[DType.float32, 3](cx, cy, cz)
-                var camLen = dot(camDir, camDir)
-                if camLen > Float32(0.0):
-                    camDir = camDir * (Float32(1.0) / sqrt(camLen))
-
-                var dx = c2w_buf[0]*camDir[0] + c2w_buf[4]*camDir[1] + c2w_buf[8]*camDir[2]
-                var dy = c2w_buf[1]*camDir[0] + c2w_buf[5]*camDir[1] + c2w_buf[9]*camDir[2]
-                var dz = c2w_buf[2]*camDir[0] + c2w_buf[6]*camDir[1] + c2w_buf[10]*camDir[2]
-                var worldDir = SIMD[DType.float32, 3](dx, dy, dz)
-                var dirLen = dot(worldDir, worldDir)
-                if dirLen > Float32(0.0):
-                    worldDir = worldDir * (Float32(1.0) / sqrt(dirLen))
-
-                var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, Int32(si), rng_seed)
-                var idx = iy * Int(fw) + ix
-                paths[idx] = PathState_C(
-                    Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
-                    RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
-                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-                    Int32(0), pcg_state, pcg_inc,
-                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
-                )
-
-        mojo_gpu_render_sample(handle, paths, Int64(n_pixels), psc[0].max_depth)
+        mojo_gpu_render_sample(
+            handle,
+            c2w_buf,
+            si, Int32(log2spp_i), Int32(n_base4_i),
+            UInt32(0), UInt32(0),
+            UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
+            Int64(n_pixels), psc[0].max_depth,
+        )
         frame_count += 1
 
         mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
@@ -654,7 +564,7 @@ fn mojo_render_interactive_gpu(
         mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
         viewer_update_framebuffer(v, denoised, fw, fh)
 
-    paths.free(); gpu_film.free(); results.free()
+    gpu_film.free(); results.free()
     beauty.free(); albedo.free(); denoised.free()
     c2w_buf.free(); cam_buf.free()
     mojo_gpu_free_scene(handle)

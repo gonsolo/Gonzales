@@ -1,12 +1,13 @@
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.math import ceildiv, sqrt, cos, sin
+from std.math import ceildiv, sqrt, cos, sin, log
 from std.memory import alloc
 from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, dot, cross
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
 from .shading import shade_core
+from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 
 # GPU scene handle — holds DeviceContext and device-resident scene buffers.
 # Allocated on the heap, returned as an opaque pointer.
@@ -30,6 +31,17 @@ struct GpuSceneHandle(Movable):
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × sizeof(Intersection_C) = 48
     var film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × sizeof(Float32) = 12
     var n_pixels: Int
+    # Camera and sampling data for GPU-side ray generation
+    var sobol_buf: DeviceBuffer[DType.uint8]  # 2 dims × 52 UInt32 = 416 bytes
+    var r2c_buf: DeviceBuffer[DType.uint8]    # raster_to_camera: 16 Float32 = 64 bytes
+    var c2w_buf: DeviceBuffer[DType.uint8]    # camera_to_world: 16 Float32 = 64 bytes (updated each frame)
+    var filter_sigma: Float32
+    var filter_support_x: Float32
+    var filter_support_y: Float32
+    var filter_norm_x: Float32
+    var filter_norm_y: Float32
+    var fw: Int
+    var fh: Int
 
 @export
 fn mojo_gpu_available() -> Bool:
@@ -51,6 +63,12 @@ fn mojo_gpu_upload_scene(
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int64,
     n_pixels: Int64,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    r2c: UnsafePointer[Float32, MutAnyOrigin],
+    c2w_init: UnsafePointer[Float32, MutAnyOrigin],
+    filter_sigma: Float32, filter_support_x: Float32, filter_support_y: Float32,
+    filter_norm_x: Float32, filter_norm_y: Float32,
+    fw: Int32, fh: Int32,
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     comptime if has_accelerator():
         try:
@@ -193,6 +211,27 @@ fn mojo_gpu_upload_scene(
                 for i in range(n_pix * 12):
                     p[i] = UInt8(0)
 
+            # Upload Sobol matrices: first 2 dimensions × 52 UInt32 = 416 bytes
+            var sobol_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](416)
+            with sobol_gpu_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr().bitcast[UInt32]()
+                for i in range(104):
+                    dst[i] = sobol_matrices[i]
+
+            # Upload raster_to_camera (16 floats = 64 bytes)
+            var r2c_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+            with r2c_gpu_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr().bitcast[Float32]()
+                for i in range(16):
+                    dst[i] = r2c[i]
+
+            # Upload camera_to_world (16 floats = 64 bytes)
+            var c2w_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+            with c2w_gpu_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr().bitcast[Float32]()
+                for i in range(16):
+                    dst[i] = c2w_init[i]
+
             # Allocate handle on heap
             var handle = alloc[GpuSceneHandle](1)
             handle.init_pointee_move(GpuSceneHandle(
@@ -212,6 +251,16 @@ fn mojo_gpu_upload_scene(
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
                 n_pixels=n_pix,
+                sobol_buf=sobol_gpu_buf^,
+                r2c_buf=r2c_gpu_buf^,
+                c2w_buf=c2w_gpu_buf^,
+                filter_sigma=filter_sigma,
+                filter_support_x=filter_support_x,
+                filter_support_y=filter_support_y,
+                filter_norm_x=filter_norm_x,
+                filter_norm_y=filter_norm_y,
+                fw=Int(fw),
+                fh=Int(fh),
             ))
 
             print("GPU: Scene uploaded successfully")
@@ -566,12 +615,77 @@ fn mojo_gpu_shade_batch(
         except e:
             print("GPU: Batch shading failed: " + String(e))
 
+# GPU kernel: generate primary PathState_C for every pixel in one pass.
+# Each thread handles one pixel.  All sampling is pure math — no host calls.
+fn gen_primary_rays_gpu(
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    r2c: UnsafePointer[Float32, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    fw: Int, fh: Int,
+    si: Int32, log2spp: Int32, n_base4: Int32,
+    seed_dim0: UInt32, seed_dim1: UInt32,
+    rng_seed_lo: UInt32, rng_seed_hi: UInt32,
+    filter_sigma: Float32, filter_norm_x: Float32, filter_support_x: Float32,
+    filter_norm_y: Float32, filter_support_y: Float32,
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var ix = tid % fw
+    var iy = tid // fw
+    var px = Int32(ix); var py = Int32(iy)
+
+    var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
+    var morton_idx  = morton_base | UInt64(si)
+    var sobol_idx   = sobol_get_sample_index(morton_idx, 0, Int(log2spp), Int(n_base4))
+    var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
+    var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
+    var deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
+    var deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
+    var filmX = Float32(ix) + Float32(0.5) + deltaX
+    var filmY = Float32(iy) + Float32(0.5) + deltaY
+
+    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
+    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
+    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
+    var cw_v = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
+    if cw_v != Float32(0.0) and cw_v != Float32(1.0):
+        cx /= cw_v; cy /= cw_v; cz /= cw_v
+    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
+    if camLen > Float32(0.0):
+        cx /= camLen; cy /= camLen; cz /= camLen
+
+    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
+    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
+    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
+    if dirLen > Float32(0.0):
+        dx /= dirLen; dy /= dirLen; dz /= dirLen
+
+    var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
+    var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
+    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
+    paths[tid] = PathState_C(
+        Ray_C(orgX, orgY, orgZ, dx, dy, dz),
+        RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
+        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+        Int32(0), pcg_state, pcg_inc,
+        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+    )
+
+
 # Render one sample pass into the persistent film buffer.
-# Upload paths once, run full bounce loop on GPU, accumulate — no download.
+# Ray generation runs on GPU — no CPU-side path buffer or PCIe upload needed.
 @export
 fn mojo_gpu_render_sample(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    si: Int32, log2spp: Int32, n_base4: Int32,
+    seed_dim0: UInt32, seed_dim1: UInt32,
+    rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     n: Int64,
     maxDepth: Int32,
 ):
@@ -581,14 +695,29 @@ fn mojo_gpu_render_sample(
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            var path_bytes = n_int * 88
-            with handle[].path_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = paths.bitcast[UInt8]()
-                for i in range(path_bytes):
-                    dst[i] = src[i]
+            # Update c2w for this frame
+            with handle[].c2w_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr().bitcast[Float32]()
+                for i in range(16):
+                    dst[i] = c2w[i]
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
+            # Generate primary rays on GPU
+            handle[].ctx.enqueue_function[gen_primary_rays_gpu, gen_primary_rays_gpu](
+                handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                handle[].fw, handle[].fh,
+                si, log2spp, n_base4,
+                seed_dim0, seed_dim1,
+                rng_seed_lo, rng_seed_hi,
+                handle[].filter_sigma, handle[].filter_norm_x, handle[].filter_support_x,
+                handle[].filter_norm_y, handle[].filter_support_y,
+                n_int,
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
             for _ in range(Int(maxDepth) + 1):
                 handle[].ctx.enqueue_function[traverse_paths_gpu, traverse_paths_gpu](
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
