@@ -4,6 +4,8 @@ comptime PLY_X    = 0
 comptime PLY_Y    = 1
 comptime PLY_Z    = 2
 comptime PLY_SKIP = 3
+comptime PLY_U    = 4
+comptime PLY_V    = 5
 comptime PLY_MAX_PROPS = 32
 
 fn _ply_read_line(
@@ -145,6 +147,8 @@ fn mojo_load_ply(
     out_n_verts: UnsafePointer[Int32, MutAnyOrigin],
     out_idx:     UnsafePointer[UnsafePointer[Int32, MutAnyOrigin], MutAnyOrigin],
     out_n_tris:  UnsafePointer[Int32, MutAnyOrigin],
+    out_uvs:     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
+    out_has_uvs: UnsafePointer[Int32, MutAnyOrigin],
 ) -> Int32:
     var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_immutable())
     var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
@@ -212,6 +216,10 @@ fn mojo_load_ply(
                     prop_roles[n_props] = Int32(PLY_Y)
                 elif _ply_word_eq(line_buf, 2, "z"):
                     prop_roles[n_props] = Int32(PLY_Z)
+                elif _ply_word_eq(line_buf, 2, "u") or _ply_word_eq(line_buf, 2, "s"):
+                    prop_roles[n_props] = Int32(PLY_U)
+                elif _ply_word_eq(line_buf, 2, "v") or _ply_word_eq(line_buf, 2, "t"):
+                    prop_roles[n_props] = Int32(PLY_V)
                 else:
                     prop_roles[n_props] = Int32(PLY_SKIP)
                 n_props += 1
@@ -226,17 +234,27 @@ fn mojo_load_ply(
         return Int32(0)
 
     var pts     = alloc[Float32](n_verts * 3)
+    var uvs_buf = alloc[Float32](n_verts * 2)
     var max_idx = n_faces * 6   # worst case: quads → 2 triangles each
     var idx_buf = alloc[Int32](max_idx)
     var n_tris  = 0
+    var found_uvs = False
+
+    # Check if we have any U/V properties
+    for pi in range(n_props):
+        var role = Int(prop_roles[pi])
+        if role == PLY_U or role == PLY_V:
+            found_uvs = True
+            break
 
     for v in range(n_verts):
         var vx = Float32(0); var vy = Float32(0); var vz = Float32(0)
+        var vu = Float32(0); var vv = Float32(0)
         for pi in range(n_props):
             var sz   = Int(prop_sizes[pi])
             var role = Int(prop_roles[pi])
             var is_d = Int(prop_is_double[pi]) == 1
-            if role == PLY_X or role == PLY_Y or role == PLY_Z:
+            if role == PLY_X or role == PLY_Y or role == PLY_Z or role == PLY_U or role == PLY_V:
                 var val: Float32
                 if is_d:
                     val = _ply_f64_le(file_buf, pos) if is_le else _ply_f64_be(file_buf, pos)
@@ -246,10 +264,15 @@ fn mojo_load_ply(
                     vx = val
                 elif role == PLY_Y:
                     vy = val
-                else:
+                elif role == PLY_Z:
                     vz = val
+                elif role == PLY_U:
+                    vu = val
+                elif role == PLY_V:
+                    vv = val
             pos += sz
         pts[v*3+0] = vx; pts[v*3+1] = vy; pts[v*3+2] = vz
+        uvs_buf[v*2+0] = vu; uvs_buf[v*2+1] = vv
 
     for _ in range(n_faces):
         var cnt = _ply_read_count(file_buf, pos, face_count_size, is_le)
@@ -281,4 +304,13 @@ fn mojo_load_ply(
     out_n_verts[0] = Int32(n_verts)
     out_idx[0]     = idx_buf
     out_n_tris[0]  = Int32(n_tris)
+
+    if found_uvs:
+        out_uvs[0]     = uvs_buf
+        out_has_uvs[0] = Int32(1)
+    else:
+        uvs_buf.free()
+        out_uvs[0]     = UnsafePointer[Float32, MutAnyOrigin]()
+        out_has_uvs[0] = Int32(0)
+
     return Int32(1)

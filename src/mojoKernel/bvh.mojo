@@ -61,6 +61,8 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var materialCount: Int64
     var areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin]
     var areaLightCount: Int64
+    var textures: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
+    var textureCount: Int64
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 
