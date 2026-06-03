@@ -2,6 +2,12 @@ from std.ffi import external_call
 from std.memory import alloc
 
 @fieldwise_init
+struct RGB(TrivialRegisterPassable):
+    var r: Float32
+    var g: Float32
+    var b: Float32
+
+@fieldwise_init
 struct PrimId_C(TrivialRegisterPassable):
     var id1: Int64
     var id2: Int64
@@ -21,12 +27,8 @@ struct Material_C(TrivialRegisterPassable):
     var _pad0: Int8
     var _pad1: Int8
     var _pad2: Int8
-    var albedoR: Float32
-    var albedoG: Float32
-    var albedoB: Float32
-    var emissionR: Float32
-    var emissionG: Float32
-    var emissionB: Float32
+    var albedo: RGB
+    var emission: RGB
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
@@ -57,15 +59,9 @@ struct Intersection_C(TrivialRegisterPassable):
 @fieldwise_init
 struct PathState_C(TrivialRegisterPassable):
     var ray: Ray_C
-    var throughputR: Float32
-    var throughputG: Float32
-    var throughputB: Float32
-    var estimateR: Float32
-    var estimateG: Float32
-    var estimateB: Float32
-    var albedoR: Float32
-    var albedoG: Float32
-    var albedoB: Float32
+    var throughput: RGB
+    var estimate: RGB
+    var albedo: RGB
     var bounce: Int32
     var pcgState: UInt64
     var pcgInc: UInt64
@@ -82,9 +78,7 @@ struct PathState_C(TrivialRegisterPassable):
 struct AreaLight_C(TrivialRegisterPassable):
     var meshIdx: Int32
     var triBaseVidx: Int32
-    var emissionR: Float32
-    var emissionG: Float32
-    var emissionB: Float32
+    var emission: RGB
     var _pad: Int32
 
 @fieldwise_init
@@ -100,12 +94,8 @@ struct PixelSample_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct TileResult_C(TrivialRegisterPassable):
-    var estimateR: Float32
-    var estimateG: Float32
-    var estimateB: Float32
-    var albedoR: Float32
-    var albedoG: Float32
-    var albedoB: Float32
+    var estimate: RGB
+    var albedo: RGB
     var filterWeight: Float32
     var pixelX: Int32
     var pixelY: Int32

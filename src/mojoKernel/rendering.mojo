@@ -1,7 +1,7 @@
 from std.math import ceildiv, sqrt
 from std.memory import alloc
 from std.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
+from .geometry import RGB, Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core
 from .shading import shade_core_cpu_nee
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64
@@ -116,9 +116,9 @@ def mojo_render_tile_v2(
                 var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, Int32(si), sp.rngSeed)
                 paths[idx] = PathState_C(
                     Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
-                    Float32(1.0), Float32(1.0), Float32(1.0),
-                    Float32(0.0), Float32(0.0), Float32(0.0),
-                    Float32(0.0), Float32(0.0), Float32(0.0),
+                    RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
+                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
                     Int32(0), pcg_state, pcg_inc,
                     Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
                 )
@@ -156,16 +156,16 @@ def mojo_render_tile_v2(
             var sumAR = Float32(0.0); var sumAG = Float32(0.0); var sumAB = Float32(0.0)
             var sumW = Float32(0.0)
             for _ in range(spp):
-                sumLR += paths[idx].estimateR
-                sumLG += paths[idx].estimateG
-                sumLB += paths[idx].estimateB
-                sumAR += paths[idx].albedoR
-                sumAG += paths[idx].albedoG
-                sumAB += paths[idx].albedoB
+                sumLR += paths[idx].estimate.r
+                sumLG += paths[idx].estimate.g
+                sumLB += paths[idx].estimate.b
+                sumAR += paths[idx].albedo.r
+                sumAG += paths[idx].albedo.g
+                sumAB += paths[idx].albedo.b
                 sumW += sp.filterWeight
                 idx += 1
             resultsPtr[out] = TileResult_C(
-                sumLR, sumLG, sumLB, sumAR, sumAG, sumAB, sumW, px, py,
+                RGB(sumLR, sumLG, sumLB), RGB(sumAR, sumAG, sumAB), sumW, px, py,
             )
             out += 1
 
@@ -226,9 +226,9 @@ def mojo_render_tile(
 
         paths[i] = PathState_C(
             Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
-            Float32(1.0), Float32(1.0), Float32(1.0),
-            Float32(0.0), Float32(0.0), Float32(0.0),
-            Float32(0.0), Float32(0.0), Float32(0.0),
+            RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
+            RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+            RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
             Int32(0),
             s.pcgState, s.pcgInc,
             Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
@@ -263,8 +263,7 @@ def mojo_render_tile(
     for i in range(n):
         var s = samplesPtr[i]
         resultsPtr[i] = TileResult_C(
-            paths[i].estimateR, paths[i].estimateG, paths[i].estimateB,
-            paths[i].albedoR, paths[i].albedoG, paths[i].albedoB,
+            paths[i].estimate, paths[i].albedo,
             s.filterWeight, s.pixelX, s.pixelY,
         )
 
@@ -342,9 +341,9 @@ fn mojo_normalize_film(
             albedo_out[i * 3 + 1] = Float32(0)
             albedo_out[i * 3 + 2] = Float32(0)
             continue
-        var br = r.estimateR / w * scale
-        var bg = r.estimateG / w * scale
-        var bb = r.estimateB / w * scale
+        var br = r.estimate.r / w * scale
+        var bg = r.estimate.g / w * scale
+        var bb = r.estimate.b / w * scale
         if max_component_value > Float32(0):
             var mx = max(br, max(bg, bb))
             if mx > max_component_value:
@@ -355,7 +354,7 @@ fn mojo_normalize_film(
         beauty_out[i * 3 + 0] = br
         beauty_out[i * 3 + 1] = bg
         beauty_out[i * 3 + 2] = bb
-        albedo_out[i * 3 + 0] = r.albedoR / w
-        albedo_out[i * 3 + 1] = r.albedoG / w
-        albedo_out[i * 3 + 2] = r.albedoB / w
+        albedo_out[i * 3 + 0] = r.albedo.r / w
+        albedo_out[i * 3 + 1] = r.albedo.g / w
+        albedo_out[i * 3 + 2] = r.albedo.b / w
 

@@ -1,7 +1,7 @@
 from std.memory import alloc
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
 from .rendering import mojo_render_all_tiles, mojo_normalize_film
-from .geometry import TileResult_C
+from .geometry import RGB, TileResult_C
 from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C
 from .bvh import BVH2Node
@@ -157,8 +157,8 @@ fn mojo_parse_and_render(
 
     var results = alloc[TileResult_C](n_pixels)
     var zero = TileResult_C(
-        estimateR=Float32(0), estimateG=Float32(0), estimateB=Float32(0),
-        albedoR=Float32(0), albedoG=Float32(0), albedoB=Float32(0),
+        estimate=RGB(Float32(0), Float32(0), Float32(0)),
+        albedo=RGB(Float32(0), Float32(0), Float32(0)),
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
     for i in range(n_pixels):
         results[i] = zero
@@ -255,8 +255,8 @@ fn mojo_render_interactive(
     var frame_count = 0
 
     var zero = TileResult_C(
-        estimateR=Float32(0), estimateG=Float32(0), estimateB=Float32(0),
-        albedoR=Float32(0),   albedoG=Float32(0),   albedoB=Float32(0),
+        estimate=RGB(Float32(0), Float32(0), Float32(0)),
+        albedo=RGB(Float32(0), Float32(0), Float32(0)),
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
 
     while not viewer_should_close(v):
