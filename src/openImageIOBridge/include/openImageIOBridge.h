@@ -23,9 +23,9 @@ bool writeSingleTile(void *out, const float *pixels, int xres, int channels, int
 // Safely closes the file and deletes the pointer.
 void closeImageOutput(void *out);
 
-// Simple float RGB writer for the Mojo path (step 18).
-int write_exr_rgb(const char *filename, const float *rgb, int width, int height,
-                  int tile_w, int tile_h);
+// Write float RGB. EXR/HDR → float32. PNG/JPG/etc. → Reinhard tonemap + sRGB uint8.
+int write_image_rgb(const char *filename, const float *rgb, int width, int height,
+                    int tile_w, int tile_h);
 
 #ifdef __cplusplus
 }

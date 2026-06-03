@@ -2,7 +2,7 @@ from std.memory import alloc
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
 from .rendering import mojo_render_all_tiles, mojo_normalize_film
 from .geometry import TileResult_C
-from .postprocess import mojo_denoise, mojo_write_exr
+from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C
 from .bvh import BVH2Node
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
@@ -182,14 +182,14 @@ fn mojo_parse_and_render(
     var denoised = alloc[Float32](n_pixels * 3)
     mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(7), Float32(5.0), Float32(0.2))
 
-    _ = mojo_write_exr(denoised, fw, fh, psc[0].film_filename, Int32(32), Int32(32))
+    _ = mojo_write_image(denoised, fw, fh, psc[0].film_filename, Int32(32), Int32(32))
     var albedo_name_buf = alloc[UInt8](16)
     var an = "albedo.exr"
     var an_ptr = an.unsafe_ptr()
     for i in range(10):
         albedo_name_buf[i] = an_ptr[i]
     albedo_name_buf[10] = UInt8(0)
-    _ = mojo_write_exr(albedo, fw, fh, albedo_name_buf, Int32(32), Int32(32))
+    _ = mojo_write_image(albedo, fw, fh, albedo_name_buf, Int32(32), Int32(32))
     albedo_name_buf.free()
 
     beauty.free(); albedo.free(); denoised.free()

@@ -1,8 +1,11 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <iostream>
 #include <memory>
+#include <vector>
 
 std::shared_ptr<OIIO::TextureSystem> textureSystem;
 
@@ -87,18 +90,63 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
 }
 
-// Simple float RGB writer for the Mojo path (step 18).
-// Writes a width*height*3 float array as an RGB EXR with the given tile size.
+static bool is_hdr_ext(const char *filename) {
+        const char *dot = strrchr(filename, '.');
+        if (!dot) return true;
+        return strcmp(dot, ".exr") == 0 || strcmp(dot, ".hdr") == 0;
+}
+
+struct RGB {
+        float r, g, b;
+
+        static RGB from(const float *p) { return {p[0], p[1], p[2]}; }
+
+        float luminance() const { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+
+        RGB reinhard() const {
+                float lum = luminance();
+                float scale = lum > 1e-6f ? (lum / (1.0f + lum)) / lum : 1.0f;
+                return {r * scale, g * scale, b * scale};
+        }
+
+        RGB to_srgb() const { return {linear_to_srgb(r), linear_to_srgb(g), linear_to_srgb(b)}; }
+
+        uint8_t to_u8(float ch) const { return (uint8_t)std::min(255.0f, ch * 255.0f + 0.5f); }
+        void store_u8(uint8_t *p) const { p[0] = to_u8(r); p[1] = to_u8(g); p[2] = to_u8(b); }
+
+private:
+        static float linear_to_srgb(float x) {
+                if (x <= 0.0f) return 0.0f;
+                if (x >= 1.0f) return 1.0f;
+                return x <= 0.0031308f ? 12.92f * x : 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f;
+        }
+};
+
+// Write a float RGB buffer.  EXR/HDR → float32 tiles.
+// PNG/JPG/etc. → Reinhard-on-luminance tonemap + sRGB gamma → uint8.
 // Returns 1 on success, 0 on failure.
-int write_exr_rgb(const char *filename, const float *rgb, int width, int height,
-                  int tile_w, int tile_h) {
+int write_image_rgb(const char *filename, const float *rgb, int width, int height,
+                    int tile_w, int tile_h) {
         auto out = OIIO::ImageOutput::create(filename);
-        if (!out) return 0;
-        OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::FLOAT);
-        spec.tile_width = tile_w;
-        spec.tile_height = tile_h;
-        if (!out->open(filename, spec)) return 0;
-        out->write_image(OIIO::TypeDesc::FLOAT, rgb);
+        if (!out) {
+                std::cerr << "write_image_rgb: cannot create writer for " << filename << std::endl;
+                return 0;
+        }
+        if (is_hdr_ext(filename)) {
+                OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::FLOAT);
+                spec.tile_width = tile_w;
+                spec.tile_height = tile_h;
+                if (!out->open(filename, spec)) return 0;
+                out->write_image(OIIO::TypeDesc::FLOAT, rgb);
+        } else {
+                int n = width * height;
+                std::vector<uint8_t> ldr(n * 3);
+                for (int i = 0; i < n; ++i)
+                        RGB::from(rgb + i * 3).reinhard().to_srgb().store_u8(ldr.data() + i * 3);
+                OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::UINT8);
+                if (!out->open(filename, spec)) return 0;
+                out->write_image(OIIO::TypeDesc::UINT8, ldr.data());
+        }
         out->close();
         return 1;
 }
