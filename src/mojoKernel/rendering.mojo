@@ -1,6 +1,7 @@
 from std.math import ceildiv, sqrt
 from std.memory import alloc
 from std.algorithm import parallelize
+from std.time import perf_counter_ns
 from .geometry import RGB, Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core
 from .shading import shade_core_cpu_nee
@@ -274,6 +275,33 @@ def mojo_render_tile(
     paths.free()
 
 
+fn _fmt_f1(v: Float64) -> String:
+    var i = Int(v)
+    var frac = Int((v - Float64(i)) * 10.0 + 0.5)
+    if frac >= 10:
+        i += 1; frac = 0
+    return String(i) + "." + String(frac)
+
+fn _fmt_time(s: Float64) -> String:
+    var sec = Int(s)
+    var min = sec // 60
+    var rem = sec % 60
+    if min > 0:
+        var rs = String(rem)
+        if rem < 10: rs = "0" + rs
+        return String(min) + "m " + rs + "s"
+    return _fmt_f1(s) + "s"
+
+fn _progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> String:
+    var pct = _fmt_f1(Float64(done) * 100.0 / Float64(total))
+    var est = Float64(0.0)
+    if done > 0:
+        est = elapsed * Float64(total) / Float64(done)
+    return ("Rendering: " + String(done) + " / " + String(total)
+        + " " + unit + " (" + pct + "%) | Elapsed: " + _fmt_time(elapsed)
+        + " | Total Est.: " + _fmt_time(est) + "                ")
+
+
 @export
 def mojo_render_all_tiles(
     raster_to_camera: UnsafePointer[Float32, MutAnyOrigin],
@@ -297,6 +325,13 @@ def mojo_render_all_tiles(
     # One scratch buffer per tile so threads never alias each other's writes.
     var tile_bufs = alloc[TileResult_C](n_tiles * max_tile_pixels)
 
+    # Progress counter — incremented after each tile (racy, display-only).
+    var done_ptr = alloc[Int32](1)
+    done_ptr[0] = Int32(0)
+    var t0 = perf_counter_ns()
+    # Print every ~5% of tiles (at least every 1 tile).
+    var print_step = max(n_tiles // 20, 1)
+
     @parameter
     fn render_one(tile_idx: Int):
         var ty_i = tile_idx // n_tiles_x
@@ -317,8 +352,17 @@ def mojo_render_all_tiles(
                 var src = iy * tw_actual + ix
                 var dst = (ty + iy - Int(min_y)) * res_x + (tx + ix - Int(min_x))
                 results[dst] = tile_buf[src]
+        done_ptr[0] += Int32(1)
+        var d = Int(done_ptr[0])
+        if d % print_step == 0 or d == n_tiles:
+            var elapsed = Float64(perf_counter_ns() - t0) / 1.0e9
+            print(_progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
 
     parallelize[render_one](n_tiles)
+    var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
+    print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
+        + " tiles (100.0%) | Done: " + _fmt_time(total_s) + "                ")
+    done_ptr.free()
     tile_bufs.free()
 
 
