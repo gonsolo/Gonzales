@@ -3,7 +3,7 @@ from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.math import ceildiv, sqrt, cos, sin, log
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, dot, cross
+from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
@@ -35,6 +35,7 @@ struct GpuSceneHandle(Movable):
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × sizeof(PathState_C) = 88
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × sizeof(Intersection_C) = 48
     var film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × sizeof(Float32) = 12
+    var shadow_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(ShadowTask_C) = 48
     var n_pixels: Int
     # Camera and sampling data for GPU-side ray generation
     var sobol_buf: DeviceBuffer[DType.uint8]  # 2 dims × 52 UInt32 = 416 bytes
@@ -228,6 +229,7 @@ fn mojo_gpu_upload_scene(
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 88)
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             with r_film_buf.map_to_host() as h:
                 var p = h.unsafe_ptr()
                 for i in range(n_pix * 12):
@@ -316,6 +318,7 @@ fn mojo_gpu_upload_scene(
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
+                shadow_buf=r_shadow_buf^,
                 n_pixels=n_pix,
                 sobol_buf=sobol_gpu_buf^,
                 r2c_buf=r2c_gpu_buf^,
@@ -460,8 +463,57 @@ fn shade_nee_gpu(
     if inter.hit == 0:
         path_ptr[].active = 0
         return
-    shade_nee_core[True](path_ptr, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures)
+    shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures,
+        UnsafePointer[ShadowTask_C, MutAnyOrigin]())
+
+
+fn shade_enqueue_shadow_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    shadow_tasks[tid].active = Int32(0)
+    var path_ptr = paths + tid
+    if path_ptr[].active == 0:
+        return
+    var inter = intersections[tid]
+    if inter.hit == 0:
+        path_ptr[].active = 0
+        return
+    shade_nee_core[True, True](path_ptr, tid, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures, shadow_tasks)
+
+
+fn traverse_shadow_rays_gpu(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var task = shadow_tasks[tid]
+    if task.active == 0:
+        return
+    var shadow_ray = Ray_C(task.orgX, task.orgY, task.orgZ, task.dirX, task.dirY, task.dirZ)
+    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, task.tmax):
+        paths[tid].estimate += RGB(task.contribR, task.contribG, task.contribB)
 
 
 fn accumulate_film_gpu(

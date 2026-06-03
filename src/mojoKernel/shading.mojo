@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, dot, cross
+from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
 
@@ -266,8 +266,9 @@ fn shade_diffuse_transmission(
 
 # ── CoatedDiffuse (plastic) branch ───────────────────────────────────────────
 @always_inline
-fn shade_coated_diffuse[use_gpu: Bool](
+fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_idx: Int,
     inter: Intersection_C,
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
@@ -278,6 +279,7 @@ fn shade_coated_diffuse[use_gpu: Bool](
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
 ):
     var mesh_idx: Int
     var base_vidx: Int
@@ -362,11 +364,20 @@ fn shade_coated_diffuse[use_gpu: Bool](
                 var cos_s = dot(normal, shadow_dir)
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                          shadow_dir[0], shadow_dir[1], shadow_dir[2])
-                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
-                        var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
-                        path_ptr[].estimate += path_ptr[].throughput * alb * al.emission * weight
+                    var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
+                    var contrib = path_ptr[].throughput * alb * al.emission * weight
+                    @parameter
+                    if enqueue_shadow:
+                        shadow_tasks[path_idx] = ShadowTask_C(
+                            hit_point[0], hit_point[1], hit_point[2],
+                            shadow_dir[0], shadow_dir[1], shadow_dir[2],
+                            dist * Float32(0.9999),
+                            contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                    else:
+                        var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                              shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                            path_ptr[].estimate += contrib
 
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
@@ -556,8 +567,9 @@ fn shade_conductor(
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
-fn shade_nee_core[use_gpu: Bool](
+fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_idx: Int,
     inter: Intersection_C,
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
@@ -568,6 +580,7 @@ fn shade_nee_core[use_gpu: Bool](
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
 ):
     var mat = materials[Int(inter.primId.materialIndex)]
 
@@ -586,7 +599,7 @@ fn shade_nee_core[use_gpu: Bool](
         return
 
     if mat.type == 5:
-        shade_coated_diffuse[use_gpu](path_ptr, inter, bvh2Nodes, primIds, meshes, mat, areaLights, areaLightCount, tex_filenames, textures, n_textures)
+        shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, mat, areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
         return
 
     if mat.type == 6:
@@ -661,11 +674,20 @@ fn shade_nee_core[use_gpu: Bool](
             var cos_s = dot(normal, shadow_dir)
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                      shadow_dir[0], shadow_dir[1], shadow_dir[2])
-                if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                     var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
-                    path_ptr[].estimate += path_ptr[].throughput * alb * al.emission * weight
+                    var contrib = path_ptr[].throughput * alb * al.emission * weight
+                    @parameter
+                    if enqueue_shadow:
+                        shadow_tasks[path_idx] = ShadowTask_C(
+                            hit_point[0], hit_point[1], hit_point[2],
+                            shadow_dir[0], shadow_dir[1], shadow_dir[2],
+                            dist * Float32(0.9999),
+                            contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                    else:
+                        var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                              shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                            path_ptr[].estimate += contrib
 
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
@@ -720,8 +742,9 @@ fn shade_core_cpu_nee(
     if inter.hit == 0:
         path_ptr[].active = 0
         return
-    shade_nee_core[False](path_ptr, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin](), 0)
+    shade_nee_core[False, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
+        tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin](), 0,
+        UnsafePointer[ShadowTask_C, MutAnyOrigin]())
 
 
 @export

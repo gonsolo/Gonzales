@@ -114,6 +114,15 @@ struct GpuTexture_C(TrivialRegisterPassable):
     var height: Int32
 
 @fieldwise_init
+struct ShadowTask_C(TrivialRegisterPassable):
+    var orgX: Float32; var orgY: Float32; var orgZ: Float32
+    var dirX: Float32; var dirY: Float32; var dirZ: Float32
+    var tmax: Float32
+    var contribR: Float32; var contribG: Float32; var contribB: Float32
+    var active: Int32
+    var _pad: Int32
+
+@fieldwise_init
 struct PixelSample_C(TrivialRegisterPassable):
     var filmX: Float32
     var filmY: Float32
