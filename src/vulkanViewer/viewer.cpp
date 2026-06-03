@@ -286,7 +286,7 @@ static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
         return;
     }
 
-    float xoffset = float(xpos - v->lastMouseX) * v->sensitivity;
+    float xoffset = float(v->lastMouseX - xpos) * v->sensitivity;
     float yoffset = float(v->lastMouseY - ypos) * v->sensitivity;
     v->lastMouseX = xpos;
     v->lastMouseY = ypos;
