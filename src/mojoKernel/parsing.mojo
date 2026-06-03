@@ -1,7 +1,8 @@
 from std.ffi import external_call
+from .ply import mojo_load_ply
 from std.math import tan
 from std.memory import alloc
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C
+from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C
 from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
 from .bvh import BVH2Node, SceneDescriptor2_C, mojo_build_bvh2
 from .sampling import mojo_gaussian_norm
@@ -613,7 +614,7 @@ fn mojo_scanner_scan_token(
 
 # ── ParsedScene constants ─────────────────────────────────────────────────────
 
-comptime PSC_MAX_MESHES = 64
+comptime PSC_MAX_MESHES = 1024
 comptime PSC_MAX_NAMED  = 64
 comptime PSC_CTM_DEPTH  = 16
 comptime PSC_ATTR_DEPTH = 8
@@ -666,18 +667,18 @@ struct _PscState:
 
     var attr_mat:    UnsafePointer[Int32, MutAnyOrigin]
     var attr_alight: UnsafePointer[Int32, MutAnyOrigin]
-    var attr_al_rgb: UnsafePointer[Float32, MutAnyOrigin]
+    var attr_al_rgb: UnsafePointer[RGB, MutAnyOrigin]
     var attr_depth:  Int32
 
     var named_names:  UnsafePointer[UInt8, MutAnyOrigin]
-    var named_albedo: UnsafePointer[Float32, MutAnyOrigin]
+    var named_albedo: UnsafePointer[RGB, MutAnyOrigin]
+    var named_type:   UnsafePointer[Int8, MutAnyOrigin]
+    var named_ior:    UnsafePointer[Float32, MutAnyOrigin]
     var n_named:      Int32
 
     var cur_mat_idx: Int32
     var in_alight:   Int32
-    var al_r: Float32
-    var al_g: Float32
-    var al_b: Float32
+    var al: RGB
 
     var film_w: Int32
     var film_h: Int32
@@ -700,7 +701,8 @@ struct _PscState:
     var mesh_nt:       UnsafePointer[Int32, MutAnyOrigin]
     var mesh_mat_idx:  UnsafePointer[Int32, MutAnyOrigin]
     var mesh_is_al:    UnsafePointer[Int32, MutAnyOrigin]
-    var mesh_al_rgb:   UnsafePointer[Float32, MutAnyOrigin]
+    var mesh_al_rgb:   UnsafePointer[RGB, MutAnyOrigin]
+    var scene_dir:     UnsafePointer[UInt8, MutAnyOrigin]
 
 
 # ── Utility functions ─────────────────────────────────────────────────────────
@@ -872,16 +874,18 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
 
     s[0].attr_mat    = alloc[Int32](PSC_ATTR_DEPTH)
     s[0].attr_alight = alloc[Int32](PSC_ATTR_DEPTH)
-    s[0].attr_al_rgb = alloc[Float32](PSC_ATTR_DEPTH * 3)
+    s[0].attr_al_rgb = alloc[RGB](PSC_ATTR_DEPTH)
     s[0].attr_depth  = Int32(0)
 
     s[0].named_names  = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
-    s[0].named_albedo = alloc[Float32](PSC_MAX_NAMED * 3)
+    s[0].named_albedo = alloc[RGB](PSC_MAX_NAMED)
+    s[0].named_type   = alloc[Int8](PSC_MAX_NAMED)
+    s[0].named_ior    = alloc[Float32](PSC_MAX_NAMED)
     s[0].n_named      = Int32(0)
 
     s[0].cur_mat_idx = Int32(-1)
     s[0].in_alight   = Int32(0)
-    s[0].al_r = Float32(0); s[0].al_g = Float32(0); s[0].al_b = Float32(0)
+    s[0].al = RGB(Float32(0), Float32(0), Float32(0))
 
     s[0].film_w    = Int32(512)
     s[0].film_h    = Int32(512)
@@ -911,7 +915,9 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].mesh_nt       = alloc[Int32](PSC_MAX_MESHES)
     s[0].mesh_mat_idx  = alloc[Int32](PSC_MAX_MESHES)
     s[0].mesh_is_al    = alloc[Int32](PSC_MAX_MESHES)
-    s[0].mesh_al_rgb   = alloc[Float32](PSC_MAX_MESHES * 3)
+    s[0].mesh_al_rgb   = alloc[RGB](PSC_MAX_MESHES)
+    s[0].scene_dir     = alloc[UInt8](PSC_FILE_MAX * 2)
+    s[0].scene_dir[0]  = UInt8(0)
 
     return s
 
@@ -923,6 +929,8 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].attr_al_rgb.free()
     s[0].named_names.free()
     s[0].named_albedo.free()
+    s[0].named_type.free()
+    s[0].named_ior.free()
     s[0].film_filename.free()
     s[0].cam2w_raw.free()
     s[0].mesh_pts_list.free()
@@ -933,6 +941,7 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].mesh_mat_idx.free()
     s[0].mesh_is_al.free()
     s[0].mesh_al_rgb.free()
+    s[0].scene_dir.free()
     s.free()
 
 fn _psc_ctm_push(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1090,14 +1099,36 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
 
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    var mat_type = Int8(1)  # default: diffuse
+    var mat_ior  = Float32(1.5)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
+    var str_val  = alloc[UInt8](64)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
     var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
-        if _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
+        if _psc_streq(name_buf, "type") and _psc_type_is_str(type_buf):
+            _ = mojo_scanner_parse_quoted_string(handle, str_val, 64)
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+            if _psc_streq(str_val, "conductor"):
+                mat_type = Int8(3)
+            elif _psc_streq(str_val, "dielectric"):
+                mat_type = Int8(4)
+            elif _psc_streq(str_val, "coateddiffuse"):
+                mat_type = Int8(5)
+            else:
+                mat_type = Int8(1)
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
+            var tmp = alloc[Float32](1)
+            _ = mojo_scanner_scan_float(handle, tmp)
+            mat_ior = tmp[0]
+            tmp.free()
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+        elif _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
@@ -1112,12 +1143,12 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var idx = Int(s[0].n_named)
     if idx < PSC_MAX_NAMED:
         _psc_strncpy(s[0].named_names + idx * PSC_NAME_MAX, mat_name, PSC_NAME_MAX)
-        s[0].named_albedo[idx * 3 + 0] = rgb[0]
-        s[0].named_albedo[idx * 3 + 1] = rgb[1]
-        s[0].named_albedo[idx * 3 + 2] = rgb[2]
+        s[0].named_albedo[idx] = RGB(rgb[0], rgb[1], rgb[2])
+        s[0].named_type[idx] = mat_type
+        s[0].named_ior[idx]  = mat_ior
         s[0].n_named += 1
 
-    mat_name.free(); type_buf.free(); name_buf.free(); rgb.free()
+    mat_name.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free()
 
 fn _psc_handle_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                                s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1134,11 +1165,9 @@ fn _psc_handle_attribute_begin(s: UnsafePointer[_PscState, MutAnyOrigin]):
     _psc_ctm_push(s)
     var d = Int(s[0].attr_depth)
     if d < PSC_ATTR_DEPTH:
-        s[0].attr_mat[d]        = s[0].cur_mat_idx
-        s[0].attr_alight[d]     = s[0].in_alight
-        s[0].attr_al_rgb[d*3+0] = s[0].al_r
-        s[0].attr_al_rgb[d*3+1] = s[0].al_g
-        s[0].attr_al_rgb[d*3+2] = s[0].al_b
+        s[0].attr_mat[d]    = s[0].cur_mat_idx
+        s[0].attr_alight[d] = s[0].in_alight
+        s[0].attr_al_rgb[d] = s[0].al
         s[0].attr_depth += 1
 
 fn _psc_handle_attribute_end(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1148,9 +1177,7 @@ fn _psc_handle_attribute_end(s: UnsafePointer[_PscState, MutAnyOrigin]):
         var d = Int(s[0].attr_depth)
         s[0].cur_mat_idx = s[0].attr_mat[d]
         s[0].in_alight   = s[0].attr_alight[d]
-        s[0].al_r = s[0].attr_al_rgb[d*3+0]
-        s[0].al_g = s[0].attr_al_rgb[d*3+1]
-        s[0].al_b = s[0].attr_al_rgb[d*3+2]
+        s[0].al = s[0].attr_al_rgb[d]
         s[0].in_alight = Int32(0)
 
 fn _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
@@ -1179,23 +1206,116 @@ fn _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyO
         ia[0] = Int32(0)
         found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
-    s[0].al_r = rgb[0]; s[0].al_g = rgb[1]; s[0].al_b = rgb[2]
+    s[0].al = RGB(rgb[0], rgb[1], rgb[2])
     sbuf.free(); type_buf.free(); name_buf.free(); rgb.free()
+
+fn _psc_mesh_store(
+    s:       UnsafePointer[_PscState, MutAnyOrigin],
+    tmp_f:   UnsafePointer[Float32, MutAnyOrigin],
+    tmp_i:   UnsafePointer[Int32, MutAnyOrigin],
+    n_verts: Int32,
+    n_tris:  Int32,
+):
+    var n_meshes = Int(s[0].n_meshes)
+    var raw_pts = alloc[Float32](Int(n_verts) * 4)
+    for v in range(Int(n_verts)):
+        raw_pts[v*4+0] = tmp_f[v*3+0]
+        raw_pts[v*4+1] = tmp_f[v*3+1]
+        raw_pts[v*4+2] = tmp_f[v*3+2]
+        raw_pts[v*4+3] = Float32(1)
+    var fin_pts = alloc[Float32](Int(n_verts) * 4)
+    mojo_transform_points(s[0].ctm, raw_pts, n_verts, fin_pts)
+    raw_pts.free()
+    var vis = alloc[Int64](Int(n_tris) * 3)
+    var fis = alloc[Int64](Int(n_tris))
+    for t in range(Int(n_tris)):
+        vis[t*3+0] = Int64(tmp_i[t*3+0])
+        vis[t*3+1] = Int64(tmp_i[t*3+1])
+        vis[t*3+2] = Int64(tmp_i[t*3+2])
+        fis[t] = Int64(3)
+    s[0].mesh_pts_list[n_meshes] = fin_pts
+    s[0].mesh_vis_list[n_meshes] = vis
+    s[0].mesh_fis_list[n_meshes] = fis
+    s[0].mesh_nv[n_meshes] = n_verts
+    s[0].mesh_nt[n_meshes] = n_tris
+    s[0].mesh_mat_idx[n_meshes] = s[0].cur_mat_idx
+    s[0].mesh_is_al[n_meshes]   = s[0].in_alight
+    s[0].mesh_al_rgb[n_meshes]  = s[0].al
+    s[0].n_meshes += 1
 
 fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                      s: UnsafePointer[_PscState, MutAnyOrigin]):
     var shape_type = alloc[UInt8](64)
     _ = mojo_scanner_parse_quoted_string(handle, shape_type, 64)
 
-    if not _psc_streq(shape_type, "trianglemesh"):
-        shape_type.free()
+    var is_tri = _psc_streq(shape_type, "trianglemesh")
+    var is_ply = _psc_streq(shape_type, "plymesh")
+    shape_type.free()
+
+    if not is_tri and not is_ply:
         _psc_skip_params(handle)
         return
-    shape_type.free()
 
     var n_meshes = Int(s[0].n_meshes)
     if n_meshes >= PSC_MAX_MESHES:
         _psc_skip_params(handle)
+        return
+
+    if is_ply:
+        var ply_filename = alloc[UInt8](PSC_FILE_MAX)
+        ply_filename[0] = UInt8(0)
+        var type_buf = alloc[UInt8](64)
+        var name_buf = alloc[UInt8](128)
+        var ia = alloc[Int32](1)
+        ia[0] = Int32(0)
+        var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        while found != 0:
+            var is_array = ia[0]
+            if _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
+                _ = mojo_scanner_parse_quoted_string(handle, ply_filename, PSC_FILE_MAX)
+                if is_array:
+                    _ = mojo_scanner_scan_char(handle, UInt8(93))
+            else:
+                _psc_skip_value(handle, type_buf, is_array)
+                if is_array:
+                    _ = mojo_scanner_scan_char(handle, UInt8(93))
+            ia[0] = Int32(0)
+            found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        ia.free()
+        type_buf.free(); name_buf.free()
+
+        var full_path = alloc[UInt8](PSC_FILE_MAX * 2)
+        var dir_len = 0
+        while s[0].scene_dir[dir_len] != UInt8(0):
+            full_path[dir_len] = s[0].scene_dir[dir_len]
+            dir_len += 1
+        var fn_i = 0
+        while ply_filename[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
+            full_path[dir_len + fn_i] = ply_filename[fn_i]
+            fn_i += 1
+        full_path[dir_len + fn_i] = UInt8(0)
+        ply_filename.free()
+
+        var ply_pts = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
+        var ply_nv  = alloc[Int32](1)
+        var ply_idx = alloc[UnsafePointer[Int32, MutAnyOrigin]](1)
+        var ply_nt  = alloc[Int32](1)
+        var ok = mojo_load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt)
+        full_path.free()
+        if ok == 0:
+            ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
+            return
+        var nv = ply_nv[0]
+        var nt = ply_nt[0]
+        if nv <= 0 or nt <= 0:
+            ply_pts[0].free(); ply_idx[0].free()
+            ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
+            return
+        var tmp_f2 = ply_pts[0]
+        var tmp_i2 = ply_idx[0]
+        _psc_mesh_store(s, tmp_f2, tmp_i2, nv, nt)
+        tmp_f2.free(); tmp_i2.free()
+        ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
         return
 
     var tmp_f = alloc[Float32](65536)
@@ -1243,42 +1363,8 @@ fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         tmp_f.free(); tmp_i.free()
         return
 
-    # Allocate raw stride-4 points (x,y,z,1)
-    var raw_pts = alloc[Float32](Int(n_verts) * 4)
-    for v in range(Int(n_verts)):
-        raw_pts[v*4+0] = tmp_f[v*3+0]
-        raw_pts[v*4+1] = tmp_f[v*3+1]
-        raw_pts[v*4+2] = tmp_f[v*3+2]
-        raw_pts[v*4+3] = Float32(1)
-
-    # Transform by current CTM
-    var fin_pts = alloc[Float32](Int(n_verts) * 4)
-    mojo_transform_points(s[0].ctm, raw_pts, n_verts, fin_pts)
-    raw_pts.free()
-
-    # Build vertex-index array (Int64) and face-index array
-    var vis = alloc[Int64](Int(n_tris) * 3)
-    var fis = alloc[Int64](Int(n_tris))
-    for t in range(Int(n_tris)):
-        vis[t*3+0] = Int64(tmp_i[t*3+0])
-        vis[t*3+1] = Int64(tmp_i[t*3+1])
-        vis[t*3+2] = Int64(tmp_i[t*3+2])
-        fis[t] = Int64(3)
-
+    _psc_mesh_store(s, tmp_f, tmp_i, n_verts, n_tris)
     tmp_f.free(); tmp_i.free()
-
-    s[0].mesh_pts_list[n_meshes] = fin_pts
-    s[0].mesh_vis_list[n_meshes] = vis
-    s[0].mesh_fis_list[n_meshes] = fis
-    s[0].mesh_nv[n_meshes] = n_verts
-    s[0].mesh_nt[n_meshes] = n_tris
-    s[0].mesh_mat_idx[n_meshes] = s[0].cur_mat_idx
-    s[0].mesh_is_al[n_meshes]   = s[0].in_alight
-    s[0].mesh_al_rgb[n_meshes*3+0] = s[0].al_r
-    s[0].mesh_al_rgb[n_meshes*3+1] = s[0].al_g
-    s[0].mesh_al_rgb[n_meshes*3+2] = s[0].al_b
-    s[0].n_meshes += 1
-
 fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
               s: UnsafePointer[_PscState, MutAnyOrigin]):
     var kw_buf = alloc[UInt8](256)
@@ -1411,13 +1497,18 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var n_mats = n_regular + Int(n_al)
     var mats = alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
-        mats[i].type = Int8(1)  # diffuse
-        mats[i].albedoR = s[0].named_albedo[i*3+0]
-        mats[i].albedoG = s[0].named_albedo[i*3+1]
-        mats[i].albedoB = s[0].named_albedo[i*3+2]
-        mats[i].emissionR = Float32(0)
-        mats[i].emissionG = Float32(0)
-        mats[i].emissionB = Float32(0)
+        var mt = s[0].named_type[i]
+        var ior = s[0].named_ior[i]
+        mats[i].type = mt
+        if mt == Int8(4):  # dielectric: albedo.r holds IOR
+            mats[i].albedo = RGB(ior, Float32(0), Float32(0))
+            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+        elif mt == Int8(5):  # coated diffuse: emission.r holds IOR
+            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].emission = RGB(ior, Float32(0), Float32(0))
+        else:
+            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
 
     # ---- Meshes + area lights ----
     var n_meshes = Int(s[0].n_meshes)
@@ -1445,23 +1536,15 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
 
         if s[0].mesh_is_al[i] != 0:
             var al_idx = Int(al_count)
-            var er = s[0].mesh_al_rgb[i*3+0]
-            var eg = s[0].mesh_al_rgb[i*3+1]
-            var eb = s[0].mesh_al_rgb[i*3+2]
+            var em = s[0].mesh_al_rgb[i]
             al_list[al_idx].meshIdx     = Int32(i)
             al_list[al_idx].triBaseVidx = Int32(0)
-            al_list[al_idx].emissionR   = er
-            al_list[al_idx].emissionG   = eg
-            al_list[al_idx].emissionB   = eb
+            al_list[al_idx].emission    = em
             al_list[al_idx]._pad        = Int32(0)
 
-            mats[al_mat_base + al_idx].type = Int8(2)  # arealight
-            mats[al_mat_base + al_idx].albedoR = Float32(0)
-            mats[al_mat_base + al_idx].albedoG = Float32(0)
-            mats[al_mat_base + al_idx].albedoB = Float32(0)
-            mats[al_mat_base + al_idx].emissionR = er
-            mats[al_mat_base + al_idx].emissionG = eg
-            mats[al_mat_base + al_idx].emissionB = eb
+            mats[al_mat_base + al_idx].type     = Int8(2)  # arealight
+            mats[al_mat_base + al_idx].albedo   = RGB(Float32(0), Float32(0), Float32(0))
+            mats[al_mat_base + al_idx].emission = em
             al_count += 1
 
     # ---- BVH construction ----
@@ -1615,6 +1698,19 @@ fn mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
         return psc
 
     var s = _psc_state_new()
+    var pi = 0
+    while path[pi] != UInt8(0):
+        pi += 1
+    var last_slash = -1
+    for ki in range(pi):
+        if path[ki] == UInt8(47):
+            last_slash = ki
+    if last_slash >= 0:
+        for ki in range(last_slash + 1):
+            s[0].scene_dir[ki] = path[ki]
+        s[0].scene_dir[last_slash + 1] = UInt8(0)
+    else:
+        s[0].scene_dir[0] = UInt8(0)
     _psc_parse(handle, s)
     mojo_scanner_free(handle)
 
