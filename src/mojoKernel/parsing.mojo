@@ -469,31 +469,26 @@ fn _scanner_call_float(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], re
 
 
 fn mojo_scanner_new(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]:
-    var mode = alloc[UInt8](3)
-    mode[0] = UInt8(114)   # 'r'
-    mode[1] = UInt8(98)    # 'b'
-    mode[2] = UInt8(0)
-    var fp = external_call["fopen", UnsafePointer[UInt8, MutAnyOrigin],
-        UnsafePointer[UInt8, MutAnyOrigin], UnsafePointer[UInt8, MutAnyOrigin]](path, mode)
-    mode.free()
     var handle = alloc[PbrtScanner_Mojo](1)
-    if not fp:
+    var path_str = String(unsafe_from_utf8_ptr=path.as_immutable())
+    try:
+        var f = open(path_str, "r")
+        var bytes = f.read_bytes()
+        f.close()
+        var size = len(bytes)
+        var buf = alloc[UInt8](size + 1)
+        for i in range(size):
+            buf[i] = bytes[i]
+        buf[size] = UInt8(0)
+        handle[0].buffer = buf
+        handle[0].total_bytes = Int32(size)
+        handle[0].cursor = Int32(0)
+        handle[0].is_at_end = Int32(0)
+    except:
         handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin]()
         handle[0].total_bytes = Int32(0)
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(1)
-        return handle
-    _ = external_call["fseek", Int32, UnsafePointer[UInt8, MutAnyOrigin], Int64, Int32](fp, Int64(0), Int32(2))
-    var size = external_call["ftell", Int64, UnsafePointer[UInt8, MutAnyOrigin]](fp)
-    _ = external_call["fseek", Int32, UnsafePointer[UInt8, MutAnyOrigin], Int64, Int32](fp, Int64(0), Int32(0))
-    var buf = alloc[UInt8](Int(size) + 1)
-    _ = external_call["fread", Int, UnsafePointer[UInt8, MutAnyOrigin], Int, Int, UnsafePointer[UInt8, MutAnyOrigin]](buf, 1, Int(size), fp)
-    _ = external_call["fclose", Int32, UnsafePointer[UInt8, MutAnyOrigin]](fp)
-    buf[Int(size)] = UInt8(0)
-    handle[0].buffer = buf
-    handle[0].total_bytes = Int32(size)
-    handle[0].cursor = Int32(0)
-    handle[0].is_at_end = Int32(0)
     return handle
 
 
