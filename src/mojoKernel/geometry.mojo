@@ -29,12 +29,14 @@ struct Material_C(TrivialRegisterPassable):
     var _pad2: Int8
     var albedo: RGB
     var emission: RGB
+    var tex_idx: Int32   # -1 = no texture; >= 0 = index into texture table
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
     var points: UnsafePointer[Float32, MutAnyOrigin]
     var faceIndices: UnsafePointer[Int64, MutAnyOrigin]
     var vertexIndices: UnsafePointer[Int64, MutAnyOrigin]
+    var uvs: UnsafePointer[Float32, MutAnyOrigin]   # nullable; stride 2 floats per vertex
 
 @fieldwise_init
 struct Ray_C(TrivialRegisterPassable):
@@ -77,9 +79,9 @@ struct PathState_C(TrivialRegisterPassable):
 @fieldwise_init
 struct AreaLight_C(TrivialRegisterPassable):
     var meshIdx: Int32
-    var triBaseVidx: Int32
+    var n_tris: Int32       # number of triangles in this light mesh
     var emission: RGB
-    var _pad: Int32
+    var total_area: Float32 # total surface area of this light mesh
 
 @fieldwise_init
 struct PixelSample_C(TrivialRegisterPassable):

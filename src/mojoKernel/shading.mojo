@@ -1,7 +1,16 @@
-from std.math import sqrt, cos, sin
+from std.math import sqrt, cos, sin, floor
+from std.ffi import external_call
+from std.memory import alloc
 from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, dot, cross
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
+
+@always_inline
+fn _srgb_to_linear(c: Float32) -> Float32:
+    if c <= Float32(0.04045):
+        return c / Float32(12.92)
+    else:
+        return Float32(((c + Float32(0.055)) / Float32(1.055)) ** Float32(2.4))
 
 @always_inline
 fn shade_core(
@@ -219,6 +228,7 @@ fn shade_coated_diffuse(
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
 ):
     var mesh_idx: Int
     var base_vidx: Int
@@ -239,6 +249,30 @@ fn shade_coated_diffuse(
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    # Texture lookup
+    var alb_r = mat.albedo.r
+    var alb_g = mat.albedo.g
+    var alb_b = mat.albedo.b
+    if Int(mat.tex_idx) >= 0 and tex_filenames:
+        var filename = tex_filenames[Int(mat.tex_idx)]
+        if filename and mesh.uvs:
+            var w0 = Float32(1.0) - inter.u - inter.v
+            var s_uv = w0 * mesh.uvs[v0*2]   + inter.u * mesh.uvs[v1*2]   + inter.v * mesh.uvs[v2*2]
+            var t_uv = w0 * mesh.uvs[v0*2+1] + inter.u * mesh.uvs[v1*2+1] + inter.v * mesh.uvs[v2*2+1]
+            s_uv = s_uv - Float32(Int(s_uv))
+            if s_uv < Float32(0.0): s_uv += Float32(1.0)
+            t_uv = t_uv - Float32(Int(t_uv))
+            if t_uv < Float32(0.0): t_uv += Float32(1.0)
+            var tr = alloc[Float32](3)
+            tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
+            _ = external_call["texture", Bool,
+                UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+                UnsafePointer[Float32, MutAnyOrigin]](filename, s_uv, t_uv, tr)
+            alb_r = _srgb_to_linear(tr[0])
+            alb_g = _srgb_to_linear(tr[1])
+            alb_b = _srgb_to_linear(tr[2])
+            tr.free()
 
     var normal = cross(p1 - p0, p2 - p0)
     var nlen = dot(normal, normal)
@@ -293,9 +327,9 @@ fn shade_coated_diffuse(
             dir = dir * (Float32(1.0) / sqrt(dlen))
 
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-        path_ptr[].throughput.r *= mat.albedo.r
-        path_ptr[].throughput.g *= mat.albedo.g
-        path_ptr[].throughput.b *= mat.albedo.b
+        path_ptr[].throughput.r *= alb_r
+        path_ptr[].throughput.g *= alb_g
+        path_ptr[].throughput.b *= alb_b
 
     path_ptr[].bounce += 1
 
@@ -481,6 +515,7 @@ fn shade_core_cpu_nee(
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     tid: Int,
 ):
     var path_ptr = paths + tid
@@ -513,7 +548,7 @@ fn shade_core_cpu_nee(
         return
 
     if mat.type == 5:
-        shade_coated_diffuse(path_ptr, inter, meshes, mat)
+        shade_coated_diffuse(path_ptr, inter, meshes, mat, tex_filenames)
         return
 
     if mat.type == 6:
@@ -558,6 +593,37 @@ fn shade_core_cpu_nee(
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
+    # ── Texture lookup ─────────────────────────────────────────────────────────
+    var alb_r = mat.albedo.r
+    var alb_g = mat.albedo.g
+    var alb_b = mat.albedo.b
+    if mat.tex_idx >= 0 and tex_filenames:
+        var filename = tex_filenames[Int(mat.tex_idx)]
+        if filename and mesh.uvs:
+            # Barycentric interpolation of UVs
+            var w0 = Float32(1.0) - inter.u - inter.v
+            var w1 = inter.u
+            var w2 = inter.v
+            var s_uv = w0 * mesh.uvs[v0_idx*2]   + w1 * mesh.uvs[v1_idx*2]   + w2 * mesh.uvs[v2_idx*2]
+            var t_uv = w0 * mesh.uvs[v0_idx*2+1] + w1 * mesh.uvs[v1_idx*2+1] + w2 * mesh.uvs[v2_idx*2+1]
+            # Wrap to [0, 1]
+            s_uv = s_uv - Float32(Int(s_uv))
+            if s_uv < Float32(0.0):
+                s_uv += Float32(1.0)
+            t_uv = t_uv - Float32(Int(t_uv))
+            if t_uv < Float32(0.0):
+                t_uv += Float32(1.0)
+            # Texture lookup
+            var tex_result = alloc[Float32](3)
+            tex_result[0] = Float32(0.0); tex_result[1] = Float32(0.0); tex_result[2] = Float32(0.0)
+            _ = external_call["texture", Bool,
+                UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+                UnsafePointer[Float32, MutAnyOrigin]](filename, s_uv, t_uv, tex_result)
+            alb_r = _srgb_to_linear(tex_result[0])
+            alb_g = _srgb_to_linear(tex_result[1])
+            alb_b = _srgb_to_linear(tex_result[2])
+            tex_result.free()
+
     # Single PCG instance for all sampling in this shade step
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -567,7 +633,8 @@ fn shade_core_cpu_nee(
         var al = areaLights[light_idx]
 
         var lmesh = meshes[Int(al.meshIdx)]
-        var lb = Int(al.triBaseVidx)
+        var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+        var lb = lti * 3
         var lv0 = Int(lmesh.vertexIndices[lb])
         var lv1 = Int(lmesh.vertexIndices[lb + 1])
         var lv2 = Int(lmesh.vertexIndices[lb + 2])
@@ -584,7 +651,6 @@ fn shade_core_cpu_nee(
         var ledge2 = lp2 - lp0
         var lcross = cross(ledge1, ledge2)
         var lcross_len = dot(lcross, lcross)
-        var light_area = Float32(0.5) * sqrt(lcross_len)
         var light_normal = lcross
         if lcross_len > Float32(0.0):
             light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
@@ -593,7 +659,7 @@ fn shade_core_cpu_nee(
         var dist_sq = dot(to_light, to_light)
         var dist = sqrt(dist_sq)
 
-        if dist > Float32(0.0001) and light_area > Float32(0.0):
+        if dist > Float32(0.0001) and al.total_area > Float32(0.0):
             var shadow_dir = to_light * (Float32(1.0) / dist)
             var cos_s = dot(normal, shadow_dir)
             var cos_l = -dot(light_normal, shadow_dir)
@@ -602,10 +668,10 @@ fn shade_core_cpu_nee(
                                       shadow_dir[0], shadow_dir[1], shadow_dir[2])
                 if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                     # pdf = 1 / (areaLightCount * light_area); G = cos_s * cos_l / dist_sq
-                    var weight = cos_s * cos_l * light_area * Float32(areaLightCount) / dist_sq
-                    path_ptr[].estimate.r += path_ptr[].throughput.r * mat.albedo.r * al.emission.r * weight
-                    path_ptr[].estimate.g += path_ptr[].throughput.g * mat.albedo.g * al.emission.g * weight
-                    path_ptr[].estimate.b += path_ptr[].throughput.b * mat.albedo.b * al.emission.b * weight
+                    var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
+                    path_ptr[].estimate.r += path_ptr[].throughput.r * alb_r * al.emission.r * weight
+                    path_ptr[].estimate.g += path_ptr[].throughput.g * alb_g * al.emission.g * weight
+                    path_ptr[].estimate.b += path_ptr[].throughput.b * alb_b * al.emission.b * weight
 
     # ── Indirect: cosine-weighted hemisphere bounce ────────────────────────────
     var u1 = pcg.next_float()
@@ -630,9 +696,9 @@ fn shade_core_cpu_nee(
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
-    path_ptr[].throughput.r *= mat.albedo.r
-    path_ptr[].throughput.g *= mat.albedo.g
-    path_ptr[].throughput.b *= mat.albedo.b
+    path_ptr[].throughput.r *= alb_r
+    path_ptr[].throughput.g *= alb_g
+    path_ptr[].throughput.b *= alb_b
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce

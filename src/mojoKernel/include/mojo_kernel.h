@@ -54,9 +54,9 @@ struct BVH2Node {
 /* Emissive triangle for next-event estimation */
 struct AreaLight_C {
         int32_t meshIdx;
-        int32_t triBaseVidx;   /* base index into vertexIndices (= triNum * 3) */
+        int32_t n_tris;        /* number of triangles in this light mesh */
         float emissionR, emissionG, emissionB;
-        int32_t _pad;
+        float total_area;      /* total surface area of this light mesh */
 };
 
 struct SceneDescriptor2_C {
