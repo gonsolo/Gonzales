@@ -2,7 +2,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
-from mojoKernel.pipeline import _generate_sobol_matrices, mojo_parse_and_render, mojo_parse_and_render_gpu, mojo_render_interactive, mojo_render_interactive_gpu
+from mojoKernel.pipeline import _generate_sobol_matrices, mojo_parse_and_render, mojo_render_interactive
 
 fn main() raises:
     var t0 = perf_counter_ns()
@@ -40,16 +40,10 @@ fn main() raises:
         path_cstr[k] = scene_path.as_bytes()[k]
     path_cstr[path_len] = UInt8(0)
 
-    if interactive and use_gpu:
-        mojo_render_interactive_gpu(path_cstr, sobol)
-    elif interactive:
-        mojo_render_interactive(path_cstr, sobol)
-    elif use_gpu:
-        _ = mojo_parse_and_render_gpu(path_cstr, sobol)
-        var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
-        print("Gonzales Total Execution Time (GPU):", elapsed_s, "s")
+    if interactive:
+        mojo_render_interactive(path_cstr, sobol, use_gpu)
     else:
-        _ = mojo_parse_and_render(path_cstr, sobol)
+        _ = mojo_parse_and_render(path_cstr, sobol, use_gpu)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 
