@@ -1,4 +1,5 @@
 .build
+/build
 Package.resolved
 /*.exr
 /*.pfm
