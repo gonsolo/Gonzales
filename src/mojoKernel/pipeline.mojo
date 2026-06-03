@@ -251,6 +251,7 @@ fn mojo_render_interactive(
     var accum       = alloc[Float32](n_pixels * 3)
     var albedo_acc  = alloc[Float32](n_pixels * 3)
     var denoised    = alloc[Float32](n_pixels * 3)
+    var results     = alloc[TileResult_C](n_pixels)
     var frame_count = 0
 
     var zero = TileResult_C(
@@ -285,7 +286,6 @@ fn mojo_render_interactive(
             filterWeight=psc[0].filter_weight,
         )
 
-        var results = alloc[TileResult_C](n_pixels)
         for i in range(n_pixels):
             results[i] = zero
 
@@ -300,8 +300,6 @@ fn mojo_render_interactive(
         mojo_normalize_film(results, Int32(n_pixels),
                             psc[0].film_iso, psc[0].film_max_comp,
                             beauty, albedo)
-        results.free()
-
         # Progressive accumulation: running average over frames.
         frame_count += 1
         var w = Float32(1) / Float32(frame_count)
@@ -319,6 +317,7 @@ fn mojo_render_interactive(
         mojo_denoise(accum, albedo_acc, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
         viewer_update_framebuffer(v, denoised, fw, fh)
 
+    results.free()
     accum.free()
     albedo_acc.free()
     denoised.free()

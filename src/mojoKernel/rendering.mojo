@@ -1,5 +1,6 @@
 from std.math import ceildiv, sqrt
 from std.memory import alloc
+from std.algorithm import parallelize
 from .geometry import Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core
 from .shading import shade_core_cpu_nee
@@ -286,30 +287,37 @@ def mojo_render_all_tiles(
     var tw = Int(tile_w)
     var th = Int(tile_h)
     var max_tile_pixels = tw * th
-    var tile_buf = alloc[TileResult_C](max_tile_pixels)
 
-    var ty = Int(min_y)
-    while ty < Int(max_y):
-        var tx = Int(min_x)
-        while tx < Int(max_x):
-            var tx_max = Int32(min(tx + tw, Int(max_x)))
-            var ty_max = Int32(min(ty + th, Int(max_y)))
-            var tw_actual = Int(tx_max) - tx
-            var th_actual = Int(ty_max) - ty
-            mojo_render_tile_v2(
-                raster_to_camera, camera_to_world,
-                Int32(tx), Int32(ty), tx_max, ty_max,
-                sampler_params, scene, tile_buf, max_depth)
-            # Copy tile results into global buffer using absolute pixel coords.
-            for iy in range(th_actual):
-                for ix in range(tw_actual):
-                    var src = iy * tw_actual + ix
-                    var dst = (ty + iy - Int(min_y)) * res_x + (tx + ix - Int(min_x))
-                    results[dst] = tile_buf[src]
-            tx += tw
-        ty += th
+    var n_tiles_x = ceildiv(Int(max_x) - Int(min_x), tw)
+    var n_tiles_y = ceildiv(Int(max_y) - Int(min_y), th)
+    var n_tiles = n_tiles_x * n_tiles_y
 
-    tile_buf.free()
+    # One scratch buffer per tile so threads never alias each other's writes.
+    var tile_bufs = alloc[TileResult_C](n_tiles * max_tile_pixels)
+
+    @parameter
+    fn render_one(tile_idx: Int):
+        var ty_i = tile_idx // n_tiles_x
+        var tx_i = tile_idx % n_tiles_x
+        var tx = Int(min_x) + tx_i * tw
+        var ty = Int(min_y) + ty_i * th
+        var tx_max = Int32(min(tx + tw, Int(max_x)))
+        var ty_max = Int32(min(ty + th, Int(max_y)))
+        var tw_actual = Int(tx_max) - tx
+        var th_actual = Int(ty_max) - ty
+        var tile_buf = tile_bufs + tile_idx * max_tile_pixels
+        mojo_render_tile_v2(
+            raster_to_camera, camera_to_world,
+            Int32(tx), Int32(ty), tx_max, ty_max,
+            sampler_params, scene, tile_buf, max_depth)
+        for iy in range(th_actual):
+            for ix in range(tw_actual):
+                var src = iy * tw_actual + ix
+                var dst = (ty + iy - Int(min_y)) * res_x + (tx + ix - Int(min_x))
+                results[dst] = tile_buf[src]
+
+    parallelize[render_one](n_tiles)
+    tile_bufs.free()
 
 
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
