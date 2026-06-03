@@ -71,18 +71,19 @@ fn mojo_denoise(
     sw.free()
 
 
-# Write a float RGB buffer to an EXR file via the OpenImageIO bridge.
-# pixels must hold width*height*3 floats (R,G,B interleaved, row-major).
-# filename must be a null-terminated UTF-8 string.
+# Write a float RGB buffer via the OpenImageIO bridge.
+# EXR/HDR → float32; PNG/JPG/etc. → Reinhard tonemap + sRGB gamma → uint8.
+# pixels: width*height*3 floats, R,G,B interleaved, row-major.
+# filename: null-terminated UTF-8 string.
 # Returns 1 on success, 0 on failure.
 @export
-fn mojo_write_exr(
+fn mojo_write_image(
     pixels: UnsafePointer[Float32, MutAnyOrigin],
     width: Int32, height: Int32,
     filename: UnsafePointer[UInt8, MutAnyOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
-    return external_call["write_exr_rgb", Int32,
+    return external_call["write_image_rgb", Int32,
         UnsafePointer[UInt8, MutAnyOrigin],
         UnsafePointer[Float32, MutAnyOrigin],
         Int32, Int32, Int32, Int32,
