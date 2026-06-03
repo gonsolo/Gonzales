@@ -93,7 +93,7 @@ fn traverse_bvh2_core(
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
 
-    var stack = InlineArray[Int, 64](fill=0)
+    var stack = InlineArray[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -156,7 +156,7 @@ fn traverse_bvh2_core(
             if toVisit == 0:
                 break
             toVisit -= 1
-            current = stack_ptr[toVisit]
+            current = Int(stack_ptr[toVisit])
         else:
             # Interior node — test both children, visit nearer first
             var leftIdx = current + 1
@@ -187,10 +187,10 @@ fn traverse_bvh2_core(
                 var rightTNear = rightHit[1]
                 if leftTNear <= rightTNear:
                     current = leftIdx
-                    stack_ptr[toVisit] = rightIdx
+                    stack_ptr[toVisit] = Int32(rightIdx)
                 else:
                     current = rightIdx
-                    stack_ptr[toVisit] = leftIdx
+                    stack_ptr[toVisit] = Int32(leftIdx)
                 toVisit += 1
             elif leftIsHit:
                 current = leftIdx
@@ -201,7 +201,7 @@ fn traverse_bvh2_core(
                 if toVisit == 0:
                     break
                 toVisit -= 1
-                current = stack_ptr[toVisit]
+                current = Int(stack_ptr[toVisit])
 
     if hitIndex != -1:
         resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
@@ -228,7 +228,7 @@ fn any_hit_bvh2_core(
     var nearXIsMin = rdirX >= Float32(0.0)
     var nearYIsMin = rdirY >= Float32(0.0)
     var nearZIsMin = rdirZ >= Float32(0.0)
-    var stack = InlineArray[Int, 64](fill=0)
+    var stack = InlineArray[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -265,7 +265,7 @@ fn any_hit_bvh2_core(
             if toVisit == 0:
                 break
             toVisit -= 1
-            current = stack_ptr[toVisit]
+            current = Int(stack_ptr[toVisit])
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
@@ -286,10 +286,10 @@ fn any_hit_bvh2_core(
             if leftIsHit and rightIsHit:
                 if leftHit[1] <= rightHit[1]:
                     current = leftIdx
-                    stack_ptr[toVisit] = rightIdx
+                    stack_ptr[toVisit] = Int32(rightIdx)
                 else:
                     current = rightIdx
-                    stack_ptr[toVisit] = leftIdx
+                    stack_ptr[toVisit] = Int32(leftIdx)
                 toVisit += 1
             elif leftIsHit:
                 current = leftIdx
@@ -299,7 +299,7 @@ fn any_hit_bvh2_core(
                 if toVisit == 0:
                     break
                 toVisit -= 1
-                current = stack_ptr[toVisit]
+                current = Int(stack_ptr[toVisit])
     return False
 
 
