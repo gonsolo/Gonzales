@@ -1,7 +1,8 @@
 from std.memory import alloc
 from std.math import sqrt
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
-from .rendering import mojo_render_all_tiles, mojo_normalize_film
+from .rendering import mojo_render_all_tiles, mojo_normalize_film, _fmt_time, _progress_str
+from std.time import perf_counter_ns
 from .geometry import RGB, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
@@ -121,8 +122,6 @@ fn _generate_sobol_matrices(path: String) -> UnsafePointer[UInt32, MutAnyOrigin]
 
     if dim < 2:
         print("Warning: Sobol file had fewer dimensions than expected")
-
-    print("Sobol matrices loaded: " + String(dim) + " dimensions")
     return matrices
 
 
@@ -185,6 +184,7 @@ fn mojo_parse_and_render(
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         var seed_dim1 = UInt32(0)
         mojo_gpu_clear_film(handle, Int64(n_pixels))
+        var t0_gpu = perf_counter_ns()
         for si in range(spp):
             mojo_gpu_render_sample(
                 handle,
@@ -195,6 +195,11 @@ fn mojo_parse_and_render(
                 UInt32(psc[0].rng_seed >> UInt64(32)),
                 Int64(n_pixels), psc[0].max_depth,
             )
+            var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
+            print(_progress_str(si + 1, spp, elapsed, "spp"), end="\r")
+        var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
+        print("Rendering: " + String(spp) + " / " + String(spp)
+            + " spp (100.0%) | Done: " + _fmt_time(gpu_total_s) + "                ")
         var gpu_film = alloc[Float32](n_pixels * 3)
         mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
         for iy in range(Int(fh)):
