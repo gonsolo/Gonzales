@@ -108,6 +108,12 @@ struct AreaLight_C(TrivialRegisterPassable):
     var total_area: Float32 # total surface area of this light mesh
 
 @fieldwise_init
+struct GpuTexture_C(TrivialRegisterPassable):
+    var data: UnsafePointer[Float32, MutAnyOrigin]  # device pointer, pre-linearised float RGB
+    var width: Int32
+    var height: Int32
+
+@fieldwise_init
 struct PixelSample_C(TrivialRegisterPassable):
     var filmX: Float32
     var filmY: Float32

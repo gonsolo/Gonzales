@@ -136,15 +136,18 @@ fn _gpu_upload_scene(
     var pts_counts = alloc[Int64](max(n_meshes, 1))
     var fi_counts  = alloc[Int64](max(n_meshes, 1))
     var vi_counts  = alloc[Int64](max(n_meshes, 1))
+    var uv_counts  = alloc[Int64](max(n_meshes, 1))
     for i in range(n_meshes):
         pts_counts[i] = Int64(psc[0].mesh_n_verts[i]) * 4
         fi_counts[i]  = Int64(psc[0].mesh_n_tris[i])
         vi_counts[i]  = Int64(psc[0].mesh_n_tris[i]) * 3
+        uv_counts[i]  = Int64(psc[0].mesh_uv_n_verts[i])
     var handle = mojo_gpu_upload_scene(
         psc[0].bvh_nodes,      Int64(psc[0].bvh_node_count),
         psc[0].prim_ids,       Int64(psc[0].prim_count),
         psc[0].meshes,         Int64(n_meshes),
-        pts_counts, fi_counts, vi_counts,
+        pts_counts, fi_counts, vi_counts, uv_counts,
+        psc[0].tex_filenames,  psc[0].tex_count,
         psc[0].materials,      Int64(psc[0].material_count),
         psc[0].area_lights,    Int64(psc[0].area_light_count),
         Int64(n_pixels),
@@ -154,7 +157,7 @@ fn _gpu_upload_scene(
         psc[0].filter_norm_x, psc[0].filter_norm_y,
         fw, fh,
     )
-    pts_counts.free(); fi_counts.free(); vi_counts.free()
+    pts_counts.free(); fi_counts.free(); vi_counts.free(); uv_counts.free()
     return handle
 
 
