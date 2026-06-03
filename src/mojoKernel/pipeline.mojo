@@ -1,5 +1,4 @@
 from std.memory import alloc
-from std.ffi import external_call
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
 from .rendering import mojo_render_all_tiles, mojo_normalize_film
 from .geometry import TileResult_C
@@ -10,36 +9,20 @@ from .bvh import BVH2Node
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
 fn _generate_sobol_matrices(path: String) -> UnsafePointer[UInt32, MutAnyOrigin]:
-    var path_len = len(path)
-    var path_cstr = alloc[UInt8](path_len + 1)
-    for i in range(path_len):
-        path_cstr[i] = path.as_bytes()[i]
-    path_cstr[path_len] = UInt8(0)
-
-    var mode = alloc[UInt8](3)
-    mode[0] = UInt8(114)   # 'r'
-    mode[1] = UInt8(98)    # 'b'
-    mode[2] = UInt8(0)
-    var fp = external_call["fopen", UnsafePointer[UInt8, MutAnyOrigin],
-        UnsafePointer[UInt8, MutAnyOrigin], UnsafePointer[UInt8, MutAnyOrigin]](path_cstr, mode)
-    mode.free()
-    path_cstr.free()
-
-    if not fp:
+    var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
+    var file_size: Int
+    try:
+        var f = open(path, "r")
+        var bytes = f.read_bytes()
+        f.close()
+        file_size = len(bytes)
+        file_buf = alloc[UInt8](file_size + 1)
+        for i in range(file_size):
+            file_buf[i] = bytes[i]
+        file_buf[file_size] = UInt8(0)
+    except:
         print("Error: cannot open Sobol data file: " + path)
         return UnsafePointer[UInt32, MutAnyOrigin]()
-
-    # Count lines (dimensions) to determine buffer size
-    # Format: s a m1 m2 ... ms per line
-    # Read entire file first
-    _ = external_call["fseek", Int32, UnsafePointer[UInt8, MutAnyOrigin], Int64, Int32](fp, Int64(0), Int32(2))
-    var file_size = external_call["ftell", Int64, UnsafePointer[UInt8, MutAnyOrigin]](fp)
-    _ = external_call["fseek", Int32, UnsafePointer[UInt8, MutAnyOrigin], Int64, Int32](fp, Int64(0), Int32(0))
-
-    var file_buf = alloc[UInt8](Int(file_size) + 1)
-    _ = external_call["fread", Int, UnsafePointer[UInt8, MutAnyOrigin], Int, Int, UnsafePointer[UInt8, MutAnyOrigin]](file_buf, 1, Int(file_size), fp)
-    _ = external_call["fclose", Int32, UnsafePointer[UInt8, MutAnyOrigin]](fp)
-    file_buf[Int(file_size)] = UInt8(0)
 
     # Allocate matrices: 21201 dimensions × 52 bits
     comptime N_DIMS = 21201

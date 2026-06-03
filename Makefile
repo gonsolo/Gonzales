@@ -129,7 +129,8 @@ MOJO_BUILD_FLAGS =
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-$(GONZALES): src/mojoKernel/__init__.mojo pyproject.toml $(OIIO_BRIDGE_LIB)
+MOJO_SRCS := $(wildcard src/mojoKernel/*.mojo)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/mojoKernel/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
