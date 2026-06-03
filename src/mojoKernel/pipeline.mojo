@@ -5,7 +5,7 @@ from .rendering import mojo_render_all_tiles, mojo_normalize_film
 from .geometry import RGB, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
-from .bvh import BVH2Node
+from .bvh import BVH2Node, SceneDescriptor2_C
 from .gpu import GpuSceneHandle, mojo_gpu_available, mojo_gpu_upload_scene, mojo_gpu_render_sample, mojo_gpu_download_film, mojo_gpu_clear_film, mojo_gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
@@ -126,110 +126,21 @@ fn _generate_sobol_matrices(path: String) -> UnsafePointer[UInt32, MutAnyOrigin]
     return matrices
 
 
-@export
-fn mojo_parse_and_render(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
-    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
-) -> Int32:
-    var psc = mojo_parse_scene(path)
-    if not psc:
-        return Int32(-1)
-
+fn _gpu_upload_scene(
+    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    sobol: UnsafePointer[UInt32, MutAnyOrigin],
+    n_pixels: Int,
+) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     var fw = psc[0].film_w
     var fh = psc[0].film_h
-    var n_pixels = Int(fw) * Int(fh)
-
-    var sd = mojo_parsed_scene_descriptor(psc)
-
-    # Build sampler params
-    var sp = TileSamplerParams_C(
-        sobolMatrices=sobol_matrices,
-        rngSeed=psc[0].rng_seed,
-        sobolSeed=Int32(0),
-        log2SamplesPerPixel=psc[0].log2_spp,
-        nBase4Digits=psc[0].n_base4_digits,
-        samplesPerPixel=psc[0].samples_per_pixel,
-        filterSigma=psc[0].filter_sigma,
-        filterSupportX=psc[0].filter_support_x,
-        filterSupportY=psc[0].filter_support_y,
-        filterNormX=psc[0].filter_norm_x,
-        filterNormY=psc[0].filter_norm_y,
-        filterWeight=psc[0].filter_weight,
-    )
-
-    var results = alloc[TileResult_C](n_pixels)
-    var zero = TileResult_C(
-        estimate=RGB(Float32(0), Float32(0), Float32(0)),
-        albedo=RGB(Float32(0), Float32(0), Float32(0)),
-        filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
-    for i in range(n_pixels):
-        results[i] = zero
-
-    var sp_ptr = alloc[TileSamplerParams_C](1)
-    sp_ptr[0] = sp
-    mojo_render_all_tiles(
-        psc[0].raster_to_camera, psc[0].camera_to_world,
-        Int32(0), Int32(0), fw, fh,
-        Int32(32), Int32(32),
-        sp_ptr, sd, results, psc[0].max_depth)
-    sp_ptr.free()
-
-    var beauty = alloc[Float32](n_pixels * 3)
-    var albedo = alloc[Float32](n_pixels * 3)
-    mojo_normalize_film(results, Int32(n_pixels),
-                        psc[0].film_iso, psc[0].film_max_comp,
-                        beauty, albedo)
-    results.free()
-
-    var denoised = alloc[Float32](n_pixels * 3)
-    mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(7), Float32(5.0), Float32(0.2))
-
-    _ = mojo_write_image(denoised, fw, fh, psc[0].film_filename, Int32(32), Int32(32))
-    var albedo_name_buf = alloc[UInt8](16)
-    var an = "albedo.exr"
-    var an_ptr = an.unsafe_ptr()
-    for i in range(10):
-        albedo_name_buf[i] = an_ptr[i]
-    albedo_name_buf[10] = UInt8(0)
-    _ = mojo_write_image(albedo, fw, fh, albedo_name_buf, Int32(32), Int32(32))
-    albedo_name_buf.free()
-
-    beauty.free(); albedo.free(); denoised.free()
-    sd.free()
-    mojo_parsed_free(psc)
-    return Int32(0)
-
-
-@export
-fn mojo_parse_and_render_gpu(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
-    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
-) -> Int32:
-    if not mojo_gpu_available():
-        print("No GPU available — compile with --target-accelerator sm_86 or similar")
-        return Int32(-1)
-
-    var psc = mojo_parse_scene(path)
-    if not psc:
-        return Int32(-1)
-
-    var fw = psc[0].film_w
-    var fh = psc[0].film_h
-    var n_pixels = Int(fw) * Int(fh)
-    var spp = Int(psc[0].samples_per_pixel)
-    var log2spp = Int(psc[0].log2_spp)
-    var n_base4 = Int(psc[0].n_base4_digits)
     var n_meshes = Int(psc[0].mesh_count)
-
-    # Build per-mesh element-count arrays for the GPU upload
     var pts_counts = alloc[Int64](max(n_meshes, 1))
     var fi_counts  = alloc[Int64](max(n_meshes, 1))
     var vi_counts  = alloc[Int64](max(n_meshes, 1))
     for i in range(n_meshes):
-        pts_counts[i] = Int64(psc[0].mesh_n_verts[i]) * 4   # Float32 values (xyzw)
-        fi_counts[i]  = Int64(psc[0].mesh_n_tris[i])        # one Int64 per face
-        vi_counts[i]  = Int64(psc[0].mesh_n_tris[i]) * 3   # three Int64 per triangle
-
+        pts_counts[i] = Int64(psc[0].mesh_n_verts[i]) * 4
+        fi_counts[i]  = Int64(psc[0].mesh_n_tris[i])
+        vi_counts[i]  = Int64(psc[0].mesh_n_tris[i]) * 3
     var handle = mojo_gpu_upload_scene(
         psc[0].bvh_nodes,      Int64(psc[0].bvh_node_count),
         psc[0].prim_ids,       Int64(psc[0].prim_count),
@@ -238,47 +149,96 @@ fn mojo_parse_and_render_gpu(
         psc[0].materials,      Int64(psc[0].material_count),
         psc[0].area_lights,    Int64(psc[0].area_light_count),
         Int64(n_pixels),
-        sobol_matrices,
+        sobol,
         psc[0].raster_to_camera, psc[0].camera_to_world,
         psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
         psc[0].filter_norm_x, psc[0].filter_norm_y,
         fw, fh,
     )
     pts_counts.free(); fi_counts.free(); vi_counts.free()
+    return handle
 
-    var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
-    var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
-    var seed_dim1 = UInt32(0)
 
-    mojo_gpu_clear_film(handle, Int64(n_pixels))
+@export
+fn mojo_parse_and_render(
+    path: UnsafePointer[UInt8, MutAnyOrigin],
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    use_gpu: Bool,
+) -> Int32:
+    if use_gpu and not mojo_gpu_available():
+        print("No GPU available — compile with --target-accelerator sm_86 or similar")
+        return Int32(-1)
 
-    for si in range(spp):
-        mojo_gpu_render_sample(
-            handle,
-            psc[0].camera_to_world,
-            Int32(si), psc[0].log2_spp, psc[0].n_base4_digits,
-            seed_dim0, seed_dim1,
-            UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
-            UInt32(psc[0].rng_seed >> UInt64(32)),
-            Int64(n_pixels), psc[0].max_depth,
-        )
+    var psc = mojo_parse_scene(path)
+    if not psc:
+        return Int32(-1)
 
-    # Download film once (n_pixels × 3 floats = sum of estimates over all spp passes)
-    var gpu_film = alloc[Float32](n_pixels * 3)
-    mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
-
-    # Convert to TileResult_C for reuse of normalize_film
+    var fw = psc[0].film_w
+    var fh = psc[0].film_h
+    var n_pixels = Int(fw) * Int(fh)
     var results = alloc[TileResult_C](n_pixels)
-    for iy in range(Int(fh)):
-        for ix in range(Int(fw)):
-            var i = iy * Int(fw) + ix
-            results[i] = TileResult_C(
-                estimate=RGB(gpu_film[i*3+0], gpu_film[i*3+1], gpu_film[i*3+2]),
-                albedo=RGB(Float32(0), Float32(0), Float32(0)),
-                filterWeight=Float32(spp),
-                pixelX=Int32(ix), pixelY=Int32(iy),
+
+    if use_gpu:
+        var spp = Int(psc[0].samples_per_pixel)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
+        var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
+        var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
+        var seed_dim1 = UInt32(0)
+        mojo_gpu_clear_film(handle, Int64(n_pixels))
+        for si in range(spp):
+            mojo_gpu_render_sample(
+                handle,
+                psc[0].camera_to_world,
+                Int32(si), psc[0].log2_spp, psc[0].n_base4_digits,
+                seed_dim0, seed_dim1,
+                UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
+                UInt32(psc[0].rng_seed >> UInt64(32)),
+                Int64(n_pixels), psc[0].max_depth,
             )
-    gpu_film.free()
+        var gpu_film = alloc[Float32](n_pixels * 3)
+        mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
+        for iy in range(Int(fh)):
+            for ix in range(Int(fw)):
+                var i = iy * Int(fw) + ix
+                results[i] = TileResult_C(
+                    estimate=RGB(gpu_film[i*3+0], gpu_film[i*3+1], gpu_film[i*3+2]),
+                    albedo=RGB(Float32(0), Float32(0), Float32(0)),
+                    filterWeight=Float32(spp),
+                    pixelX=Int32(ix), pixelY=Int32(iy),
+                )
+        gpu_film.free()
+        mojo_gpu_free_scene(handle)
+    else:
+        var zero = TileResult_C(
+            estimate=RGB(Float32(0), Float32(0), Float32(0)),
+            albedo=RGB(Float32(0), Float32(0), Float32(0)),
+            filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
+        for i in range(n_pixels):
+            results[i] = zero
+        var sd = mojo_parsed_scene_descriptor(psc)
+        var sp = TileSamplerParams_C(
+            sobolMatrices=sobol_matrices,
+            rngSeed=psc[0].rng_seed,
+            sobolSeed=Int32(0),
+            log2SamplesPerPixel=psc[0].log2_spp,
+            nBase4Digits=psc[0].n_base4_digits,
+            samplesPerPixel=psc[0].samples_per_pixel,
+            filterSigma=psc[0].filter_sigma,
+            filterSupportX=psc[0].filter_support_x,
+            filterSupportY=psc[0].filter_support_y,
+            filterNormX=psc[0].filter_norm_x,
+            filterNormY=psc[0].filter_norm_y,
+            filterWeight=psc[0].filter_weight,
+        )
+        var sp_ptr = alloc[TileSamplerParams_C](1)
+        sp_ptr[0] = sp
+        mojo_render_all_tiles(
+            psc[0].raster_to_camera, psc[0].camera_to_world,
+            Int32(0), Int32(0), fw, fh,
+            Int32(32), Int32(32),
+            sp_ptr, sd, results, psc[0].max_depth)
+        sp_ptr.free()
+        sd.free()
 
     var beauty = alloc[Float32](n_pixels * 3)
     var albedo = alloc[Float32](n_pixels * 3)
@@ -301,149 +261,16 @@ fn mojo_parse_and_render_gpu(
     albedo_name_buf.free()
 
     beauty.free(); albedo.free(); denoised.free()
-    mojo_gpu_free_scene(handle)
     mojo_parsed_free(psc)
     return Int32(0)
 
 
-# Interactive render loop.  Opens a Vulkan window and renders progressively,
-# resetting accumulation whenever the user moves the camera.
 fn mojo_render_interactive(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
+    use_gpu: Bool,
 ):
-    var psc = mojo_parse_scene(path)
-    if not psc:
-        print("Failed to parse scene")
-        return
-
-    var fw = psc[0].film_w
-    var fh = psc[0].film_h
-    var n_pixels = Int(fw) * Int(fh)
-
-    # Build window title
-    var title_str = "gonzales"
-    var title_buf = alloc[UInt8](9)
-    var ts = title_str.unsafe_ptr()
-    for i in range(8):
-        title_buf[i] = ts[i]
-    title_buf[8] = UInt8(0)
-
-    var v = viewer_create(fw, fh, title_buf)
-    title_buf.free()
-    if not v:
-        print("Failed to create viewer window")
-        mojo_parsed_free(psc)
-        return
-
-    # Set initial camera state extracted from the parsed camera_to_world matrix.
-    # Column-major layout: col0=right, col1=up, col2=dir, col3=pos.
-    var c2w = psc[0].camera_to_world
-    var cam_buf = alloc[CameraState](1)
-    cam_buf[0] = CameraState(
-        posX=c2w[12], posY=c2w[13], posZ=c2w[14],
-        dirX=c2w[8],  dirY=c2w[9],  dirZ=c2w[10],
-        upX =c2w[4],  upY =c2w[5],  upZ =c2w[6],
-        cameraChanged=Int32(0),
-    )
-    viewer_set_camera_state(v, cam_buf)
-
-    var sd = mojo_parsed_scene_descriptor(psc)
-
-    # Working camera-to-world buffer (updated when user moves camera).
-    var c2w_buf = alloc[Float32](16)
-    for i in range(16):
-        c2w_buf[i] = c2w[i]
-
-    var sp_ptr      = alloc[TileSamplerParams_C](1)
-    var accum       = alloc[Float32](n_pixels * 3)
-    var albedo_acc  = alloc[Float32](n_pixels * 3)
-    var denoised    = alloc[Float32](n_pixels * 3)
-    var results     = alloc[TileResult_C](n_pixels)
-    var frame_count = 0
-
-    var zero = TileResult_C(
-        estimate=RGB(Float32(0), Float32(0), Float32(0)),
-        albedo=RGB(Float32(0), Float32(0), Float32(0)),
-        filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
-
-    while not viewer_should_close(v):
-        viewer_poll_events(v)
-
-        viewer_get_camera_state(v, result=cam_buf)
-        if cam_buf[0].cameraChanged != Int32(0):
-            frame_count = 0
-            for i in range(n_pixels * 3):
-                accum[i]      = Float32(0)
-                albedo_acc[i] = Float32(0)
-            build_camera_to_world(cam_buf, c2w_buf)
-
-        # Build 1-spp sampler params; vary rngSeed per frame for diversity.
-        sp_ptr[0] = TileSamplerParams_C(
-            sobolMatrices=sobol,
-            rngSeed=UInt64(frame_count),
-            sobolSeed=Int32(frame_count % 65536),
-            log2SamplesPerPixel=Int32(0),
-            nBase4Digits=Int32(1),
-            samplesPerPixel=Int32(1),
-            filterSigma=psc[0].filter_sigma,
-            filterSupportX=psc[0].filter_support_x,
-            filterSupportY=psc[0].filter_support_y,
-            filterNormX=psc[0].filter_norm_x,
-            filterNormY=psc[0].filter_norm_y,
-            filterWeight=psc[0].filter_weight,
-        )
-
-        for i in range(n_pixels):
-            results[i] = zero
-
-        mojo_render_all_tiles(
-            psc[0].raster_to_camera, c2w_buf,
-            Int32(0), Int32(0), fw, fh,
-            Int32(32), Int32(32),
-            sp_ptr, sd, results, psc[0].max_depth)
-
-        var beauty = alloc[Float32](n_pixels * 3)
-        var albedo = alloc[Float32](n_pixels * 3)
-        mojo_normalize_film(results, Int32(n_pixels),
-                            psc[0].film_iso, psc[0].film_max_comp,
-                            beauty, albedo)
-        # Progressive accumulation: running average over frames.
-        frame_count += 1
-        var w = Float32(1) / Float32(frame_count)
-        if frame_count == 1:
-            for i in range(n_pixels * 3):
-                accum[i]      = beauty[i]
-                albedo_acc[i] = albedo[i]
-        else:
-            for i in range(n_pixels * 3):
-                accum[i]      += (beauty[i]      - accum[i])      * w
-                albedo_acc[i] += (albedo[i]       - albedo_acc[i]) * w
-        beauty.free()
-        albedo.free()
-
-        mojo_denoise(accum, albedo_acc, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
-        viewer_update_framebuffer(v, denoised, fw, fh)
-
-    results.free()
-    accum.free()
-    albedo_acc.free()
-    denoised.free()
-    c2w_buf.free()
-    sp_ptr.free()
-    cam_buf.free()
-    sd.free()
-    mojo_parsed_free(psc)
-    viewer_destroy(v)
-
-
-# Interactive GPU render loop.  Uploads scene once, then progressively
-# accumulates 1-spp GPU passes, resetting when the camera moves.
-fn mojo_render_interactive_gpu(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
-    sobol: UnsafePointer[UInt32, MutAnyOrigin],
-):
-    if not mojo_gpu_available():
+    if use_gpu and not mojo_gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return
 
@@ -455,49 +282,34 @@ fn mojo_render_interactive_gpu(
     var fw = psc[0].film_w
     var fh = psc[0].film_h
     var n_pixels = Int(fw) * Int(fh)
-    var n_meshes = Int(psc[0].mesh_count)
 
-    var pts_counts = alloc[Int64](max(n_meshes, 1))
-    var fi_counts  = alloc[Int64](max(n_meshes, 1))
-    var vi_counts  = alloc[Int64](max(n_meshes, 1))
-    for i in range(n_meshes):
-        pts_counts[i] = Int64(psc[0].mesh_n_verts[i]) * 4
-        fi_counts[i]  = Int64(psc[0].mesh_n_tris[i])
-        vi_counts[i]  = Int64(psc[0].mesh_n_tris[i]) * 3
+    var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin]()
+    if use_gpu:
+        handle = _gpu_upload_scene(psc, sobol, n_pixels)
+        if not handle:
+            print("GPU: Failed to upload scene")
+            mojo_parsed_free(psc)
+            return
 
-    var handle = mojo_gpu_upload_scene(
-        psc[0].bvh_nodes,   Int64(psc[0].bvh_node_count),
-        psc[0].prim_ids,    Int64(psc[0].prim_count),
-        psc[0].meshes,      Int64(n_meshes),
-        pts_counts, fi_counts, vi_counts,
-        psc[0].materials,   Int64(psc[0].material_count),
-        psc[0].area_lights, Int64(psc[0].area_light_count),
-        Int64(n_pixels),
-        sobol,
-        psc[0].raster_to_camera, psc[0].camera_to_world,
-        psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
-        psc[0].filter_norm_x, psc[0].filter_norm_y,
-        fw, fh,
-    )
-    pts_counts.free(); fi_counts.free(); vi_counts.free()
-
-    if not handle:
-        print("GPU: Failed to upload scene")
-        mojo_parsed_free(psc)
-        return
-
-    var title_str = "gonzales GPU"
-    var title_buf = alloc[UInt8](13)
+    var title_len: Int
+    var title_str: String
+    if use_gpu:
+        title_str = "gonzales GPU"
+        title_len = 12
+    else:
+        title_str = "gonzales"
+        title_len = 8
+    var title_buf = alloc[UInt8](title_len + 1)
     var ts = title_str.unsafe_ptr()
-    for i in range(12):
+    for i in range(title_len):
         title_buf[i] = ts[i]
-    title_buf[12] = UInt8(0)
-
+    title_buf[title_len] = UInt8(0)
     var v = viewer_create(fw, fh, title_buf)
     title_buf.free()
     if not v:
         print("Failed to create viewer window")
-        mojo_gpu_free_scene(handle)
+        if use_gpu:
+            mojo_gpu_free_scene(handle)
         mojo_parsed_free(psc)
         return
 
@@ -515,58 +327,122 @@ fn mojo_render_interactive_gpu(
     for i in range(16):
         c2w_buf[i] = c2w[i]
 
-    var gpu_film = alloc[Float32](n_pixels * 3)
     var results  = alloc[TileResult_C](n_pixels)
     var beauty   = alloc[Float32](n_pixels * 3)
     var albedo   = alloc[Float32](n_pixels * 3)
     var denoised = alloc[Float32](n_pixels * 3)
     var frame_count = 0
 
-    mojo_gpu_clear_film(handle, Int64(n_pixels))
+    # Mode-specific buffers — null until allocated below
+    var gpu_film   = UnsafePointer[Float32, MutAnyOrigin]()
+    var sd         = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]()
+    var sp_ptr     = UnsafePointer[TileSamplerParams_C, MutAnyOrigin]()
+    var accum      = UnsafePointer[Float32, MutAnyOrigin]()
+    var albedo_acc = UnsafePointer[Float32, MutAnyOrigin]()
+
+    if use_gpu:
+        gpu_film = alloc[Float32](n_pixels * 3)
+        mojo_gpu_clear_film(handle, Int64(n_pixels))
+    else:
+        sd         = mojo_parsed_scene_descriptor(psc)
+        sp_ptr     = alloc[TileSamplerParams_C](1)
+        accum      = alloc[Float32](n_pixels * 3)
+        albedo_acc = alloc[Float32](n_pixels * 3)
+
+    var zero = TileResult_C(
+        estimate=RGB(Float32(0), Float32(0), Float32(0)),
+        albedo=RGB(Float32(0), Float32(0), Float32(0)),
+        filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
 
     while not viewer_should_close(v):
         viewer_poll_events(v)
-
         viewer_get_camera_state(v, result=cam_buf)
         if cam_buf[0].cameraChanged != Int32(0):
             frame_count = 0
-            mojo_gpu_clear_film(handle, Int64(n_pixels))
             build_camera_to_world(cam_buf, c2w_buf)
+            if use_gpu:
+                mojo_gpu_clear_film(handle, Int64(n_pixels))
+            else:
+                for i in range(n_pixels * 3):
+                    accum[i]      = Float32(0)
+                    albedo_acc[i] = Float32(0)
 
-        # log2spp=16 → 65536 Sobol samples before wrapping; varies film jitter each frame.
-        comptime log2spp_i = 16
-        comptime n_base4_i = 8
-        var si = Int32(frame_count % 65536)
-
-        mojo_gpu_render_sample(
-            handle,
-            c2w_buf,
-            si, Int32(log2spp_i), Int32(n_base4_i),
-            UInt32(0), UInt32(0),
-            UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
-            Int64(n_pixels), psc[0].max_depth,
-        )
-        frame_count += 1
-
-        mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
-
-        for i in range(n_pixels):
-            results[i] = TileResult_C(
-                estimate=RGB(gpu_film[i*3+0], gpu_film[i*3+1], gpu_film[i*3+2]),
-                albedo=RGB(Float32(0), Float32(0), Float32(0)),
-                filterWeight=Float32(frame_count),
-                pixelX=Int32(i % Int(fw)), pixelY=Int32(i // Int(fw)),
+        if use_gpu:
+            comptime log2spp_i = 16
+            comptime n_base4_i = 8
+            var si = Int32(frame_count % 65536)
+            mojo_gpu_render_sample(
+                handle, c2w_buf,
+                si, Int32(log2spp_i), Int32(n_base4_i),
+                UInt32(0), UInt32(0),
+                UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
+                Int64(n_pixels), psc[0].max_depth,
             )
-        mojo_normalize_film(results, Int32(n_pixels),
-                            psc[0].film_iso, psc[0].film_max_comp,
-                            beauty, albedo)
+            frame_count += 1
+            mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
+            for i in range(n_pixels):
+                results[i] = TileResult_C(
+                    estimate=RGB(gpu_film[i*3+0], gpu_film[i*3+1], gpu_film[i*3+2]),
+                    albedo=RGB(Float32(0), Float32(0), Float32(0)),
+                    filterWeight=Float32(frame_count),
+                    pixelX=Int32(i % Int(fw)), pixelY=Int32(i // Int(fw)),
+                )
+            mojo_normalize_film(results, Int32(n_pixels),
+                                psc[0].film_iso, psc[0].film_max_comp,
+                                beauty, albedo)
+        else:
+            sp_ptr[0] = TileSamplerParams_C(
+                sobolMatrices=sobol,
+                rngSeed=UInt64(frame_count),
+                sobolSeed=Int32(frame_count % 65536),
+                log2SamplesPerPixel=Int32(0),
+                nBase4Digits=Int32(1),
+                samplesPerPixel=Int32(1),
+                filterSigma=psc[0].filter_sigma,
+                filterSupportX=psc[0].filter_support_x,
+                filterSupportY=psc[0].filter_support_y,
+                filterNormX=psc[0].filter_norm_x,
+                filterNormY=psc[0].filter_norm_y,
+                filterWeight=psc[0].filter_weight,
+            )
+            for i in range(n_pixels):
+                results[i] = zero
+            mojo_render_all_tiles(
+                psc[0].raster_to_camera, c2w_buf,
+                Int32(0), Int32(0), fw, fh,
+                Int32(32), Int32(32),
+                sp_ptr, sd, results, psc[0].max_depth)
+            var beauty_frame = alloc[Float32](n_pixels * 3)
+            var albedo_frame = alloc[Float32](n_pixels * 3)
+            mojo_normalize_film(results, Int32(n_pixels),
+                                psc[0].film_iso, psc[0].film_max_comp,
+                                beauty_frame, albedo_frame)
+            frame_count += 1
+            var w = Float32(1) / Float32(frame_count)
+            if frame_count == 1:
+                for i in range(n_pixels * 3):
+                    accum[i]      = beauty_frame[i]
+                    albedo_acc[i] = albedo_frame[i]
+            else:
+                for i in range(n_pixels * 3):
+                    accum[i]      += (beauty_frame[i] - accum[i])      * w
+                    albedo_acc[i] += (albedo_frame[i] - albedo_acc[i]) * w
+            beauty_frame.free(); albedo_frame.free()
+            for i in range(n_pixels * 3):
+                beauty[i] = accum[i]
+                albedo[i] = albedo_acc[i]
 
         mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
         viewer_update_framebuffer(v, denoised, fw, fh)
 
-    gpu_film.free(); results.free()
-    beauty.free(); albedo.free(); denoised.free()
+    results.free(); beauty.free(); albedo.free(); denoised.free()
     c2w_buf.free(); cam_buf.free()
-    mojo_gpu_free_scene(handle)
+    if use_gpu:
+        gpu_film.free()
+        mojo_gpu_free_scene(handle)
+    else:
+        accum.free(); albedo_acc.free()
+        sp_ptr.free()
+        sd.free()
     mojo_parsed_free(psc)
     viewer_destroy(v)
