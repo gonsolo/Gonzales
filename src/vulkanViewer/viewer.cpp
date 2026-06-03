@@ -266,7 +266,7 @@ static void keyCallback(GLFWwindow* window, int key, int /*scancode*/,
 static void mouseButtonCallback(GLFWwindow* window, int button, int action,
                                  int /*mods*/) {
     auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
-    if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_RIGHT) {
         v->mousePressed = (action == GLFW_PRESS);
         if (v->mousePressed) {
             glfwGetCursorPos(window, &v->lastMouseX, &v->lastMouseY);
