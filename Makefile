@@ -122,15 +122,26 @@ $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/openImageIOBridge.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
+VIEWER_SRC = src/vulkanViewer/viewer.cpp
+VIEWER_INC = src/vulkanViewer/include
+VIEWER_GEN = src/vulkanViewer/generated
+VIEWER_LIB = $(BUILD_DIR)/libvulkanviewer.so
+
+$(VIEWER_LIB): $(VIEWER_SRC) $(VIEWER_INC)/viewer.h
+	@mkdir -p $(BUILD_DIR)
+	g++ -fPIC -shared -std=c++20 -I$(VIEWER_INC) -I$(VIEWER_GEN) \
+		$(VIEWER_SRC) -lvulkan -lglfw -o $(VIEWER_LIB)
+
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89
 else
 MOJO_BUILD_FLAGS =
 endif
-MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
+MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
+                  -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 MOJO_SRCS := $(wildcard src/mojoKernel/*.mojo)
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/mojoKernel/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 

@@ -5,6 +5,7 @@ from .geometry import TileResult_C
 from .postprocess import mojo_denoise, mojo_write_exr
 from .sampling import TileSamplerParams_C
 from .bvh import BVH2Node
+from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
@@ -195,3 +196,127 @@ fn mojo_parse_and_render(
     sd.free()
     mojo_parsed_free(psc)
     return Int32(0)
+
+
+# Interactive render loop.  Opens a Vulkan window and renders progressively,
+# resetting accumulation whenever the user moves the camera.
+fn mojo_render_interactive(
+    path: UnsafePointer[UInt8, MutAnyOrigin],
+    sobol: UnsafePointer[UInt32, MutAnyOrigin],
+):
+    var psc = mojo_parse_scene(path)
+    if not psc:
+        print("Failed to parse scene")
+        return
+
+    var fw = psc[0].film_w
+    var fh = psc[0].film_h
+    var n_pixels = Int(fw) * Int(fh)
+
+    # Build window title
+    var title_str = "gonzales"
+    var title_buf = alloc[UInt8](9)
+    var ts = title_str.unsafe_ptr()
+    for i in range(8):
+        title_buf[i] = ts[i]
+    title_buf[8] = UInt8(0)
+
+    var v = viewer_create(fw, fh, title_buf)
+    title_buf.free()
+    if not v:
+        print("Failed to create viewer window")
+        mojo_parsed_free(psc)
+        return
+
+    # Set initial camera state extracted from the parsed camera_to_world matrix.
+    # Column-major layout: col0=right, col1=up, col2=dir, col3=pos.
+    var c2w = psc[0].camera_to_world
+    var cam_buf = alloc[CameraState](1)
+    cam_buf[0] = CameraState(
+        posX=c2w[12], posY=c2w[13], posZ=c2w[14],
+        dirX=c2w[8],  dirY=c2w[9],  dirZ=c2w[10],
+        upX =c2w[4],  upY =c2w[5],  upZ =c2w[6],
+        cameraChanged=Int32(0),
+    )
+    viewer_set_camera_state(v, cam_buf)
+
+    var sd = mojo_parsed_scene_descriptor(psc)
+
+    # Working camera-to-world buffer (updated when user moves camera).
+    var c2w_buf = alloc[Float32](16)
+    for i in range(16):
+        c2w_buf[i] = c2w[i]
+
+    var sp_ptr = alloc[TileSamplerParams_C](1)
+    var accum  = alloc[Float32](n_pixels * 3)
+    var frame_count = 0
+
+    var zero = TileResult_C(
+        estimateR=Float32(0), estimateG=Float32(0), estimateB=Float32(0),
+        albedoR=Float32(0),   albedoG=Float32(0),   albedoB=Float32(0),
+        filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
+
+    while not viewer_should_close(v):
+        viewer_poll_events(v)
+
+        viewer_get_camera_state(v, result=cam_buf)
+        if cam_buf[0].cameraChanged != Int32(0):
+            frame_count = 0
+            for i in range(n_pixels * 3):
+                accum[i] = Float32(0)
+            build_camera_to_world(cam_buf, c2w_buf)
+
+        # Build 1-spp sampler params; vary rngSeed per frame for diversity.
+        sp_ptr[0] = TileSamplerParams_C(
+            sobolMatrices=sobol,
+            rngSeed=UInt64(frame_count),
+            sobolSeed=Int32(frame_count % 65536),
+            log2SamplesPerPixel=Int32(0),
+            nBase4Digits=Int32(1),
+            samplesPerPixel=Int32(1),
+            filterSigma=psc[0].filter_sigma,
+            filterSupportX=psc[0].filter_support_x,
+            filterSupportY=psc[0].filter_support_y,
+            filterNormX=psc[0].filter_norm_x,
+            filterNormY=psc[0].filter_norm_y,
+            filterWeight=psc[0].filter_weight,
+        )
+
+        var results = alloc[TileResult_C](n_pixels)
+        for i in range(n_pixels):
+            results[i] = zero
+
+        mojo_render_all_tiles(
+            psc[0].raster_to_camera, c2w_buf,
+            Int32(0), Int32(0), fw, fh,
+            Int32(32), Int32(32),
+            sp_ptr, sd, results, psc[0].max_depth)
+
+        var beauty = alloc[Float32](n_pixels * 3)
+        var albedo = alloc[Float32](n_pixels * 3)
+        mojo_normalize_film(results, Int32(n_pixels),
+                            psc[0].film_iso, psc[0].film_max_comp,
+                            beauty, albedo)
+        results.free()
+        albedo.free()
+
+        # Progressive accumulation: running average over frames.
+        frame_count += 1
+        if frame_count == 1:
+            for i in range(n_pixels * 3):
+                accum[i] = beauty[i]
+        else:
+            var w = Float32(1) / Float32(frame_count)
+            for i in range(n_pixels * 3):
+                accum[i] += (beauty[i] - accum[i]) * w
+        beauty.free()
+
+        viewer_update_framebuffer(v, accum, fw, fh)
+
+    accum.free()
+    c2w_buf.free()
+    sp_ptr.free()
+    cam_buf.free()
+    sd.free()
+    mojo_parsed_free(psc)
+    viewer_destroy(v)

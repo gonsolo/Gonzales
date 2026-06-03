@@ -1090,17 +1090,17 @@ void viewer_poll_events(ViewerHandle viewer) {
     glfwPollEvents();
 }
 
-CameraState viewer_get_camera_state(ViewerHandle viewer) {
+void viewer_get_camera_state(ViewerHandle viewer, CameraState *out) {
     auto* v = static_cast<Viewer*>(viewer);
-    CameraState state = v->camera;
+    if (!v || !out) return;
+    *out = v->camera;
     v->camera.cameraChanged = 0;
-    return state;
 }
 
-void viewer_set_camera_state(ViewerHandle viewer, CameraState state) {
+void viewer_set_camera_state(ViewerHandle viewer, const CameraState *state) {
     auto* v = static_cast<Viewer*>(viewer);
-    if (!v) return;
-    v->camera = state;
+    if (!v || !state) return;
+    v->camera = *state;
 
     // Based on the set camera, we should also compute pitch and yaw to match.
     // dirX, dirY, dirZ should already be normalized.
