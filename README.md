@@ -18,33 +18,39 @@ documentation with annotated source code.
 
 ## Architecture
 
-The renderer is organized into 18 modules mirroring the architecture of
-[PBRT](https://www.pbr-book.org/):
+The renderer is written entirely in **Mojo** (~7,800 lines) and organized
+into focused modules:
 
-| Module | Responsibility |
-|--------|---------------|
-| **Integrator** | Volume path tracing with multiple importance sampling |
-| **Accelerators** | BVH with Surface Area Heuristic |
-| **Sampler** | Z-Sobol quasi-random sequences with Owen scrambling |
-| **Bsdf** | Diffuse, dielectric, microfacet, coated, layered, hair, mix |
-| **Reflection** | Fresnel equations, Trowbridge-Reitz microfacet distribution |
-| **Light** | Area, point, distant, and infinite (environment map) lights |
-| **Core** | Ray, spectrum, film, scene, distributions, tile renderer |
-| **Geometry** | Vectors, points, normals, transforms, bounding boxes (SIMD4) |
-| **Shape** | Spheres, triangle meshes, PLY, curves |
-| **Texture** | Image textures, Ptex via C++ interop |
-| **Camera** | Perspective camera with depth of field |
-| **Image** | EXR output via OpenImageIO C++ interop |
+| Module | Lines | Responsibility |
+|--------|------:|---------------|
+| `parsing.mojo` | 1,959 | PBRT-v4 scene parser — geometry, materials, lights, textures |
+| `gpu.mojo` | 1,294 | GPU kernels: wavefront path tracing, à-trous denoiser, film |
+| `shading.mojo` | 770 | Material shading — diffuse, coated, conductor, dielectric |
+| `bvh.mojo` | 535 | BVH construction (SAH) and traversal |
+| `pipeline.mojo` | 457 | Batch and interactive rendering pipelines |
+| `rendering.mojo` | 407 | CPU tile renderer, film accumulation, bilateral denoiser |
+| `ply.mojo` | 316 | PLY mesh loader |
+| `sampling.mojo` | 173 | Z-Sobol sampler with Owen scrambling |
+| `geometry.mojo` | 191 | Ray, intersection, path state structs |
+| `transform.mojo` | — | 4×4 matrix math |
+| `rng.mojo` | — | PCG32 random number generator |
+| `postprocess.mojo` | — | Joint bilateral denoiser (CPU) |
+| `viewer.mojo` | — | Interactive Vulkan viewer bridge |
+
+External C/C++ libraries (OpenImageIO, Ptex, Vulkan) are called via Mojo's
+C FFI — not reimplemented.
 
 ## Key Features
 
-- **Veach-style MIS** — Power heuristic balancing light and BSDF sampling
-- **Pure Swift BVH** — Native acceleration with SAH, no Embree dependency
+- **Wavefront GPU path tracing** — Batches 8 samples per bounce loop; NVIDIA GPU via Mojo's GPU API
+- **À-trous wavelet denoiser** — Variance-adaptive 5-pass GPU denoiser (Dammertz 2010)
+- **Veach-style MIS** — Power heuristic balancing NEE and BSDF sampling
+- **Pure Mojo BVH** — SAH construction and traversal, no Embree dependency
 - **Z-Sobol sampling** — Low-discrepancy sequences for fast convergence
 - **Russian roulette** — Unbiased path termination for efficiency
 - **PBRT-v4 format** — Full scene file compatibility
-- **Structured concurrency** — Tile-based parallel rendering via `withThrowingTaskGroup`
-- **Ptex & OpenImageIO** — C++ interop for professional texture and image handling
+- **Ptex & OpenImageIO** — C FFI interop for professional texture and image handling
+- **Interactive viewer** — GPU-accelerated real-time preview with progressive refinement
 
 ## Rendering Moana
 
