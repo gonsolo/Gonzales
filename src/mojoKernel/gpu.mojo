@@ -1229,7 +1229,11 @@ fn mojo_gpu_atrous_denoise(
             var pong_ptr = handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32]()
             var alb_ptr  = handle[].atrous_albedo_buf.unsafe_ptr().bitcast[Float32]()
             var var_ptr  = handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32]()
-            for i in range(5):
+            # Ramp passes with frame_count: 1 pass at fc=1, 5 passes at fc>=5.
+            # Prevents the large effective radius (31px at 5 passes) from averaging
+            # lit pixels with unlit ones during fast camera movement.
+            var n_passes = min(5, max(1, Int(frame_count)))
+            for i in range(n_passes):
                 var step = 1 << i   # 1, 2, 4, 8, 16
                 var src_ptr = ping_ptr if i % 2 == 0 else pong_ptr
                 var dst_ptr = pong_ptr if i % 2 == 0 else ping_ptr
@@ -1239,10 +1243,11 @@ fn mojo_gpu_atrous_denoise(
                     Float32(4.0), Float32(0.1),
                     grid_dim=grid_n, block_dim=block_size,
                 )
-            # 5 passes (i=0..4): last dst = pong (i=4 even → dst=pong)
+            # Result is in pong if n_passes is odd, ping if even.
             handle[].ctx.synchronize()
             var bytes = n_pix * 12
-            with handle[].atrous_pong_buf.map_to_host() as h:
+            var result_buf = handle[].atrous_pong_buf if n_passes % 2 == 1 else handle[].atrous_ping_buf
+            with result_buf.map_to_host() as h:
                 var src = h.unsafe_ptr()
                 var dst = output.bitcast[UInt8]()
                 for i in range(bytes):

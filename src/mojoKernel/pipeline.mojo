@@ -441,7 +441,7 @@ fn mojo_render_interactive(
             for i in range(n_pixels * 3):
                 beauty[i] = accum[i]
                 albedo[i] = albedo_acc[i]
-            mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
+            mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(7), Float32(5.0), Float32(0.5))
 
         viewer_update_framebuffer(v, denoised, fw, fh)
 
