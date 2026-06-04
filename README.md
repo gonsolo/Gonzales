@@ -91,20 +91,16 @@ evaluation (geometry traversal only).
 
 | Dependency | Description | Install (Arch) |
 | --- | --- | --- |
-| [Swift 6.3](https://swift.org) | Compiler with C++20 interop | `pacman -S swift` |
+| [Mojo](https://www.modular.com/mojo) (via `uv`) | Compiler; GPU target requires `--target-accelerator sm_XX` | `uv run mojo` |
 | [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) | EXR/HDR image I/O | `pacman -S openimageio` |
 | [Ptex](https://github.com/wdas/ptex) | Per-face texture mapping (Disney) | `pacman -S ptex` |
+| [Vulkan](https://vulkan.lunarg.com/) | Interactive viewer | `pacman -S vulkan-icd-loader` |
 | [Loupe](https://gitlab.gnome.org/GNOME/loupe) | EXR image viewer (for `make view_release`) | `pacman -S loupe` |
 
+For GPU rendering, set `--target-accelerator` to match your GPU's compute
+capability (e.g. `sm_86` for RTX 3060, `sm_89` for RTX 4090).
+
 ## Installation
-
-### Arch Linux (AUR)
-
-```bash
-yay gonzales-git
-```
-
-<https://aur.archlinux.org/packages/gonzales-git>
 
 ### Building from Source
 
@@ -112,8 +108,6 @@ yay gonzales-git
 make debug    # debug build
 make release  # optimized release build
 ```
-
-> **Note (Swift 6.1.2+ on Arch Linux):** An [incompatibility with GCC 15](https://github.com/swiftlang/swift/issues/81774) requires patching `/usr/lib/swift/lib/swift/_FoundationCShims/_CStdlib.h` line 55 to wrap the `#if __has_include(<math.h>)` block in `#if 0 ... #endif`.
 
 ## Getting Started
 
