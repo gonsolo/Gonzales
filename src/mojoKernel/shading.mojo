@@ -250,6 +250,8 @@ fn shade_diffuse_transmission(
         var w = total / pt
         path_ptr[].throughput *= trans * w
 
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = mat.albedo
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
@@ -402,6 +404,8 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
         path_ptr[].throughput *= alb
 
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = alb
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
@@ -488,6 +492,8 @@ fn shade_dielectric(
         var hit_point = ray_org + ray_dir * inter.tHit - normal * Float32(0.0001)
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refr[0], refr[1], refr[2])
 
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = RGB(Float32(1), Float32(1), Float32(1))
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce (throughput unchanged for ideal glass)
@@ -549,6 +555,8 @@ fn shade_conductor(
         refl = refl * (Float32(1.0) / sqrt(rlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = mat.albedo
     path_ptr[].throughput *= mat.albedo
     path_ptr[].bounce += 1
 
@@ -708,6 +716,8 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = alb
     path_ptr[].throughput *= alb
     path_ptr[].bounce += 1
 

@@ -40,7 +40,8 @@ struct GpuSceneHandle(Movable):
     # mojo_gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × 88
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
-    var film_buf: DeviceBuffer[DType.uint8]         # n_pixels × 3 × sizeof(Float32) = 12
+    var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
+    var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -237,10 +238,15 @@ fn mojo_gpu_upload_scene(
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 88 * WAVEFRONT_BATCH)
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48 * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             with r_film_buf.map_to_host() as h:
+                var p = h.unsafe_ptr()
+                for i in range(n_pix * 12):
+                    p[i] = UInt8(0)
+            with r_albedo_film_buf.map_to_host() as h:
                 var p = h.unsafe_ptr()
                 for i in range(n_pix * 12):
                     p[i] = UInt8(0)
@@ -328,6 +334,7 @@ fn mojo_gpu_upload_scene(
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
+                albedo_film_buf=r_albedo_film_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -607,6 +614,7 @@ fn traverse_shadow_rays_gpu(
 fn accumulate_film_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_film: UnsafePointer[Float32, MutAnyOrigin],
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -615,6 +623,9 @@ fn accumulate_film_gpu(
     film[tid*3+0] += paths[tid].estimate.r
     film[tid*3+1] += paths[tid].estimate.g
     film[tid*3+2] += paths[tid].estimate.b
+    albedo_film[tid*3+0] += paths[tid].albedo.r
+    albedo_film[tid*3+1] += paths[tid].albedo.g
+    albedo_film[tid*3+2] += paths[tid].albedo.b
 
 
 fn clear_film_gpu(film: UnsafePointer[Float32, MutAnyOrigin], n_pixels: Int):
@@ -631,20 +642,20 @@ fn clear_film_gpu(film: UnsafePointer[Float32, MutAnyOrigin], n_pixels: Int):
 fn accumulate_film_wavefront_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_film: UnsafePointer[Float32, MutAnyOrigin],
     n_pixels: Int, actual_batch: Int,
 ):
     var px = Int(block_idx.x * block_dim.x + thread_idx.x)
     if px >= n_pixels:
         return
     var r = Float32(0); var g = Float32(0); var b = Float32(0)
+    var ar = Float32(0); var ag = Float32(0); var ab = Float32(0)
     for si in range(actual_batch):
         var p = paths[si * n_pixels + px]
-        r += p.estimate.r
-        g += p.estimate.g
-        b += p.estimate.b
-    film[px*3+0] += r
-    film[px*3+1] += g
-    film[px*3+2] += b
+        r += p.estimate.r; g += p.estimate.g; b += p.estimate.b
+        ar += p.albedo.r;  ag += p.albedo.g;  ab += p.albedo.b
+    film[px*3+0] += r; film[px*3+1] += g; film[px*3+2] += b
+    albedo_film[px*3+0] += ar; albedo_film[px*3+1] += ag; albedo_film[px*3+2] += ab
 
 
 # Wavefront primary-ray generation: thread ti → pixel (ti % n_pixels), sample (si_start + ti // n_pixels).
@@ -919,6 +930,7 @@ fn mojo_gpu_render_sample(
             handle[].ctx.enqueue_function[accumulate_film_gpu, accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 n_int,
                 grid_dim=grid_dim,
                 block_dim=block_size,
@@ -999,6 +1011,7 @@ fn mojo_gpu_render_wavefront(
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu, accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 n_pix, batch,
                 grid_dim=grid_pix,
                 block_dim=block_size,
@@ -1031,6 +1044,29 @@ fn mojo_gpu_download_film(
 
 
 @export
+fn mojo_gpu_download_albedo(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    film: UnsafePointer[Float32, MutAnyOrigin],
+    n: Int64,
+):
+    var n_int = Int(n)
+    if n_int == 0:
+        return
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            handle[].ctx.synchronize()
+            var film_bytes = n_int * 12
+            with handle[].albedo_film_buf.map_to_host() as host_buf:
+                var src = host_buf.unsafe_ptr()
+                var dst = film.bitcast[UInt8]()
+                for i in range(film_bytes):
+                    dst[i] = src[i]
+        except e:
+            print("GPU download albedo failed: " + String(e))
+
+
+@export
 fn mojo_gpu_clear_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     n: Int64,
@@ -1045,6 +1081,12 @@ fn mojo_gpu_clear_film(
             var grid_dim = ceildiv(n_int, block_size)
             handle[].ctx.enqueue_function[clear_film_gpu, clear_film_gpu](
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
+                n_int,
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
+            handle[].ctx.enqueue_function[clear_film_gpu, clear_film_gpu](
+                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 n_int,
                 grid_dim=grid_dim,
                 block_dim=block_size,
