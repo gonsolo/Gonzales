@@ -6,11 +6,10 @@
 
 # Gonzales — Physically Based Renderer
 
-A production-capable Monte Carlo path tracer written in **Swift 6.3**, designed
+A production-capable Monte Carlo path tracer written in **Mojo**, designed
 for high-end light transport simulation. Gonzales renders complex scenes —
-including Disney's Moana Island and all 32 Bitterli benchmark scenes — using
-modern Swift features: strict concurrency, structured task groups, and SIMD
-vector types.
+including Disney's Moana Island and all 32 Bitterli benchmark scenes — with
+GPU-accelerated wavefront path tracing and an à-trous wavelet denoiser.
 
 📖 Read the [Gonzales Book](https://gonsolo.github.io/gonzales/) for detailed
 documentation with annotated source code.
@@ -55,6 +54,32 @@ The renderer is organized into 18 modules mirroring the architecture of
 | v0.1 (2023) | 1920×800 | 64 | 78 min | Threadripper 1920X, with Embree |
 | v0.2 (2026) | — | — | — | ARC cleanup, Embree removed |
 | v0.3 (2026) | — | — | — | [Release Notes](Documentation/ReleaseNotes/0.3.md) |
+
+## Performance
+
+Benchmark: [Bitterli bathroom](https://benedikt-bitterli.me/resources/) scene, 1024×1024, 64 spp.
+Hardware: AMD Ryzen 9 7950X (24 cores), NVIDIA RTX 3060 12 GB.
+
+| Renderer | Mode | Wall time | Notes |
+|---|---|---|---|
+| **Gonzales** | GPU | **6.9s** | Wavefront path tracing + à-trous denoiser |
+| **pbrt-v4** | GPU (OptiX) | 5.4s | Hardware RT cores |
+| **Embree pathtracer** | CPU | 11.0s | Hardware AVX2 BVH, no textures/materials |
+| **Gonzales** | CPU | 29.9s | Full materials and textures |
+| **pbrt-v4** | CPU | 53.2s | Full materials and textures |
+
+Gonzales CPU is **1.8× faster** than pbrt CPU. Gonzales GPU trails pbrt GPU by 1.3× — the
+gap is OptiX RT cores, which are inaccessible outside of OptiX. Embree's CPU number is
+not directly comparable since the benchmark scene contains no texture lookups or material
+evaluation (geometry traversal only).
+
+### Lines of code
+
+| Project | Lines (own code) |
+|---|---|
+| **Gonzales** | **~7,800** |
+| pbrt-v4 | ~84,000 (excluding bundled data tables and third-party libs) |
+| Embree kernel | ~96,000 (BVH/traversal only, no rendering) |
 
 ## Prerequisites
 
