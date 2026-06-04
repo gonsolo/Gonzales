@@ -7,7 +7,7 @@ from .geometry import RGB, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
-from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, mojo_gpu_available, mojo_gpu_upload_scene, mojo_gpu_render_sample, mojo_gpu_render_wavefront, mojo_gpu_download_film, mojo_gpu_download_albedo, mojo_gpu_clear_film, mojo_gpu_free_scene
+from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, mojo_gpu_available, mojo_gpu_upload_scene, mojo_gpu_render_sample, mojo_gpu_render_wavefront, mojo_gpu_download_film, mojo_gpu_download_albedo, mojo_gpu_clear_film, mojo_gpu_atrous_denoise, mojo_gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
 # Generate Sobol matrices from the Joe-Kuo data file.
@@ -349,16 +349,12 @@ fn mojo_render_interactive(
     var frame_count = 0
 
     # Mode-specific buffers — null until allocated below
-    var gpu_film        = UnsafePointer[Float32, MutAnyOrigin]()
-    var gpu_albedo_film = UnsafePointer[Float32, MutAnyOrigin]()
     var sd         = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]()
     var sp_ptr     = UnsafePointer[TileSamplerParams_C, MutAnyOrigin]()
     var accum      = UnsafePointer[Float32, MutAnyOrigin]()
     var albedo_acc = UnsafePointer[Float32, MutAnyOrigin]()
 
     if use_gpu:
-        gpu_film        = alloc[Float32](n_pixels * 3)
-        gpu_albedo_film = alloc[Float32](n_pixels * 3)
         mojo_gpu_clear_film(handle, Int64(n_pixels))
     else:
         sd         = mojo_parsed_scene_descriptor(psc)
@@ -396,18 +392,9 @@ fn mojo_render_interactive(
                 Int64(n_pixels), psc[0].max_depth,
             )
             frame_count += 1
-            mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
-            mojo_gpu_download_albedo(handle, gpu_albedo_film, Int64(n_pixels))
-            for i in range(n_pixels):
-                results[i] = TileResult_C(
-                    estimate=RGB(gpu_film[i*3+0], gpu_film[i*3+1], gpu_film[i*3+2]),
-                    albedo=RGB(gpu_albedo_film[i*3+0], gpu_albedo_film[i*3+1], gpu_albedo_film[i*3+2]),
-                    filterWeight=Float32(frame_count),
-                    pixelX=Int32(i % Int(fw)), pixelY=Int32(i // Int(fw)),
-                )
-            mojo_normalize_film(results, Int32(n_pixels),
-                                psc[0].film_iso, psc[0].film_max_comp,
-                                beauty, albedo)
+            mojo_gpu_atrous_denoise(handle, denoised, Int64(n_pixels),
+                                    Int32(frame_count),
+                                    psc[0].film_iso, psc[0].film_max_comp)
         else:
             sp_ptr[0] = TileSamplerParams_C(
                 sobolMatrices=sobol,
@@ -449,15 +436,13 @@ fn mojo_render_interactive(
             for i in range(n_pixels * 3):
                 beauty[i] = accum[i]
                 albedo[i] = albedo_acc[i]
+            mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
 
-        mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(3), Float32(5.0), Float32(0.2))
         viewer_update_framebuffer(v, denoised, fw, fh)
 
     results.free(); beauty.free(); albedo.free(); denoised.free()
     c2w_buf.free(); cam_buf.free()
     if use_gpu:
-        gpu_film.free()
-        gpu_albedo_film.free()
         mojo_gpu_free_scene(handle)
     else:
         accum.free(); albedo_acc.free()

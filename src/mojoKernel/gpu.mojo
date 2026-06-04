@@ -2,7 +2,7 @@ from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
-from std.math import ceildiv, sqrt, cos, sin, log
+from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
 from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from std.ffi import external_call
@@ -42,6 +42,11 @@ struct GpuSceneHandle(Movable):
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
     var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
+    # À-trous wavelet denoiser buffers (interactive GPU path)
+    var atrous_ping_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — beauty ping, input to pass 0
+    var atrous_pong_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — ping-pong working buffer
+    var atrous_albedo_buf: DeviceBuffer[DType.uint8]   # n_pixels × 12 — normalized albedo, constant across passes
+    var atrous_variance_buf: DeviceBuffer[DType.uint8] # n_pixels × 4  — spatial luminance variance
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -239,6 +244,10 @@ fn mojo_gpu_upload_scene(
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48 * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -335,6 +344,10 @@ fn mojo_gpu_upload_scene(
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
                 albedo_film_buf=r_albedo_film_buf^,
+                atrous_ping_buf=r_atrous_ping_buf^,
+                atrous_pong_buf=r_atrous_pong_buf^,
+                atrous_albedo_buf=r_atrous_albedo_buf^,
+                atrous_variance_buf=r_atrous_variance_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -1064,6 +1077,176 @@ fn mojo_gpu_download_albedo(
                     dst[i] = src[i]
         except e:
             print("GPU download albedo failed: " + String(e))
+
+
+# ── À-trous wavelet denoiser (Dammertz et al. 2010) ─────────────────────────
+# Three kernels: normalize, variance estimate, one à-trous pass (5× ping-pong).
+
+fn normalize_beauty_albedo_gpu(
+    film: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_film: UnsafePointer[Float32, MutAnyOrigin],
+    beauty_out: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_out: UnsafePointer[Float32, MutAnyOrigin],
+    n_pixels: Int,
+    inv_weight: Float32,
+    iso_scale: Float32,
+    max_comp: Float32,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= n_pixels:
+        return
+    var lr = film[tid*3+0] * inv_weight * iso_scale
+    var lg = film[tid*3+1] * inv_weight * iso_scale
+    var lb = film[tid*3+2] * inv_weight * iso_scale
+    var luma = Float32(0.2126)*lr + Float32(0.7152)*lg + Float32(0.0722)*lb
+    var scale = Float32(1.0)
+    if luma > max_comp and luma > Float32(0.0):
+        scale = max_comp / luma
+    beauty_out[tid*3+0] = lr * scale
+    beauty_out[tid*3+1] = lg * scale
+    beauty_out[tid*3+2] = lb * scale
+    albedo_out[tid*3+0] = albedo_film[tid*3+0] * inv_weight
+    albedo_out[tid*3+1] = albedo_film[tid*3+1] * inv_weight
+    albedo_out[tid*3+2] = albedo_film[tid*3+2] * inv_weight
+
+
+fn estimate_variance_gpu(
+    beauty: UnsafePointer[Float32, MutAnyOrigin],
+    variance_out: UnsafePointer[Float32, MutAnyOrigin],
+    fw: Int, fh: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= fw * fh:
+        return
+    var px = tid % fw
+    var py = tid // fw
+    var mean = Float32(0)
+    var mean_sq = Float32(0)
+    var count = 0
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            var nx = px + dx; var ny = py + dy
+            if nx < 0 or nx >= fw or ny < 0 or ny >= fh:
+                continue
+            var ni = (ny * fw + nx) * 3
+            var l = Float32(0.2126)*beauty[ni] + Float32(0.7152)*beauty[ni+1] + Float32(0.0722)*beauty[ni+2]
+            mean += l; mean_sq += l * l; count += 1
+    var fc = Float32(count)
+    mean /= fc; mean_sq /= fc
+    var v = mean_sq - mean * mean
+    variance_out[tid] = v if v > Float32(0) else Float32(0)
+
+
+fn atrous_filter_gpu(
+    input: UnsafePointer[Float32, MutAnyOrigin],
+    albedo: UnsafePointer[Float32, MutAnyOrigin],
+    variance: UnsafePointer[Float32, MutAnyOrigin],
+    output: UnsafePointer[Float32, MutAnyOrigin],
+    fw: Int, fh: Int,
+    step: Int,
+    sigma_l: Float32,
+    sigma_a: Float32,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= fw * fh:
+        return
+    var px = tid % fw; var py = tid // fw
+
+    var cr = input[tid*3]; var cg = input[tid*3+1]; var cb = input[tid*3+2]
+    var cl = Float32(0.2126)*cr + Float32(0.7152)*cg + Float32(0.0722)*cb
+    var var_p = variance[tid]
+    var sigma_l2 = sigma_l * sigma_l * var_p + Float32(1e-6)
+    var sigma_a2 = sigma_a * sigma_a
+    var car = albedo[tid*3]; var cag = albedo[tid*3+1]; var cab = albedo[tid*3+2]
+
+    var acc_r = Float32(0); var acc_g = Float32(0); var acc_b = Float32(0)
+    var acc_w = Float32(0)
+
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            var nx = px + dx * step; var ny = py + dy * step
+            if nx < 0 or nx >= fw or ny < 0 or ny >= fh:
+                continue
+            var ni = (ny * fw + nx) * 3
+            var ql = Float32(0.2126)*input[ni] + Float32(0.7152)*input[ni+1] + Float32(0.0722)*input[ni+2]
+            var dl = ql - cl
+            var w_l = exp(-dl * dl / sigma_l2)
+            var dar = albedo[ni] - car; var dag = albedo[ni+1] - cag; var dab = albedo[ni+2] - cab
+            var w_a = exp(-(dar*dar + dag*dag + dab*dab) / sigma_a2)
+            var adx = dx if dx >= 0 else -dx; var ady = dy if dy >= 0 else -dy
+            var hx = Float32(0.0625) if adx == 2 else (Float32(0.25) if adx == 1 else Float32(0.375))
+            var hy = Float32(0.0625) if ady == 2 else (Float32(0.25) if ady == 1 else Float32(0.375))
+            var w_s = hx * hy
+            var w = w_s * w_l * w_a
+            acc_r += input[ni] * w; acc_g += input[ni+1] * w; acc_b += input[ni+2] * w
+            acc_w += w
+
+    if acc_w > Float32(0):
+        output[tid*3] = acc_r / acc_w; output[tid*3+1] = acc_g / acc_w; output[tid*3+2] = acc_b / acc_w
+    else:
+        output[tid*3] = cr; output[tid*3+1] = cg; output[tid*3+2] = cb
+
+
+@export
+fn mojo_gpu_atrous_denoise(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    output: UnsafePointer[Float32, MutAnyOrigin],
+    n: Int64,
+    frame_count: Int32,
+    film_iso: Float32,
+    film_max_comp: Float32,
+):
+    var n_pix = Int(n)
+    if n_pix == 0:
+        return
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            var fw = handle[].fw; var fh = handle[].fh
+            comptime block_size = 256
+            var grid_n = ceildiv(n_pix, block_size)
+            var inv_weight = Float32(1.0) / Float32(max(Int(frame_count), 1))
+            var iso_scale = film_iso / Float32(100.0)
+
+            handle[].ctx.enqueue_function[normalize_beauty_albedo_gpu, normalize_beauty_albedo_gpu](
+                handle[].film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_albedo_buf.unsafe_ptr().bitcast[Float32](),
+                n_pix, inv_weight, iso_scale, film_max_comp,
+                grid_dim=grid_n, block_dim=block_size,
+            )
+            handle[].ctx.enqueue_function[estimate_variance_gpu, estimate_variance_gpu](
+                handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32](),
+                fw, fh,
+                grid_dim=grid_n, block_dim=block_size,
+            )
+
+            var ping_ptr = handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32]()
+            var pong_ptr = handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32]()
+            var alb_ptr  = handle[].atrous_albedo_buf.unsafe_ptr().bitcast[Float32]()
+            var var_ptr  = handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32]()
+            for i in range(5):
+                var step = 1 << i   # 1, 2, 4, 8, 16
+                var src_ptr = ping_ptr if i % 2 == 0 else pong_ptr
+                var dst_ptr = pong_ptr if i % 2 == 0 else ping_ptr
+                handle[].ctx.enqueue_function[atrous_filter_gpu, atrous_filter_gpu](
+                    src_ptr, alb_ptr, var_ptr, dst_ptr,
+                    fw, fh, step,
+                    Float32(4.0), Float32(0.1),
+                    grid_dim=grid_n, block_dim=block_size,
+                )
+            # 5 passes (i=0..4): last dst = pong (i=4 even → dst=pong)
+            handle[].ctx.synchronize()
+            var bytes = n_pix * 12
+            with handle[].atrous_pong_buf.map_to_host() as h:
+                var src = h.unsafe_ptr()
+                var dst = output.bitcast[UInt8]()
+                for i in range(bytes):
+                    dst[i] = src[i]
+        except e:
+            print("GPU atrous denoise failed: " + String(e))
 
 
 @export
