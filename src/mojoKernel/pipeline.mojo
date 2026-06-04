@@ -207,22 +207,28 @@ fn mojo_parse_and_render(
         var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
         print("Rendering: " + String(spp) + " / " + String(spp)
             + " spp (100.0%) | Done: " + _fmt_time(gpu_total_s) + "                ")
-        var gpu_film = alloc[Float32](n_pixels * 3)
-        var gpu_albedo = alloc[Float32](n_pixels * 3)
-        mojo_gpu_download_film(handle, gpu_film, Int64(n_pixels))
-        mojo_gpu_download_albedo(handle, gpu_albedo, Int64(n_pixels))
-        for iy in range(Int(fh)):
-            for ix in range(Int(fw)):
-                var i = iy * Int(fw) + ix
-                results[i] = TileResult_C(
-                    estimate=RGB(gpu_film[i*3+0], gpu_film[i*3+1], gpu_film[i*3+2]),
-                    albedo=RGB(gpu_albedo[i*3+0], gpu_albedo[i*3+1], gpu_albedo[i*3+2]),
-                    filterWeight=Float32(spp),
-                    pixelX=Int32(ix), pixelY=Int32(iy),
-                )
-        gpu_film.free()
-        gpu_albedo.free()
+        var denoised_gpu = alloc[Float32](n_pixels * 3)
+        var albedo_gpu   = alloc[Float32](n_pixels * 3)
+        mojo_gpu_atrous_denoise(handle, denoised_gpu, Int64(n_pixels),
+                                Int32(spp), psc[0].film_iso, psc[0].film_max_comp)
+        mojo_gpu_download_albedo(handle, albedo_gpu, Int64(n_pixels))
+        var inv_spp = Float32(1.0) / Float32(spp)
+        for i in range(n_pixels * 3):
+            albedo_gpu[i] *= inv_spp
         mojo_gpu_free_scene(handle)
+        _ = mojo_write_image(denoised_gpu, fw, fh, psc[0].film_filename, Int32(32), Int32(32))
+        var albedo_name_buf = alloc[UInt8](16)
+        var an = "albedo.exr"
+        var an_ptr = an.unsafe_ptr()
+        for i in range(10):
+            albedo_name_buf[i] = an_ptr[i]
+        albedo_name_buf[10] = UInt8(0)
+        _ = mojo_write_image(albedo_gpu, fw, fh, albedo_name_buf, Int32(32), Int32(32))
+        albedo_name_buf.free()
+        denoised_gpu.free(); albedo_gpu.free()
+        results.free()
+        mojo_parsed_free(psc)
+        return Int32(0)
     else:
         var zero = TileResult_C(
             estimate=RGB(Float32(0), Float32(0), Float32(0)),
@@ -255,17 +261,17 @@ fn mojo_parse_and_render(
         sp_ptr.free()
         sd.free()
 
+    # CPU path: normalize → beauty/albedo, bilateral denoise → denoised
     var beauty = alloc[Float32](n_pixels * 3)
     var albedo = alloc[Float32](n_pixels * 3)
     mojo_normalize_film(results, Int32(n_pixels),
                         psc[0].film_iso, psc[0].film_max_comp,
                         beauty, albedo)
     results.free()
-
     var denoised = alloc[Float32](n_pixels * 3)
     mojo_denoise(beauty, albedo, fw, fh, denoised, Int32(7), Float32(5.0), Float32(0.2))
+    beauty.free()
     _ = mojo_write_image(denoised, fw, fh, psc[0].film_filename, Int32(32), Int32(32))
-
     var albedo_name_buf = alloc[UInt8](16)
     var an = "albedo.exr"
     var an_ptr = an.unsafe_ptr()
@@ -274,8 +280,7 @@ fn mojo_parse_and_render(
     albedo_name_buf[10] = UInt8(0)
     _ = mojo_write_image(albedo, fw, fh, albedo_name_buf, Int32(32), Int32(32))
     albedo_name_buf.free()
-
-    beauty.free(); albedo.free(); denoised.free()
+    albedo.free(); denoised.free()
     mojo_parsed_free(psc)
     return Int32(0)
 

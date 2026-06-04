@@ -1098,10 +1098,12 @@ fn normalize_beauty_albedo_gpu(
     var lr = film[tid*3+0] * inv_weight * iso_scale
     var lg = film[tid*3+1] * inv_weight * iso_scale
     var lb = film[tid*3+2] * inv_weight * iso_scale
-    var luma = Float32(0.2126)*lr + Float32(0.7152)*lg + Float32(0.0722)*lb
     var scale = Float32(1.0)
-    if luma > max_comp and luma > Float32(0.0):
-        scale = max_comp / luma
+    if max_comp > Float32(0.0):
+        var mx = lr if lr > lg else lg
+        if lb > mx: mx = lb
+        if mx > max_comp:
+            scale = max_comp / mx
     beauty_out[tid*3+0] = lr * scale
     beauty_out[tid*3+1] = lg * scale
     beauty_out[tid*3+2] = lb * scale
