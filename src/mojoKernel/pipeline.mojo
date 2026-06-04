@@ -7,7 +7,7 @@ from .geometry import RGB, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
-from .gpu import GpuSceneHandle, mojo_gpu_available, mojo_gpu_upload_scene, mojo_gpu_render_sample, mojo_gpu_download_film, mojo_gpu_clear_film, mojo_gpu_free_scene
+from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, mojo_gpu_available, mojo_gpu_upload_scene, mojo_gpu_render_sample, mojo_gpu_render_wavefront, mojo_gpu_download_film, mojo_gpu_clear_film, mojo_gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
 # Generate Sobol matrices from the Joe-Kuo data file.
@@ -188,18 +188,22 @@ fn mojo_parse_and_render(
         var seed_dim1 = UInt32(0)
         mojo_gpu_clear_film(handle, Int64(n_pixels))
         var t0_gpu = perf_counter_ns()
-        for si in range(spp):
-            mojo_gpu_render_sample(
+        var si = 0
+        while si < spp:
+            var actual_batch = min(WAVEFRONT_BATCH, spp - si)
+            mojo_gpu_render_wavefront(
                 handle,
                 psc[0].camera_to_world,
-                Int32(si), psc[0].log2_spp, psc[0].n_base4_digits,
+                Int32(si), Int32(actual_batch),
+                psc[0].log2_spp, psc[0].n_base4_digits,
                 seed_dim0, seed_dim1,
                 UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
                 UInt32(psc[0].rng_seed >> UInt64(32)),
                 Int64(n_pixels), psc[0].max_depth,
             )
+            si += actual_batch
             var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
-            print(_progress_str(si + 1, spp, elapsed, "spp"), end="\r")
+            print(_progress_str(si, spp, elapsed, "spp"), end="\r")
         var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
         print("Rendering: " + String(spp) + " / " + String(spp)
             + " spp (100.0%) | Done: " + _fmt_time(gpu_total_s) + "                ")

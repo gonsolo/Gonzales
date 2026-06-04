@@ -11,6 +11,10 @@ from .rng import PCG32
 from .shading import shade_core, shade_nee_core
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 
+# Number of samples per pixel processed together in one wavefront bounce loop.
+# path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
+alias WAVEFRONT_BATCH: Int = 8
+
 # GPU scene handle — holds DeviceContext and device-resident scene buffers.
 # Allocated on the heap, returned as an opaque pointer.
 @fieldwise_init
@@ -32,9 +36,10 @@ struct GpuSceneHandle(Movable):
     var n_textures: Int
     var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C) = 24
     var n_area_lights: Int
-    # Persistent render buffers — sized for n_pixels, reused across all spp passes
-    var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × sizeof(PathState_C) = 88
-    var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × sizeof(Intersection_C) = 48
+    # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
+    # mojo_gpu_render_sample (interactive) only uses the first n_pixels slots.
+    var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × 88
+    var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
     var film_buf: DeviceBuffer[DType.uint8]         # n_pixels × 3 × sizeof(Float32) = 12
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
@@ -229,8 +234,8 @@ fn mojo_gpu_upload_scene(
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
-            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 88)
-            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
+            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 88 * WAVEFRONT_BATCH)
+            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48 * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
@@ -621,6 +626,92 @@ fn clear_film_gpu(film: UnsafePointer[Float32, MutAnyOrigin], n_pixels: Int):
     film[tid*3+2] = Float32(0)
 
 
+# Wavefront accumulation: thread px sums actual_batch samples from path_buf layout
+# path_buf[si * n_pixels + px] and adds to film[px].  No atomics needed (one thread per pixel).
+fn accumulate_film_wavefront_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    film: UnsafePointer[Float32, MutAnyOrigin],
+    n_pixels: Int, actual_batch: Int,
+):
+    var px = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if px >= n_pixels:
+        return
+    var r = Float32(0); var g = Float32(0); var b = Float32(0)
+    for si in range(actual_batch):
+        var p = paths[si * n_pixels + px]
+        r += p.estimate.r
+        g += p.estimate.g
+        b += p.estimate.b
+    film[px*3+0] += r
+    film[px*3+1] += g
+    film[px*3+2] += b
+
+
+# Wavefront primary-ray generation: thread ti → pixel (ti % n_pixels), sample (si_start + ti // n_pixels).
+# Layout: path_buf[si_local * n_pixels + px_flat] — adjacent threads touch adjacent pixels of same sample.
+fn gen_primary_rays_wavefront_gpu(
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    r2c: UnsafePointer[Float32, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    fw: Int, fh: Int,
+    si_start: Int32, log2spp: Int32, n_base4: Int32,
+    seed_dim0: UInt32, seed_dim1: UInt32,
+    rng_seed_lo: UInt32, rng_seed_hi: UInt32,
+    filter_sigma: Float32, filter_norm_x: Float32, filter_support_x: Float32,
+    filter_norm_y: Float32, filter_support_y: Float32,
+    count: Int, n_pixels: Int,
+):
+    var ti = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if ti >= count:
+        return
+    var si_local = ti // n_pixels
+    var px_flat  = ti % n_pixels
+    var ix = px_flat % fw
+    var iy = px_flat // fw
+    var px = Int32(ix); var py = Int32(iy)
+    var si = si_start + Int32(si_local)
+
+    var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
+    var morton_idx  = morton_base | UInt64(si)
+    var sobol_idx   = sobol_get_sample_index(morton_idx, 0, Int(log2spp), Int(n_base4))
+    var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
+    var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
+    var deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
+    var deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
+    var filmX = Float32(ix) + Float32(0.5) + deltaX
+    var filmY = Float32(iy) + Float32(0.5) + deltaY
+
+    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
+    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
+    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
+    var cw_v = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
+    if cw_v != Float32(0.0) and cw_v != Float32(1.0):
+        cx /= cw_v; cy /= cw_v; cz /= cw_v
+    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
+    if camLen > Float32(0.0):
+        cx /= camLen; cy /= camLen; cz /= camLen
+
+    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
+    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
+    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
+    if dirLen > Float32(0.0):
+        dx /= dirLen; dy /= dirLen; dz /= dirLen
+
+    var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
+    var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
+    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
+    paths[ti] = PathState_C(
+        Ray_C(orgX, orgY, orgZ, dx, dy, dz),
+        RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
+        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+        Int32(0), pcg_state, pcg_inc,
+        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+    )
+
+
 # Traversal kernel that reads rays directly from PathState_C (no separate ray buffer).
 fn traverse_paths_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -834,6 +925,86 @@ fn mojo_gpu_render_sample(
             )
         except e:
             print("GPU render sample failed: " + String(e))
+
+
+# Wavefront render: generates actual_batch samples worth of primary rays for all pixels,
+# runs the full bounce loop over n_pixels × actual_batch paths together, then accumulates.
+# Caller loops over spp in steps of WAVEFRONT_BATCH; progress reporting is up to the caller.
+@export
+fn mojo_gpu_render_wavefront(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    si_start: Int32, actual_batch: Int32,
+    log2spp: Int32, n_base4: Int32,
+    seed_dim0: UInt32, seed_dim1: UInt32,
+    rng_seed_lo: UInt32, rng_seed_hi: UInt32,
+    n: Int64,
+    maxDepth: Int32,
+):
+    var n_pix = Int(n)
+    var batch  = Int(actual_batch)
+    var n_total = n_pix * batch
+    if n_total == 0:
+        return
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            with handle[].c2w_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr().bitcast[Float32]()
+                for i in range(16):
+                    dst[i] = c2w[i]
+            comptime block_size = 256
+            var grid_total = ceildiv(n_total, block_size)
+            var grid_pix   = ceildiv(n_pix, block_size)
+            handle[].ctx.enqueue_function[gen_primary_rays_wavefront_gpu, gen_primary_rays_wavefront_gpu](
+                handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                handle[].fw, handle[].fh,
+                si_start, log2spp, n_base4,
+                seed_dim0, seed_dim1, rng_seed_lo, rng_seed_hi,
+                handle[].filter_sigma, handle[].filter_norm_x, handle[].filter_support_x,
+                handle[].filter_norm_y, handle[].filter_support_y,
+                n_total, n_pix,
+                grid_dim=grid_total,
+                block_dim=block_size,
+            )
+            for _ in range(Int(maxDepth) + 1):
+                handle[].ctx.enqueue_function[traverse_paths_gpu, traverse_paths_gpu](
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    n_total,
+                    grid_dim=grid_total,
+                    block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_nee_gpu, shade_nee_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    n_total,
+                    grid_dim=grid_total,
+                    block_dim=block_size,
+                )
+            handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu, accumulate_film_wavefront_gpu](
+                handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                handle[].film_buf.unsafe_ptr().bitcast[Float32](),
+                n_pix, batch,
+                grid_dim=grid_pix,
+                block_dim=block_size,
+            )
+        except e:
+            print("GPU wavefront render failed: " + String(e))
 
 
 @export
