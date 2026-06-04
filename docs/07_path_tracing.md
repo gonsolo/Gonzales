@@ -4,27 +4,30 @@ Path tracing is the algorithm at the heart of gonzales. It estimates the
 rendering equation by tracing random paths of light through the scene,
 accumulating contributions from light sources at each surface interaction.
 
-The implementation lives in `VolumePathIntegrator.swift` — a single 470-line
-file that handles both surface and volume scattering.
+The implementation lives in `shading.mojo` (material shaders) and
+`rendering.mojo` / `gpu.mojo` (the bounce loop).
 
 ## The Bounce Loop
 
 Each pixel's color is estimated by tracing one or more paths. A path starts
-at the camera, bounces off surfaces (or through volumes), and accumulates
-light. The main loop iterates over bounces until the path terminates:
+at the camera, bounces off surfaces, and accumulates light. The main loop
+iterates over bounces until the path terminates. In `PathState_C`:
 
-{{snippet:Sources/libgonzales/Integrator/VolumePathIntegrator.swift:bounce-loop}}
+```mojo
+# Per-path state carried across all bounces:
+var throughput: RGB   # product of BSDF weights so far
+var estimate: RGB     # accumulated radiance
+var bounce: Int32     # current depth
+var active: Int8      # 0 = terminated
+```
 
 At each bounce, the integrator:
 
 1. Finds the nearest surface intersection via the BVH
-2. Adds direct emission if this is the first bounce or follows a specular bounce
-3. Samples one light for direct illumination
+2. Adds direct emission if this is the first bounce or a specular bounce
+3. Samples one light for direct illumination (NEE)
 4. Samples the BSDF to choose the next bounce direction
-5. Applies Russian roulette to decide whether to continue
-
-The `BounceState` struct carries all per-path state — the current ray,
-accumulated estimate, throughput weight, and albedo for denoising.
+5. Updates throughput and applies Russian roulette
 
 ## Multiple Importance Sampling
 
@@ -32,44 +35,42 @@ Direct lighting uses Multiple Importance Sampling (MIS) to combine two
 sampling strategies:
 
 1. **Light sampling** — sample a point on the light source, evaluate the BSDF
-   for that direction
-2. **BSDF sampling** — sample a direction from the BSDF, trace a ray to see
-   if it hits a light
+2. **BSDF sampling** — sample a direction from the BSDF, check if it hits a light
 
 Neither strategy alone is optimal for all materials. MIS combines them using
 the power heuristic:
 
-```swift
-let lightWeight = powerHeuristic(pdfF: lightPdf, pdfG: brdfPdf)
-let lightContribution = lightEstimate * lightWeight / lightPdf
-
-let brdfWeight = powerHeuristic(pdfF: brdfPdf, pdfG: lightPdf)
-let brdfContribution = brdfEstimate * brdfWeight / brdfPdf
-
-return lightContribution + brdfContribution
+```
+w_light = pdf_light² / (pdf_light² + pdf_bsdf²)
+estimate = light_radiance * w_light / pdf_light
+         + bsdf_radiance  * w_bsdf  / pdf_bsdf
 ```
 
-The power heuristic weights each sample by `pdf² / (pdf₁² + pdf₂²)`,
-giving near-optimal variance in practice.
+The power heuristic gives near-optimal variance across a wide range of
+material roughnesses.
 
 ## Russian Roulette
 
 Without termination, paths would bounce forever. Russian roulette provides
 an unbiased way to stop paths probabilistically. When the throughput weight
-drops below 1.0, the path is terminated with probability proportional to
-the weight loss. Surviving paths are boosted to compensate:
+drops below 1.0, the path is terminated with probability `1 - luma(throughput)`.
+Surviving paths are boosted to compensate:
 
-{{snippet:Sources/libgonzales/Integrator/VolumePathIntegrator.swift:russian-roulette}}
+```mojo
+if path_ptr[].bounce > 1:
+    var q = max(Float32(0.05), Float32(1) - path_ptr[].throughput.luma())
+    if pcg_next_float(state, inc) < q:
+        path_ptr[].active = Int8(0)
+        return
+    path_ptr[].throughput *= Float32(1) / (Float32(1) - q)
+```
 
-This elegantly concentrates computation on paths that carry significant
-energy while maintaining an unbiased estimate. The `bounce > 1` guard
-ensures that at least two bounces are always computed, preserving direct
-and first-indirect illumination quality.
+The `bounce > 1` guard ensures at least two bounces are always computed,
+preserving direct and first-indirect illumination quality.
 
-## Volume Scattering
+## CPU vs GPU Path
 
-When a ray passes through a participating medium (fog, smoke, clouds),
-it may scatter before reaching a surface. The integrator samples the
-medium for a scattering event, evaluates direct lighting at the scattering
-point using the phase function, and continues the path in a new direction
-sampled from the phase function.
+The same shading functions (`shade_nee_core[use_gpu: Bool]`) run on both CPU
+and GPU. The `use_gpu` compile-time parameter selects GPU texture sampling vs
+CPU OpenImageIO texture lookup inside the same function body. On the GPU, the
+entire bounce loop is unrolled at compile time across a fixed `maxDepth`.

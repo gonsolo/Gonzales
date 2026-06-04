@@ -64,5 +64,5 @@ Gonzales supports two texture types:
 - **Image textures** — loaded from PNG, EXR, or other image formats via
   OpenImageIO, with bilinear filtering and UV mapping
 - **Ptex textures** — Disney's per-face texture format, accessed via the
-  Ptex C++ library through Swift's C++ interop. Ptex eliminates UV mapping
+  Ptex C++ library through Mojo's C FFI. Ptex eliminates UV mapping
   entirely — each mesh face stores its own texture data directly.

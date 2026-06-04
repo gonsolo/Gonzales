@@ -1,18 +1,22 @@
 # Appendix 1: Development Roadmap
 
+> **Status (2026-06-04): All phases complete.** Gonzales is a pure Mojo renderer
+> — no Swift, no hand-written C++. The roadmap below is preserved as a historical
+> record of how the port progressed.
+
 **Design principle:** hardware-agnostic compute kernels. The same Mojo code
 targets CPU SIMD, GPU warps, and future wide-vector architectures (RISC-V V,
 ARM SVE). Write once, run anywhere the hardware is wide.
 
-## Current Architecture
+## Starting Architecture (early 2026)
 
-Gonzales uses a **megakernel** integrator: each tile traces one ray at a time
-through all its bounces before starting the next ray. The BVH uses 8-wide
-nodes (BVH8) with SIMD intersection tests. The scene graph uses Swift
-reference types, which introduces ARC (Automatic Reference Counting) overhead
+Gonzales used a **megakernel** integrator: each tile traced one ray at a time
+through all its bounces before starting the next ray. The BVH used 8-wide
+nodes (BVH8) with SIMD intersection tests. The scene graph used Swift
+reference types, which introduced ARC (Automatic Reference Counting) overhead
 in the traversal hot path.
 
-Profiling on the Barcelona Pavilion scene (16 spp) shows approximately:
+Profiling on the Barcelona Pavilion scene (16 spp) showed approximately:
 
 - **33%** BVH traversal
 - **22%** `swift_retain` / `swift_release` (ARC overhead)
@@ -21,20 +25,16 @@ Profiling on the Barcelona Pavilion scene (16 spp) shows approximately:
 
 ## Phase 1: CPU Performance
 
-Eliminate the Swift language tax and improve single-ray traversal. Each step
-produces a measurable speedup and can be benchmarked against the Barcelona
-Pavilion scene.
+Eliminated the Swift language tax and improved single-ray traversal.
 
 ### Step 1: Mojo Traversal Kernel ✅ (2026-03-25)
 
-Write the BVH traversal and triangle intersection in Mojo, exported via
-`@export` with C calling convention and called from Swift via a bridging
-header. Eliminates all ARC traffic from the hot path (~22% of CPU time).
+Wrote BVH traversal and triangle intersection in Mojo, exported via
+`@export` with C calling convention. Eliminated all ARC traffic from the
+hot path (~22% of CPU time).
 
 Mojo's built-in `SIMD[f32, 8]` maps directly to AVX2 for the AABB test,
-and the same kernel can later target GPU via `@gpu` (Phase 3) without a
-rewrite. A working Mojo CPU+GPU raytracer prototype exists at
-`/home/gonsolo/work/mojo_gpu_raytracer/`.
+and the same kernel targets GPU via `@gpu.function` (Phase 3) without a rewrite.
 
 ### Step 2: BVH2 with Compact Nodes ✅ (2026-03-28)
 
@@ -101,18 +101,13 @@ Port material and texture evaluation to GPU compute. The wavefront
 architecture naturally separates trace and shade phases, so each can be a
 distinct compute dispatch.
 
-**Evaluated Architecture Options:**
+**Evaluated Architecture Options (at the time):**
 
-1. **The Adapter Bridge**: Maintain legacy Swift looping. Map active paths to a `[PathState_C]` flat buffer, fire `mojo_gpu_shade_batch()`, and translate back to `ActivePath` in Swift. (Safest, slower due to host/device ping-ponging).
-2. **Pure Wavefront (Swift Redesign)**: Eradicate `ActivePath` and use `[PathState_C]` natively in `Tile.swift`, eliminating all translation overhead.
-3. **The Mega-Loop (GPU Only)**: Move the `for bounce in 0...maxDepth` loop deeply into `kernel.mojo`. The CPU only launches generating camera rays and awaits final pixel estimates.
+1. **The Adapter Bridge**: Maintain legacy Swift looping. Map active paths to a `[PathState_C]` flat buffer, fire `mojo_gpu_shade_batch()`, and translate back. (Safest, slower due to host/device ping-ponging).
+2. **Pure Wavefront (Mojo Redesign)**: Eradicate the Swift driver and use `[PathState_C]` natively, eliminating all translation overhead.
+3. **The Mega-Loop (GPU Only)**: Move the bounce loop entirely into Mojo. The CPU only launches primary rays and awaits final pixel estimates.
 
-**Current Architectural Decision:**
-We are proceeding with an **Adapter Bridge (Option 1)** for the shading port.
-Instead of nuking the legacy `Tile.swift` looping structures, we will dynamically
-map `ActivePath` elements into a C-compatible contiguous `[PathState_C]` buffer.
-This allows us to maintain the existing Swift tracing pipeline for verification
-and safety while safely shifting the heaviest payload into the Mojo megakernel (`mojo_gpu_shade_batch`).
+**Decision taken:** Option 3 — the entire pipeline is now pure Mojo with no Swift driver. The bounce loop lives in `gpu.mojo` (`mojo_gpu_render_wavefront`) and `rendering.mojo` (`mojo_render_tile_v2`). Swift has been fully removed.
 
 ### Step 7: Interactive Viewer ✅ (2026-03-28)
 
@@ -154,7 +149,7 @@ Connect gonzales to production pipelines and tools.
 OpenUSD (Pixar's Universal Scene Description) integration:
 
 - **Scene abstraction layer** — common interface for PBRT + USD readers
-- **OpenUSD C++ bridging** — via Swift C++ interop (Swift 5.9+) or C wrapper
+- **OpenUSD C++ bridging** — via Mojo's C FFI or a thin C wrapper
 - **Hydra render delegate** — USD's rendering abstraction, used by Cycles,
   Arnold, and RenderMan. Works in any Hydra application (Blender, Solaris,
   usdview, NVIDIA Omniverse)
@@ -215,8 +210,8 @@ Optional: SOA, CPU Ray Packets (independent, any time)
 ## VFX Reference Platform Ecosystem
 
 Production rendering relies on open-source libraries maintained under the
-ASWF (Academy Software Foundation). All are C++ and follow the same Swift
-bridging pattern already used for OIIO and Ptex.
+ASWF (Academy Software Foundation). All are C++ and are called via Mojo's
+C FFI, following the same pattern already used for OIIO and Ptex.
 
 | Library                 | Status  | Purpose                                                    |
 | ----------------------- | ------- | ---------------------------------------------------------- |

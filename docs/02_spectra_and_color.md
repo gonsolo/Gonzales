@@ -2,56 +2,48 @@
 
 Physically based rendering requires an accurate model of light color. In the
 real world, light is a continuous spectrum of wavelengths. Gonzales currently
-uses an RGB approximation — three floating-point values representing red, green,
-and blue — but the code is structured to support full spectral rendering in
-the future through the `Spectrum` protocol.
+uses an RGB approximation — three `Float32` values representing red, green,
+and blue.
 
-## The Spectrum Protocol
+## The RGB Type
 
-All spectral types in gonzales conform to the `Spectrum` protocol, which
-requires multiplication and conversion to RGB. This abstraction allows
-`PiecewiseLinearSpectrum` (used for metal optical constants) to coexist with
-the primary `RgbSpectrum` type, and will later enable a `SampledSpectrum`
-for wavelength-by-wavelength rendering.
+The workhorse type is `RGB` in `geometry.mojo`:
 
-## RgbSpectrum
+```mojo
+struct RGB(TrivialRegisterPassable):
+    var r: Float32
+    var g: Float32
+    var b: Float32
 
-The workhorse type is `RgbSpectrum`. Like the geometry types, it is backed
-by `SIMD4<Real>` to get vectorized arithmetic for free:
+    fn luma(self) -> Float32:
+        return Float32(0.2126)*self.r + Float32(0.7152)*self.g + Float32(0.0722)*self.b
+```
 
-{{snippet:Sources/libgonzales/Core/Spectrum.swift:rgb-spectrum-struct}}
+Multiplying two spectra — which happens at every surface interaction to
+apply throughput — is three scalar multiplies. `TrivialRegisterPassable`
+ensures these land in registers and in GPU-friendly flat path buffers
+with no indirection.
 
-This means that multiplying two spectra — which happens at every surface
-interaction — compiles down to a single SIMD multiply instruction. The named
-accessors `red`, `green`, `blue` provide readability while the underlying
-SIMD4 provides performance.
-
-Global constants `black`, `white`, `gray`, `red`, `green`, `blue` are defined
-for convenience and appear throughout the integrator code as sentinel values.
+Global sentinel values (`RGB(0,0,0)` for black, `RGB(1,1,1)` for white) appear
+throughout the shading code.
 
 ## Metal Optical Constants
 
-Metals like silver, aluminium, copper, brass, and gold have wavelength-dependent
-refractive indices and extinction coefficients. Gonzales stores these as
-`PiecewiseLinearSpectrum` values — arrays of (wavelength, value) pairs sampled
-from measured data. The `namedSpectra` dictionary maps PBRT material names
-(e.g. `"metal-Ag-eta"`) to the corresponding spectrum.
+Metals like silver, aluminium, copper, and gold have wavelength-dependent
+refractive indices and extinction coefficients. These are stored as arrays of
+(wavelength, value) pairs sampled from measured data and looked up at render
+time in `shading.mojo`.
 
 ## Black-Body Radiation
 
-Light sources like incandescent bulbs and stars emit radiation whose color
-depends on temperature. The `blackBodyToRgb` function approximates this using
-Tanner Helland's algorithm, avoiding the need for a full spectral integration:
-
-{{snippet:Sources/libgonzales/Core/Spectrum.swift:black-body}}
-
-The function maps temperatures from candlelight (~1800K, warm orange) through
-daylight (~6500K, neutral white) to overcast sky (~10000K, bluish white).
+Light sources like incandescent bulbs emit radiation whose color depends on
+temperature. The renderer approximates black-body color using a polynomial fit
+that maps temperatures from candlelight (~1800 K, warm orange) through daylight
+(~6500 K, neutral white) to overcast sky (~10000 K, bluish white).
 
 ## Gamma Correction
 
-Two functions handle the nonlinear sRGB encoding and decoding:
-`gammaLinearToSrgb` converts from the linear light space used during rendering
-to the sRGB curve expected by displays, while `gammaSrgbToLinear` does the
-reverse for texture inputs. Getting this wrong is one of the most common
-sources of washed-out or overly dark renders.
+Linear-to-sRGB and sRGB-to-linear conversions are applied at texture load time
+and image output time respectively. Getting this wrong is one of the most common
+sources of washed-out or overly dark renders — all rendering happens in linear
+light, displays expect sRGB.

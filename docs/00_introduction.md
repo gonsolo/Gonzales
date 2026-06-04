@@ -1,41 +1,41 @@
 # Introduction
 
-Gonzales is a physically based renderer written in Swift. It implements
-a volume path tracer capable of rendering production-quality scenes — including
-Disney's Moana Island — using modern Swift 6.3 features like strict concurrency,
-structured task groups, and SIMD vector types.
+Gonzales is a physically based renderer written in Mojo. It implements
+a path tracer capable of rendering production-quality scenes — including
+Disney's Moana Island — with both CPU and GPU execution via Mojo's unified
+compute model.
 
-## Why Swift?
+## Why Mojo?
 
-Most renderers are written in C++. Swift offers an alternative with value
-semantics by default, memory safety without garbage collection, and first-class
-concurrency. Gonzales explores how far these advantages carry in a
-performance-critical domain where every nanosecond in the inner loop matters.
+Most renderers are written in C++. Mojo offers an alternative with Python-like
+syntax, zero-cost abstractions, and first-class GPU support. The same kernel
+code targets CPU SIMD and GPU warps without separate codepaths — Mojo's
+`@parameter if has_accelerator()` compile-time dispatch selects the right
+backend at build time. This is what allows gonzales to run identical path
+tracing logic on both CPU and NVIDIA GPU from a single ~7,800-line codebase.
+
+On the CPU side, `std.algorithm.parallelize` distributes tiles across all
+logical cores. On the GPU side, Mojo's `DeviceContext` and `@gpu` functions
+drive wavefront path tracing with no CUDA boilerplate.
 
 ## Architecture
 
-The renderer is organized into 18 focused modules that mirror the established
-architecture of PBRT (Physically Based Rendering: From Theory to Implementation):
+The renderer is organized into focused Mojo modules:
 
-| Module | Responsibility |
-|--------|---------------|
-| **Geometry** | Vectors, points, normals, transforms, bounding boxes |
-| **Core** | Ray, spectrum, film, scene, distributions, rendering loop |
-| **Accelerators** | BVH construction and traversal |
-| **Sampler** | Z-Sobol quasi-random sequences |
-| **Bsdf** | Diffuse, dielectric, hair, coated, layered, mix |
-| **Reflection** | Fresnel equations, microfacet distributions, BSDF framework |
-| **Light** | Area, point, distant, and infinite (environment) lights |
-| **Material** | Material dispatch and parameter evaluation |
-| **Texture** | Image textures, Ptex support via C++ interop |
-| **Shape** | Spheres, triangles, PLY meshes, curves |
-| **Camera** | Perspective camera with depth of field |
-| **Filter** | Pixel reconstruction filters |
-| **Integrator** | Volume path tracing with MIS |
-| **Image** | EXR output via OpenImageIO C++ interop |
+| Module | Lines | Responsibility |
+|--------|------:|---------------|
+| `parsing.mojo` | 1,959 | PBRT-v4 scene parser |
+| `gpu.mojo` | 1,294 | GPU kernels: wavefront path tracing, à-trous denoiser |
+| `shading.mojo` | 770 | Material shading — diffuse, coated, conductor, dielectric |
+| `bvh.mojo` | 535 | BVH construction (SAH) and traversal |
+| `pipeline.mojo` | 457 | Batch and interactive rendering pipelines |
+| `rendering.mojo` | 407 | CPU tile renderer and film accumulation |
+| `ply.mojo` | 316 | PLY mesh loader |
+| `geometry.mojo` | 191 | Ray, intersection, and path state structs |
+| `sampling.mojo` | 173 | Z-Sobol sampler with Owen scrambling |
 
-The codebase is split into a library (`libgonzales`) and an executable
-(`gonzales`), enabling both standalone rendering and unit testing.
+External C/C++ libraries (OpenImageIO, Ptex, Vulkan) are called via Mojo's
+C FFI — not reimplemented.
 
 ## The Rendering Equation
 
@@ -58,4 +58,4 @@ Monte Carlo estimator that ties everything together.
 5. **Reflection Models** — the BSDF framework
 6. **Lights and Materials** — light sources and surface descriptions
 7. **Path Tracing** — the integrator: MIS, Russian roulette, volumes
-8. **Rendering Pipeline** — tile-based concurrency and image output
+8. **Rendering Pipeline** — GPU wavefront and CPU tile-based rendering

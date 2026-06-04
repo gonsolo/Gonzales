@@ -4,27 +4,37 @@ When a ray hits a surface, the renderer needs to know how light scatters
 from that point. This is described by the Bidirectional Scattering
 Distribution Function (BSDF), which tells us the ratio of reflected (or
 transmitted) light for any pair of incoming and outgoing directions.
+All material shading lives in `shading.mojo`.
 
-## The BSDF Framework
+## The Shading Framework
 
-Gonzales defines a `FramedBsdf` protocol that all BSDF models conform to.
-Each BSDF operates in a local coordinate system defined by a `BsdfFrame` —
-the surface's shading normal and tangent vectors. The `ShadingFrame` type
-handles the world-to-local and local-to-world transformations.
+Rather than a protocol or virtual dispatch, gonzales uses compile-time
+`@parameter` dispatch on a material type integer:
 
-Every BSDF must implement three operations:
+```mojo
+fn shade_nee_core[use_gpu: Bool](path_ptr, mat, ...):
+    if mat.type == 1:   # diffuse
+        shade_diffuse(path_ptr, mat, ...)
+    elif mat.type == 3: # conductor
+        shade_conductor(path_ptr, mat, ...)
+    elif mat.type == 4: # dielectric
+        shade_dielectric(path_ptr, mat, ...)
+    elif mat.type == 5: # coated diffuse
+        shade_coated_diffuse(path_ptr, mat, ...)
+```
 
-- **evaluate** — given outgoing and incident directions, return the BSDF value
-- **sample** — given an outgoing direction and random numbers, generate a new
-  incident direction with its PDF
-- **probabilityDensity** — return the PDF for a given direction pair
+The `use_gpu` compile-time parameter selects between GPU texture sampling
+and CPU texture sampling within the same function body, keeping CPU and GPU
+paths in sync with no code duplication.
 
 ## Diffuse Reflection
 
 The simplest reflection model: light scatters equally in all directions above
 the surface. The BSDF value is constant — just the reflectance divided by π:
 
-{{snippet:Sources/libgonzales/Bsdf/DiffuseBsdf.swift:diffuse-bsdf}}
+```
+f_diffuse(ω_i, ω_o) = albedo / π
+```
 
 The factor of 1/π comes from energy conservation: integrating a constant
 BSDF over the hemisphere with the cosine weight must not exceed one.
@@ -34,44 +44,31 @@ distribution of the integrand and reduces variance.
 ## Dielectric Materials
 
 Glass and water are dielectrics — they both reflect and transmit light.
-The `DielectricBsdf` uses the Fresnel equations to determine the split
+`shade_dielectric` uses the Fresnel equations to determine the split
 between reflection and refraction based on the angle of incidence and the
 refractive index ratio.
 
-For smooth surfaces (low roughness), the BSDF is purely specular: light
-reflects in exactly one direction and the PDF is a delta function. For
-rough surfaces, the Trowbridge-Reitz microfacet distribution spreads the
-reflection into a lobe.
+For smooth surfaces, the BSDF is purely specular: light reflects in exactly
+one direction. For rough surfaces, the Trowbridge-Reitz microfacet distribution
+spreads the reflection into a lobe.
 
 ## Microfacet Reflection
 
 The Trowbridge-Reitz (GGX) distribution models rough surfaces as a
 collection of tiny flat mirrors (microfacets) oriented according to a
-statistical distribution. The key function `D(ωh)` gives the density of
+statistical distribution. The density function `D(ωh)` gives the density of
 microfacets with half-vector ωh. Combined with the Fresnel term and the
 Smith masking-shadowing function `G`, this produces physically plausible
 glossy reflections.
 
 ## Coated and Layered BSDFs
 
-Real materials often have multiple layers — a clear coat over metallic paint,
-or skin with subsurface scattering. Gonzales supports:
-
-- **CoatedConductorBsdf** — a dielectric layer over a metallic substrate
-- **CoatedDiffuseBsdf** — a dielectric layer over a diffuse substrate  
-- **LayeredBsdf** — a general multi-layer model using random walks between
-  interface boundaries
-
-## Hair BSDF
-
-The `HairBsdf` implements the Marschner hair scattering model, which
-treats each hair fiber as a dielectric cylinder. It models three primary
-scattering modes: R (surface reflection), TT (transmission through the
-fiber), and TRT (internal reflection). This is essential for rendering
-realistic hair and fur.
+Real materials often have multiple layers — a clear coat over diffuse paint.
+`shade_coated_diffuse` models a dielectric layer over a diffuse substrate
+and includes NEE (next-event estimation) for direct lighting at both the
+surface and the coat interface.
 
 ## Mix BSDF
 
-The `MixBsdf` linearly blends two BSDFs using a scalar amount parameter.
-This enables materials like partially oxidized metal (mix of conductor and
-diffuse) without needing a dedicated material model for every combination.
+Materials can mix two BSDFs by a scalar weight. This enables partially
+oxidized metal or wet surfaces without dedicated material models.
