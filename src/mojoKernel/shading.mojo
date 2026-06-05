@@ -594,6 +594,88 @@ fn shade_dielectric(
     path_ptr[].specularBounce = Int8(1)   # dielectric is a delta BSDF
     path_ptr[].lastBsdfPdf = Float32(0.0) # delta — pdf undefined for cosine hemisphere
 
+# Thin dielectric (type 9): one-sided glass — Fresnel selects reflect or transmit,
+# but transmitted ray is NOT refracted (direction unchanged). Models window glass,
+# soap bubbles, thin films. IOR stored in mat.albedo.r like regular dielectric.
+@always_inline
+fn shade_thin_dielectric(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var geom_normal = cross(p1 - p0, p2 - p0)
+    var nlen = dot(geom_normal, geom_normal)
+    if nlen > Float32(0.0):
+        geom_normal = geom_normal * (Float32(1.0) / sqrt(nlen))
+
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+
+    # For thin dielectric, always use outward-facing normal
+    var entering = dot(ray_dir, geom_normal) < Float32(0.0)
+    var normal = geom_normal if entering else -geom_normal
+    var cos_i = max(Float32(0.0), -dot(ray_dir, normal))
+    var ior = mat.albedo.r
+
+    # Two-way Fresnel for thin slab: account for internal reflection too
+    # Effective reflectance = F + (1-F)*F*(1-F) / (1 - F^2) ≈ 2F/(1+F)
+    # Simplification: just use single-interface Schlick
+    var r0 = (ior - Float32(1.0)) / (ior + Float32(1.0))
+    r0 = r0 * r0
+    var one_m = Float32(1.0) - cos_i
+    var one_m2 = one_m * one_m
+    var fresnel = r0 + (Float32(1.0) - r0) * one_m2 * one_m2 * one_m
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    if pcg.next_float() < fresnel:
+        # Reflect
+        var refl = ray_dir + normal * (Float32(2.0) * cos_i)
+        var rlen = dot(refl, refl)
+        if rlen > Float32(0.0):
+            refl = refl * (Float32(1.0) / sqrt(rlen))
+        var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+    else:
+        # Transmit — same direction, offset past the surface
+        var hit_point = ray_org + ray_dir * inter.tHit - normal * Float32(0.0001)
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], ray_dir[0], ray_dir[1], ray_dir[2])
+
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = RGB(Float32(1), Float32(1), Float32(1))
+    path_ptr[].bounce += 1
+    if path_ptr[].bounce > 1:
+        var lum = path_ptr[].throughput.luma()
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+    path_ptr[].pcgState = pcg.state
+    path_ptr[].specularBounce = Int8(1)
+    path_ptr[].lastBsdfPdf = Float32(0.0)
+
 
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
 @always_inline
@@ -635,8 +717,8 @@ fn shade_conductor(
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
-    var alpha_u = max(mat.roughU * mat.roughU, Float32(0.0001))
-    var alpha_v = max(mat.roughV * mat.roughV, Float32(0.0001))
+    var alpha_x = max(mat.roughU * mat.roughU, Float32(0.0001))
+    var alpha_y = max(mat.roughV * mat.roughV, Float32(0.0001))
     var is_rough = mat.roughU > Float32(0.001) or mat.roughV > Float32(0.001)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -649,67 +731,89 @@ fn shade_conductor(
         var rlen = dot(scatter_dir, scatter_dir)
         if rlen > Float32(0.0):
             scatter_dir = scatter_dir * (Float32(1.0) / sqrt(rlen))
-        fresnel_weight = Float32(1.0)  # perfect mirror: F = 1
+        fresnel_weight = Float32(1.0)
     else:
-        # GGX VNDF sampling (Heitz 2018, isotropic simplification when alpha_u ≈ alpha_v)
-        # 1. Build tangent frame around normal
-        var alpha = (alpha_u + alpha_v) * Float32(0.5)  # isotropic average
-        var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-        var an = Float32(-1.0) / (sign_n + normal[2])
-        var bn = normal[0] * normal[1] * an
-        var t1 = SIMD[DType.float32, 3](Float32(1.0) + sign_n * normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
-        var t2 = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+        # True anisotropic GGX VNDF (Heitz 2018)
+        # Derive UV tangent frame for anisotropy direction
+        var t1: SIMD[DType.float32, 3]
+        var t2: SIMD[DType.float32, 3]
+        if mesh.uvs and alpha_x != alpha_y:
+            # UV-gradient tangent: tangent = (duv2.v*dp1 - duv1.v*dp2) / det
+            var dp1 = p1 - p0; var dp2 = p2 - p0
+            var u0f = mesh.uvs[v0*2]; var v0f = mesh.uvs[v0*2+1]
+            var u1f = mesh.uvs[v1*2]; var v1f = mesh.uvs[v1*2+1]
+            var u2f = mesh.uvs[v2*2]; var v2f = mesh.uvs[v2*2+1]
+            var du1 = u1f - u0f; var dv1 = v1f - v0f
+            var du2 = u2f - u0f; var dv2 = v2f - v0f
+            var det = du1 * dv2 - du2 * dv1
+            if det != Float32(0.0):
+                var inv_det = Float32(1.0) / det
+                t1 = (dp1 * dv2 - dp2 * dv1) * inv_det
+                var tlen = dot(t1, t1)
+                if tlen > Float32(0.0): t1 = t1 * (Float32(1.0) / sqrt(tlen))
+                t2 = cross(normal, t1)
+                var t2len = dot(t2, t2)
+                if t2len > Float32(0.0): t2 = t2 * (Float32(1.0) / sqrt(t2len))
+            else:
+                var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+                var an = Float32(-1.0) / (sign_n + normal[2])
+                var bn = normal[0] * normal[1] * an
+                t1 = SIMD[DType.float32, 3](Float32(1.0) + sign_n*normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
+                t2 = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+        else:
+            # Frisvad arbitrary tangent frame
+            var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+            var an = Float32(-1.0) / (sign_n + normal[2])
+            var bn = normal[0] * normal[1] * an
+            t1 = SIMD[DType.float32, 3](Float32(1.0) + sign_n*normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
+            t2 = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
 
-        # 2. wo in local frame (outgoing = -ray_dir)
+        # wo in local anisotropic frame
         var wo = -ray_dir
-        var wo_x = dot(wo, t1)
-        var wo_y = dot(wo, t2)
-        var wo_z = dot(wo, normal)
+        var wo_x = dot(wo, t1); var wo_y = dot(wo, t2); var wo_z = dot(wo, normal)
 
-        # 3. Stretch wo by alpha
-        var wos = SIMD[DType.float32, 3](wo_x * alpha, wo_y * alpha, wo_z)
+        # Stretch wo by (alpha_x, alpha_y) — anisotropic
+        var wos = SIMD[DType.float32, 3](wo_x * alpha_x, wo_y * alpha_y, wo_z)
         var wos_len = sqrt(dot(wos, wos))
         var vh = wos * (Float32(1.0) / wos_len) if wos_len > Float32(0.0) else normal
 
-        # 4. Orthonormal basis around vh
+        # Orthonormal basis around vh
         var sign_vh = Float32(1.0) if vh[2] >= Float32(0.0) else Float32(-1.0)
         var av = Float32(-1.0) / (sign_vh + vh[2])
         var bv = vh[0] * vh[1] * av
         var bt1 = SIMD[DType.float32, 3](Float32(1.0) + sign_vh*vh[0]*vh[0]*av, sign_vh*bv, -sign_vh*vh[0])
         var bt2 = SIMD[DType.float32, 3](bv, sign_vh + vh[1]*vh[1]*av, -vh[1])
 
-        # 5. Sample disk
-        var u1 = pcg.next_float()
-        var u2 = pcg.next_float()
+        # Sample visible hemisphere disk
+        var u1 = pcg.next_float(); var u2 = pcg.next_float()
         var r_disk = sqrt(u1)
         var phi = Float32(6.28318530718) * u2
-        var tx = r_disk * cos(phi)
-        var ty_raw = r_disk * sin(phi)
+        var tx = r_disk * cos(phi); var ty_raw = r_disk * sin(phi)
         var s_corr = Float32(0.5) * (Float32(1.0) + vh[2])
         var ty = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
         var tz2 = Float32(1.0) - tx*tx - ty*ty
         var tz = sqrt(tz2 if tz2 > Float32(0.0) else Float32(0.0))
-
-        # 6. Half-vector in local frame, unstretch
         var nh_local = bt1 * tx + bt2 * ty + vh * tz
-        var wh_local = SIMD[DType.float32, 3](alpha * nh_local[0], alpha * nh_local[1], max(Float32(0.0), nh_local[2]))
+
+        # Unstretch with per-axis alpha — anisotropic
+        var wh_local = SIMD[DType.float32, 3](alpha_x * nh_local[0], alpha_y * nh_local[1], max(Float32(0.0), nh_local[2]))
         var wh_len = dot(wh_local, wh_local)
         var wh_unit = wh_local * (Float32(1.0) / sqrt(wh_len)) if wh_len > Float32(0.0) else normal
 
-        # 7. Half-vector back to world space
+        # Half-vector back to world space
         var wh_world = t1 * wh_unit[0] + t2 * wh_unit[1] + normal * wh_unit[2]
         var wh_wlen = dot(wh_world, wh_world)
         if wh_wlen > Float32(0.0):
             wh_world = wh_world * (Float32(1.0) / sqrt(wh_wlen))
 
-        # 8. Reflect wo around wh
+        # Reflect wo around wh
         var wo_dot_wh = dot(wo, wh_world)
         scatter_dir = wh_world * (Float32(2.0) * wo_dot_wh) - wo
         var sd_len = dot(scatter_dir, scatter_dir)
         if sd_len > Float32(0.0):
             scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
 
-        # 9. Schlick Fresnel for conductor using albedo as F0
+        # Schlick Fresnel for conductor using albedo as F0
         var cos_wh = max(Float32(0.0), wo_dot_wh)
         var one_m = Float32(1.0) - cos_wh
         var one_m2 = one_m * one_m
@@ -717,7 +821,6 @@ fn shade_conductor(
         var f0_luma = mat.albedo.luma()
         fresnel_weight = f0_luma + (Float32(1.0) - f0_luma) * schlick
 
-        # Clamp if wi went below surface
         if dot(scatter_dir, normal) <= Float32(0.0):
             path_ptr[].active = 0
             path_ptr[].pcgState = pcg.state
@@ -991,6 +1094,69 @@ fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
                 path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
         path_ptr[].pcgState = pcg2.state
 
+# Apply tangent-space normal map: samples the texture, decodes [-1,1] normal,
+# rotates it into world space via UV-gradient tangent frame.
+# Returns geom_normal unchanged when normal_tex_idx < 0 or no UVs.
+@always_inline
+fn _apply_normal_map[use_gpu: Bool](
+    mat: Material_C,
+    v0: Int, v1: Int, v2: Int,
+    mesh: TriangleMesh_C,
+    inter: Intersection_C,
+    geom_normal: SIMD[DType.float32, 3],
+    p0: SIMD[DType.float32, 3],
+    p1: SIMD[DType.float32, 3],
+    p2: SIMD[DType.float32, 3],
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+) -> SIMD[DType.float32, 3]:
+    if mat.normal_tex_idx < Int32(0) or not mesh.uvs:
+        return geom_normal
+    # Compute barycentric UV coordinates
+    var dp1 = p1 - p0; var dp2 = p2 - p0
+    var u0f = mesh.uvs[v0*2]; var v0f = mesh.uvs[v0*2+1]
+    var u1f = mesh.uvs[v1*2]; var v1f = mesh.uvs[v1*2+1]
+    var u2f = mesh.uvs[v2*2]; var v2f = mesh.uvs[v2*2+1]
+    var du1 = u1f - u0f; var dv1 = v1f - v0f
+    var du2 = u2f - u0f; var dv2 = v2f - v0f
+    var det = du1 * dv2 - du2 * dv1
+    if det == Float32(0.0):
+        return geom_normal
+    var inv_det = Float32(1.0) / det
+    # Tangent and bitangent from UV gradients
+    var tangent = (dp1 * dv2 - dp2 * dv1) * inv_det
+    var tlen = dot(tangent, tangent)
+    if tlen <= Float32(0.0): return geom_normal
+    tangent = tangent * (Float32(1.0) / sqrt(tlen))
+    var bitangent = cross(geom_normal, tangent)
+    var blen = dot(bitangent, bitangent)
+    if blen <= Float32(0.0): return geom_normal
+    bitangent = bitangent * (Float32(1.0) / sqrt(blen))
+    # Interpolate UV at hit point (use centroid as approximation — barycentrics not stored)
+    var uv_u = (u0f + u1f + u2f) * Float32(0.333333)
+    var uv_v = (v0f + v1f + v2f) * Float32(0.333333)
+    # Use the normal_tex_idx texture directly via OIIO
+    @parameter
+    if not use_gpu:
+        var nfname = tex_filenames[Int(mat.normal_tex_idx)]
+        var tr = alloc[Float32](3)
+        tr[0] = Float32(0.5); tr[1] = Float32(0.5); tr[2] = Float32(1.0)
+        _ = external_call["texture", Bool,
+            UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+            UnsafePointer[Float32, MutAnyOrigin]](nfname, uv_u, uv_v, tr)
+        # Decode: [0,1] → [-1,1]
+        var nx = tr[0] * Float32(2.0) - Float32(1.0)
+        var ny = tr[1] * Float32(2.0) - Float32(1.0)
+        var nz = tr[2] * Float32(2.0) - Float32(1.0)
+        tr.free()
+        # Rotate tangent-space normal to world space
+        var world_n = tangent * nx + bitangent * ny + geom_normal * nz
+        var wn_len = dot(world_n, world_n)
+        if wn_len > Float32(0.0):
+            return world_n * (Float32(1.0) / sqrt(wn_len))
+    return geom_normal
+
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
@@ -1043,6 +1209,24 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
                 var pdf_light = Float32(1.0) / (Float32(4.0) * Float32(3.14159265359))
+                @parameter
+                if not use_gpu:
+                    # Use CDF-based pdf when available (env-map importance sampling)
+                    if ilight.cdf_w > Int32(0) and ilight.cdf_h > Int32(0):
+                        var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+                        var u = (atan2(ray_dir[2], ray_dir[0]) + Float32(3.14159265359)) / Float32(6.28318530718)
+                        var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / Float32(3.14159265359)
+                        var px = Int(min(Float32(iw - 1), max(Float32(0.0), u * Float32(iw))))
+                        var py = Int(min(Float32(ih - 1), max(Float32(0.0), v * Float32(ih))))
+                        var marginal_base = ih + 1
+                        var row_cdf_base = marginal_base + py * (iw + 1)
+                        # pdf of this texel in the CDF
+                        var dp_row = ilight.cdf_ptr[py + 1] - ilight.cdf_ptr[py]
+                        var dp_col_base = row_cdf_base + px
+                        var dp_col = ilight.cdf_ptr[dp_col_base + 1] - ilight.cdf_ptr[dp_col_base]
+                        var sin_theta = sin(Float32(3.14159265359) * (Float32(py) + Float32(0.5)) / Float32(ih))
+                        if sin_theta > Float32(0.0) and dp_row > Float32(0.0):
+                            pdf_light = (dp_row * dp_col * Float32(iw) * Float32(ih)) / (Float32(2.0) * Float32(3.14159265359) * Float32(3.14159265359) * sin_theta)
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
             path_ptr[].estimate += path_ptr[].throughput * env_rgb * mis_weight
         path_ptr[].active = 0
@@ -1114,6 +1298,10 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks, mat)
         return
 
+    if mat.type == 9:
+        shade_thin_dielectric(path_ptr, inter, meshes, mat)
+        return
+
     if mat.type != 1:
         path_ptr[].active = 0
         return
@@ -1143,6 +1331,12 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         normal = normal * (Float32(1.0) / sqrt(nlen))
 
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    if dot(normal, ray_dir) > Float32(0.0):
+        normal = -normal
+
+    # Apply normal map if present (CPU only; GPU path uses geometric normal)
+    normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
+        tex_filenames, textures, n_textures)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
 

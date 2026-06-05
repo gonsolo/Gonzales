@@ -53,9 +53,10 @@ struct Material_C(TrivialRegisterPassable):
     var _pad2: Int8
     var albedo: RGB
     var emission: RGB
-    var tex_idx: Int32   # -1 = no texture; >= 0 = index into texture table
-    var roughU: Float32  # GGX uroughness (conductor); 0 = perfect mirror
-    var roughV: Float32  # GGX vroughness (conductor); 0 = perfect mirror
+    var tex_idx: Int32      # -1 = no texture; >= 0 = index into texture table
+    var roughU: Float32     # GGX uroughness (conductor); 0 = perfect mirror
+    var roughV: Float32     # GGX vroughness (conductor); 0 = perfect mirror
+    var normal_tex_idx: Int32  # -1 = no normal map; >= 0 = index into texture table
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
@@ -129,10 +130,11 @@ struct PointLight_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct InfiniteLight_C(TrivialRegisterPassable):
-    var tex_idx: Int32      # index into tex_filenames; -1 = constant colour
-    var _pad: Int32
-    var scale: RGB          # multiplier applied to env map sample
-    var _pad2: Float32
+    var scale: RGB
+    var tex_idx: Int32   # -1 = solid colour, >= 0 = texture
+    var cdf_w: Int32     # env-map CDF width (0 = no CDF)
+    var cdf_h: Int32     # env-map CDF height
+    var cdf_ptr: UnsafePointer[Float32, MutAnyOrigin]  # flat 2D CDF (marginal + conditional)
 
 @fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):

@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from .ply import mojo_load_ply
-from std.math import tan, sqrt, acos, atan2
+from std.math import tan, sqrt, acos, atan2, sin
 from std.memory import alloc
 from .geometry import RGB, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C
 from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
@@ -732,6 +732,7 @@ struct _PscState:
     var scene_dir:     UnsafePointer[UInt8, MutAnyOrigin]
 
     var named_tex_idx: UnsafePointer[Int32, MutAnyOrigin]
+    var named_normal_tex_idx: UnsafePointer[Int32, MutAnyOrigin]  # per-material normal map tex idx
     var named_mix1:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name1 (PSC_MAX_NAMED * PSC_NAME_MAX)
     var named_mix2:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name2
     var named_amount:  UnsafePointer[Float32, MutAnyOrigin] # mix blend amount
@@ -975,6 +976,9 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].named_tex_idx = alloc[Int32](PSC_MAX_NAMED)
     for i in range(PSC_MAX_NAMED):
         s[0].named_tex_idx[i] = Int32(-1)
+    s[0].named_normal_tex_idx = alloc[Int32](PSC_MAX_NAMED)
+    for i in range(PSC_MAX_NAMED):
+        s[0].named_normal_tex_idx[i] = Int32(-1)
     s[0].named_mix1   = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
     s[0].named_mix2   = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
     s[0].named_amount  = alloc[Float32](PSC_MAX_NAMED)
@@ -1025,6 +1029,7 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].mesh_has_uvs.free()
     s[0].scene_dir.free()
     s[0].named_tex_idx.free()
+    s[0].named_normal_tex_idx.free()
     s[0].named_mix1.free()
     s[0].named_mix2.free()
     s[0].named_amount.free()
@@ -1195,6 +1200,7 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
     var tex_idx_for_mat = Int32(-1)
+    var normal_tex_idx_for_mat = Int32(-1)
     var mix_name1 = alloc[UInt8](PSC_NAME_MAX)
     var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
     var mix_amount = Float32(0.5)
@@ -1223,6 +1229,8 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
                 mat_type = Int8(7)
             elif _psc_streq(str_val, "mix"):
                 mat_type = Int8(8)
+            elif _psc_streq(str_val, "thindielectric"):
+                mat_type = Int8(9)
             else:
                 mat_type = Int8(1)
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
@@ -1251,6 +1259,14 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
                     break
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
+        elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(116):  # 't' = texture
+            _ = mojo_scanner_parse_quoted_string(handle, str_val, 64)
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+            for ti in range(Int(s[0].n_textures)):
+                if _psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
+                    normal_tex_idx_for_mat = Int32(ti)
+                    break
         elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
             mix_amount = _psc_scan_one_float(handle, is_array)
         elif _psc_streq(name_buf, "materials") and _psc_type_is_str(type_buf):
@@ -1281,6 +1297,7 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         s[0].named_roughU[idx] = mat_roughU
         s[0].named_roughV[idx] = mat_roughV
         s[0].named_tex_idx[idx] = tex_idx_for_mat
+        s[0].named_normal_tex_idx[idx] = normal_tex_idx_for_mat
         _psc_strncpy(s[0].named_mix1 + idx * PSC_NAME_MAX, mix_name1, PSC_NAME_MAX)
         _psc_strncpy(s[0].named_mix2 + idx * PSC_NAME_MAX, mix_name2, PSC_NAME_MAX)
         s[0].named_amount[idx] = mix_amount
@@ -1841,6 +1858,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         mats[i].tex_idx = s[0].named_tex_idx[i]
         mats[i].roughU  = s[0].named_roughU[i]
         mats[i].roughV  = s[0].named_roughV[i]
+        mats[i].normal_tex_idx = s[0].named_normal_tex_idx[i]
         if mt == Int8(4):  # dielectric: albedo.r holds IOR
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
@@ -1850,6 +1868,9 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         elif mt == Int8(7):  # coated conductor: emission.r holds IOR (clearcoat eta)
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
+        elif mt == Int8(9):  # thin dielectric: albedo.r holds IOR (same as type 4)
+            mats[i].albedo = RGB(ior, Float32(0), Float32(0))
+            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
         elif mt == Int8(8):  # mix: resolve sub-material names to indices
             var m1_name = s[0].named_mix1 + i * PSC_NAME_MAX
             var m2_name = s[0].named_mix2 + i * PSC_NAME_MAX
@@ -1929,6 +1950,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             mats[al_mat_base + al_idx].tex_idx  = Int32(-1)
             mats[al_mat_base + al_idx].roughU   = Float32(0)
             mats[al_mat_base + al_idx].roughV   = Float32(0)
+            mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
             al_count += 1
 
     # ---- BVH construction ----
@@ -2118,10 +2140,73 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     if ni > 0:
         var il_buf = alloc[InfiniteLight_C](ni)
         for i in range(ni):
-            il_buf[i] = InfiniteLight_C(
-                s[0].inf_tex_idx[i], Int32(0),
-                RGB(s[0].inf_rgb[i*3+0], s[0].inf_rgb[i*3+1], s[0].inf_rgb[i*3+2]),
-                Float32(0))
+            var tidx = s[0].inf_tex_idx[i]
+            var sc = RGB(s[0].inf_rgb[i*3+0], s[0].inf_rgb[i*3+1], s[0].inf_rgb[i*3+2])
+            var cdf_w = Int32(0); var cdf_h = Int32(0)
+            var cdf_ptr = UnsafePointer[Float32, MutAnyOrigin]()
+            if tidx >= Int32(0):
+                # Build 2D importance-sampling CDF from env-map luminance via load_texture_rgb
+                var fname = psc[0].tex_filenames[Int(tidx)]
+                var pixels_ptr = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
+                var iw_out = alloc[Int32](1); var ih_out = alloc[Int32](1)
+                iw_out[0] = Int32(0); ih_out[0] = Int32(0)
+                var load_ok = external_call["load_texture_rgb", Int32,
+                    UnsafePointer[UInt8, MutAnyOrigin],
+                    UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
+                    UnsafePointer[Int32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin]](
+                    fname, pixels_ptr, iw_out, ih_out)
+                var iw = Int(iw_out[0]); var ih = Int(ih_out[0])
+                iw_out.free(); ih_out.free()
+                if load_ok == Int32(0) and iw > 0 and ih > 0:
+                    var pixels = pixels_ptr[0]
+                    # CDF layout: (ih+1) marginal + ih*(iw+1) conditional floats
+                    var cdf_size = (ih + 1) + ih * (iw + 1)
+                    var cdf_buf = alloc[Float32](cdf_size)
+                    # Compute per-row luminance sums (marginal pdf)
+                    var row_sums = alloc[Float32](ih)
+                    for ry in range(ih):
+                        # Sin-weighted solid angle for lat-long map
+                        var sin_theta = sin(Float32(3.14159265359) * (Float32(ry) + Float32(0.5)) / Float32(ih))
+                        var row_sum = Float32(0.0)
+                        for rx in range(iw):
+                            var r2 = pixels[(ry * iw + rx) * 3 + 0]
+                            var g2 = pixels[(ry * iw + rx) * 3 + 1]
+                            var b2 = pixels[(ry * iw + rx) * 3 + 2]
+                            var lum = Float32(0.2126) * r2 + Float32(0.7152) * g2 + Float32(0.0722) * b2
+                            row_sum += lum * sin_theta
+                        row_sums[ry] = row_sum
+                    # Build marginal CDF (ih+1 values, starts at 0)
+                    cdf_buf[0] = Float32(0.0)
+                    for ry in range(ih):
+                        cdf_buf[ry + 1] = cdf_buf[ry] + row_sums[ry]
+                    var total = cdf_buf[ih]
+                    if total > Float32(0.0):
+                        var inv_total = Float32(1.0) / total
+                        for ry in range(ih + 1):
+                            cdf_buf[ry] *= inv_total
+                    # Build per-row conditional CDFs (ih * (iw+1) values)
+                    for ry in range(ih):
+                        var sin_theta = sin(Float32(3.14159265359) * (Float32(ry) + Float32(0.5)) / Float32(ih))
+                        var base = (ih + 1) + ry * (iw + 1)
+                        cdf_buf[base] = Float32(0.0)
+                        for rx in range(iw):
+                            var r2 = pixels[(ry * iw + rx) * 3 + 0]
+                            var g2 = pixels[(ry * iw + rx) * 3 + 1]
+                            var b2 = pixels[(ry * iw + rx) * 3 + 2]
+                            var lum = Float32(0.2126) * r2 + Float32(0.7152) * g2 + Float32(0.0722) * b2
+                            cdf_buf[base + rx + 1] = cdf_buf[base + rx] + lum * sin_theta
+                        var row_total = cdf_buf[base + iw]
+                        if row_total > Float32(0.0):
+                            var inv_rt = Float32(1.0) / row_total
+                            for rx in range(iw + 1):
+                                cdf_buf[base + rx] *= inv_rt
+                    row_sums.free()
+                    _ = external_call["free_texture_rgb", Int32,
+                        UnsafePointer[Float32, MutAnyOrigin]](pixels)
+                    cdf_ptr = cdf_buf
+                    cdf_w = Int32(iw); cdf_h = Int32(ih)
+                pixels_ptr.free()
+            il_buf[i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr)
         psc[0].infinite_lights = il_buf
     else:
         psc[0].infinite_lights = UnsafePointer[InfiniteLight_C, MutAnyOrigin]()
