@@ -95,10 +95,10 @@ struct PathState_C(TrivialRegisterPassable):
     var _pad1: Int8
     var _pad2: Int8
     var _pad3: Int8
-    var _pad4: Int8
-    var _pad5: Int8
-    var _pad6: Int8
-    var _pad7: Int8
+    # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
+    # Used for MIS weighting when the next bounce hits an emitter.
+    # Stored as Float32 in the four _pad4.._pad7 bytes.
+    var lastBsdfPdf: Float32
 
 @fieldwise_init
 struct AreaLight_C(TrivialRegisterPassable):

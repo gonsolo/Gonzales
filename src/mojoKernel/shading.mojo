@@ -5,6 +5,16 @@ from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Mate
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
 
+# Power heuristic (β=2) for two-strategy MIS.
+@always_inline
+def power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
+    var f2 = pdf_f * pdf_f
+    var g2 = pdf_g * pdf_g
+    var denom = f2 + g2
+    if denom <= Float32(0.0):
+        return Float32(0.0)
+    return f2 / denom
+
 @always_inline
 fn _srgb_to_linear(c: Float32) -> Float32:
     if c <= Float32(0.04045):
@@ -366,8 +376,12 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 var cos_s = dot(normal, shadow_dir)
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                    var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
-                    var contrib = path_ptr[].throughput * alb * al.emission * weight
+                    var pdf_light_cd = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
+                    var pi_cd = Float32(3.14159265359)
+                    var pdf_bsdf_cd = cos_s / pi_cd
+                    var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
+                    var weight_cd = alb * al.emission * (cos_s * w_cd / (pdf_light_cd * pi_cd))
+                    var contrib = path_ptr[].throughput * weight_cd
                     @parameter
                     if enqueue_shadow:
                         shadow_tasks[path_idx] = ShadowTask_C(
@@ -402,6 +416,9 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             dir = dir * (Float32(1.0) / sqrt(dlen))
 
         path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+        # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/pi).
+        var cos_sc = dot(dir, normal)
+        path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
         path_ptr[].throughput *= alb
 
     if path_ptr[].bounce == 0:
@@ -593,8 +610,41 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     var mat = materials[Int(inter.primId.materialIndex)]
 
     if mat.type == 2:
+        # Emissive surface hit.
         if path_ptr[].bounce == 0:
+            # Camera ray directly hit the light — always add full emission.
             path_ptr[].estimate += path_ptr[].throughput * mat.emission
+        else:
+            # Arrived via BSDF scatter from the previous bounce.
+            # Apply MIS weight using the stored BSDF pdf and the light's solid-angle pdf.
+            var pdf_bsdf = path_ptr[].lastBsdfPdf
+            if pdf_bsdf > Float32(0.0) and inter.primId.type == Int8(3):
+                var al_idx = Int(inter.primId.id1)
+                var al = areaLights[al_idx]
+                # Solid-angle PDF for uniform area sampling of this triangle light:
+                # pdf_light = dist² / (cos_l * total_area * nLights)
+                # We need the surface normal of the emitter triangle.
+                var lmesh_idx = Int(inter.primId.id2 >> 32)
+                var lbase   = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+                var lmesh   = meshes[lmesh_idx]
+                var lv0 = Int(lmesh.vertexIndices[lbase])
+                var lv1 = Int(lmesh.vertexIndices[lbase + 1])
+                var lv2 = Int(lmesh.vertexIndices[lbase + 2])
+                var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+                var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+                var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+                var lnorm = cross(lp1 - lp0, lp2 - lp0)
+                var lnlen = dot(lnorm, lnorm)
+                if lnlen > Float32(0.0):
+                    lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
+                var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+                var cos_l = -dot(lnorm, ray_dir)
+                var dist  = inter.tHit
+                var dist2 = dist * dist
+                if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
+                    var pdf_light = dist2 / (cos_l * al.total_area * Float32(areaLightCount))
+                    var w = power_heuristic(pdf_bsdf, pdf_light)
+                    path_ptr[].estimate += path_ptr[].throughput * mat.emission * w
         path_ptr[].active = 0
         return
 
@@ -682,20 +732,27 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_s = dot(normal, shadow_dir)
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                    var weight = cos_s * cos_l * al.total_area * Float32(areaLightCount) / (dist_sq * Float32(3.14159265359))
-                    var contrib = path_ptr[].throughput * alb * al.emission * weight
-                    @parameter
-                    if enqueue_shadow:
-                        shadow_tasks[path_idx] = ShadowTask_C(
-                            hit_point[0], hit_point[1], hit_point[2],
-                            shadow_dir[0], shadow_dir[1], shadow_dir[2],
-                            dist * Float32(0.9999),
-                            contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
-                    else:
-                        var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                              shadow_dir[0], shadow_dir[1], shadow_dir[2])
-                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
-                            path_ptr[].estimate += contrib
+                # pdf_light in solid angle measure: dist² / (cos_l * A * N)
+                var pdf_light = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
+                # pdf_bsdf for cosine-weighted hemisphere: cos_s / π
+                var pi = Float32(3.14159265359)
+                var pdf_bsdf_nee = cos_s / pi
+                var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
+                # f = albedo/π, estimator = f * Le * cos_s * w / pdf_light
+                var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
+                var contrib = path_ptr[].throughput * weight
+                @parameter
+                if enqueue_shadow:
+                    shadow_tasks[path_idx] = ShadowTask_C(
+                        hit_point[0], hit_point[1], hit_point[2],
+                        shadow_dir[0], shadow_dir[1], shadow_dir[2],
+                        dist * Float32(0.9999),
+                        contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                else:
+                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                          shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                        path_ptr[].estimate += contrib
 
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
@@ -718,6 +775,10 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = alb
+    # Store BSDF pdf for MIS weighting if the next bounce hits an emitter.
+    # For cosine-weighted hemisphere: pdf = cos(theta) / pi = dot(dir, normal) / pi
+    var cos_scatter = dot(dir, normal)
+    path_ptr[].lastBsdfPdf = (cos_scatter if cos_scatter > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
     path_ptr[].throughput *= alb
     path_ptr[].bounce += 1
 

@@ -122,7 +122,8 @@ def mojo_render_tile_v2(
                     RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
                     RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
                     Int32(0), pcg_state, pcg_inc,
-                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+                    Int8(1), Int8(0), Int8(0), Int8(0),
+                    Float32(0.0),
                 )
                 idx += 1
 
@@ -234,7 +235,8 @@ def mojo_render_tile(
             RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
             Int32(0),
             s.pcgState, s.pcgInc,
-            Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+            Int8(1), Int8(0), Int8(0), Int8(0),
+            Float32(0.0),
         )
 
     # Multi-bounce path trace

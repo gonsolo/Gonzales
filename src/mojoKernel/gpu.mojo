@@ -732,7 +732,8 @@ fn gen_primary_rays_wavefront_gpu(
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
-        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+        Int8(1), Int8(0), Int8(0), Int8(0),
+        Float32(0.0),
     )
 
 
@@ -869,7 +870,8 @@ fn gen_primary_rays_gpu(
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
-        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0),
+        Int8(1), Int8(0), Int8(0), Int8(0),
+        Float32(0.0),
     )
 
 
