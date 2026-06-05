@@ -736,6 +736,7 @@ struct _PscState:
     var named_mix1:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name1 (PSC_MAX_NAMED * PSC_NAME_MAX)
     var named_mix2:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name2
     var named_amount:  UnsafePointer[Float32, MutAnyOrigin] # mix blend amount
+    var named_transmittance: UnsafePointer[RGB, MutAnyOrigin] # diffusetransmission transmittance
     var tex_names:     UnsafePointer[UInt8, MutAnyOrigin]
     var tex_files:     UnsafePointer[UInt8, MutAnyOrigin]
     var n_textures:    Int32
@@ -778,6 +779,17 @@ fn _psc_strncpy(dst: UnsafePointer[UInt8, MutAnyOrigin],
         dst[Int(i)] = src[Int(i)]
         i += 1
     dst[Int(i)] = UInt8(0)
+
+fn _psc_strncmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral, n: Int) -> Int:
+    """Compare first n bytes of a against literal b. Returns 0 if equal."""
+    for i in range(n):
+        var ca = Int(a[i])
+        var cb = Int(b.unsafe_ptr()[i])
+        if ca != cb:
+            return ca - cb
+        if ca == 0:
+            return 0
+    return 0
 
 fn _psc_identity(m: UnsafePointer[Float32, MutAnyOrigin]):
     for i in range(16):
@@ -922,6 +934,7 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].attr_mat    = alloc[Int32](PSC_ATTR_DEPTH)
     s[0].attr_alight = alloc[Int32](PSC_ATTR_DEPTH)
     s[0].attr_al_rgb = alloc[RGB](PSC_ATTR_DEPTH)
+    s[0].named_transmittance = alloc[RGB](PSC_MAX_NAMED)
     s[0].attr_depth  = Int32(0)
 
     s[0].named_names  = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
@@ -1009,6 +1022,7 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].attr_mat.free()
     s[0].attr_alight.free()
     s[0].attr_al_rgb.free()
+    s[0].named_transmittance.free()
     s[0].named_names.free()
     s[0].named_albedo.free()
     s[0].named_type.free()
@@ -1195,6 +1209,15 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
 
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    # transmittance for DiffuseTransmission (default 0.25 per PBRT)
+    var trans_rgb = alloc[Float32](3)
+    trans_rgb[0] = Float32(0.25); trans_rgb[1] = Float32(0.25); trans_rgb[2] = Float32(0.25)
+    # named-spectrum conductor optical constants (R/G/B at 630/530/450 nm)
+    var metal_eta = alloc[Float32](3)
+    metal_eta[0] = Float32(0.5); metal_eta[1] = Float32(0.5); metal_eta[2] = Float32(0.5)
+    var metal_k   = alloc[Float32](3)
+    metal_k[0] = Float32(0.5); metal_k[1] = Float32(0.5); metal_k[2] = Float32(0.5)
+    var has_spectral_conductor = False
     var mat_type = Int8(1)  # default: diffuse
     var mat_ior  = Float32(1.5)
     var mat_roughU = Float32(0.0)
@@ -1248,6 +1271,39 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
             mat_roughV = _psc_scan_one_float(handle, is_array)
         elif _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
+        elif _psc_streq(name_buf, "transmittance") and _psc_type_is_float(type_buf):
+            # DiffuseTransmission transmittance — stored in trans_rgb, later -> mat.emission
+            _psc_scan_rgb(handle, trans_rgb, is_array)
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(115):  # 's' = spectrum
+            # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
+            # Read the metal name string, look up precomputed F0 per channel.
+            var mname = alloc[UInt8](64)
+            _ = mojo_scanner_parse_quoted_string(handle, mname, 64)
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+            # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
+            # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
+            if _psc_streq(name_buf, "eta"):
+                if _psc_strncmp(mname, "metal-Ag", 8) == 0:
+                    metal_eta[0] = Float32(0.136); metal_eta[1] = Float32(0.130); metal_eta[2] = Float32(0.144)
+                elif _psc_strncmp(mname, "metal-Al", 8) == 0:
+                    metal_eta[0] = Float32(1.300); metal_eta[1] = Float32(0.826); metal_eta[2] = Float32(0.644)
+                elif _psc_strncmp(mname, "metal-Au", 8) == 0:
+                    metal_eta[0] = Float32(0.194); metal_eta[1] = Float32(0.608); metal_eta[2] = Float32(1.426)
+                elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
+                    metal_eta[0] = Float32(0.272); metal_eta[1] = Float32(1.120); metal_eta[2] = Float32(1.160)
+                has_spectral_conductor = True
+            else:  # "k"
+                if _psc_strncmp(mname, "metal-Ag", 8) == 0:
+                    metal_k[0] = Float32(3.880); metal_k[1] = Float32(3.070); metal_k[2] = Float32(2.560)
+                elif _psc_strncmp(mname, "metal-Al", 8) == 0:
+                    metal_k[0] = Float32(7.480); metal_k[1] = Float32(6.280); metal_k[2] = Float32(5.580)
+                elif _psc_strncmp(mname, "metal-Au", 8) == 0:
+                    metal_k[0] = Float32(3.060); metal_k[1] = Float32(2.120); metal_k[2] = Float32(1.846)
+                elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
+                    metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
+                has_spectral_conductor = True
+            mname.free()
         elif _psc_streq(name_buf, "reflectance") and type_buf[0] == UInt8(116):  # 't' = texture
             _ = mojo_scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
@@ -1291,7 +1347,19 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var idx = Int(s[0].n_named)
     if idx < PSC_MAX_NAMED:
         _psc_strncpy(s[0].named_names + idx * PSC_NAME_MAX, mat_name, PSC_NAME_MAX)
-        s[0].named_albedo[idx] = RGB(rgb[0], rgb[1], rgb[2])
+        # For named-spectrum conductors: compute Fresnel F0 per channel
+        # F0 = ((eta-1)^2 + k^2) / ((eta+1)^2 + k^2)   (normal-incidence)
+        if has_spectral_conductor and mat_type == Int8(3):
+            var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
+                      ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
+            var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
+                      ((metal_eta[1]+Float32(1.0))*(metal_eta[1]+Float32(1.0)) + metal_k[1]*metal_k[1])
+            var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
+                      ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
+            s[0].named_albedo[idx] = RGB(f0r, f0g, f0b)
+        else:
+            s[0].named_albedo[idx] = RGB(rgb[0], rgb[1], rgb[2])
+        s[0].named_transmittance[idx] = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
         s[0].named_type[idx] = mat_type
         s[0].named_ior[idx]  = mat_ior
         s[0].named_roughU[idx] = mat_roughU
@@ -1304,6 +1372,7 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         s[0].n_named += 1
 
     mat_name.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free()
+    trans_rgb.free(); metal_eta.free(); metal_k.free()
     mix_name1.free(); mix_name2.free()
 
 fn _psc_handle_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
@@ -1886,6 +1955,9 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             mats[i].roughU  = s[0].named_amount[i]  # blend factor
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+        elif mt == Int8(6):  # diffusetransmission: emission holds the transmittance
+            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].emission = s[0].named_transmittance[i]
         else:
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
