@@ -691,6 +691,8 @@ struct _PscState:
     var named_albedo: UnsafePointer[RGB, MutAnyOrigin]
     var named_type:   UnsafePointer[Int8, MutAnyOrigin]
     var named_ior:    UnsafePointer[Float32, MutAnyOrigin]
+    var named_roughU: UnsafePointer[Float32, MutAnyOrigin]
+    var named_roughV: UnsafePointer[Float32, MutAnyOrigin]
     var n_named:      Int32
 
     var cur_mat_idx: Int32
@@ -905,6 +907,8 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].named_albedo = alloc[RGB](PSC_MAX_NAMED)
     s[0].named_type   = alloc[Int8](PSC_MAX_NAMED)
     s[0].named_ior    = alloc[Float32](PSC_MAX_NAMED)
+    s[0].named_roughU = alloc[Float32](PSC_MAX_NAMED)
+    s[0].named_roughV = alloc[Float32](PSC_MAX_NAMED)
     s[0].n_named      = Int32(0)
 
     s[0].cur_mat_idx = Int32(-1)
@@ -967,6 +971,8 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].named_albedo.free()
     s[0].named_type.free()
     s[0].named_ior.free()
+    s[0].named_roughU.free()
+    s[0].named_roughV.free()
     s[0].film_filename.free()
     s[0].cam2w_raw.free()
     s[0].mesh_pts_list.free()
@@ -1142,6 +1148,8 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
     var mat_type = Int8(1)  # default: diffuse
     var mat_ior  = Float32(1.5)
+    var mat_roughU = Float32(0.0)
+    var mat_roughV = Float32(0.0)
     var tex_idx_for_mat = Int32(-1)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
@@ -1161,6 +1169,8 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
                 mat_type = Int8(4)
             elif _psc_streq(str_val, "coateddiffuse"):
                 mat_type = Int8(5)
+            elif _psc_streq(str_val, "diffusetransmission"):
+                mat_type = Int8(6)
             else:
                 mat_type = Int8(1)
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
@@ -1170,6 +1180,12 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
             tmp.free()
             if is_array:
                 _ = mojo_scanner_scan_char(handle, UInt8(93))
+        elif (_psc_streq(name_buf, "uroughness") or _psc_streq(name_buf, "roughness")) and _psc_type_is_float(type_buf):
+            mat_roughU = _psc_scan_one_float(handle, is_array)
+            if _psc_streq(name_buf, "roughness"):
+                mat_roughV = mat_roughU
+        elif _psc_streq(name_buf, "vroughness") and _psc_type_is_float(type_buf):
+            mat_roughV = _psc_scan_one_float(handle, is_array)
         elif _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         elif _psc_streq(name_buf, "reflectance") and type_buf[0] == UInt8(116):  # 't' = texture
@@ -1197,6 +1213,8 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         s[0].named_albedo[idx] = RGB(rgb[0], rgb[1], rgb[2])
         s[0].named_type[idx] = mat_type
         s[0].named_ior[idx]  = mat_ior
+        s[0].named_roughU[idx] = mat_roughU
+        s[0].named_roughV[idx] = mat_roughV
         s[0].named_tex_idx[idx] = tex_idx_for_mat
         s[0].n_named += 1
 
@@ -1505,6 +1523,14 @@ fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     tex_name.free(); tex_type.free(); tex_class.free()
     type_buf.free(); name_buf.free(); str_val.free()
 
+fn _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                             s: UnsafePointer[_PscState, MutAnyOrigin]):
+    # Parse LightSource type string then skip all params (future: handle distant/infinite/point)
+    var type_buf = alloc[UInt8](64)
+    _ = mojo_scanner_parse_quoted_string(handle, type_buf, 64)
+    _psc_skip_params(handle)
+    type_buf.free()
+
 fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
               s: UnsafePointer[_PscState, MutAnyOrigin]):
     var kw_buf = alloc[UInt8](256)
@@ -1551,6 +1577,8 @@ fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             _psc_handle_attribute_end(s)
         elif _psc_streq(kw_buf, "AreaLightSource"):
             _psc_handle_area_light_source(handle, s)
+        elif _psc_streq(kw_buf, "LightSource"):
+            _psc_handle_light_source(handle, s)
         elif _psc_streq(kw_buf, "Texture"):
             _psc_handle_texture(handle, s)
         else:
@@ -1643,6 +1671,8 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         var ior = s[0].named_ior[i]
         mats[i].type = mt
         mats[i].tex_idx = s[0].named_tex_idx[i]
+        mats[i].roughU  = s[0].named_roughU[i]
+        mats[i].roughV  = s[0].named_roughV[i]
         if mt == Int8(4):  # dielectric: albedo.r holds IOR
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
@@ -1711,6 +1741,8 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             mats[al_mat_base + al_idx].albedo   = RGB(Float32(0), Float32(0), Float32(0))
             mats[al_mat_base + al_idx].emission = em
             mats[al_mat_base + al_idx].tex_idx  = Int32(-1)
+            mats[al_mat_base + al_idx].roughU   = Float32(0)
+            mats[al_mat_base + al_idx].roughV   = Float32(0)
             al_count += 1
 
     # ---- BVH construction ----

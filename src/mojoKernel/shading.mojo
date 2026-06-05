@@ -325,6 +325,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/π)
     var cos_sc = dot(dir, bounce_normal)
     path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
+    path_ptr[].specularBounce = Int8(0)
 
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = mat.albedo
@@ -485,6 +486,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/pi).
         var cos_sc = dot(dir, normal)
         path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
+        path_ptr[].specularBounce = Int8(0)
         path_ptr[].throughput *= alb
 
     if path_ptr[].bounce == 0:
@@ -589,9 +591,11 @@ fn shade_dielectric(
             path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
 
     path_ptr[].pcgState = pcg.state
+    path_ptr[].specularBounce = Int8(1)   # dielectric is a delta BSDF
+    path_ptr[].lastBsdfPdf = Float32(0.0) # delta — pdf undefined for cosine hemisphere
 
 
-# ── Conductor (perfect mirror) branch ────────────────────────────────────────
+# ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
 @always_inline
 fn shade_conductor(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
@@ -631,20 +635,103 @@ fn shade_conductor(
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
-    # Perfect specular reflection: r = d - 2(d·n)n
-    var refl = ray_dir - normal * (Float32(2.0) * dot(ray_dir, normal))
-    var rlen = dot(refl, refl)
-    if rlen > Float32(0.0):
-        refl = refl * (Float32(1.0) / sqrt(rlen))
+    var alpha_u = max(mat.roughU * mat.roughU, Float32(0.0001))
+    var alpha_v = max(mat.roughV * mat.roughV, Float32(0.0001))
+    var is_rough = mat.roughU > Float32(0.001) or mat.roughV > Float32(0.001)
 
-    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var scatter_dir: SIMD[DType.float32, 3]
+    var fresnel_weight: Float32
+
+    if not is_rough:
+        # Perfect specular reflection
+        scatter_dir = ray_dir - normal * (Float32(2.0) * dot(ray_dir, normal))
+        var rlen = dot(scatter_dir, scatter_dir)
+        if rlen > Float32(0.0):
+            scatter_dir = scatter_dir * (Float32(1.0) / sqrt(rlen))
+        fresnel_weight = Float32(1.0)  # perfect mirror: F = 1
+    else:
+        # GGX VNDF sampling (Heitz 2018, isotropic simplification when alpha_u ≈ alpha_v)
+        # 1. Build tangent frame around normal
+        var alpha = (alpha_u + alpha_v) * Float32(0.5)  # isotropic average
+        var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+        var an = Float32(-1.0) / (sign_n + normal[2])
+        var bn = normal[0] * normal[1] * an
+        var t1 = SIMD[DType.float32, 3](Float32(1.0) + sign_n * normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
+        var t2 = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+
+        # 2. wo in local frame (outgoing = -ray_dir)
+        var wo = -ray_dir
+        var wo_x = dot(wo, t1)
+        var wo_y = dot(wo, t2)
+        var wo_z = dot(wo, normal)
+
+        # 3. Stretch wo by alpha
+        var wos = SIMD[DType.float32, 3](wo_x * alpha, wo_y * alpha, wo_z)
+        var wos_len = sqrt(dot(wos, wos))
+        var vh = wos * (Float32(1.0) / wos_len) if wos_len > Float32(0.0) else normal
+
+        # 4. Orthonormal basis around vh
+        var sign_vh = Float32(1.0) if vh[2] >= Float32(0.0) else Float32(-1.0)
+        var av = Float32(-1.0) / (sign_vh + vh[2])
+        var bv = vh[0] * vh[1] * av
+        var bt1 = SIMD[DType.float32, 3](Float32(1.0) + sign_vh*vh[0]*vh[0]*av, sign_vh*bv, -sign_vh*vh[0])
+        var bt2 = SIMD[DType.float32, 3](bv, sign_vh + vh[1]*vh[1]*av, -vh[1])
+
+        # 5. Sample disk
+        var u1 = pcg.next_float()
+        var u2 = pcg.next_float()
+        var r_disk = sqrt(u1)
+        var phi = Float32(6.28318530718) * u2
+        var tx = r_disk * cos(phi)
+        var ty_raw = r_disk * sin(phi)
+        var s_corr = Float32(0.5) * (Float32(1.0) + vh[2])
+        var ty = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
+        var tz2 = Float32(1.0) - tx*tx - ty*ty
+        var tz = sqrt(tz2 if tz2 > Float32(0.0) else Float32(0.0))
+
+        # 6. Half-vector in local frame, unstretch
+        var nh_local = bt1 * tx + bt2 * ty + vh * tz
+        var wh_local = SIMD[DType.float32, 3](alpha * nh_local[0], alpha * nh_local[1], max(Float32(0.0), nh_local[2]))
+        var wh_len = dot(wh_local, wh_local)
+        var wh_unit = wh_local * (Float32(1.0) / sqrt(wh_len)) if wh_len > Float32(0.0) else normal
+
+        # 7. Half-vector back to world space
+        var wh_world = t1 * wh_unit[0] + t2 * wh_unit[1] + normal * wh_unit[2]
+        var wh_wlen = dot(wh_world, wh_world)
+        if wh_wlen > Float32(0.0):
+            wh_world = wh_world * (Float32(1.0) / sqrt(wh_wlen))
+
+        # 8. Reflect wo around wh
+        var wo_dot_wh = dot(wo, wh_world)
+        scatter_dir = wh_world * (Float32(2.0) * wo_dot_wh) - wo
+        var sd_len = dot(scatter_dir, scatter_dir)
+        if sd_len > Float32(0.0):
+            scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
+
+        # 9. Schlick Fresnel for conductor using albedo as F0
+        var cos_wh = max(Float32(0.0), wo_dot_wh)
+        var one_m = Float32(1.0) - cos_wh
+        var one_m2 = one_m * one_m
+        var schlick = one_m2 * one_m2 * one_m
+        var f0_luma = mat.albedo.luma()
+        fresnel_weight = f0_luma + (Float32(1.0) - f0_luma) * schlick
+
+        # Clamp if wi went below surface
+        if dot(scatter_dir, normal) <= Float32(0.0):
+            path_ptr[].active = 0
+            path_ptr[].pcgState = pcg.state
+            return
+
+    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], scatter_dir[0], scatter_dir[1], scatter_dir[2])
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = mat.albedo
-    path_ptr[].throughput *= mat.albedo
+    path_ptr[].throughput *= mat.albedo * fresnel_weight
+    path_ptr[].specularBounce = Int8(1)
+    path_ptr[].lastBsdfPdf = Float32(0.0)
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
-    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     if path_ptr[].bounce > 1:
         var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
@@ -677,8 +764,8 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
     if mat.type == 2:
         # Emissive surface hit.
-        if path_ptr[].bounce == 0:
-            # Camera ray directly hit the light — always add full emission.
+        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+            # Camera ray or must-follow specular chain — always add full emission.
             path_ptr[].estimate += path_ptr[].throughput * mat.emission
         else:
             # Arrived via BSDF scatter from the previous bounce.
@@ -687,9 +774,6 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if pdf_bsdf > Float32(0.0) and inter.primId.type == Int8(3):
                 var al_idx = Int(inter.primId.id1)
                 var al = areaLights[al_idx]
-                # Solid-angle PDF for uniform area sampling of this triangle light:
-                # pdf_light = dist² / (cos_l * total_area * nLights)
-                # We need the surface normal of the emitter triangle.
                 var lmesh_idx = Int(inter.primId.id2 >> 32)
                 var lbase   = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
                 var lmesh   = meshes[lmesh_idx]
@@ -847,6 +931,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     # For cosine-weighted hemisphere: pdf = cos(theta) / pi = dot(dir, normal) / pi
     var cos_scatter = dot(dir, normal)
     path_ptr[].lastBsdfPdf = (cos_scatter if cos_scatter > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
+    path_ptr[].specularBounce = Int8(0)
     path_ptr[].throughput *= alb
     path_ptr[].bounce += 1
 

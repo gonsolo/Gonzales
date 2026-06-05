@@ -54,6 +54,8 @@ struct Material_C(TrivialRegisterPassable):
     var albedo: RGB
     var emission: RGB
     var tex_idx: Int32   # -1 = no texture; >= 0 = index into texture table
+    var roughU: Float32  # GGX uroughness (conductor); 0 = perfect mirror
+    var roughV: Float32  # GGX vroughness (conductor); 0 = perfect mirror
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
@@ -92,7 +94,7 @@ struct PathState_C(TrivialRegisterPassable):
     var pcgState: UInt64
     var pcgInc: UInt64
     var active: Int8
-    var _pad1: Int8
+    var specularBounce: Int8   # 1 if previous scatter was a delta BSDF (mirror/glass)
     var _pad2: Int8
     var _pad3: Int8
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
