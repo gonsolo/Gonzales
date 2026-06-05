@@ -732,6 +732,9 @@ struct _PscState:
     var scene_dir:     UnsafePointer[UInt8, MutAnyOrigin]
 
     var named_tex_idx: UnsafePointer[Int32, MutAnyOrigin]
+    var named_mix1:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name1 (PSC_MAX_NAMED * PSC_NAME_MAX)
+    var named_mix2:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name2
+    var named_amount:  UnsafePointer[Float32, MutAnyOrigin] # mix blend amount
     var tex_names:     UnsafePointer[UInt8, MutAnyOrigin]
     var tex_files:     UnsafePointer[UInt8, MutAnyOrigin]
     var n_textures:    Int32
@@ -972,6 +975,13 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].named_tex_idx = alloc[Int32](PSC_MAX_NAMED)
     for i in range(PSC_MAX_NAMED):
         s[0].named_tex_idx[i] = Int32(-1)
+    s[0].named_mix1   = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
+    s[0].named_mix2   = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
+    s[0].named_amount  = alloc[Float32](PSC_MAX_NAMED)
+    for i in range(PSC_MAX_NAMED):
+        s[0].named_mix1[i * PSC_NAME_MAX] = UInt8(0)
+        s[0].named_mix2[i * PSC_NAME_MAX] = UInt8(0)
+        s[0].named_amount[i] = Float32(0.5)
     s[0].tex_names  = alloc[UInt8](PSC_MAX_TEX * PSC_NAME_MAX)
     s[0].tex_files  = alloc[UInt8](PSC_MAX_TEX * PSC_FILE_MAX * 2)
     s[0].n_textures = Int32(0)
@@ -1015,6 +1025,9 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].mesh_has_uvs.free()
     s[0].scene_dir.free()
     s[0].named_tex_idx.free()
+    s[0].named_mix1.free()
+    s[0].named_mix2.free()
+    s[0].named_amount.free()
     s[0].tex_names.free()
     s[0].tex_files.free()
     s[0].dist_dirs.free(); s[0].dist_rgb.free()
@@ -1182,6 +1195,10 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
     var tex_idx_for_mat = Int32(-1)
+    var mix_name1 = alloc[UInt8](PSC_NAME_MAX)
+    var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
+    var mix_amount = Float32(0.5)
+    mix_name1[0] = UInt8(0); mix_name2[0] = UInt8(0)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var str_val  = alloc[UInt8](64)
@@ -1202,6 +1219,10 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
                 mat_type = Int8(5)
             elif _psc_streq(str_val, "diffusetransmission"):
                 mat_type = Int8(6)
+            elif _psc_streq(str_val, "coatedconductor"):
+                mat_type = Int8(7)
+            elif _psc_streq(str_val, "mix"):
+                mat_type = Int8(8)
             else:
                 mat_type = Int8(1)
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
@@ -1230,6 +1251,19 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
                     break
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
+        elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
+            mix_amount = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "materials") and _psc_type_is_str(type_buf):
+            # Two quoted material names for mix
+            var tmp1 = alloc[UInt8](PSC_NAME_MAX)
+            var tmp2 = alloc[UInt8](PSC_NAME_MAX)
+            _ = mojo_scanner_parse_quoted_string(handle, tmp1, PSC_NAME_MAX)
+            _ = mojo_scanner_parse_quoted_string(handle, tmp2, PSC_NAME_MAX)
+            _psc_strncpy(mix_name1, tmp1, PSC_NAME_MAX)
+            _psc_strncpy(mix_name2, tmp2, PSC_NAME_MAX)
+            tmp1.free(); tmp2.free()
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
@@ -1247,9 +1281,13 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         s[0].named_roughU[idx] = mat_roughU
         s[0].named_roughV[idx] = mat_roughV
         s[0].named_tex_idx[idx] = tex_idx_for_mat
+        _psc_strncpy(s[0].named_mix1 + idx * PSC_NAME_MAX, mix_name1, PSC_NAME_MAX)
+        _psc_strncpy(s[0].named_mix2 + idx * PSC_NAME_MAX, mix_name2, PSC_NAME_MAX)
+        s[0].named_amount[idx] = mix_amount
         s[0].n_named += 1
 
     mat_name.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free()
+    mix_name1.free(); mix_name2.free()
 
 fn _psc_handle_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                                s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1809,6 +1847,24 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         elif mt == Int8(5):  # coated diffuse: emission.r holds IOR
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
+        elif mt == Int8(7):  # coated conductor: emission.r holds IOR (clearcoat eta)
+            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].emission = RGB(ior, Float32(0), Float32(0))
+        elif mt == Int8(8):  # mix: resolve sub-material names to indices
+            var m1_name = s[0].named_mix1 + i * PSC_NAME_MAX
+            var m2_name = s[0].named_mix2 + i * PSC_NAME_MAX
+            var idx1 = Int32(0)  # default to first material
+            var idx2 = Int32(0)
+            for j in range(n_regular):
+                if _psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m1_name) == 0:
+                    idx1 = Int32(j)
+                if _psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m2_name) == 0:
+                    idx2 = Int32(j)
+            # Pack both indices into tex_idx: high 16 bits = idx2, low 16 bits = idx1
+            mats[i].tex_idx = (idx2 << 16) | (idx1 & Int32(0xFFFF))
+            mats[i].roughU  = s[0].named_amount[i]  # blend factor
+            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
         else:
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))

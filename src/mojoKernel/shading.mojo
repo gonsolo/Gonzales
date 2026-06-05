@@ -742,6 +742,256 @@ fn shade_conductor(
     path_ptr[].pcgState = pcg.state
 
 
+# CoatedConductor: dielectric clearcoat over GGX conductor.
+# Schlick Fresnel at the air/coat interface: F_schlick(cos_theta, 0, 1, ior)
+# selects between coat specular reflection (F) and conducting GGX layer (1-F).
+# This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
+@always_inline
+fn shade_coated_conductor(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var normal = cross(p1 - p0, p2 - p0)
+    var nlen = dot(normal, normal)
+    if nlen > Float32(0.0):
+        normal = normal * (Float32(1.0) / sqrt(nlen))
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    if dot(normal, ray_dir) > Float32(0.0):
+        normal = -normal
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var cos_theta = max(Float32(0.0), -dot(ray_dir, normal))
+    var ior = mat.emission.r if mat.emission.r > Float32(1.0) else Float32(1.5)
+
+    # Schlick Fresnel approximation for coat interface (air→dielectric)
+    var r0 = (ior - Float32(1.0)) / (ior + Float32(1.0))
+    r0 = r0 * r0
+    var one_m = Float32(1.0) - cos_theta
+    var one_m2 = one_m * one_m
+    var f_coat = r0 + (Float32(1.0) - r0) * one_m2 * one_m2 * one_m
+
+    var scatter_dir: SIMD[DType.float32, 3]
+    var tput_scale: RGB
+
+    if pcg.next_float() < f_coat:
+        # Coat reflection: perfect specular off the coat surface
+        scatter_dir = ray_dir - normal * (Float32(2.0) * dot(ray_dir, normal))
+        var sd_len = dot(scatter_dir, scatter_dir)
+        if sd_len > Float32(0.0):
+            scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
+        tput_scale = RGB(Float32(1.0), Float32(1.0), Float32(1.0))  # coat is clear
+        path_ptr[].specularBounce = Int8(1)
+    else:
+        # Conductor lobe: GGX VNDF (reuse conductor logic with mat.roughU/roughV)
+        var alpha_u = max(mat.roughU * mat.roughU, Float32(0.0001))
+        var alpha_v = max(mat.roughV * mat.roughV, Float32(0.0001))
+        var alpha = (alpha_u + alpha_v) * Float32(0.5)
+        var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+        var an = Float32(-1.0) / (sign_n + normal[2])
+        var bn = normal[0] * normal[1] * an
+        var t1 = SIMD[DType.float32, 3](Float32(1.0) + sign_n * normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
+        var t2 = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+        var wo = -ray_dir
+        var wo_x = dot(wo, t1); var wo_y = dot(wo, t2); var wo_z = dot(wo, normal)
+        var wos = SIMD[DType.float32, 3](wo_x * alpha, wo_y * alpha, wo_z)
+        var wos_len = sqrt(dot(wos, wos))
+        var vh = wos * (Float32(1.0) / wos_len) if wos_len > Float32(0.0) else normal
+        var sign_vh = Float32(1.0) if vh[2] >= Float32(0.0) else Float32(-1.0)
+        var av = Float32(-1.0) / (sign_vh + vh[2])
+        var bv = vh[0] * vh[1] * av
+        var bt1 = SIMD[DType.float32, 3](Float32(1.0) + sign_vh*vh[0]*vh[0]*av, sign_vh*bv, -sign_vh*vh[0])
+        var bt2 = SIMD[DType.float32, 3](bv, sign_vh + vh[1]*vh[1]*av, -vh[1])
+        var u1 = pcg.next_float(); var u2 = pcg.next_float()
+        var r_disk = sqrt(u1)
+        var phi = Float32(6.28318530718) * u2
+        var tx = r_disk * cos(phi); var ty_raw = r_disk * sin(phi)
+        var s_corr = Float32(0.5) * (Float32(1.0) + vh[2])
+        var ty = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
+        var tz2 = Float32(1.0) - tx*tx - ty*ty
+        var tz = sqrt(tz2 if tz2 > Float32(0.0) else Float32(0.0))
+        var nh_local = bt1 * tx + bt2 * ty + vh * tz
+        var wh_local = SIMD[DType.float32, 3](alpha * nh_local[0], alpha * nh_local[1], max(Float32(0.0), nh_local[2]))
+        var wh_len = dot(wh_local, wh_local)
+        var wh_unit = wh_local * (Float32(1.0) / sqrt(wh_len)) if wh_len > Float32(0.0) else normal
+        var wh_world = t1 * wh_unit[0] + t2 * wh_unit[1] + normal * wh_unit[2]
+        var wh_wlen = dot(wh_world, wh_world)
+        if wh_wlen > Float32(0.0):
+            wh_world = wh_world * (Float32(1.0) / sqrt(wh_wlen))
+        var wo_dot_wh = dot(wo, wh_world)
+        scatter_dir = wh_world * (Float32(2.0) * wo_dot_wh) - wo
+        var sd_len = dot(scatter_dir, scatter_dir)
+        if sd_len > Float32(0.0):
+            scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
+        if dot(scatter_dir, normal) <= Float32(0.0):
+            path_ptr[].active = 0
+            path_ptr[].pcgState = pcg.state
+            return
+        var cos_wh = max(Float32(0.0), wo_dot_wh)
+        var one_m3 = Float32(1.0) - cos_wh
+        var one_m4 = one_m3 * one_m3
+        var schlick = one_m4 * one_m4 * one_m3
+        var f0_luma = mat.albedo.luma()
+        var f_metal = f0_luma + (Float32(1.0) - f0_luma) * schlick
+        tput_scale = mat.albedo * f_metal * (Float32(1.0) - f_coat)
+        path_ptr[].specularBounce = Int8(1)
+
+    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], scatter_dir[0], scatter_dir[1], scatter_dir[2])
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = mat.albedo
+    path_ptr[].throughput *= tput_scale
+    path_ptr[].lastBsdfPdf = Float32(0.0)
+    path_ptr[].bounce += 1
+    if path_ptr[].bounce > 1:
+        var lum = path_ptr[].throughput.luma()
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+    path_ptr[].pcgState = pcg.state
+
+
+# Mix material: randomly select one of two sub-materials using amount as probability.
+# Sub-material indices are packed into mat.tex_idx: low 16 bits = idx1, high 16 bits = idx2.
+# mat.roughU = blend amount (probability of picking mat2).
+@always_inline
+fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_idx: Int,
+    inter: Intersection_C,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    mat: Material_C,
+):
+    var packed = mat.tex_idx
+    var idx1 = Int(packed & Int32(0xFFFF))
+    var idx2 = Int((packed >> 16) & Int32(0xFFFF))
+    var amount = mat.roughU  # blend factor: 0 = all mat1, 1 = all mat2
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var chosen_idx: Int
+    if pcg.next_float() < amount:
+        chosen_idx = idx2
+    else:
+        chosen_idx = idx1
+    path_ptr[].pcgState = pcg.state
+    # Recurse: shade with the chosen sub-material
+    # Guard against self-referential mix (cycle) — if sub-mat is also mix,
+    # fall through to diffuse to avoid infinite recursion.
+    var sub_mat = materials[chosen_idx]
+    if sub_mat.type == Int8(8):
+        sub_mat.type = Int8(1)  # fallback to diffuse
+    if sub_mat.type == Int8(3):
+        shade_conductor(path_ptr, inter, meshes, sub_mat)
+    elif sub_mat.type == Int8(4):
+        shade_dielectric(path_ptr, inter, meshes, sub_mat)
+    elif sub_mat.type == Int8(7):
+        shade_coated_conductor(path_ptr, inter, meshes, sub_mat)
+    elif sub_mat.type == Int8(5):
+        shade_coated_diffuse[use_gpu, enqueue_shadow](
+            path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, sub_mat,
+            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
+    elif sub_mat.type == Int8(6):
+        shade_diffuse_transmission[use_gpu, enqueue_shadow](
+            path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
+            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
+    else:
+        # Diffuse fallback (type 1 or unknown)
+        sub_mat.type = Int8(1)
+        # re-use diffuse path via a minimal stub
+        path_ptr[].active = Int8(0)  # will be reset by diffuse path — set inactive, diffuse handles restart
+        # Actually just let shade_nee_core handle it below; override type in materials array would
+        # corrupt shared data. Instead, manually inline a simple lambertian bounce.
+        var mesh_idx: Int
+        var base_vidx: Int
+        if inter.primId.type == 0:
+            mesh_idx = Int(inter.primId.id1)
+            base_vidx = Int(inter.primId.id2)
+        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+            mesh_idx = Int(inter.primId.id2 >> 32)
+            base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+        else:
+            path_ptr[].active = 0
+            return
+        var mesh = meshes[mesh_idx]
+        var v0 = Int(mesh.vertexIndices[base_vidx])
+        var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+        var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+        var pp0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+        var pp1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+        var pp2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+        var normal = cross(pp1 - pp0, pp2 - pp0)
+        var nlen = dot(normal, normal)
+        if nlen > Float32(0.0):
+            normal = normal * (Float32(1.0) / sqrt(nlen))
+        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+        if dot(normal, ray_dir) > Float32(0.0):
+            normal = -normal
+        var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+        var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+        var pcg2 = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+        var u1 = pcg2.next_float(); var u2 = pcg2.next_float()
+        var phi = Float32(6.28318530718) * u2
+        var st = sqrt(u1)
+        var ct = sqrt(Float32(1.0) - u1)
+        var sign_n2 = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+        var an2 = Float32(-1.0) / (sign_n2 + normal[2])
+        var bn2 = normal[0] * normal[1] * an2
+        var t1b = SIMD[DType.float32, 3](Float32(1.0) + sign_n2*normal[0]*normal[0]*an2, sign_n2*bn2, -sign_n2*normal[0])
+        var t2b = SIMD[DType.float32, 3](bn2, sign_n2 + normal[1]*normal[1]*an2, -normal[1])
+        var lx = cos(phi) * st; var ly = sin(phi) * st
+        var scatter_dir = t1b * lx + t2b * ly + normal * ct
+        var sd_len = dot(scatter_dir, scatter_dir)
+        if sd_len > Float32(0.0):
+            scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
+        path_ptr[].active = Int8(1)
+        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], scatter_dir[0], scatter_dir[1], scatter_dir[2])
+        if path_ptr[].bounce == 0:
+            path_ptr[].albedo = sub_mat.albedo
+        path_ptr[].throughput *= sub_mat.albedo
+        path_ptr[].specularBounce = Int8(0)
+        path_ptr[].lastBsdfPdf = Float32(1.0) / Float32(3.14159265359)
+        path_ptr[].bounce += 1
+        if path_ptr[].bounce > 1:
+            var lum = path_ptr[].throughput.luma()
+            var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+            if pcg2.next_float() < q:
+                path_ptr[].active = 0
+            else:
+                path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+        path_ptr[].pcgState = pcg2.state
+
+
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
@@ -852,6 +1102,16 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         shade_diffuse_transmission[use_gpu, enqueue_shadow](
             path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
             areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
+        return
+
+    if mat.type == 7:
+        shade_coated_conductor(path_ptr, inter, meshes, mat)
+        return
+
+    if mat.type == 8:
+        shade_mix[use_gpu, enqueue_shadow](
+            path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
+            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks, mat)
         return
 
     if mat.type != 1:
