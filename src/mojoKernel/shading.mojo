@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
 
@@ -132,7 +132,7 @@ fn shade_core(
             normal = normal * (1.0 / sqrt(nlen))
 
         # Orient normal towards ray
-        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
         if dot(normal, ray_dir) > 0:
             normal = normal * -1.0
 
@@ -162,8 +162,8 @@ fn shade_core(
             dir = dir * (1.0 / sqrt(dlen))
 
         # Update Ray
-        var org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ) + ray_dir * inter.tHit + normal * 0.0001
-        path_ptr[].ray = Ray_C(org[0], org[1], org[2], dir[0], dir[1], dir[2])
+        var org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + ray_dir * inter.tHit + normal * 0.0001
+        path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
 
         # Update Throughput (albedo)
         path_ptr[].throughput *= mat.albedo
@@ -215,12 +215,12 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     if nlen > Float32(0.0):
         normal = normal * (Float32(1.0) / sqrt(nlen))
 
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     # Orient normal toward incoming ray
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
 
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     # Balance heuristic: choose reflect vs transmit proportional to luminance
@@ -281,14 +281,9 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
                 var weight_dt = lobe_alb * al.emission * (cos_s * w_dt * lobe_w / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight_dt
                 comptime if enqueue_shadow:
-                    shadow_tasks[path_idx] = ShadowTask_C(
-                        hit_point[0], hit_point[1], hit_point[2],
-                        shadow_dir[0], shadow_dir[1], shadow_dir[2],
-                        dist * Float32(0.9999),
-                        contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                    shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                 else:
-                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                          shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                         path_ptr[].estimate += contrib
 
@@ -313,7 +308,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     if dlen > Float32(0.0):
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
-    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
 
     # Throughput: lobe_alb / pdf_bsdf * lobe_selection_weight
     # = lobe_alb / (cos/π) * (total/p_lobe) → lobe_alb * π/cos * lobe_w
@@ -387,11 +382,11 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if nlen > Float32(0.0):
         normal = normal * (Float32(1.0) / sqrt(nlen))
 
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
 
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -411,7 +406,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         var rlen = dot(refl, refl)
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
     else:
         # Diffuse bounce through coating — NEE direct light sampling
         if areaLightCount > 0:
@@ -451,14 +446,9 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var contrib = path_ptr[].throughput * weight_cd
                     @parameter
                     if enqueue_shadow:
-                        shadow_tasks[path_idx] = ShadowTask_C(
-                            hit_point[0], hit_point[1], hit_point[2],
-                            shadow_dir[0], shadow_dir[1], shadow_dir[2],
-                            dist * Float32(0.9999),
-                            contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                     else:
-                        var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                              shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                        var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                         if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                             path_ptr[].estimate += contrib
 
@@ -482,7 +472,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         if dlen > Float32(0.0):
             dir = dir * (Float32(1.0) / sqrt(dlen))
 
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
         # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/pi).
         var cos_sc = dot(dir, normal)
         path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
@@ -538,8 +528,8 @@ fn shade_dielectric(
     if nlen > Float32(0.0):
         geom_normal = geom_normal * (Float32(1.0) / sqrt(nlen))
 
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
 
     var ior = mat.albedo.r
     var entering = dot(ray_dir, geom_normal) < Float32(0.0)
@@ -566,7 +556,7 @@ fn shade_dielectric(
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
         var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
     else:
         # Refract: t = eta*d + (eta*cos_i - sqrt(1 - sin2_t))*n
         var cos_t = sqrt(Float32(1.0) - sin2_t)
@@ -575,7 +565,7 @@ fn shade_dielectric(
         if rlen > Float32(0.0):
             refr = refr * (Float32(1.0) / sqrt(rlen))
         var hit_point = ray_org + ray_dir * inter.tHit - normal * Float32(0.0001)
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refr[0], refr[1], refr[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refr[0], refr[1], refr[2]))
 
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = RGB(Float32(1), Float32(1), Float32(1))
@@ -629,8 +619,8 @@ fn shade_thin_dielectric(
     if nlen > Float32(0.0):
         geom_normal = geom_normal * (Float32(1.0) / sqrt(nlen))
 
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
 
     # For thin dielectric, always use outward-facing normal
     var entering = dot(ray_dir, geom_normal) < Float32(0.0)
@@ -656,11 +646,11 @@ fn shade_thin_dielectric(
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
         var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], refl[0], refl[1], refl[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
     else:
         # Transmit — same direction, offset past the surface
         var hit_point = ray_org + ray_dir * inter.tHit - normal * Float32(0.0001)
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], ray_dir[0], ray_dir[1], ray_dir[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ray_dir[0], ray_dir[1], ray_dir[2]))
 
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = RGB(Float32(1), Float32(1), Float32(1))
@@ -710,11 +700,11 @@ fn shade_conductor(
     if nlen > Float32(0.0):
         normal = normal * (Float32(1.0) / sqrt(nlen))
 
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
 
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var alpha_x = max(mat.roughU * mat.roughU, Float32(0.0001))
@@ -826,7 +816,7 @@ fn shade_conductor(
             path_ptr[].pcgState = pcg.state
             return
 
-    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], scatter_dir[0], scatter_dir[1], scatter_dir[2])
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(scatter_dir[0], scatter_dir[1], scatter_dir[2]))
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = mat.albedo
     path_ptr[].throughput *= mat.albedo * fresnel_weight
@@ -879,10 +869,10 @@ fn shade_coated_conductor(
     var nlen = dot(normal, normal)
     if nlen > Float32(0.0):
         normal = normal * (Float32(1.0) / sqrt(nlen))
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -961,7 +951,7 @@ fn shade_coated_conductor(
         tput_scale = mat.albedo * f_metal * (Float32(1.0) - f_coat)
         path_ptr[].specularBounce = Int8(1)
 
-    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], scatter_dir[0], scatter_dir[1], scatter_dir[2])
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(scatter_dir[0], scatter_dir[1], scatter_dir[2]))
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = mat.albedo
     path_ptr[].throughput *= tput_scale
@@ -1057,10 +1047,10 @@ fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
         var nlen = dot(normal, normal)
         if nlen > Float32(0.0):
             normal = normal * (Float32(1.0) / sqrt(nlen))
-        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
         if dot(normal, ray_dir) > Float32(0.0):
             normal = -normal
-        var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+        var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
         var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
         var pcg2 = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
         var u1 = pcg2.next_float(); var u2 = pcg2.next_float()
@@ -1078,7 +1068,7 @@ fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
         if sd_len > Float32(0.0):
             scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
         path_ptr[].active = Int8(1)
-        path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], scatter_dir[0], scatter_dir[1], scatter_dir[2])
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(scatter_dir[0], scatter_dir[1], scatter_dir[2]))
         if path_ptr[].bounce == 0:
             path_ptr[].albedo = sub_mat.albedo
         path_ptr[].throughput *= sub_mat.albedo
@@ -1184,7 +1174,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
-        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
         for inf_i in range(infiniteLightCount):
             var ilight = infiniteLights[inf_i]
             var env_rgb: RGB
@@ -1259,7 +1249,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var lnlen = dot(lnorm, lnorm)
                 if lnlen > Float32(0.0):
                     lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
-                var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+                var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                 var cos_l = -dot(lnorm, ray_dir)
                 var dist  = inter.tHit
                 var dist2 = dist * dist
@@ -1330,7 +1320,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     if nlen > Float32(0.0):
         normal = normal * (Float32(1.0) / sqrt(nlen))
 
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
 
@@ -1340,7 +1330,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
 
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.orgX, path_ptr[].ray.orgY, path_ptr[].ray.orgZ)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
@@ -1384,21 +1374,16 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var contrib = path_ptr[].throughput * weight
                 @parameter
                 if enqueue_shadow:
-                    shadow_tasks[path_idx] = ShadowTask_C(
-                        hit_point[0], hit_point[1], hit_point[2],
-                        shadow_dir[0], shadow_dir[1], shadow_dir[2],
-                        dist * Float32(0.9999),
-                        contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                    shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                 else:
-                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                          shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                         path_ptr[].estimate += contrib
 
     # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
     for dl_i in range(distantLightCount):
         var dl = distantLights[dl_i]
-        var ldir = SIMD[DType.float32, 3](dl.dirX, dl.dirY, dl.dirZ)  # direction toward scene (away from light)
+        var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)  # direction toward scene (away from light)
         var to_light = -ldir  # direction from hit point toward the light
         var cos_s = dot(normal, to_light)
         if cos_s > Float32(0.0):
@@ -1409,20 +1394,16 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var t_max = Float32(2000.0)
             @parameter
             if enqueue_shadow:
-                shadow_tasks[path_idx] = ShadowTask_C(
-                    hit_point[0], hit_point[1], hit_point[2],
-                    to_light[0], to_light[1], to_light[2],
-                    t_max, contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]), t_max, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
             else:
-                var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                      to_light[0], to_light[1], to_light[2])
+                var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]))
                 if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, t_max):
                     path_ptr[].estimate += contrib
 
     # ── Point light NEE (delta light: MIS weight = 1) ────────────────────────
     for pl_i in range(pointLightCount):
         var pl = pointLights[pl_i]
-        var lpos = SIMD[DType.float32, 3](pl.posX, pl.posY, pl.posZ)
+        var lpos = SIMD[DType.float32, 3](pl.position.x, pl.position.y, pl.position.z)
         var to_light = lpos - hit_point
         var dist_sq = dot(to_light, to_light)
         var dist = sqrt(dist_sq)
@@ -1436,14 +1417,9 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
                 @parameter
                 if enqueue_shadow:
-                    shadow_tasks[path_idx] = ShadowTask_C(
-                        hit_point[0], hit_point[1], hit_point[2],
-                        ldir[0], ldir[1], ldir[2],
-                        dist * Float32(0.9999),
-                        contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                    shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ldir[0], ldir[1], ldir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                 else:
-                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
-                                          ldir[0], ldir[1], ldir[2])
+                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ldir[0], ldir[1], ldir[2]))
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                         path_ptr[].estimate += contrib
 
@@ -1465,7 +1441,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     if dlen > Float32(0.0):
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
-    path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = alb
     # Store BSDF pdf for MIS weighting if the next bounce hits an emitter.

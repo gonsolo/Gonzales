@@ -2,7 +2,7 @@ from std.ffi import external_call
 from .ply import mojo_load_ply
 from std.math import tan, sqrt, acos, atan2, sin
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C
 from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
 from .bvh import BVH2Node, SceneDescriptor2_C, mojo_build_bvh2
 from .sampling import mojo_gaussian_norm
@@ -2113,7 +2113,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         var dl_buf = alloc[DistantLight_C](nd)
         for i in range(nd):
             dl_buf[i] = DistantLight_C(
-                s[0].dist_dirs[i*3+0], s[0].dist_dirs[i*3+1], s[0].dist_dirs[i*3+2],
+                Vec3f(s[0].dist_dirs[i*3+0], s[0].dist_dirs[i*3+1], s[0].dist_dirs[i*3+2]),
                 Float32(0),
                 RGB(s[0].dist_rgb[i*3+0], s[0].dist_rgb[i*3+1], s[0].dist_rgb[i*3+2]),
                 Float32(0))
@@ -2127,7 +2127,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         var pl_buf = alloc[PointLight_C](np2)
         for i in range(np2):
             pl_buf[i] = PointLight_C(
-                s[0].pt_pos[i*3+0], s[0].pt_pos[i*3+1], s[0].pt_pos[i*3+2],
+                Point3f(s[0].pt_pos[i*3+0], s[0].pt_pos[i*3+1], s[0].pt_pos[i*3+2]),
                 Float32(0),
                 RGB(s[0].pt_rgb[i*3+0], s[0].pt_rgb[i*3+1], s[0].pt_rgb[i*3+2]),
                 Float32(0))

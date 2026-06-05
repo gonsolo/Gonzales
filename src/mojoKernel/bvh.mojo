@@ -1,34 +1,30 @@
 from std.memory import alloc
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, PixelSample_C
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, PixelSample_C, Point3f, Vec3f
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
+# Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
 
 @fieldwise_init
 struct BVH2Node(TrivialRegisterPassable):
-    var boundsMinX: Float32
-    var boundsMinY: Float32
-    var boundsMinZ: Float32
-    var boundsMaxX: Float32
-    var boundsMaxY: Float32
-    var boundsMaxZ: Float32
+    var min: Point3f        # AABB minimum corner
+    var max: Point3f        # AABB maximum corner
     var offset: Int32       # interior: right child index, leaf: primIds offset
     var count: Int32        # 0 = interior, >0 = leaf primitive count
 
 @always_inline
 fn intersect_aabb(
-    boundsMinX: Float32, boundsMinY: Float32, boundsMinZ: Float32,
-    boundsMaxX: Float32, boundsMaxY: Float32, boundsMaxZ: Float32,
+    bmin: Point3f, bmax: Point3f,
     rdirX: Float32, rdirY: Float32, rdirZ: Float32,
     orgRdirX: Float32, orgRdirY: Float32, orgRdirZ: Float32,
     nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
     tMax: Float32
 ) -> Tuple[Bool, Float32]:
-    var nearX = boundsMinX if nearXIsMin else boundsMaxX
-    var farX  = boundsMaxX if nearXIsMin else boundsMinX
-    var nearY = boundsMinY if nearYIsMin else boundsMaxY
-    var farY  = boundsMaxY if nearYIsMin else boundsMinY
-    var nearZ = boundsMinZ if nearZIsMin else boundsMaxZ
-    var farZ  = boundsMaxZ if nearZIsMin else boundsMinZ
+    var nearX = bmin.x if nearXIsMin else bmax.x
+    var farX  = bmax.x if nearXIsMin else bmin.x
+    var nearY = bmin.y if nearYIsMin else bmax.y
+    var farY  = bmax.y if nearYIsMin else bmin.y
+    var nearZ = bmin.z if nearZIsMin else bmax.z
+    var farZ  = bmax.z if nearZIsMin else bmin.z
 
     var tNearX = nearX * rdirX - orgRdirX
     var tNearY = nearY * rdirY - orgRdirY
@@ -82,13 +78,13 @@ fn traverse_bvh2_core(
     resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
 ):
 
-    var rdirX = Float32(1.0) / ray.dirX
-    var rdirY = Float32(1.0) / ray.dirY
-    var rdirZ = Float32(1.0) / ray.dirZ
+    var rdirX = Float32(1.0) / ray.direction.x
+    var rdirY = Float32(1.0) / ray.direction.y
+    var rdirZ = Float32(1.0) / ray.direction.z
 
-    var orgRdirX = ray.orgX * rdirX
-    var orgRdirY = ray.orgY * rdirY
-    var orgRdirZ = ray.orgZ * rdirZ
+    var orgRdirX = ray.origin.x * rdirX
+    var orgRdirY = ray.origin.y * rdirY
+    var orgRdirZ = ray.origin.z * rdirZ
 
     var nearXIsMin = rdirX >= Float32(0.0)
     var nearYIsMin = rdirY >= Float32(0.0)
@@ -104,8 +100,8 @@ fn traverse_bvh2_core(
     var toVisit = 0
     var current = 0
 
-    var ray_org = SIMD[DType.float32, 3](ray.orgX, ray.orgY, ray.orgZ)
-    var ray_dir = SIMD[DType.float32, 3](ray.dirX, ray.dirY, ray.dirZ)
+    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
 
     while True:
         var node = bvh2Nodes[current]
@@ -172,14 +168,12 @@ fn traverse_bvh2_core(
             var rightNode = bvh2Nodes[rightIdx]
 
             var leftHit = intersect_aabb(
-                leftNode.boundsMinX, leftNode.boundsMinY, leftNode.boundsMinZ,
-                leftNode.boundsMaxX, leftNode.boundsMaxY, leftNode.boundsMaxZ,
+                leftNode.min, leftNode.max,
                 rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
-                rightNode.boundsMinX, rightNode.boundsMinY, rightNode.boundsMinZ,
-                rightNode.boundsMaxX, rightNode.boundsMaxY, rightNode.boundsMaxZ,
+                rightNode.min, rightNode.max,
                 rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
@@ -225,12 +219,12 @@ fn any_hit_bvh2_core(
     ray: Ray_C,
     tMax: Float32,
 ) -> Bool:
-    var rdirX = Float32(1.0) / ray.dirX
-    var rdirY = Float32(1.0) / ray.dirY
-    var rdirZ = Float32(1.0) / ray.dirZ
-    var orgRdirX = ray.orgX * rdirX
-    var orgRdirY = ray.orgY * rdirY
-    var orgRdirZ = ray.orgZ * rdirZ
+    var rdirX = Float32(1.0) / ray.direction.x
+    var rdirY = Float32(1.0) / ray.direction.y
+    var rdirZ = Float32(1.0) / ray.direction.z
+    var orgRdirX = ray.origin.x * rdirX
+    var orgRdirY = ray.origin.y * rdirY
+    var orgRdirZ = ray.origin.z * rdirZ
     var nearXIsMin = rdirX >= Float32(0.0)
     var nearYIsMin = rdirY >= Float32(0.0)
     var nearZIsMin = rdirZ >= Float32(0.0)
@@ -238,8 +232,8 @@ fn any_hit_bvh2_core(
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
-    var ray_org = SIMD[DType.float32, 3](ray.orgX, ray.orgY, ray.orgZ)
-    var ray_dir = SIMD[DType.float32, 3](ray.dirX, ray.dirY, ray.dirZ)
+    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
     while True:
         var node = bvh2Nodes[current]
         if node.count > 0:
@@ -278,13 +272,11 @@ fn any_hit_bvh2_core(
             var leftNode = bvh2Nodes[leftIdx]
             var rightNode = bvh2Nodes[rightIdx]
             var leftHit = intersect_aabb(
-                leftNode.boundsMinX, leftNode.boundsMinY, leftNode.boundsMinZ,
-                leftNode.boundsMaxX, leftNode.boundsMaxY, leftNode.boundsMaxZ,
+                leftNode.min, leftNode.max,
                 rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
                 nearXIsMin, nearYIsMin, nearZIsMin, tMax)
             var rightHit = intersect_aabb(
-                rightNode.boundsMinX, rightNode.boundsMinY, rightNode.boundsMinZ,
-                rightNode.boundsMaxX, rightNode.boundsMaxY, rightNode.boundsMaxZ,
+                rightNode.min, rightNode.max,
                 rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
                 nearXIsMin, nearYIsMin, nearZIsMin, tMax)
             var leftIsHit = leftHit[0]
@@ -395,7 +387,7 @@ fn build_bvh2_node(
 
     # Leaf when geometry is degenerate or a single primitive.
     if sa == Float32(0.0) or count == 1 or cmax_d == cmin_d:
-        out_nodes[my] = BVH2Node(bminx, bminy, bminz, bmaxx, bmaxy, bmaxz,
+        out_nodes[my] = BVH2Node(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz),
                                  Int32(start), Int32(count))
         return Int32(my)
 
@@ -492,7 +484,7 @@ fn build_bvh2_node(
         # else: leave mid = -1 (leaf)
 
     if mid < 0:
-        out_nodes[my] = BVH2Node(bminx, bminy, bminz, bmaxx, bmaxy, bmaxz,
+        out_nodes[my] = BVH2Node(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz),
                                  Int32(start), Int32(count))
         return Int32(my)
 
@@ -501,7 +493,7 @@ fn build_bvh2_node(
                         out_nodes, node_count, prims_per_node)
     var right = build_bvh2_node(widx, wmin, wmax, mid, end,
                                 out_nodes, node_count, prims_per_node)
-    out_nodes[my] = BVH2Node(bminx, bminy, bminz, bmaxx, bmaxy, bmaxz,
+    out_nodes[my] = BVH2Node(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz),
                              right, Int32(0))
     return Int32(my)
 

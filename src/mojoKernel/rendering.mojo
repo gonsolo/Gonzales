@@ -2,7 +2,7 @@ from std.math import ceildiv, sqrt
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core
 from .shading import shade_core_cpu_nee
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64
@@ -120,7 +120,7 @@ def mojo_render_tile_v2(
 
                 var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, Int32(si), sp.rngSeed)
                 paths[idx] = PathState_C(
-                    Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
+                    Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(worldDir[0], worldDir[1], worldDir[2])),
                     RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
                     RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
                     RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -235,7 +235,7 @@ def mojo_render_tile(
             worldDir = worldDir * (Float32(1.0) / sqrt(dirLen))
 
         paths[i] = PathState_C(
-            Ray_C(orgX, orgY, orgZ, worldDir[0], worldDir[1], worldDir[2]),
+            Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(worldDir[0], worldDir[1], worldDir[2])),
             RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
             RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
             RGB(Float32(0.0), Float32(0.0), Float32(0.0)),

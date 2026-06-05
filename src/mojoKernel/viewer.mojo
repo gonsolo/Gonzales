@@ -1,19 +1,15 @@
 from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt
+from .geometry import Point3f, Vec3f
 
 # Mirror of C struct CameraState from viewer.h (40 bytes, pointer-passed).
+# Layout: Point3f position (12) + Vec3f direction (12) + Vec3f up (12) + Int32 cameraChanged (4) = 40 B
 @fieldwise_init
 struct CameraState(TrivialRegisterPassable):
-    var posX: Float32
-    var posY: Float32
-    var posZ: Float32
-    var dirX: Float32
-    var dirY: Float32
-    var dirZ: Float32
-    var upX: Float32
-    var upY: Float32
-    var upZ: Float32
+    var position: Point3f
+    var direction: Vec3f
+    var up: Vec3f
     var cameraChanged: Int32
 
 # Opaque C pointer to the Viewer object.  Treat as UInt8* to stay away from
@@ -51,8 +47,8 @@ fn viewer_destroy(v: ViewerHandle):
 
 # Build a column-major camera-to-world matrix from position/direction/up.
 fn build_camera_to_world(cs: UnsafePointer[CameraState, MutAnyOrigin], c2w: UnsafePointer[Float32, MutAnyOrigin]):
-    var dx = cs[0].dirX; var dy = cs[0].dirY; var dz = cs[0].dirZ
-    var ux = cs[0].upX;  var uy = cs[0].upY;  var uz = cs[0].upZ
+    var dx = cs[0].direction.x; var dy = cs[0].direction.y; var dz = cs[0].direction.z
+    var ux = cs[0].up.x;        var uy = cs[0].up.y;        var uz = cs[0].up.z
 
     # right = normalize(cross(up, dir))
     var rx = uy * dz - uz * dy
@@ -74,5 +70,5 @@ fn build_camera_to_world(cs: UnsafePointer[CameraState, MutAnyOrigin], c2w: Unsa
     # Column 2: dir (forward = camera +Z)
     c2w[8] = dx;  c2w[9] = dy;  c2w[10] = dz; c2w[11] = Float32(0)
     # Column 3: position
-    c2w[12] = cs[0].posX; c2w[13] = cs[0].posY
-    c2w[14] = cs[0].posZ; c2w[15] = Float32(1)
+    c2w[12] = cs[0].position.x; c2w[13] = cs[0].position.y
+    c2w[14] = cs[0].position.z; c2w[15] = Float32(1)

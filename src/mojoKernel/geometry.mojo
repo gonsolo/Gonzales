@@ -1,6 +1,63 @@
 from std.ffi import external_call
 from std.memory import alloc
 
+# ── Primitive math types ───────────────────────────────────────────────────────
+# Point3f and Vec3f are semantically distinct (affine point vs. free vector)
+# but share an identical memory layout: 3 × Float32 = 12 bytes, packed.
+# This matches pbrt-v4 convention. Using named structs instead of SIMD[f32,3]
+# avoids the hidden 4th lane padding that SIMD[f32,N] requires (N must be a
+# power of 2), which would break cache-line-sized BVH node packing.
+
+@fieldwise_init
+struct Point3f(TrivialRegisterPassable):
+    """An affine point in 3D space (position)."""
+    var x: Float32
+    var y: Float32
+    var z: Float32
+
+    @always_inline
+    fn __add__(self, v: Vec3f) -> Point3f:
+        return Point3f(self.x + v.x, self.y + v.y, self.z + v.z)
+
+    @always_inline
+    fn __sub__(self, o: Point3f) -> Vec3f:
+        return Vec3f(self.x - o.x, self.y - o.y, self.z - o.z)
+
+    @always_inline
+    fn to_simd(self) -> SIMD[DType.float32, 3]:
+        return SIMD[DType.float32, 3](self.x, self.y, self.z)
+
+@fieldwise_init
+struct Vec3f(TrivialRegisterPassable):
+    """A free vector in 3D space (direction / displacement)."""
+    var x: Float32
+    var y: Float32
+    var z: Float32
+
+    @always_inline
+    fn __neg__(self) -> Vec3f:
+        return Vec3f(-self.x, -self.y, -self.z)
+
+    @always_inline
+    fn __mul__(self, s: Float32) -> Vec3f:
+        return Vec3f(self.x * s, self.y * s, self.z * s)
+
+    @always_inline
+    fn to_simd(self) -> SIMD[DType.float32, 3]:
+        return SIMD[DType.float32, 3](self.x, self.y, self.z)
+
+@always_inline
+fn vec3f(s: SIMD[DType.float32, 3]) -> Vec3f:
+    """Convert a SIMD[f32,3] to a Vec3f."""
+    return Vec3f(s[0], s[1], s[2])
+
+@always_inline
+fn point3f(s: SIMD[DType.float32, 3]) -> Point3f:
+    """Convert a SIMD[f32,3] to a Point3f."""
+    return Point3f(s[0], s[1], s[2])
+
+# ── Color ──────────────────────────────────────────────────────────────────────
+
 @fieldwise_init
 struct RGB(TrivialRegisterPassable):
     var r: Float32
@@ -30,6 +87,8 @@ struct RGB(TrivialRegisterPassable):
     @always_inline
     fn luma(self) -> Float32:
         return Float32(0.2126)*self.r + Float32(0.7152)*self.g + Float32(0.0722)*self.b
+
+# ── Scene primitives ───────────────────────────────────────────────────────────
 
 @fieldwise_init
 struct PrimId_C(TrivialRegisterPassable):
@@ -65,14 +124,15 @@ struct TriangleMesh_C(TrivialRegisterPassable):
     var vertexIndices: UnsafePointer[Int64, MutAnyOrigin]
     var uvs: UnsafePointer[Float32, MutAnyOrigin]   # nullable; stride 2 floats per vertex
 
+# ── Ray ───────────────────────────────────────────────────────────────────────
+
 @fieldwise_init
 struct Ray_C(TrivialRegisterPassable):
-    var orgX: Float32
-    var orgY: Float32
-    var orgZ: Float32
-    var dirX: Float32
-    var dirY: Float32
-    var dirZ: Float32
+    """A ray: a 3D origin point and a unit direction vector."""
+    var origin: Point3f
+    var direction: Vec3f
+
+# ── Intersection ──────────────────────────────────────────────────────────────
 
 @fieldwise_init
 struct Intersection_C(TrivialRegisterPassable):
@@ -84,6 +144,8 @@ struct Intersection_C(TrivialRegisterPassable):
     var _pad0: Int8
     var _pad1: Int8
     var _pad2: Int8
+
+# ── Path state ────────────────────────────────────────────────────────────────
 
 @fieldwise_init
 struct PathState_C(TrivialRegisterPassable):
@@ -100,8 +162,9 @@ struct PathState_C(TrivialRegisterPassable):
     var _pad3: Int8
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.
-    # Stored as Float32 in the four _pad4.._pad7 bytes.
     var lastBsdfPdf: Float32
+
+# ── Lights ────────────────────────────────────────────────────────────────────
 
 @fieldwise_init
 struct AreaLight_C(TrivialRegisterPassable):
@@ -112,18 +175,16 @@ struct AreaLight_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct DistantLight_C(TrivialRegisterPassable):
-    var dirX: Float32       # direction FROM the light toward the scene (world space)
-    var dirY: Float32
-    var dirZ: Float32
+    """A directional (infinite) light. direction points FROM the light toward the scene."""
+    var direction: Vec3f
     var _pad: Float32
     var emission: RGB
     var _pad2: Float32
 
 @fieldwise_init
 struct PointLight_C(TrivialRegisterPassable):
-    var posX: Float32
-    var posY: Float32
-    var posZ: Float32
+    """An isotropic point light at a world-space position."""
+    var position: Point3f
     var _pad: Float32
     var intensity: RGB
     var _pad2: Float32
@@ -136,6 +197,8 @@ struct InfiniteLight_C(TrivialRegisterPassable):
     var cdf_h: Int32     # env-map CDF height
     var cdf_ptr: UnsafePointer[Float32, MutAnyOrigin]  # flat 2D CDF (marginal + conditional)
 
+# ── GPU / render pipeline helpers ─────────────────────────────────────────────
+
 @fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):
     var data: UnsafePointer[Float32, MutAnyOrigin]  # device pointer, pre-linearised float RGB
@@ -144,10 +207,11 @@ struct GpuTexture_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct ShadowTask_C(TrivialRegisterPassable):
-    var orgX: Float32; var orgY: Float32; var orgZ: Float32
-    var dirX: Float32; var dirY: Float32; var dirZ: Float32
+    """A deferred shadow ray with its pre-computed radiance contribution."""
+    var origin: Point3f
+    var direction: Vec3f
     var tmax: Float32
-    var contribR: Float32; var contribG: Float32; var contribB: Float32
+    var contrib: RGB
     var active: Int32
     var _pad: Int32
 
@@ -169,6 +233,8 @@ struct TileResult_C(TrivialRegisterPassable):
     var filterWeight: Float32
     var pixelX: Int32
     var pixelY: Int32
+
+# ── Math helpers ──────────────────────────────────────────────────────────────
 
 @always_inline
 fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:

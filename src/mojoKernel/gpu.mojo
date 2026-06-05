@@ -4,7 +4,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
@@ -628,9 +628,9 @@ fn traverse_shadow_rays_gpu(
     var task = shadow_tasks[tid]
     if task.active == 0:
         return
-    var shadow_ray = Ray_C(task.orgX, task.orgY, task.orgZ, task.dirX, task.dirY, task.dirZ)
+    var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, task.tmax):
-        paths[tid].estimate += RGB(task.contribR, task.contribG, task.contribB)
+        paths[tid].estimate += RGB(task.contrib.r, task.contrib.g, task.contrib.b)
 
 
 fn accumulate_film_gpu(
@@ -736,7 +736,7 @@ fn gen_primary_rays_wavefront_gpu(
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
     paths[ti] = PathState_C(
-        Ray_C(orgX, orgY, orgZ, dx, dy, dz),
+        Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)),
         RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -874,7 +874,7 @@ fn gen_primary_rays_gpu(
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
     paths[tid] = PathState_C(
-        Ray_C(orgX, orgY, orgZ, dx, dy, dz),
+        Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)),
         RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),

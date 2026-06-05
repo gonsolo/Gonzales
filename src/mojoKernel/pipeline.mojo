@@ -3,7 +3,7 @@ from std.math import sqrt
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
 from .rendering import mojo_render_all_tiles, mojo_normalize_film, _fmt_time, _progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, TileResult_C, PathState_C, Ray_C, dot
+from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import mojo_denoise, mojo_write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
@@ -336,9 +336,9 @@ fn mojo_render_interactive(
     var c2w = psc[0].camera_to_world
     var cam_buf = alloc[CameraState](1)
     cam_buf[0] = CameraState(
-        posX=c2w[12], posY=c2w[13], posZ=c2w[14],
-        dirX=c2w[8],  dirY=c2w[9],  dirZ=c2w[10],
-        upX =c2w[4],  upY =c2w[5],  upZ =c2w[6],
+        position=Point3f(c2w[12], c2w[13], c2w[14]),
+        direction=Vec3f(c2w[8],  c2w[9],  c2w[10]),
+        up=Vec3f(c2w[4],  c2w[5],  c2w[6]),
         cameraChanged=Int32(0),
     )
     viewer_set_camera_state(v, cam_buf)
