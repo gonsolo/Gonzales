@@ -6,6 +6,7 @@ from .geometry import Vec3f, PI, TWO_PI, INV_PI
 # See: docs/04_sampling.md — Multiple Importance Sampling
 
 @always_inline
+# <<listing: power_heuristic>>
 fn power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
     """Balance heuristic with β=2 (Veach 1997).
     Combines two sampling strategies f and g into a single weight:
@@ -21,8 +22,10 @@ fn power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
 
 # ── Directional sampling ───────────────────────────────────────────────────────
 # See: docs/04_sampling.md — Directional Distributions
+# <</listing>>
 
 @always_inline
+# <<listing: sample_cosine_hemisphere>>
 fn sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
     """Cosine-weighted hemisphere sampling via Malley's method.
     Maps uniform (u1,u2) ∈ [0,1)² to a direction proportional to cos θ.
@@ -35,9 +38,11 @@ fn sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
     var y     = r * sin(phi)
     var z_sq  = Float32(1.0) - u1
     var z     = sqrt(z_sq if z_sq > Float32(0.0) else Float32(0.0))
+# <</listing>>
     return Vec3f(x, y, z)
 
 @always_inline
+# <<listing: sample_ggx_vndf>>
 fn sample_ggx_vndf(
     wo_local: Vec3f,           # outgoing direction in the stretched frame
     alpha_x: Float32,          # GGX roughness along tangent
@@ -80,6 +85,7 @@ fn sample_ggx_vndf(
     var wh = Vec3f(alpha_x * nh_local.x, alpha_y * nh_local.y,
                    max(Float32(0.0), nh_local.z))
     return wh.normalize() if wh.length_sq() > Float32(0.0) else Vec3f(0.0, 0.0, 1.0)
+# <</listing>>
 
 # ── ZSobolSampler + GaussianFilter ──────────────────────────────────────────
 

@@ -84,7 +84,7 @@ PFM = $(IMAGE:.exr=.pfm)
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lint lldb p perf tags t test \
-	test_debug test_release v view wc
+	test_debug test_release v view wc book book-html book-watch
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -342,8 +342,22 @@ open_trace_in_ui:
 perfetto: gonzales.perfscript open_trace_in_ui
 	python open_trace_in_ui -i $<
 
+# ── Book build ──────────────────────────────────────────────────────────────
+# Usage:
+#   make book          — render Markdown with live code snippets inlined
+#   make book-html     — also produce HTML via Pandoc (needs: sudo apt install pandoc)
+#   make book-watch    — live-rebuild on source/doc changes (needs: pip install watchdog)
+
 book:
 	python3 docs/build_book.py
+	@echo "Book written to docs/book/"
+
+book-html:
+	python3 docs/build_book.py --html
+	@echo "HTML book written to docs/book/*.html"
+
+book-watch:
+	python3 docs/build_book.py --watch --html
 
 WALL_SCENE = wall.pbrt
 WALL_IMAGE = pavilion-wall.exr

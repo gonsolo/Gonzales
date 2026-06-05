@@ -6,12 +6,14 @@ from std.math import sqrt, acos, atan2, cos
 # Stored as Float32 aliases so every formula reads like the paper it came from.
 # See: docs/01_geometry.md
 
+# <<listing: Math Constants>>
 alias PI         : Float32 = 3.14159265358979323846
 alias TWO_PI     : Float32 = 6.28318530717958647692
 alias INV_PI     : Float32 = 0.31830988618379067154
 alias INV_TWO_PI : Float32 = 0.15915494309189533577
 alias INV_FOUR_PI: Float32 = 0.07957747154594766788
 alias SQRT2      : Float32 = 1.41421356237309504880
+# <</listing>>
 
 # ── Point3f / Vec3f ────────────────────────────────────────────────────────────
 # Semantically distinct (affine point vs. free vector) but identical layout:
@@ -22,6 +24,7 @@ alias SQRT2      : Float32 = 1.41421356237309504880
 # See: docs/01_geometry.md
 
 @fieldwise_init
+# <<listing: Point3f>>
 struct Point3f(TrivialRegisterPassable):
     """An affine point in 3D space (position, not a direction)."""
     var x: Float32
@@ -42,7 +45,9 @@ struct Point3f(TrivialRegisterPassable):
         return SIMD[DType.float32, 3](self.x, self.y, self.z)
 
 @fieldwise_init
+# <</listing>>
 struct Vec3f(TrivialRegisterPassable):
+# <<listing: Vec3f>>
     """A free vector in 3D space (direction, displacement, or surface normal)."""
     var x: Float32
     var y: Float32
@@ -101,6 +106,7 @@ fn point3f(s: SIMD[DType.float32, 3]) -> Point3f:
     """Convert a SIMD[f32,3] to a Point3f."""
     return Point3f(s[0], s[1], s[2])
 
+# <</listing>>
 # ── Color / Spectrum ───────────────────────────────────────────────────────────
 # SampledSpectrum is currently an RGB triple. This alias makes the shader code
 # forward-compatible with a future spectral representation.
@@ -109,6 +115,7 @@ fn point3f(s: SIMD[DType.float32, 3]) -> Point3f:
 @fieldwise_init
 struct RGB(TrivialRegisterPassable):
     """Linear-light RGB colour value. All arithmetic is in scene-linear space."""
+# <<listing: RGB>>
     var r: Float32
     var g: Float32
     var b: Float32
@@ -155,12 +162,15 @@ struct RGB(TrivialRegisterPassable):
     @always_inline
     fn clamp(self, lo: Float32, hi: Float32) -> RGB:
         """Per-channel clamp — useful for tonemapping guard values."""
+# <</listing>>
         var clamp_f = fn(v: Float32) -> Float32: return lo if v < lo else (hi if v > hi else v)
         return RGB(clamp_f(self.r), clamp_f(self.g), clamp_f(self.b))
 
 alias SampledSpectrum = RGB
+# <<listing: SampledSpectrum>>
 """Placeholder alias for a future spectral type. Currently == RGB.
    See: docs/02_spectra_and_color.md
+# <</listing>>
 """
 
 # ── Scene primitives ───────────────────────────────────────────────────────────
@@ -206,9 +216,11 @@ struct TriangleMesh_C(TrivialRegisterPassable):
 struct Ray_C(TrivialRegisterPassable):
     """A ray: a world-space origin point and a unit direction vector."""
     var origin: Point3f
+# <<listing: Ray_C>>
     var direction: Vec3f
 
 # ── Intersection ──────────────────────────────────────────────────────────────
+# <</listing>>
 
 @fieldwise_init
 struct Intersection_C(TrivialRegisterPassable):
@@ -226,6 +238,7 @@ struct Intersection_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct PathState_C(TrivialRegisterPassable):
+# <<listing: PathState_C>>
     var ray: Ray_C
     var throughput: SampledSpectrum
     var estimate: SampledSpectrum
@@ -240,6 +253,7 @@ struct PathState_C(TrivialRegisterPassable):
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32
+# <</listing>>
 
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md
@@ -330,6 +344,7 @@ struct TileResult_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct Frame(TrivialRegisterPassable):
+# <<listing: Frame>>
     """Orthonormal shading frame. z = shading normal (hemisphere up).
     x = tangent, y = bitangent.
     See: docs/05_reflection_models.md
@@ -363,13 +378,17 @@ struct Frame(TrivialRegisterPassable):
 
 # ── Geometry helpers ───────────────────────────────────────────────────────────
 # See: docs/01_geometry.md
+# <</listing>>
 
 @always_inline
 fn safe_sqrt(x: Float32) -> Float32:
+# <<listing: safe_sqrt>>
     """sqrt(max(x, 0)) — avoids NaN from small negative values due to rounding."""
     return sqrt(x if x > Float32(0.0) else Float32(0.0))
 
+# <</listing>>
 @always_inline
+# <<listing: reflect>>
 fn reflect(wo: Vec3f, n: Vec3f) -> Vec3f:
     """Specular reflection of wo about surface normal n.
     Equation: wi = 2(wo·n)n − wo.
@@ -379,7 +398,9 @@ fn reflect(wo: Vec3f, n: Vec3f) -> Vec3f:
     return n * (Float32(2.0) * wo.dot(n)) - wo
 
 @always_inline
+# <</listing>>
 fn refract(wi: Vec3f, n: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f]:
+# <<listing: refract>>
     """Snell's law refraction. eta = η_i / η_t.
     Returns (True, wt) on success, (False, _) on total internal reflection.
     See: docs/05_reflection_models.md — Specular Transmission.
@@ -391,7 +412,9 @@ fn refract(wi: Vec3f, n: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f]:
         return (False, Vec3f(0.0, 0.0, 0.0))   # total internal reflection
     var cos_theta_t = safe_sqrt(Float32(1.0) - sin2_theta_t)
     var wt = wi * (-eta) + n * (eta * cos_theta_i - cos_theta_t)
+# <</listing>>
     return (True, wt)
+# <<listing: schlick_fresnel>>
 
 @always_inline
 fn schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
@@ -402,6 +425,7 @@ fn schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
     var t = Float32(1.0) - cos_theta
     var t2 = t * t
     return f0 + (Float32(1.0) - f0) * (t2 * t2 * t)
+# <</listing>>
 
 @always_inline
 fn spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> Vec3f:
