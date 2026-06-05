@@ -174,12 +174,22 @@ fn shade_core(
 
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
-fn shade_diffuse_transmission(
+def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_idx: Int,
     inter: Intersection_C,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    mat: Material_C,
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
 ):
+    var mat = materials[Int(inter.primId.materialIndex)]
     var mesh_idx: Int
     var base_vidx: Int
     if inter.primId.type == 0:
@@ -226,39 +236,95 @@ fn shade_diffuse_transmission(
     var choose_reflect = pcg.next_float() < pr / total
     # Bounce normal: same side for reflection, opposite for transmission
     var bounce_normal = normal if choose_reflect else -normal
+    # Albedo for this lobe (used in NEE estimator)
+    var lobe_alb = refl if choose_reflect else trans
+    # Selection-probability compensation weight
+    var lobe_w = total / (pr if choose_reflect else pt)
 
-    # Cosine-weighted hemisphere around bounce_normal
+    var hit_point = ray_org + ray_dir * inter.tHit + bounce_normal * Float32(0.0001)
+
+    # ── NEE direct light sampling (MIS weighted) ───────────────────────────────
+    if areaLightCount > 0:
+        var light_idx = Int(pcg.next_uint() % UInt32(areaLightCount))
+        var al = areaLights[light_idx]
+        var lmesh = meshes[Int(al.meshIdx)]
+        var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+        var lb = lti * 3
+        var lv0 = Int(lmesh.vertexIndices[lb])
+        var lv1 = Int(lmesh.vertexIndices[lb + 1])
+        var lv2 = Int(lmesh.vertexIndices[lb + 2])
+        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+        var r1 = pcg.next_float()
+        var r2 = pcg.next_float()
+        var sqrt_r1 = sqrt(r1)
+        var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
+        var lcross = cross(lp1 - lp0, lp2 - lp0)
+        var light_normal = lcross
+        var lcross_len = dot(lcross, lcross)
+        if lcross_len > Float32(0.0):
+            light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+        var to_light = light_point - hit_point
+        var dist_sq = dot(to_light, to_light)
+        var dist = sqrt(dist_sq)
+        if dist > Float32(0.0001) and al.total_area > Float32(0.0):
+            var shadow_dir = to_light * (Float32(1.0) / dist)
+            var cos_s = dot(bounce_normal, shadow_dir)
+            var cos_l = -dot(light_normal, shadow_dir)
+            if cos_s > Float32(0.0) and cos_l > Float32(0.0):
+                var pi = Float32(3.14159265359)
+                var pdf_light = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
+                var pdf_bsdf_dt = cos_s / pi
+                var w_dt = power_heuristic(pdf_light, pdf_bsdf_dt)
+                # f = lobe_alb/π * lobe_w (lobe selection weight already folded in)
+                var weight_dt = lobe_alb * al.emission * (cos_s * w_dt * lobe_w / (pdf_light * pi))
+                var contrib = path_ptr[].throughput * weight_dt
+                comptime if enqueue_shadow:
+                    shadow_tasks[path_idx] = ShadowTask_C(
+                        hit_point[0], hit_point[1], hit_point[2],
+                        shadow_dir[0], shadow_dir[1], shadow_dir[2],
+                        dist * Float32(0.9999),
+                        contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                else:
+                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                          shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                        path_ptr[].estimate += contrib
+
+    # ── BSDF scatter ───────────────────────────────────────────────────────────
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
     var r = sqrt(u1)
     var theta = Float32(2.0) * Float32(3.14159265359) * u2
-    var x = r * cos(theta)
-    var y = r * sin(theta)
+    var sx = r * cos(theta)
+    var sy = r * sin(theta)
     var z2 = Float32(1.0) - u1
-    var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
+    var sz = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
 
     var sign = Float32(1.0) if bounce_normal[2] >= Float32(0.0) else Float32(-1.0)
-    var a = Float32(-1.0) / (sign + bounce_normal[2])
-    var b = bounce_normal[0] * bounce_normal[1] * a
-    var tangent  = SIMD[DType.float32, 3](Float32(1.0) + sign * bounce_normal[0] * bounce_normal[0] * a, sign * b, -sign * bounce_normal[0])
-    var bitangent = SIMD[DType.float32, 3](b, sign + bounce_normal[1] * bounce_normal[1] * a, -bounce_normal[1])
+    var aa = Float32(-1.0) / (sign + bounce_normal[2])
+    var bb = bounce_normal[0] * bounce_normal[1] * aa
+    var tangent  = SIMD[DType.float32, 3](Float32(1.0) + sign * bounce_normal[0] * bounce_normal[0] * aa, sign * bb, -sign * bounce_normal[0])
+    var bitangent = SIMD[DType.float32, 3](bb, sign + bounce_normal[1] * bounce_normal[1] * aa, -bounce_normal[1])
 
-    var dir = tangent * x + bitangent * y + bounce_normal * z
+    var dir = tangent * sx + bitangent * sy + bounce_normal * sz
     var dlen = dot(dir, dir)
     if dlen > Float32(0.0):
         dir = dir * (Float32(1.0) / sqrt(dlen))
 
-    # Offset along bounce_normal to avoid self-intersection
-    var hit_point = ray_org + ray_dir * inter.tHit + bounce_normal * Float32(0.0001)
     path_ptr[].ray = Ray_C(hit_point[0], hit_point[1], hit_point[2], dir[0], dir[1], dir[2])
 
-    # Throughput weight = color / selection_probability = color * total / p_choice
-    if choose_reflect:
-        var w = total / pr
-        path_ptr[].throughput *= refl * w
-    else:
-        var w = total / pt
-        path_ptr[].throughput *= trans * w
+    # Throughput: lobe_alb / pdf_bsdf * lobe_selection_weight
+    # = lobe_alb / (cos/π) * (total/p_lobe) → lobe_alb * π/cos * lobe_w
+    # But cosine-hemisphere importance sampling gives cos/π cancel:
+    # f * cos / pdf = (lobe_alb/π) * cos / (cos/π) = lobe_alb
+    # Then multiply by lobe_w to compensate for stochastic lobe selection.
+    path_ptr[].throughput *= lobe_alb * lobe_w
+
+    # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/π)
+    var cos_sc = dot(dir, bounce_normal)
+    path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
 
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = mat.albedo
@@ -661,7 +727,9 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     if mat.type == 6:
-        shade_diffuse_transmission(path_ptr, inter, meshes, mat)
+        shade_diffuse_transmission[use_gpu, enqueue_shadow](
+            path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
+            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
         return
 
     if mat.type != 1:
