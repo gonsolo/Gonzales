@@ -1,5 +1,85 @@
-from std.math import sqrt, log, exp
+from std.math import sqrt, log, exp, cos, sin
 from std.memory import alloc
+from .geometry import Vec3f, PI, TWO_PI, INV_PI
+
+# ── Multiple-importance sampling ───────────────────────────────────────────────
+# See: docs/04_sampling.md — Multiple Importance Sampling
+
+@always_inline
+fn power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
+    """Balance heuristic with β=2 (Veach 1997).
+    Combines two sampling strategies f and g into a single weight:
+        w(f) = f² / (f² + g²)
+    See: docs/04_sampling.md — Power Heuristic.
+    """
+    var f2 = pdf_f * pdf_f
+    var g2 = pdf_g * pdf_g
+    var denom = f2 + g2
+    if denom <= Float32(0.0):
+        return Float32(0.0)
+    return f2 / denom
+
+# ── Directional sampling ───────────────────────────────────────────────────────
+# See: docs/04_sampling.md — Directional Distributions
+
+@always_inline
+fn sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
+    """Cosine-weighted hemisphere sampling via Malley's method.
+    Maps uniform (u1,u2) ∈ [0,1)² to a direction proportional to cos θ.
+    PDF = cos(θ) / π.  z = cos θ (hemisphere axis).
+    See: docs/04_sampling.md — Cosine-Weighted Hemisphere.
+    """
+    var r     = sqrt(u1)
+    var phi   = TWO_PI * u2
+    var x     = r * cos(phi)
+    var y     = r * sin(phi)
+    var z_sq  = Float32(1.0) - u1
+    var z     = sqrt(z_sq if z_sq > Float32(0.0) else Float32(0.0))
+    return Vec3f(x, y, z)
+
+@always_inline
+fn sample_ggx_vndf(
+    wo_local: Vec3f,           # outgoing direction in the stretched frame
+    alpha_x: Float32,          # GGX roughness along tangent
+    alpha_y: Float32,          # GGX roughness along bitangent
+    u1: Float32, u2: Float32,  # uniform random numbers
+) -> Vec3f:
+    """Visible Normal Distribution Function sampling (Heitz 2018).
+    Returns a half-vector wh in the anisotropic local frame such that
+    wh is sampled proportional to D(wh) |wh·wo| / (wh normalisation).
+    The caller reflects wo around wh to get the outgoing direction.
+
+    Reference: E. Heitz, "Sampling the GGX Distribution of Visible Normals",
+    JCGT 7(4), 2018. https://jcgt.org/published/0007/04/01/
+    See: docs/05_reflection_models.md — GGX VNDF Sampling.
+    """
+    # 1. Stretch incoming direction by (alpha_x, alpha_y)
+    var wos = Vec3f(wo_local.x * alpha_x, wo_local.y * alpha_y, wo_local.z)
+    var wos_len = wos.length()
+    var vh = wos * (Float32(1.0) / wos_len) if wos_len > Float32(0.0) else Vec3f(0.0, 0.0, 1.0)
+
+    # 2. Orthonormal basis around the stretched half-vector (Duff et al. 2017)
+    var sign_vh = Float32(1.0) if vh.z >= Float32(0.0) else Float32(-1.0)
+    var av = Float32(-1.0) / (sign_vh + vh.z)
+    var bv = vh.x * vh.y * av
+    var bt1 = Vec3f(Float32(1.0) + sign_vh * vh.x * vh.x * av, sign_vh * bv, -sign_vh * vh.x)
+    var bt2 = Vec3f(bv, sign_vh + vh.y * vh.y * av, -vh.y)
+
+    # 3. Sample point on visible hemisphere disk
+    var r_disk = sqrt(u1)
+    var phi    = TWO_PI * u2
+    var tx     = r_disk * cos(phi)
+    var ty_raw = r_disk * sin(phi)
+    var s_corr = Float32(0.5) * (Float32(1.0) + vh.z)
+    var ty     = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
+    var tz_sq  = Float32(1.0) - tx * tx - ty * ty
+    var tz     = sqrt(tz_sq if tz_sq > Float32(0.0) else Float32(0.0))
+    var nh_local = bt1 * tx + bt2 * ty + vh * tz
+
+    # 4. Unstretch to get the half-vector in the anisotropic frame
+    var wh = Vec3f(alpha_x * nh_local.x, alpha_y * nh_local.y,
+                   max(Float32(0.0), nh_local.z))
+    return wh.normalize() if wh.length_sq() > Float32(0.0) else Vec3f(0.0, 0.0, 1.0)
 
 # ── ZSobolSampler + GaussianFilter ──────────────────────────────────────────
 

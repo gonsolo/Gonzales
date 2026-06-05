@@ -2,7 +2,7 @@ from std.ffi import external_call
 from .ply import mojo_load_ply
 from std.math import tan, sqrt, acos, atan2, sin
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C, PI, TWO_PI
 from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
 from .bvh import BVH2Node, SceneDescriptor2_C, mojo_build_bvh2
 from .sampling import mojo_gaussian_norm
@@ -1775,7 +1775,7 @@ fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
 
 fn _psc_make_perspective(fov_deg: Float32, near: Float32,
                          dst: UnsafePointer[Float32, MutAnyOrigin]):
-    var half_rad = fov_deg * Float32(3.14159265358979323846) / Float32(360)
+    var half_rad = fov_deg * PI / Float32(360)
     var inv_tan = Float32(1) / tan(half_rad)
     var far = fov_deg
     var t22 = far / (far - near)
@@ -2166,7 +2166,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
                     var row_sums = alloc[Float32](ih)
                     for ry in range(ih):
                         # Sin-weighted solid angle for lat-long map
-                        var sin_theta = sin(Float32(3.14159265359) * (Float32(ry) + Float32(0.5)) / Float32(ih))
+                        var sin_theta = sin(PI * (Float32(ry) + Float32(0.5)) / Float32(ih))
                         var row_sum = Float32(0.0)
                         for rx in range(iw):
                             var r2 = pixels[(ry * iw + rx) * 3 + 0]
@@ -2186,7 +2186,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
                             cdf_buf[ry] *= inv_total
                     # Build per-row conditional CDFs (ih * (iw+1) values)
                     for ry in range(ih):
-                        var sin_theta = sin(Float32(3.14159265359) * (Float32(ry) + Float32(0.5)) / Float32(ih))
+                        var sin_theta = sin(PI * (Float32(ry) + Float32(0.5)) / Float32(ih))
                         var base = (ih + 1) + ry * (iw + 1)
                         cdf_buf[base] = Float32(0.0)
                         for rx in range(iw):

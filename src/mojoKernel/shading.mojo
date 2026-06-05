@@ -1,19 +1,10 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
-
-# Power heuristic (β=2) for two-strategy MIS.
-@always_inline
-def power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
-    var f2 = pdf_f * pdf_f
-    var g2 = pdf_g * pdf_g
-    var denom = f2 + g2
-    if denom <= Float32(0.0):
-        return Float32(0.0)
-    return f2 / denom
+from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
 
 @always_inline
 fn _srgb_to_linear(c: Float32) -> Float32:
@@ -143,7 +134,7 @@ fn shade_core(
         path_ptr[].pcgState = pcg.state
 
         var r = sqrt(u1)
-        var theta = 2.0 * Float32(3.14159265359) * u2
+        var theta = 2.0 * PI * u2
         var x = r * cos(theta)
         var y = r * sin(theta)
         var z2 = 1.0 - u1
@@ -273,7 +264,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_s = dot(bounce_normal, shadow_dir)
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                var pi = Float32(3.14159265359)
+                var pi = PI
                 var pdf_light = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
                 var pdf_bsdf_dt = cos_s / pi
                 var w_dt = power_heuristic(pdf_light, pdf_bsdf_dt)
@@ -291,7 +282,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
     var r = sqrt(u1)
-    var theta = Float32(2.0) * Float32(3.14159265359) * u2
+    var theta = TWO_PI * u2
     var sx = r * cos(theta)
     var sy = r * sin(theta)
     var z2 = Float32(1.0) - u1
@@ -319,7 +310,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 
     # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/π)
     var cos_sc = dot(dir, bounce_normal)
-    path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
+    path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / PI
     path_ptr[].specularBounce = Int8(0)
 
     if path_ptr[].bounce == 0:
@@ -439,7 +430,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_s > Float32(0.0) and cos_l > Float32(0.0):
                     var pdf_light_cd = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
-                    var pi_cd = Float32(3.14159265359)
+                    var pi_cd = PI
                     var pdf_bsdf_cd = cos_s / pi_cd
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
                     var weight_cd = alb * al.emission * (cos_s * w_cd / (pdf_light_cd * pi_cd))
@@ -455,7 +446,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
         var r = sqrt(u1)
-        var theta = Float32(2.0) * Float32(3.14159265359) * u2
+        var theta = TWO_PI * u2
         var x = r * cos(theta)
         var y = r * sin(theta)
         var z2 = Float32(1.0) - u1
@@ -475,7 +466,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
         # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/pi).
         var cos_sc = dot(dir, normal)
-        path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
+        path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / PI
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].throughput *= alb
 
@@ -777,7 +768,7 @@ fn shade_conductor(
         # Sample visible hemisphere disk
         var u1 = pcg.next_float(); var u2 = pcg.next_float()
         var r_disk = sqrt(u1)
-        var phi = Float32(6.28318530718) * u2
+        var phi = TWO_PI * u2
         var tx = r_disk * cos(phi); var ty_raw = r_disk * sin(phi)
         var s_corr = Float32(0.5) * (Float32(1.0) + vh[2])
         var ty = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
@@ -919,7 +910,7 @@ fn shade_coated_conductor(
         var bt2 = SIMD[DType.float32, 3](bv, sign_vh + vh[1]*vh[1]*av, -vh[1])
         var u1 = pcg.next_float(); var u2 = pcg.next_float()
         var r_disk = sqrt(u1)
-        var phi = Float32(6.28318530718) * u2
+        var phi = TWO_PI * u2
         var tx = r_disk * cos(phi); var ty_raw = r_disk * sin(phi)
         var s_corr = Float32(0.5) * (Float32(1.0) + vh[2])
         var ty = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
@@ -1054,7 +1045,7 @@ fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
         var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
         var pcg2 = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
         var u1 = pcg2.next_float(); var u2 = pcg2.next_float()
-        var phi = Float32(6.28318530718) * u2
+        var phi = TWO_PI * u2
         var st = sqrt(u1)
         var ct = sqrt(Float32(1.0) - u1)
         var sign_n2 = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
@@ -1073,7 +1064,7 @@ fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].albedo = sub_mat.albedo
         path_ptr[].throughput *= sub_mat.albedo
         path_ptr[].specularBounce = Int8(0)
-        path_ptr[].lastBsdfPdf = Float32(1.0) / Float32(3.14159265359)
+        path_ptr[].lastBsdfPdf = INV_PI
         path_ptr[].bounce += 1
         if path_ptr[].bounce > 1:
             var lum = path_ptr[].throughput.luma()
@@ -1182,8 +1173,8 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if not use_gpu:
                 if ilight.tex_idx >= Int32(0):
                     var fname = tex_filenames[Int(ilight.tex_idx)]
-                    var u = (atan2(ray_dir[2], ray_dir[0]) + Float32(3.14159265359)) / Float32(6.28318530718)
-                    var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / Float32(3.14159265359)
+                    var u = (atan2(ray_dir[2], ray_dir[0]) + PI) / TWO_PI
+                    var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / PI
                     var tr = alloc[Float32](3)
                     tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
                     _ = external_call["texture", Bool,
@@ -1198,14 +1189,14 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var mis_weight = Float32(1.0)
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
-                var pdf_light = Float32(1.0) / (Float32(4.0) * Float32(3.14159265359))
+                var pdf_light = INV_FOUR_PI
                 @parameter
                 if not use_gpu:
                     # Use CDF-based pdf when available (env-map importance sampling)
                     if ilight.cdf_w > Int32(0) and ilight.cdf_h > Int32(0):
                         var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-                        var u = (atan2(ray_dir[2], ray_dir[0]) + Float32(3.14159265359)) / Float32(6.28318530718)
-                        var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / Float32(3.14159265359)
+                        var u = (atan2(ray_dir[2], ray_dir[0]) + PI) / TWO_PI
+                        var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / PI
                         var px = Int(min(Float32(iw - 1), max(Float32(0.0), u * Float32(iw))))
                         var py = Int(min(Float32(ih - 1), max(Float32(0.0), v * Float32(ih))))
                         var marginal_base = ih + 1
@@ -1214,9 +1205,9 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var dp_row = ilight.cdf_ptr[py + 1] - ilight.cdf_ptr[py]
                         var dp_col_base = row_cdf_base + px
                         var dp_col = ilight.cdf_ptr[dp_col_base + 1] - ilight.cdf_ptr[dp_col_base]
-                        var sin_theta = sin(Float32(3.14159265359) * (Float32(py) + Float32(0.5)) / Float32(ih))
+                        var sin_theta = sin(PI * (Float32(py) + Float32(0.5)) / Float32(ih))
                         if sin_theta > Float32(0.0) and dp_row > Float32(0.0):
-                            pdf_light = (dp_row * dp_col * Float32(iw) * Float32(ih)) / (Float32(2.0) * Float32(3.14159265359) * Float32(3.14159265359) * sin_theta)
+                            pdf_light = (dp_row * dp_col * Float32(iw) * Float32(ih)) / (TWO_PI * PI * sin_theta)
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
             path_ptr[].estimate += path_ptr[].throughput * env_rgb * mis_weight
         path_ptr[].active = 0
@@ -1367,7 +1358,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
                 var pdf_light = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
-                var pi = Float32(3.14159265359)
+                var pi = PI
                 var pdf_bsdf_nee = cos_s / pi
                 var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
                 var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
@@ -1388,7 +1379,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var cos_s = dot(normal, to_light)
         if cos_s > Float32(0.0):
             # f = alb/pi, no geometry term (parallel rays), pdf = delta -> weight = 1
-            var pi = Float32(3.14159265359)
+            var pi = PI
             var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s / pi)
             # Shadow ray at very long distance (scene diameter ~1000)
             var t_max = Float32(2000.0)
@@ -1411,7 +1402,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var ldir = to_light * (Float32(1.0) / dist)
             var cos_s = dot(normal, ldir)
             if cos_s > Float32(0.0):
-                var pi = Float32(3.14159265359)
+                var pi = PI
                 # f = alb/pi, geometry = cos_s, pdf = delta -> weight = 1
                 # radiance = intensity / dist²
                 var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
@@ -1426,7 +1417,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
     var r = sqrt(u1)
-    var theta = Float32(2.0) * Float32(3.14159265359) * u2
+    var theta = TWO_PI * u2
     var x = r * cos(theta)
     var y = r * sin(theta)
     var z2 = Float32(1.0) - u1
@@ -1447,7 +1438,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     # Store BSDF pdf for MIS weighting if the next bounce hits an emitter.
     # For cosine-weighted hemisphere: pdf = cos(theta) / pi = dot(dir, normal) / pi
     var cos_scatter = dot(dir, normal)
-    path_ptr[].lastBsdfPdf = (cos_scatter if cos_scatter > Float32(0.0) else Float32(0.0)) / Float32(3.14159265359)
+    path_ptr[].lastBsdfPdf = (cos_scatter if cos_scatter > Float32(0.0) else Float32(0.0)) / PI
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].throughput *= alb
     path_ptr[].bounce += 1
