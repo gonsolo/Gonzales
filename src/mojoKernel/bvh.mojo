@@ -1,5 +1,5 @@
 from std.memory import alloc
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, PixelSample_C
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, PixelSample_C
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 
@@ -63,6 +63,12 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var areaLightCount: Int64
     var textures: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
     var textureCount: Int64
+    var distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin]
+    var distantLightCount: Int64
+    var pointLights: UnsafePointer[PointLight_C, MutAnyOrigin]
+    var pointLightCount: Int64
+    var infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin]
+    var infiniteLightCount: Int64
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 

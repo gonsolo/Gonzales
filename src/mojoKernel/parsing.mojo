@@ -1,8 +1,8 @@
 from std.ffi import external_call
 from .ply import mojo_load_ply
-from std.math import tan, sqrt
+from std.math import tan, sqrt, acos, atan2
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C
+from .geometry import RGB, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C
 from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
 from .bvh import BVH2Node, SceneDescriptor2_C, mojo_build_bvh2
 from .sampling import mojo_gaussian_norm
@@ -674,6 +674,12 @@ struct ParsedScene_Mojo:
     var rng_seed:         UInt64
     var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
     var tex_count:        Int32
+    var distant_lights:   UnsafePointer[DistantLight_C, MutAnyOrigin]
+    var distant_count:    Int32
+    var point_lights:     UnsafePointer[PointLight_C, MutAnyOrigin]
+    var point_count:      Int32
+    var infinite_lights:  UnsafePointer[InfiniteLight_C, MutAnyOrigin]
+    var infinite_count:   Int32
 
 # ── Internal parse state ──────────────────────────────────────────────────────
 
@@ -729,6 +735,17 @@ struct _PscState:
     var tex_names:     UnsafePointer[UInt8, MutAnyOrigin]
     var tex_files:     UnsafePointer[UInt8, MutAnyOrigin]
     var n_textures:    Int32
+
+    # Non-area lights accumulated during parse
+    var dist_dirs:     UnsafePointer[Float32, MutAnyOrigin]   # n_distant * 3 floats
+    var dist_rgb:      UnsafePointer[Float32, MutAnyOrigin]   # n_distant * 3 floats
+    var n_distant:     Int32
+    var pt_pos:        UnsafePointer[Float32, MutAnyOrigin]   # n_point * 3 floats
+    var pt_rgb:        UnsafePointer[Float32, MutAnyOrigin]   # n_point * 3 floats
+    var n_point:       Int32
+    var inf_tex_idx:   UnsafePointer[Int32, MutAnyOrigin]     # n_infinite indices
+    var inf_rgb:       UnsafePointer[Float32, MutAnyOrigin]   # n_infinite * 3 floats
+    var n_infinite:    Int32
 
 
 # ── Utility functions ─────────────────────────────────────────────────────────
@@ -959,6 +976,17 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].tex_files  = alloc[UInt8](PSC_MAX_TEX * PSC_FILE_MAX * 2)
     s[0].n_textures = Int32(0)
 
+    comptime MAX_LIGHTS = 64
+    s[0].dist_dirs   = alloc[Float32](MAX_LIGHTS * 3)
+    s[0].dist_rgb    = alloc[Float32](MAX_LIGHTS * 3)
+    s[0].n_distant   = Int32(0)
+    s[0].pt_pos      = alloc[Float32](MAX_LIGHTS * 3)
+    s[0].pt_rgb      = alloc[Float32](MAX_LIGHTS * 3)
+    s[0].n_point     = Int32(0)
+    s[0].inf_tex_idx = alloc[Int32](MAX_LIGHTS)
+    s[0].inf_rgb     = alloc[Float32](MAX_LIGHTS * 3)
+    s[0].n_infinite  = Int32(0)
+
     return s
 
 fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -989,6 +1017,9 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].named_tex_idx.free()
     s[0].tex_names.free()
     s[0].tex_files.free()
+    s[0].dist_dirs.free(); s[0].dist_rgb.free()
+    s[0].pt_pos.free();    s[0].pt_rgb.free()
+    s[0].inf_tex_idx.free(); s[0].inf_rgb.free()
     s.free()
 
 fn _psc_ctm_push(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1471,6 +1502,7 @@ fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     else:
         s[0].mesh_uvs_list[cur_mesh_idx] = UnsafePointer[Float32, MutAnyOrigin]()
     tmp_f.free(); tmp_i.free(); tmp_uv.free()
+
 fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                        s: UnsafePointer[_PscState, MutAnyOrigin]):
     # Texture <name> <type> <class> [params]
@@ -1525,11 +1557,109 @@ fn _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
 
 fn _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                              s: UnsafePointer[_PscState, MutAnyOrigin]):
-    # Parse LightSource type string then skip all params (future: handle distant/infinite/point)
+    var ltype = alloc[UInt8](64)
+    _ = mojo_scanner_parse_quoted_string(handle, ltype, 64)
     var type_buf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, type_buf, 64)
-    _psc_skip_params(handle)
-    type_buf.free()
+    var name_buf = alloc[UInt8](128)
+    var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
+    var rgb      = alloc[Float32](3)
+    var xyz      = alloc[Float32](3)
+    rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
+    xyz[0] = Float32(0); xyz[1] = Float32(0); xyz[2] = Float32(1000)  # default: from above
+    var scale    = Float32(1.0)
+    var ia = alloc[Int32](1)
+    ia[0] = Int32(0)
+    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    while found != 0:
+        var is_array = ia[0]
+        if (_psc_streq(name_buf, "L") or _psc_streq(name_buf, "I")) and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, rgb, is_array)
+        elif _psc_streq(name_buf, "scale") and _psc_type_is_float(type_buf):
+            scale = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "from") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, xyz, is_array)   # reuse xyz for point-light position
+        elif _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
+            _ = mojo_scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+        else:
+            _psc_skip_value(handle, type_buf, is_array)
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+        ia[0] = Int32(0)
+        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    ia.free()
+
+    comptime MAX_LIGHTS = 64
+    if _psc_streq(ltype, "distant"):
+        var idx = Int(s[0].n_distant)
+        if idx < MAX_LIGHTS:
+            # direction = -from (from describes where light comes from)
+            var len = sqrt(xyz[0]*xyz[0] + xyz[1]*xyz[1] + xyz[2]*xyz[2])
+            if len < Float32(0.0001): len = Float32(1.0)
+            s[0].dist_dirs[idx*3+0] = -xyz[0] / len
+            s[0].dist_dirs[idx*3+1] = -xyz[1] / len
+            s[0].dist_dirs[idx*3+2] = -xyz[2] / len
+            s[0].dist_rgb[idx*3+0] = rgb[0] * scale
+            s[0].dist_rgb[idx*3+1] = rgb[1] * scale
+            s[0].dist_rgb[idx*3+2] = rgb[2] * scale
+            s[0].n_distant += 1
+    elif _psc_streq(ltype, "point"):
+        var idx = Int(s[0].n_point)
+        if idx < MAX_LIGHTS:
+            # Apply current CTM to position
+            var raw = alloc[Float32](4)
+            raw[0] = xyz[0]; raw[1] = xyz[1]; raw[2] = xyz[2]; raw[3] = Float32(1)
+            var fin = alloc[Float32](4)
+            mojo_transform_points(s[0].ctm, raw, Int32(1), fin)
+            s[0].pt_pos[idx*3+0] = fin[0]
+            s[0].pt_pos[idx*3+1] = fin[1]
+            s[0].pt_pos[idx*3+2] = fin[2]
+            s[0].pt_rgb[idx*3+0] = rgb[0] * scale
+            s[0].pt_rgb[idx*3+1] = rgb[1] * scale
+            s[0].pt_rgb[idx*3+2] = rgb[2] * scale
+            s[0].n_point += 1
+            raw.free(); fin.free()
+    elif _psc_streq(ltype, "infinite"):
+        var idx = Int(s[0].n_infinite)
+        if idx < MAX_LIGHTS:
+            # Try to find texture by filename
+            var tex_i = Int32(-1)
+            if str_val[0] != UInt8(0):
+                # Build full path and register as a texture
+                var full = alloc[UInt8](PSC_FILE_MAX * 2)
+                var dir_len = 0
+                while s[0].scene_dir[dir_len] != UInt8(0):
+                    full[dir_len] = s[0].scene_dir[dir_len]
+                    dir_len += 1
+                var fn_i = 0
+                while str_val[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
+                    full[dir_len + fn_i] = str_val[fn_i]
+                    fn_i += 1
+                full[dir_len + fn_i] = UInt8(0)
+                # Register as a texture entry
+                var ti = Int(s[0].n_textures)
+                if ti < PSC_MAX_TEX:
+                    # Name = "__inf_N"
+                    s[0].tex_names[ti * PSC_NAME_MAX + 0] = UInt8(95)  # '_'
+                    s[0].tex_names[ti * PSC_NAME_MAX + 1] = UInt8(95)
+                    s[0].tex_names[ti * PSC_NAME_MAX + 2] = UInt8(105) # 'i'
+                    s[0].tex_names[ti * PSC_NAME_MAX + 3] = UInt8(110) # 'n'
+                    s[0].tex_names[ti * PSC_NAME_MAX + 4] = UInt8(102) # 'f'
+                    s[0].tex_names[ti * PSC_NAME_MAX + 5] = UInt8(0)
+                    var dst = s[0].tex_files + ti * PSC_FILE_MAX * 2
+                    for ci in range(dir_len + fn_i + 1):
+                        dst[ci] = full[ci]
+                    tex_i = Int32(ti)
+                    s[0].n_textures += 1
+                full.free()
+            s[0].inf_tex_idx[idx] = tex_i
+            s[0].inf_rgb[idx*3+0] = rgb[0] * scale
+            s[0].inf_rgb[idx*3+1] = rgb[1] * scale
+            s[0].inf_rgb[idx*3+2] = rgb[2] * scale
+            s[0].n_infinite += 1
+
+    ltype.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free(); xyz.free()
 
 fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
               s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1899,6 +2029,48 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     psc[0].tex_filenames    = tex_ptrs
     psc[0].tex_count        = Int32(n_tex)
 
+    # ---- Non-area lights ----
+    var nd = Int(s[0].n_distant)
+    if nd > 0:
+        var dl_buf = alloc[DistantLight_C](nd)
+        for i in range(nd):
+            dl_buf[i] = DistantLight_C(
+                s[0].dist_dirs[i*3+0], s[0].dist_dirs[i*3+1], s[0].dist_dirs[i*3+2],
+                Float32(0),
+                RGB(s[0].dist_rgb[i*3+0], s[0].dist_rgb[i*3+1], s[0].dist_rgb[i*3+2]),
+                Float32(0))
+        psc[0].distant_lights = dl_buf
+    else:
+        psc[0].distant_lights = UnsafePointer[DistantLight_C, MutAnyOrigin]()
+    psc[0].distant_count = Int32(nd)
+
+    var np2 = Int(s[0].n_point)
+    if np2 > 0:
+        var pl_buf = alloc[PointLight_C](np2)
+        for i in range(np2):
+            pl_buf[i] = PointLight_C(
+                s[0].pt_pos[i*3+0], s[0].pt_pos[i*3+1], s[0].pt_pos[i*3+2],
+                Float32(0),
+                RGB(s[0].pt_rgb[i*3+0], s[0].pt_rgb[i*3+1], s[0].pt_rgb[i*3+2]),
+                Float32(0))
+        psc[0].point_lights = pl_buf
+    else:
+        psc[0].point_lights = UnsafePointer[PointLight_C, MutAnyOrigin]()
+    psc[0].point_count = Int32(np2)
+
+    var ni = Int(s[0].n_infinite)
+    if ni > 0:
+        var il_buf = alloc[InfiniteLight_C](ni)
+        for i in range(ni):
+            il_buf[i] = InfiniteLight_C(
+                s[0].inf_tex_idx[i], Int32(0),
+                RGB(s[0].inf_rgb[i*3+0], s[0].inf_rgb[i*3+1], s[0].inf_rgb[i*3+2]),
+                Float32(0))
+        psc[0].infinite_lights = il_buf
+    else:
+        psc[0].infinite_lights = UnsafePointer[InfiniteLight_C, MutAnyOrigin]()
+    psc[0].infinite_count = Int32(ni)
+
 # ── Exported API ──────────────────────────────────────────────────────────────
 
 fn mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
@@ -1912,6 +2084,10 @@ fn mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
         psc[0].bvh_node_count = Int32(0)
         psc[0].material_count = Int32(0)
         psc[0].area_light_count = Int32(0)
+        psc[0].tex_count = Int32(0)
+        psc[0].distant_count = Int32(0)
+        psc[0].point_count = Int32(0)
+        psc[0].infinite_count = Int32(0)
         return psc
 
     var s = _psc_state_new()
@@ -1972,20 +2148,32 @@ fn mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         for ti in range(nt):
             psc[0].tex_filenames[ti].free()
         psc[0].tex_filenames.free()
+    if psc[0].distant_count > 0:
+        psc[0].distant_lights.free()
+    if psc[0].point_count > 0:
+        psc[0].point_lights.free()
+    if psc[0].infinite_count > 0:
+        psc[0].infinite_lights.free()
     psc.free()
 
-fn mojo_parsed_scene_descriptor(
+def mojo_parsed_scene_descriptor(
     psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]
 ) -> UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]:
     var sd = alloc[SceneDescriptor2_C](1)
-    sd[0].bvh2Nodes      = psc[0].bvh_nodes
-    sd[0].primIds        = psc[0].prim_ids
-    sd[0].meshes         = psc[0].meshes
-    sd[0].meshCount      = Int64(psc[0].mesh_count)
-    sd[0].materials      = psc[0].materials
-    sd[0].materialCount  = Int64(psc[0].material_count)
-    sd[0].areaLights     = psc[0].area_lights
-    sd[0].areaLightCount = Int64(psc[0].area_light_count)
-    sd[0].textures       = psc[0].tex_filenames
-    sd[0].textureCount   = Int64(psc[0].tex_count)
+    sd[0].bvh2Nodes        = psc[0].bvh_nodes
+    sd[0].primIds          = psc[0].prim_ids
+    sd[0].meshes           = psc[0].meshes
+    sd[0].meshCount        = Int64(psc[0].mesh_count)
+    sd[0].materials        = psc[0].materials
+    sd[0].materialCount    = Int64(psc[0].material_count)
+    sd[0].areaLights       = psc[0].area_lights
+    sd[0].areaLightCount   = Int64(psc[0].area_light_count)
+    sd[0].textures         = psc[0].tex_filenames
+    sd[0].textureCount     = Int64(psc[0].tex_count)
+    sd[0].distantLights    = psc[0].distant_lights
+    sd[0].distantLightCount = Int64(psc[0].distant_count)
+    sd[0].pointLights      = psc[0].point_lights
+    sd[0].pointLightCount  = Int64(psc[0].point_count)
+    sd[0].infiniteLights   = psc[0].infinite_lights
+    sd[0].infiniteLightCount = Int64(psc[0].infinite_count)
     return sd

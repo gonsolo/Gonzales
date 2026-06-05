@@ -43,7 +43,10 @@ def mojo_render_paths(
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.materials,
                                scene.areaLights, Int(scene.areaLightCount),
-                               scene.textures, i)
+                               scene.textures, i,
+                               scene.distantLights, Int(scene.distantLightCount),
+                               scene.pointLights, Int(scene.pointLightCount),
+                               scene.infiniteLights, Int(scene.infiniteLightCount))
 
     intersections.free()
 
@@ -147,7 +150,10 @@ def mojo_render_tile_v2(
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.materials,
                                scene.areaLights, Int(scene.areaLightCount),
-                               scene.textures, i)
+                               scene.textures, i,
+                               scene.distantLights, Int(scene.distantLightCount),
+                               scene.pointLights, Int(scene.pointLightCount),
+                               scene.infiniteLights, Int(scene.infiniteLightCount))
 
     # Accumulate the spp samples per pixel and emit one result per pixel.
     idx = 0
@@ -263,7 +269,10 @@ def mojo_render_tile(
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.materials,
                                scene.areaLights, Int(scene.areaLightCount),
-                               scene.textures, i)
+                               scene.textures, i,
+                               scene.distantLights, Int(scene.distantLightCount),
+                               scene.pointLights, Int(scene.pointLightCount),
+                               scene.infiniteLights, Int(scene.infiniteLightCount))
 
     # Write results for film accumulation
     for i in range(n):

@@ -4,7 +4,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
+from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
@@ -545,7 +545,10 @@ fn shade_compact_nee_gpu(
     shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials,
         areaLights, areaLightCount,
         UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin]())
+        UnsafePointer[ShadowTask_C, MutAnyOrigin](),
+        UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0)
 
 
 fn shade_nee_gpu(
@@ -573,7 +576,10 @@ fn shade_nee_gpu(
         return
     shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
         UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin]())
+        UnsafePointer[ShadowTask_C, MutAnyOrigin](),
+        UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0)
 
 
 fn shade_enqueue_shadow_gpu(
@@ -602,7 +608,10 @@ fn shade_enqueue_shadow_gpu(
         path_ptr[].active = 0
         return
     shade_nee_core[True, True](path_ptr, tid, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures, shadow_tasks)
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures, shadow_tasks,
+        UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0)
 
 
 fn traverse_shadow_rays_gpu(

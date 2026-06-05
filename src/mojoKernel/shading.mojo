@@ -1,7 +1,7 @@
-from std.math import sqrt, cos, sin, floor
+from std.math import sqrt, cos, sin, floor, acos, atan2
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
+from .geometry import RGB, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
 
@@ -759,7 +759,45 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int,
 ):
+    # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
+    if inter.hit == 0:
+        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.dirX, path_ptr[].ray.dirY, path_ptr[].ray.dirZ)
+        for inf_i in range(infiniteLightCount):
+            var ilight = infiniteLights[inf_i]
+            var env_rgb: RGB
+            @parameter
+            if not use_gpu:
+                if ilight.tex_idx >= Int32(0):
+                    var fname = tex_filenames[Int(ilight.tex_idx)]
+                    var u = (atan2(ray_dir[2], ray_dir[0]) + Float32(3.14159265359)) / Float32(6.28318530718)
+                    var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / Float32(3.14159265359)
+                    var tr = alloc[Float32](3)
+                    tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
+                    _ = external_call["texture", Bool,
+                        UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+                        UnsafePointer[Float32, MutAnyOrigin]](fname, u, v, tr)
+                    env_rgb = RGB(tr[0], tr[1], tr[2]) * ilight.scale
+                    tr.free()
+                else:
+                    env_rgb = ilight.scale
+            else:
+                env_rgb = ilight.scale
+            var mis_weight = Float32(1.0)
+            if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
+                var pdf_bsdf = path_ptr[].lastBsdfPdf
+                var pdf_light = Float32(1.0) / (Float32(4.0) * Float32(3.14159265359))
+                mis_weight = power_heuristic(pdf_bsdf, pdf_light)
+            path_ptr[].estimate += path_ptr[].throughput * env_rgb * mis_weight
+        path_ptr[].active = 0
+        return
+
     var mat = materials[Int(inter.primId.materialIndex)]
 
     if mat.type == 2:
@@ -884,13 +922,10 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_s = dot(normal, shadow_dir)
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                # pdf_light in solid angle measure: dist² / (cos_l * A * N)
                 var pdf_light = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
-                # pdf_bsdf for cosine-weighted hemisphere: cos_s / π
                 var pi = Float32(3.14159265359)
                 var pdf_bsdf_nee = cos_s / pi
                 var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
-                # f = albedo/π, estimator = f * Le * cos_s * w / pdf_light
                 var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight
                 @parameter
@@ -903,6 +938,58 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 else:
                     var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
                                           shadow_dir[0], shadow_dir[1], shadow_dir[2])
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                        path_ptr[].estimate += contrib
+
+    # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
+    for dl_i in range(distantLightCount):
+        var dl = distantLights[dl_i]
+        var ldir = SIMD[DType.float32, 3](dl.dirX, dl.dirY, dl.dirZ)  # direction toward scene (away from light)
+        var to_light = -ldir  # direction from hit point toward the light
+        var cos_s = dot(normal, to_light)
+        if cos_s > Float32(0.0):
+            # f = alb/pi, no geometry term (parallel rays), pdf = delta -> weight = 1
+            var pi = Float32(3.14159265359)
+            var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s / pi)
+            # Shadow ray at very long distance (scene diameter ~1000)
+            var t_max = Float32(2000.0)
+            @parameter
+            if enqueue_shadow:
+                shadow_tasks[path_idx] = ShadowTask_C(
+                    hit_point[0], hit_point[1], hit_point[2],
+                    to_light[0], to_light[1], to_light[2],
+                    t_max, contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+            else:
+                var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                      to_light[0], to_light[1], to_light[2])
+                if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, t_max):
+                    path_ptr[].estimate += contrib
+
+    # ── Point light NEE (delta light: MIS weight = 1) ────────────────────────
+    for pl_i in range(pointLightCount):
+        var pl = pointLights[pl_i]
+        var lpos = SIMD[DType.float32, 3](pl.posX, pl.posY, pl.posZ)
+        var to_light = lpos - hit_point
+        var dist_sq = dot(to_light, to_light)
+        var dist = sqrt(dist_sq)
+        if dist > Float32(0.0001):
+            var ldir = to_light * (Float32(1.0) / dist)
+            var cos_s = dot(normal, ldir)
+            if cos_s > Float32(0.0):
+                var pi = Float32(3.14159265359)
+                # f = alb/pi, geometry = cos_s, pdf = delta -> weight = 1
+                # radiance = intensity / dist²
+                var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
+                @parameter
+                if enqueue_shadow:
+                    shadow_tasks[path_idx] = ShadowTask_C(
+                        hit_point[0], hit_point[1], hit_point[2],
+                        ldir[0], ldir[1], ldir[2],
+                        dist * Float32(0.9999),
+                        contrib.r, contrib.g, contrib.b, Int32(1), Int32(0))
+                else:
+                    var shadow_ray = Ray_C(hit_point[0], hit_point[1], hit_point[2],
+                                          ldir[0], ldir[1], ldir[2])
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                         path_ptr[].estimate += contrib
 
@@ -958,17 +1045,22 @@ fn shade_core_cpu_nee(
     areaLightCount: Int,
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     tid: Int,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int,
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
         return
     var inter = intersections[tid]
-    if inter.hit == 0:
-        path_ptr[].active = 0
-        return
     shade_nee_core[False, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
         tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin](), 0,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin]())
+        UnsafePointer[ShadowTask_C, MutAnyOrigin](),
+        distantLights, distantLightCount, pointLights, pointLightCount,
+        infiniteLights, infiniteLightCount)
 
 
 @export

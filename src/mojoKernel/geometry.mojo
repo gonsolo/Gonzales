@@ -110,6 +110,31 @@ struct AreaLight_C(TrivialRegisterPassable):
     var total_area: Float32 # total surface area of this light mesh
 
 @fieldwise_init
+struct DistantLight_C(TrivialRegisterPassable):
+    var dirX: Float32       # direction FROM the light toward the scene (world space)
+    var dirY: Float32
+    var dirZ: Float32
+    var _pad: Float32
+    var emission: RGB
+    var _pad2: Float32
+
+@fieldwise_init
+struct PointLight_C(TrivialRegisterPassable):
+    var posX: Float32
+    var posY: Float32
+    var posZ: Float32
+    var _pad: Float32
+    var intensity: RGB
+    var _pad2: Float32
+
+@fieldwise_init
+struct InfiniteLight_C(TrivialRegisterPassable):
+    var tex_idx: Int32      # index into tex_filenames; -1 = constant colour
+    var _pad: Int32
+    var scale: RGB          # multiplier applied to env map sample
+    var _pad2: Float32
+
+@fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):
     var data: UnsafePointer[Float32, MutAnyOrigin]  # device pointer, pre-linearised float RGB
     var width: Int32
