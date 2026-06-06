@@ -351,16 +351,6 @@ struct ShadowTask_C(TrivialRegisterPassable):
     var active: Int32
     var _pad: Int32
 
-@fieldwise_init
-struct PixelSample_C(TrivialRegisterPassable):
-    var filmX: Float32
-    var filmY: Float32
-    var filterWeight: Float32
-    var pixelX: Int32
-    var pixelY: Int32
-    var _pad: Int32
-    var pcgState: UInt64
-    var pcgInc: UInt64
 
 @fieldwise_init
 struct TileResult_C(TrivialRegisterPassable):
