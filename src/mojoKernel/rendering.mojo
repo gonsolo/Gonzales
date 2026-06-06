@@ -1,10 +1,11 @@
-from std.math import ceildiv, sqrt
+from std.math import ceildiv, sqrt, log, exp, cos, sin
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, dot
-from .bvh import SceneDescriptor2_C, traverse_bvh2_core
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PathState_C, TileResult_C, PixelSample_C, Sphere_C, dot, Medium_C, MediumInterface_C, SampledSpectrum
+from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres
 from .shading import shade_core_cpu_nee
+from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64
 
 @export
@@ -36,6 +37,8 @@ def mojo_render_paths(
                 scene.bvh2Nodes, scene.primIds, scene.meshes,
                 paths[i].ray, Float32(1.0e38), intersections + i,
             )
+            if scene.sphereCount > 0:
+                test_spheres(scene.spheres, Int(scene.sphereCount), paths[i].ray, intersections + i)
 
         for i in range(n):
             if paths[i].active == 0:
@@ -46,7 +49,8 @@ def mojo_render_paths(
                                scene.textures, i,
                                scene.distantLights, Int(scene.distantLightCount),
                                scene.pointLights, Int(scene.pointLightCount),
-                               scene.infiniteLights, Int(scene.infiniteLightCount))
+                               scene.infiniteLights, Int(scene.infiniteLightCount),
+                               scene.spheres, Int(scene.sphereCount))
 
     intersections.free()
 
@@ -127,6 +131,7 @@ def mojo_render_tile_v2(
                     Int32(0), pcg_state, pcg_inc,
                     Int8(1), Int8(0), Int8(0), Int8(0),
                     Float32(0.0),
+                    Int32(-1),
                 )
                 idx += 1
 
@@ -144,6 +149,52 @@ def mojo_render_tile_v2(
                 continue
             traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes,
                                paths[i].ray, Float32(1.0e38), intersections + i)
+            if scene.sphereCount > 0:
+                test_spheres(scene.spheres, Int(scene.sphereCount), paths[i].ray, intersections + i)
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            # ── Volume transmittance sampling ──────────────────────────
+            var med_idx = Int(paths[i].current_medium_idx)
+            if med_idx >= 0 and Int(scene.mediumCount) > 0 and intersections[i].hit != Int8(0):
+                var med = scene.mediums[med_idx]
+                var sigma_t_r = med.sigma_a.r + med.sigma_s.r
+                var sigma_t_g = med.sigma_a.g + med.sigma_s.g
+                var sigma_t_b = med.sigma_a.b + med.sigma_s.b
+                var sigma_maj = sigma_t_r
+                if sigma_maj > Float32(0.0):
+                    var pcg_vol = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                    var u_free  = pcg_vol.next_float()
+                    paths[i].pcgState = pcg_vol.state
+                    var t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
+                    var t_surf = intersections[i].tHit
+                    var t_seg  = min(t_free, t_surf)
+                    paths[i].throughput.r *= exp(-sigma_t_r * t_seg)
+                    paths[i].throughput.g *= exp(-sigma_t_g * t_seg)
+                    paths[i].throughput.b *= exp(-sigma_t_b * t_seg)
+                    if t_free < t_surf:
+                        var p_absorb  = (med.sigma_a.r) / sigma_maj
+                        var p_scatter = (med.sigma_s.r) / sigma_maj
+                        var pcg2 = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                        var u_mode = pcg2.next_float()
+                        paths[i].pcgState = pcg2.state
+                        if u_mode < p_absorb:
+                            paths[i].throughput = RGB(Float32(0), Float32(0), Float32(0))
+                            paths[i].active = Int8(0)
+                        elif u_mode < p_absorb + p_scatter:
+                            var pcg3 = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                            var u1 = pcg3.next_float()
+                            var u2 = pcg3.next_float()
+                            paths[i].pcgState = pcg3.state
+                            var cos_theta = Float32(2) * u1 - Float32(1)
+                            var sin_theta = sqrt(max(Float32(0), Float32(1) - cos_theta * cos_theta))
+                            var phi = Float32(6.28318530718) * u2
+                            var ox = paths[i].ray.origin.x + t_free * paths[i].ray.direction.x
+                            var oy = paths[i].ray.origin.y + t_free * paths[i].ray.direction.y
+                            var oz = paths[i].ray.origin.z + t_free * paths[i].ray.direction.z
+                            paths[i].ray = Ray_C(Point3f(ox, oy, oz), Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
+                            paths[i].specularBounce = Int8(0)
+                            intersections[i].hit = Int8(0)
         for i in range(n):
             if paths[i].active == 0:
                 continue
@@ -153,7 +204,47 @@ def mojo_render_tile_v2(
                                scene.textures, i,
                                scene.distantLights, Int(scene.distantLightCount),
                                scene.pointLights, Int(scene.pointLightCount),
-                               scene.infiniteLights, Int(scene.infiniteLightCount))
+                               scene.infiniteLights, Int(scene.infiniteLightCount),
+                               scene.spheres, Int(scene.sphereCount))
+        # ── Medium interface transitions ──────────────────────────
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            if intersections[i].hit == Int8(0):
+                continue
+            var mi_mat_idx = Int(intersections[i].primId.materialIndex)
+            if mi_mat_idx < 0 or scene.mediumIfaceCount == Int64(0):
+                continue
+            var mi_mat = scene.materials[mi_mat_idx]
+            if mi_mat.medium_interface_idx < Int32(0):
+                continue
+            var iface = scene.mediumInterfaces[Int(mi_mat.medium_interface_idx)]
+            var mi_mesh_idx: Int
+            var mi_base_vidx: Int
+            if intersections[i].primId.type == 0:
+                mi_mesh_idx = Int(intersections[i].primId.id1)
+                mi_base_vidx = Int(intersections[i].primId.id2)
+            else:
+                mi_mesh_idx = Int(intersections[i].primId.id2 >> 32)
+                mi_base_vidx = Int(intersections[i].primId.id2 & 0xFFFFFFFF) * 3
+            var mi_m = scene.meshes[mi_mesh_idx]
+            var mi_vi0 = Int(mi_m.vertexIndices[mi_base_vidx])
+            var mi_vi1 = Int(mi_m.vertexIndices[mi_base_vidx + 1])
+            var mi_vi2 = Int(mi_m.vertexIndices[mi_base_vidx + 2])
+            var mi_e1x = mi_m.points[mi_vi1*4]   - mi_m.points[mi_vi0*4]
+            var mi_e1y = mi_m.points[mi_vi1*4+1] - mi_m.points[mi_vi0*4+1]
+            var mi_e1z = mi_m.points[mi_vi1*4+2] - mi_m.points[mi_vi0*4+2]
+            var mi_e2x = mi_m.points[mi_vi2*4]   - mi_m.points[mi_vi0*4]
+            var mi_e2y = mi_m.points[mi_vi2*4+1] - mi_m.points[mi_vi0*4+1]
+            var mi_e2z = mi_m.points[mi_vi2*4+2] - mi_m.points[mi_vi0*4+2]
+            var mi_nx = mi_e1y * mi_e2z - mi_e1z * mi_e2y
+            var mi_ny = mi_e1z * mi_e2x - mi_e1x * mi_e2z
+            var mi_nz = mi_e1x * mi_e2y - mi_e1y * mi_e2x
+            var mi_dot = paths[i].ray.direction.x * mi_nx + paths[i].ray.direction.y * mi_ny + paths[i].ray.direction.z * mi_nz
+            if mi_dot > Float32(0):
+                paths[i].current_medium_idx = iface.outside_medium_idx
+            else:
+                paths[i].current_medium_idx = iface.inside_medium_idx
 
     # Accumulate the spp samples per pixel and emit one result per pixel.
     idx = 0
@@ -243,6 +334,7 @@ def mojo_render_tile(
             s.pcgState, s.pcgInc,
             Int8(1), Int8(0), Int8(0), Int8(0),
             Float32(0.0),
+            Int32(-1),
         )
 
     # Multi-bounce path trace
@@ -262,6 +354,63 @@ def mojo_render_tile(
                 scene.bvh2Nodes, scene.primIds, scene.meshes,
                 paths[i].ray, Float32(1.0e38), intersections + i,
             )
+            if scene.sphereCount > 0:
+                test_spheres(scene.spheres, Int(scene.sphereCount), paths[i].ray, intersections + i)
+
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            # ── Volume transmittance sampling ─────────────────────────
+            var med_idx = Int(paths[i].current_medium_idx)
+            if med_idx >= 0 and Int(scene.mediumCount) > 0 and intersections[i].hit != Int8(0):
+                var med = scene.mediums[med_idx]
+                var sigma_t_r = med.sigma_a.r + med.sigma_s.r
+                var sigma_t_g = med.sigma_a.g + med.sigma_s.g
+                var sigma_t_b = med.sigma_a.b + med.sigma_s.b
+                var sigma_maj = sigma_t_r  # use R as majorant channel
+                if sigma_maj > Float32(0.0):
+                    var pcg_vol = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                    var u_free  = pcg_vol.next_float()
+                    paths[i].pcgState = pcg_vol.state
+                    var t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
+                    var t_surf = intersections[i].tHit
+                    var t_seg  = min(t_free, t_surf)
+                    # Apply Beer-Lambert transmittance for traversed segment
+                    paths[i].throughput.r *= exp(-sigma_t_r * t_seg)
+                    paths[i].throughput.g *= exp(-sigma_t_g * t_seg)
+                    paths[i].throughput.b *= exp(-sigma_t_b * t_seg)
+                    if t_free < t_surf:
+                        # Interaction inside medium
+                        var p_absorb  = (med.sigma_a.r) / sigma_maj
+                        var p_scatter = (med.sigma_s.r) / sigma_maj
+                        var pcg2 = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                        var u_mode = pcg2.next_float()
+                        paths[i].pcgState = pcg2.state
+                        if u_mode < p_absorb:
+                            # Absorbed — kill path
+                            paths[i].throughput = RGB(Float32(0), Float32(0), Float32(0))
+                            paths[i].active = Int8(0)
+                        elif u_mode < p_absorb + p_scatter:
+                            # Scatter — sample isotropic direction (g≈0)
+                            var pcg3 = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                            var u1 = pcg3.next_float()
+                            var u2 = pcg3.next_float()
+                            paths[i].pcgState = pcg3.state
+                            var cos_theta = Float32(2) * u1 - Float32(1)
+                            var sin_theta = sqrt(max(Float32(0), Float32(1) - cos_theta * cos_theta))
+                            var phi = Float32(6.28318530718) * u2
+                            var dx = sin_theta * cos(phi)
+                            var dy = sin_theta * sin(phi)
+                            var dz = cos_theta
+                            # Move ray origin to scatter point
+                            var ox = paths[i].ray.origin.x + t_free * paths[i].ray.direction.x
+                            var oy = paths[i].ray.origin.y + t_free * paths[i].ray.direction.y
+                            var oz = paths[i].ray.origin.z + t_free * paths[i].ray.direction.z
+                            paths[i].ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+                            paths[i].specularBounce = Int8(0)
+                            # Reset intersection so surface shading is skipped
+                            intersections[i].hit = Int8(0)
+                        # else: null scatter (for inhomogeneous; in homogeneous p_null=0)
 
         for i in range(n):
             if paths[i].active == 0:
@@ -272,7 +421,62 @@ def mojo_render_tile(
                                scene.textures, i,
                                scene.distantLights, Int(scene.distantLightCount),
                                scene.pointLights, Int(scene.pointLightCount),
-                               scene.infiniteLights, Int(scene.infiniteLightCount))
+                               scene.infiniteLights, Int(scene.infiniteLightCount),
+                               scene.spheres, Int(scene.sphereCount))
+
+        # ── Medium interface transitions ───────────────────────────────────
+        # After surface shading, update current_medium_idx based on which
+        # side of the interface the *outgoing* ray is on.
+        # Use the geometric normal and the NEW ray direction (post-shading)
+        # to determine inside vs outside.
+        for i in range(n):
+            if paths[i].active == 0:
+                continue
+            if intersections[i].hit == Int8(0):
+                continue
+            var mat_idx = Int(intersections[i].primId.materialIndex)
+            if mat_idx < 0 or scene.mediumIfaceCount == Int64(0):
+                continue
+            var mat = scene.materials[mat_idx]
+            if mat.medium_interface_idx < Int32(0):
+                continue
+            var iface = scene.mediumInterfaces[Int(mat.medium_interface_idx)]
+            # Recompute the geometric normal at the hit point.
+            var mesh_idx2: Int
+            var base_vidx2: Int
+            if intersections[i].primId.type == 0:
+                mesh_idx2 = Int(intersections[i].primId.id1)
+                base_vidx2 = Int(intersections[i].primId.id2)
+            else:
+                mesh_idx2 = Int(intersections[i].primId.id2 >> 32)
+                base_vidx2 = Int(intersections[i].primId.id2 & 0xFFFFFFFF) * 3
+            var m = scene.meshes[mesh_idx2]
+            var vi0 = Int(m.vertexIndices[base_vidx2])
+            var vi1 = Int(m.vertexIndices[base_vidx2 + 1])
+            var vi2 = Int(m.vertexIndices[base_vidx2 + 2])
+            var e1x = m.points[vi1*4]   - m.points[vi0*4]
+            var e1y = m.points[vi1*4+1] - m.points[vi0*4+1]
+            var e1z = m.points[vi1*4+2] - m.points[vi0*4+2]
+            var e2x = m.points[vi2*4]   - m.points[vi0*4]
+            var e2y = m.points[vi2*4+1] - m.points[vi0*4+1]
+            var e2z = m.points[vi2*4+2] - m.points[vi0*4+2]
+            var nx = e1y * e2z - e1z * e2y
+            var ny = e1z * e2x - e1x * e2z
+            var nz = e1x * e2y - e1y * e2x
+            # Dot of outgoing ray direction with geometric normal.
+            # Positive = ray going to the outside; Negative = ray going inside.
+            var out_dx = paths[i].ray.direction.x
+            var out_dy = paths[i].ray.direction.y
+            var out_dz = paths[i].ray.direction.z
+            var d_dot_n = out_dx * nx + out_dy * ny + out_dz * nz
+            if d_dot_n > Float32(0):
+                # Outgoing ray is on the OUTSIDE of the surface
+                paths[i].current_medium_idx = iface.outside_medium_idx
+            else:
+                # Outgoing ray is on the INSIDE of the surface
+                paths[i].current_medium_idx = iface.inside_medium_idx
+
+
 
     # Write results for film accumulation
     for i in range(n):

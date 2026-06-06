@@ -1,5 +1,6 @@
 from std.memory import alloc
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, PixelSample_C, Point3f, Vec3f
+from std.math import sqrt
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, PixelSample_C, Point3f, Vec3f, Medium_C, MediumInterface_C
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -65,6 +66,60 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var pointLightCount: Int64
     var infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin]
     var infiniteLightCount: Int64
+    var spheres: UnsafePointer[Sphere_C, MutAnyOrigin]
+    var sphereCount: Int64
+    var mediums: UnsafePointer[Medium_C, MutAnyOrigin]
+    var mediumCount: Int64
+    var mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin]
+    var mediumIfaceCount: Int64
+
+# ── Analytical sphere intersection ────────────────────────────────────────────
+
+@always_inline
+fn ray_sphere_hit(center: Point3f, radius: Float32,
+                  ray: Ray_C, t_min: Float32, t_max: Float32) -> Float32:
+    """Exact ray-sphere intersection. Returns t of first hit in (t_min, t_max), or -1."""
+    var ocx = ray.origin.x - center.x
+    var ocy = ray.origin.y - center.y
+    var ocz = ray.origin.z - center.z
+    # Use half-b form to avoid catastrophic cancellation
+    var a = ray.direction.x*ray.direction.x + ray.direction.y*ray.direction.y + ray.direction.z*ray.direction.z
+    var half_b = ocx*ray.direction.x + ocy*ray.direction.y + ocz*ray.direction.z
+    var c = ocx*ocx + ocy*ocy + ocz*ocz - radius * radius
+    var disc = half_b * half_b - a * c
+    if disc < Float32(0.0):
+        return Float32(-1.0)
+    var sqrtd = sqrt(disc)
+    var t = (-half_b - sqrtd) / a
+    if t >= t_min and t < t_max:
+        return t
+    t = (-half_b + sqrtd) / a
+    if t >= t_min and t < t_max:
+        return t
+    return Float32(-1.0)
+
+@always_inline
+fn test_spheres(
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    ray: Ray_C,
+    result: UnsafePointer[Intersection_C, MutAnyOrigin],
+):
+    """Test all analytical spheres against the ray, updating result if closer.
+    Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
+    """
+    var t_max = Float32(1.0e38)
+    if result[0].hit != Int8(0):
+        t_max = result[0].tHit
+    for i in range(n_spheres):
+        var t = ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), t_max)
+        if t > Float32(0.0):
+            t_max = t
+            result[0].hit = Int8(1)
+            result[0].tHit = t
+            result[0].primId.type = Int8(4)
+            result[0].primId.id1 = Int64(i)
+            result[0].primId.materialIndex = Int64(spheres[i].materialIndex)
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 

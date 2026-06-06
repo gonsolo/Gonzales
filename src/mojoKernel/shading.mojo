@@ -1,9 +1,9 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
-from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core
+from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
 
 @always_inline
@@ -44,6 +44,7 @@ fn _tex_lookup[use_gpu: Bool](
                 var w0 = Float32(1.0) - inter.u - inter.v
                 var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
                 var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
                 return _sample_tex(tex, su, tv)
     else:
         if ti >= 0 and tex_filenames:
@@ -52,6 +53,7 @@ fn _tex_lookup[use_gpu: Bool](
                 var w0 = Float32(1.0) - inter.u - inter.v
                 var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
                 var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
                 su = su - Float32(Int(su))
                 if su < Float32(0.0): su += Float32(1.0)
                 tv = tv - Float32(Int(tv))
@@ -1162,6 +1164,8 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     pointLightCount: Int,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int,
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
@@ -1214,6 +1218,31 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     var mat = materials[Int(inter.primId.materialIndex)]
+
+    # ── Analytical sphere hit: collect emission and terminate (Null material) ──
+    if inter.primId.type == Int8(4) and sphereCount > 0:
+        var sph_idx = Int(inter.primId.id1)
+        var sph = spheres[sph_idx]
+        if sph.isAreaLight == Int8(1):
+            if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+                path_ptr[].estimate += path_ptr[].throughput * sph.emission
+            else:
+                # MIS: BSDF pdf vs sphere solid-angle pdf from previous shading point
+                var pdf_bsdf = path_ptr[].lastBsdfPdf
+                var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+                var to_c_x = sph.center.x - ray_org[0]
+                var to_c_y = sph.center.y - ray_org[1]
+                var to_c_z = sph.center.z - ray_org[2]
+                var dc_sq = to_c_x*to_c_x + to_c_y*to_c_y + to_c_z*to_c_z
+                var sin2_max = sph.radius * sph.radius / dc_sq
+                if sin2_max < Float32(1.0) and pdf_bsdf > Float32(0.0):
+                    var cos_max = sqrt(Float32(1.0) - sin2_max)
+                    var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
+                    var pdf_light = Float32(1.0) / (solid_angle * Float32(max(sphereCount, 1)))
+                    var w = power_heuristic(pdf_bsdf, pdf_light)
+                    path_ptr[].estimate += path_ptr[].throughput * sph.emission * w
+        path_ptr[].active = 0
+        return
 
     if mat.type == 2:
         # Emissive surface hit.
@@ -1414,6 +1443,60 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                         path_ptr[].estimate += contrib
 
+    # ── Sphere light NEE (solid-angle cone sampling) ──────────────────────────
+    for sph_i in range(sphereCount):
+        var sph = spheres[sph_i]
+        if sph.isAreaLight == Int8(0):
+            continue
+        var to_cx = sph.center.x - hit_point[0]
+        var to_cy = sph.center.y - hit_point[1]
+        var to_cz = sph.center.z - hit_point[2]
+        var dc_sq = to_cx*to_cx + to_cy*to_cy + to_cz*to_cz
+        var dc = sqrt(dc_sq)
+        if dc < sph.radius or dc_sq == Float32(0.0):
+            continue
+        var sin2_max = sph.radius * sph.radius / dc_sq
+        if sin2_max >= Float32(1.0):
+            continue
+        var cos_max = sqrt(Float32(1.0) - sin2_max)
+        # Build local ONB with z-axis toward sphere center
+        var zc = SIMD[DType.float32, 3](to_cx / dc, to_cy / dc, to_cz / dc)
+        var xc: SIMD[DType.float32, 3]
+        if (zc[0] if zc[0] >= Float32(0.0) else -zc[0]) < Float32(0.9):
+            xc = cross(zc, SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0)))
+        else:
+            xc = cross(zc, SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)))
+        var xlen = dot(xc, xc)
+        if xlen > Float32(0.0):
+            xc = xc * (Float32(1.0) / sqrt(xlen))
+        var yc = cross(zc, xc)
+        # Uniform cone sampling toward sphere
+        var r1s = pcg.next_float()
+        var r2s = pcg.next_float()
+        var cos_th = Float32(1.0) - r1s * (Float32(1.0) - cos_max)
+        var sin_th = sqrt(max(Float32(0.0), Float32(1.0) - cos_th * cos_th))
+        var phis = TWO_PI * r2s
+        var shadow_dir = xc * (sin_th * cos(phis)) + yc * (sin_th * sin(phis)) + zc * cos_th
+        var sdlen = dot(shadow_dir, shadow_dir)
+        if sdlen > Float32(0.0):
+            shadow_dir = shadow_dir * (Float32(1.0) / sqrt(sdlen))
+        var cos_s = dot(normal, shadow_dir)
+        if cos_s > Float32(0.0):
+            var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
+            var n_sphere_lights = Float32(max(sphereCount, 1))
+            var pdf_light = Float32(1.0) / (solid_angle * n_sphere_lights)
+            var pdf_bsdf_nee = cos_s / PI
+            var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
+            var weight = alb * sph.emission * (cos_s * w_nee / (pdf_light * PI))
+            var contrib = path_ptr[].throughput * weight
+            @parameter
+            if enqueue_shadow:
+                shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dc * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+            else:
+                var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dc * Float32(0.9999)):
+                    path_ptr[].estimate += contrib
+
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
     var r = sqrt(u1)
@@ -1472,6 +1555,8 @@ fn shade_core_cpu_nee(
     pointLightCount: Int,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int,
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -1481,7 +1566,8 @@ fn shade_core_cpu_nee(
         tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin](), 0,
         UnsafePointer[ShadowTask_C, MutAnyOrigin](),
         distantLights, distantLightCount, pointLights, pointLightCount,
-        infiniteLights, infiniteLightCount)
+        infiniteLights, infiniteLightCount,
+        spheres, sphereCount)
 
 
 @export

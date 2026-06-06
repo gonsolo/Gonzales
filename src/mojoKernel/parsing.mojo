@@ -1,8 +1,8 @@
 from std.ffi import external_call
 from .ply import mojo_load_ply
-from std.math import tan, sqrt, acos, atan2, sin
+from std.math import tan, sqrt, acos, atan2, sin, abs, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C, PI, TWO_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C, PI, TWO_PI, Medium_C, MediumInterface_C
 from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
 from .bvh import BVH2Node, SceneDescriptor2_C, mojo_build_bvh2
 from .sampling import mojo_gaussian_norm
@@ -635,6 +635,15 @@ comptime PSC_NAME_MAX   = 64
 comptime PSC_FILE_MAX   = 256
 comptime PSC_MAX_TEX    = 64
 
+# ── Hair curve tessellation constants ─────────────────────────────────────────
+# B-spline curves (Shape "curve") are tessellated into cross-ribbon triangles.
+# HAIR_EVAL_N points are sampled uniformly along each strand (B-spline),
+# giving HAIR_EVAL_N-1 ribbon segments. Each segment becomes 2 perpendicular
+# quads (4 triangles) forming a cross-shaped profile visible from any angle.
+comptime HAIR_EVAL_N    = 8          # sample points along each strand
+comptime HAIR_MAX_VTX   = 15_000_000 # lazy buffer: max accumulated hair vertices
+comptime HAIR_MAX_TRI   = 10_000_000 # lazy buffer: max accumulated hair triangles
+
 # ── Output struct ─────────────────────────────────────────────────────────────
 
 struct ParsedScene_Mojo:
@@ -680,6 +689,12 @@ struct ParsedScene_Mojo:
     var point_count:      Int32
     var infinite_lights:  UnsafePointer[InfiniteLight_C, MutAnyOrigin]
     var infinite_count:   Int32
+    var spheres:          UnsafePointer[Sphere_C, MutAnyOrigin]
+    var sphere_count:     Int32
+    var mediums:          UnsafePointer[Medium_C, MutAnyOrigin]
+    var medium_count:     Int32
+    var medium_ifaces:    UnsafePointer[MediumInterface_C, MutAnyOrigin]
+    var medium_iface_count: Int32
 
 # ── Internal parse state ──────────────────────────────────────────────────────
 
@@ -737,6 +752,13 @@ struct _PscState:
     var named_mix2:    UnsafePointer[UInt8, MutAnyOrigin]   # mix mat name2
     var named_amount:  UnsafePointer[Float32, MutAnyOrigin] # mix blend amount
     var named_transmittance: UnsafePointer[RGB, MutAnyOrigin] # diffusetransmission transmittance
+    # Hair curve accumulator (lazy-allocated on first Shape "curve")
+    var hair_pts:    UnsafePointer[Float32, MutAnyOrigin]  # 3 floats per vertex (world-space)
+    var hair_idx:    UnsafePointer[Int32, MutAnyOrigin]    # 3 ints per triangle
+    var hair_nv:     Int32
+    var hair_nt:     Int32
+    var hair_mat:    Int32   # cur_mat_idx when first curve was added
+    var hair_inited: Int32   # 0 = not yet allocated
     var tex_names:     UnsafePointer[UInt8, MutAnyOrigin]
     var tex_files:     UnsafePointer[UInt8, MutAnyOrigin]
     var n_textures:    Int32
@@ -751,6 +773,36 @@ struct _PscState:
     var inf_tex_idx:   UnsafePointer[Int32, MutAnyOrigin]     # n_infinite indices
     var inf_rgb:       UnsafePointer[Float32, MutAnyOrigin]   # n_infinite * 3 floats
     var n_infinite:    Int32
+
+    # Analytical sphere primitives
+    var sph_cx:   UnsafePointer[Float32, MutAnyOrigin]  # center x (n_spheres)
+    var sph_cy:   UnsafePointer[Float32, MutAnyOrigin]  # center y
+    var sph_cz:   UnsafePointer[Float32, MutAnyOrigin]  # center z
+    var sph_r:    UnsafePointer[Float32, MutAnyOrigin]  # radius
+    var sph_mat:  UnsafePointer[Int32, MutAnyOrigin]    # material index
+    var sph_al:   UnsafePointer[Int8, MutAnyOrigin]     # isAreaLight flag
+    var sph_rgb:  UnsafePointer[RGB, MutAnyOrigin]      # emission RGB
+    var n_spheres: Int32
+
+    # Homogeneous media (cap 32)
+    var med_names:  UnsafePointer[UInt8, MutAnyOrigin]   # 32 * 64 bytes
+    var med_sa:     UnsafePointer[Float32, MutAnyOrigin]  # n_mediums * 3
+    var med_ss:     UnsafePointer[Float32, MutAnyOrigin]  # n_mediums * 3
+    var med_g:      UnsafePointer[Float32, MutAnyOrigin]  # n_mediums
+    var n_mediums:  Int32
+    # Medium interfaces bound to materials (cap 256)
+    var miface_inside:  UnsafePointer[Int32, MutAnyOrigin]  # n_ifaces
+    var miface_outside: UnsafePointer[Int32, MutAnyOrigin]  # n_ifaces
+    var miface_mat:     UnsafePointer[Int32, MutAnyOrigin]  # which mat_idx each iface belongs to
+    var n_ifaces: Int32
+    var cur_inside_medium: Int32   # attribute-state: current MediumInterface inside
+    var cur_outside_medium: Int32  # attribute-state: current MediumInterface outside
+    var mesh_inside_med:  UnsafePointer[Int32, MutAnyOrigin]  # per-mesh inside medium idx
+    var mesh_outside_med: UnsafePointer[Int32, MutAnyOrigin]  # per-mesh outside medium idx
+    var sph_inside_med:   UnsafePointer[Int32, MutAnyOrigin]  # per-sphere inside medium idx
+    var sph_outside_med:  UnsafePointer[Int32, MutAnyOrigin]  # per-sphere outside medium idx
+    var attr_inside_med:  UnsafePointer[Int32, MutAnyOrigin]  # attribute stack
+    var attr_outside_med: UnsafePointer[Int32, MutAnyOrigin]  # attribute stack
 
 
 # ── Utility functions ─────────────────────────────────────────────────────────
@@ -935,6 +987,13 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].attr_alight = alloc[Int32](PSC_ATTR_DEPTH)
     s[0].attr_al_rgb = alloc[RGB](PSC_ATTR_DEPTH)
     s[0].named_transmittance = alloc[RGB](PSC_MAX_NAMED)
+    # Hair accumulator: lazily allocated on first Shape "curve"
+    s[0].hair_inited = Int32(0)
+    s[0].hair_nv = Int32(0)
+    s[0].hair_nt = Int32(0)
+    s[0].hair_mat = Int32(-1)
+    s[0].hair_pts = UnsafePointer[Float32, MutAnyOrigin]()
+    s[0].hair_idx = UnsafePointer[Int32, MutAnyOrigin]()
     s[0].attr_depth  = Int32(0)
 
     s[0].named_names  = alloc[UInt8](PSC_MAX_NAMED * PSC_NAME_MAX)
@@ -1014,6 +1073,35 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].inf_rgb     = alloc[Float32](MAX_LIGHTS * 3)
     s[0].n_infinite  = Int32(0)
 
+    comptime MAX_SPHERES = 64
+    s[0].sph_cx  = alloc[Float32](MAX_SPHERES)
+    s[0].sph_cy  = alloc[Float32](MAX_SPHERES)
+    s[0].sph_cz  = alloc[Float32](MAX_SPHERES)
+    s[0].sph_r   = alloc[Float32](MAX_SPHERES)
+    s[0].sph_mat = alloc[Int32](MAX_SPHERES)
+    s[0].sph_al  = alloc[Int8](MAX_SPHERES)
+    s[0].sph_rgb = alloc[RGB](MAX_SPHERES)
+    s[0].n_spheres = Int32(0)
+
+    # Mediums
+    s[0].med_names = alloc[UInt8](32 * 64)
+    s[0].med_sa    = alloc[Float32](32 * 3)
+    s[0].med_ss    = alloc[Float32](32 * 3)
+    s[0].med_g     = alloc[Float32](32)
+    s[0].n_mediums = Int32(0)
+    s[0].miface_inside  = alloc[Int32](256)
+    s[0].miface_outside = alloc[Int32](256)
+    s[0].miface_mat     = alloc[Int32](256)
+    s[0].n_ifaces = Int32(0)
+    s[0].cur_inside_medium = Int32(-1)
+    s[0].cur_outside_medium = Int32(-1)
+    s[0].mesh_inside_med  = alloc[Int32](PSC_MAX_MESHES)
+    s[0].mesh_outside_med = alloc[Int32](PSC_MAX_MESHES)
+    s[0].sph_inside_med   = alloc[Int32](256)
+    s[0].sph_outside_med  = alloc[Int32](256)
+    s[0].attr_inside_med  = alloc[Int32](PSC_ATTR_DEPTH)
+    s[0].attr_outside_med = alloc[Int32](PSC_ATTR_DEPTH)
+
     return s
 
 fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1023,6 +1111,9 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].attr_alight.free()
     s[0].attr_al_rgb.free()
     s[0].named_transmittance.free()
+    if s[0].hair_inited != 0:
+        s[0].hair_pts.free()
+        s[0].hair_idx.free()
     s[0].named_names.free()
     s[0].named_albedo.free()
     s[0].named_type.free()
@@ -1038,6 +1129,12 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].mesh_nt.free()
     s[0].mesh_mat_idx.free()
     s[0].mesh_is_al.free()
+    s[0].mesh_inside_med.free()
+    s[0].mesh_outside_med.free()
+    s[0].sph_inside_med.free()
+    s[0].sph_outside_med.free()
+    s[0].attr_inside_med.free()
+    s[0].attr_outside_med.free()
     s[0].mesh_al_rgb.free()
     s[0].mesh_uvs_list.free()
     s[0].mesh_has_uvs.free()
@@ -1052,6 +1149,9 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].dist_dirs.free(); s[0].dist_rgb.free()
     s[0].pt_pos.free();    s[0].pt_rgb.free()
     s[0].inf_tex_idx.free(); s[0].inf_rgb.free()
+    s[0].sph_cx.free(); s[0].sph_cy.free(); s[0].sph_cz.free()
+    s[0].sph_r.free();  s[0].sph_mat.free()
+    s[0].sph_al.free(); s[0].sph_rgb.free()
     s.free()
 
 fn _psc_ctm_push(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1218,6 +1318,12 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
     var metal_k   = alloc[Float32](3)
     metal_k[0] = Float32(0.5); metal_k[1] = Float32(0.5); metal_k[2] = Float32(0.5)
     var has_spectral_conductor = False
+    # hair material melanin parameters
+    var eumelanin   = Float32(0.0)
+    var pheomelanin = Float32(0.0)
+    var sigma_a_rgb = alloc[Float32](3)
+    sigma_a_rgb[0] = Float32(-1); sigma_a_rgb[1] = Float32(-1); sigma_a_rgb[2] = Float32(-1)
+    var has_sigma_a = False
     var mat_type = Int8(1)  # default: diffuse
     var mat_ior  = Float32(1.5)
     var mat_roughU = Float32(0.0)
@@ -1254,6 +1360,8 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
                 mat_type = Int8(8)
             elif _psc_streq(str_val, "thindielectric"):
                 mat_type = Int8(9)
+            elif _psc_streq(str_val, "hair"):
+                mat_type = Int8(11)
             else:
                 mat_type = Int8(1)
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
@@ -1274,6 +1382,15 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
         elif _psc_streq(name_buf, "transmittance") and _psc_type_is_float(type_buf):
             # DiffuseTransmission transmittance — stored in trans_rgb, later -> mat.emission
             _psc_scan_rgb(handle, trans_rgb, is_array)
+        elif _psc_streq(name_buf, "eumelanin") and _psc_type_is_float(type_buf):
+            # Hair material: melanin concentration -> stored in rgb[0] (temp)
+            eumelanin = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "pheomelanin") and _psc_type_is_float(type_buf):
+            pheomelanin = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "sigma_a") and _psc_type_is_float(type_buf):
+            # Hair material: direct absorption coefficients (R,G,B)
+            _psc_scan_rgb(handle, sigma_a_rgb, is_array)
+            has_sigma_a = True
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(115):  # 's' = spectrum
             # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
             # Read the metal name string, look up precomputed F0 per channel.
@@ -1357,6 +1474,19 @@ fn _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAn
             var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
                       ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
             s[0].named_albedo[idx] = RGB(f0r, f0g, f0b)
+        elif mat_type == Int8(11):
+            # Physically-based melanin -> RGB albedo.
+            # PBRT-v4 sigma_a coefficients at R@630nm, G@530nm, B@450nm:
+            #   eumelanin:   [0.419, 0.697, 1.37]
+            #   pheomelanin: [0.187, 0.400, 1.05]
+            # Color = exp(-sigma_a * scale) where scale = 2.0 is a good typical
+            # effective path length through a hair cross-section ribbon.
+            var ce = eumelanin; var cp = pheomelanin
+            var scale = Float32(2.0)
+            var al_r = exp(-(ce * Float32(0.419) + cp * Float32(0.187)) * scale)
+            var al_g = exp(-(ce * Float32(0.697) + cp * Float32(0.400)) * scale)
+            var al_b = exp(-(ce * Float32(1.370) + cp * Float32(1.050)) * scale)
+            s[0].named_albedo[idx] = RGB(al_r, al_g, al_b)
         else:
             s[0].named_albedo[idx] = RGB(rgb[0], rgb[1], rgb[2])
         s[0].named_transmittance[idx] = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
@@ -1393,6 +1523,8 @@ fn _psc_handle_attribute_begin(s: UnsafePointer[_PscState, MutAnyOrigin]):
         s[0].attr_mat[d]    = s[0].cur_mat_idx
         s[0].attr_alight[d] = s[0].in_alight
         s[0].attr_al_rgb[d] = s[0].al
+        s[0].attr_inside_med[d]  = s[0].cur_inside_medium
+        s[0].attr_outside_med[d] = s[0].cur_outside_medium
         s[0].attr_depth += 1
 
 fn _psc_handle_attribute_end(s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1404,6 +1536,8 @@ fn _psc_handle_attribute_end(s: UnsafePointer[_PscState, MutAnyOrigin]):
         s[0].in_alight   = s[0].attr_alight[d]
         s[0].al = s[0].attr_al_rgb[d]
         s[0].in_alight = Int32(0)
+        s[0].cur_inside_medium  = s[0].attr_inside_med[d]
+        s[0].cur_outside_medium = s[0].attr_outside_med[d]
 
 fn _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                                  s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1464,9 +1598,283 @@ fn _psc_mesh_store(
     s[0].mesh_nv[n_meshes] = n_verts
     s[0].mesh_nt[n_meshes] = n_tris
     s[0].mesh_mat_idx[n_meshes] = s[0].cur_mat_idx
+    s[0].mesh_inside_med[n_meshes]  = s[0].cur_inside_medium
+    s[0].mesh_outside_med[n_meshes] = s[0].cur_outside_medium
     s[0].mesh_is_al[n_meshes]   = s[0].in_alight
     s[0].mesh_al_rgb[n_meshes]  = s[0].al
     s[0].n_meshes += 1
+
+# ── Hair curve helpers ────────────────────────────────────────────────────────
+
+fn _psc_ensure_hair_buf(s: UnsafePointer[_PscState, MutAnyOrigin]) -> Bool:
+    """Lazily allocate the hair accumulation buffers. Returns False if at mesh limit."""
+    if s[0].hair_inited != 0:
+        return True
+    if s[0].n_meshes >= Int32(PSC_MAX_MESHES):
+        return False
+    s[0].hair_pts = alloc[Float32](HAIR_MAX_VTX * 3)
+    s[0].hair_idx = alloc[Int32](HAIR_MAX_TRI * 3)
+    s[0].hair_nv  = Int32(0)
+    s[0].hair_nt  = Int32(0)
+    s[0].hair_mat = s[0].cur_mat_idx
+    s[0].hair_inited = Int32(1)
+    return True
+
+fn _psc_bspline3(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
+                  u: Float32, pt_out: UnsafePointer[Float32, MutAnyOrigin]):
+    """Evaluate uniform cubic B-spline at global parameter u in [0,1].
+    cp: interleaved xyz control points, n_cp: number of 3D control points."""
+    var n_seg = n_cp - 3
+    if n_seg <= 0:
+        pt_out[0] = cp[0]; pt_out[1] = cp[1]; pt_out[2] = cp[2]; return
+    var s_f = u * Float32(n_seg)
+    var seg = Int(s_f)
+    if seg >= n_seg: seg = n_seg - 1
+    var t = s_f - Float32(seg)
+    var t2 = t * t
+    var t3 = t2 * t
+    # Uniform cubic B-spline basis at local t:
+    var b0 = (Float32(1) - Float32(3)*t + Float32(3)*t2 - t3) / Float32(6)
+    var b1 = (Float32(4) - Float32(6)*t2 + Float32(3)*t3) / Float32(6)
+    var b2 = (Float32(1) + Float32(3)*t + Float32(3)*t2 - Float32(3)*t3) / Float32(6)
+    var b3 = t3 / Float32(6)
+    for k in range(3):
+        pt_out[k] = b0*cp[seg*3+k] + b1*cp[(seg+1)*3+k] + b2*cp[(seg+2)*3+k] + b3*cp[(seg+3)*3+k]
+
+fn _psc_hair_add_quad(s: UnsafePointer[_PscState, MutAnyOrigin],
+        p0x: Float32, p0y: Float32, p0z: Float32,
+        p1x: Float32, p1y: Float32, p1z: Float32,
+        ux: Float32, uy: Float32, uz: Float32, hw: Float32):
+    """Append one rectangular quad (2 triangles) to the hair accumulator."""
+    if s[0].hair_nv + Int32(4) > Int32(HAIR_MAX_VTX): return
+    if s[0].hair_nt + Int32(2) > Int32(HAIR_MAX_TRI): return
+    var bv = Int(s[0].hair_nv)
+    var bt = Int(s[0].hair_nt)
+    s[0].hair_pts[bv*3+0] = p0x+ux*hw; s[0].hair_pts[bv*3+1] = p0y+uy*hw; s[0].hair_pts[bv*3+2] = p0z+uz*hw
+    s[0].hair_pts[(bv+1)*3+0] = p0x-ux*hw; s[0].hair_pts[(bv+1)*3+1] = p0y-uy*hw; s[0].hair_pts[(bv+1)*3+2] = p0z-uz*hw
+    s[0].hair_pts[(bv+2)*3+0] = p1x+ux*hw; s[0].hair_pts[(bv+2)*3+1] = p1y+uy*hw; s[0].hair_pts[(bv+2)*3+2] = p1z+uz*hw
+    s[0].hair_pts[(bv+3)*3+0] = p1x-ux*hw; s[0].hair_pts[(bv+3)*3+1] = p1y-uy*hw; s[0].hair_pts[(bv+3)*3+2] = p1z-uz*hw
+    s[0].hair_idx[bt*3+0] = Int32(bv);   s[0].hair_idx[bt*3+1] = Int32(bv+1); s[0].hair_idx[bt*3+2] = Int32(bv+2)
+    s[0].hair_idx[(bt+1)*3+0] = Int32(bv+1); s[0].hair_idx[(bt+1)*3+1] = Int32(bv+3); s[0].hair_idx[(bt+1)*3+2] = Int32(bv+2)
+    s[0].hair_nv += Int32(4)
+    s[0].hair_nt += Int32(2)
+
+fn _psc_handle_curve_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                            s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Parse Shape "curve" B-spline strand and append cross-ribbon triangles."""
+    var MAX_CP = 512
+    var cp_buf = alloc[Float32](MAX_CP * 3)
+    var n_cp = Int32(0)
+    var width = Float32(0.002)
+    var type_buf = alloc[UInt8](64)
+    var name_buf = alloc[UInt8](128)
+    var ia = alloc[Int32](1)
+    ia[0] = Int32(0)
+    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    while found != 0:
+        var is_array = ia[0]
+        if _psc_type_is_float(type_buf) and _psc_streq(name_buf, "P"):
+            var n_f = mojo_scanner_scan_floats(handle, cp_buf, MAX_CP * 3)
+            n_cp = n_f / Int32(3)
+            if is_array: _ = mojo_scanner_scan_char(handle, UInt8(93))
+        elif _psc_type_is_float(type_buf) and (_psc_streq(name_buf, "width") or _psc_streq(name_buf, "width0")):
+            width = _psc_scan_one_float(handle, is_array)
+        else:
+            _psc_skip_value(handle, type_buf, is_array)
+            if is_array: _ = mojo_scanner_scan_char(handle, UInt8(93))
+        ia[0] = Int32(0)
+        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    type_buf.free(); name_buf.free(); ia.free()
+    if n_cp < Int32(4):
+        cp_buf.free(); return
+    if not _psc_ensure_hair_buf(s):
+        cp_buf.free(); return
+    # Evaluate HAIR_EVAL_N uniformly-spaced points along the B-spline
+    var eval_pts = alloc[Float32](HAIR_EVAL_N * 3)
+    for step in range(HAIR_EVAL_N):
+        var u = Float32(step) / Float32(HAIR_EVAL_N - 1)
+        _psc_bspline3(cp_buf, Int(n_cp), u, eval_pts + step * 3)
+    cp_buf.free()
+    # Apply current CTM to evaluation points
+    var raw4 = alloc[Float32](HAIR_EVAL_N * 4)
+    var xfm4 = alloc[Float32](HAIR_EVAL_N * 4)
+    for step in range(HAIR_EVAL_N):
+        raw4[step*4+0] = eval_pts[step*3+0]
+        raw4[step*4+1] = eval_pts[step*3+1]
+        raw4[step*4+2] = eval_pts[step*3+2]
+        raw4[step*4+3] = Float32(1)
+    mojo_transform_points(s[0].ctm, raw4, Int32(HAIR_EVAL_N), xfm4)
+    raw4.free()
+    # Tessellate segments into cross-ribbon geometry
+    var hw = width / Float32(2)
+    for seg in range(HAIR_EVAL_N - 1):
+        var p0x = xfm4[seg*4+0]; var p0y = xfm4[seg*4+1]; var p0z = xfm4[seg*4+2]
+        var p1x = xfm4[(seg+1)*4+0]; var p1y = xfm4[(seg+1)*4+1]; var p1z = xfm4[(seg+1)*4+2]
+        var tx = p1x-p0x; var ty = p1y-p0y; var tz = p1z-p0z
+        var tlen = sqrt(tx*tx + ty*ty + tz*tz)
+        if tlen < Float32(1e-10): continue
+        tx /= tlen; ty /= tlen; tz /= tlen
+        # First perpendicular: T x Y (or T x X if near-parallel)
+        var ux: Float32; var uy: Float32; var uz: Float32
+        if abs(ty) < Float32(0.9):
+            ux = -tz; uy = Float32(0); uz = tx   # T x Y = (-Tz, 0, Tx)
+        else:
+            ux = Float32(0); uy = tz; uz = -ty    # T x X = (0, Tz, -Ty)
+        var ulen = sqrt(ux*ux + uy*uy + uz*uz)
+        ux /= ulen; uy /= ulen; uz /= ulen
+        # Second perpendicular: V = T x U
+        var vx = ty*uz - tz*uy; var vy = tz*ux - tx*uz; var vz = tx*uy - ty*ux
+        _psc_hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, ux,uy,uz, hw)
+        _psc_hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, vx,vy,vz, hw)
+    xfm4.free(); eval_pts.free()
+
+fn _psc_flush_hair(s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Flush all accumulated hair strands into a single scene mesh."""
+    if s[0].hair_inited == 0 or s[0].hair_nt == 0:
+        return
+    var saved_mat = s[0].cur_mat_idx
+    s[0].cur_mat_idx = s[0].hair_mat
+    _psc_mesh_store(s, s[0].hair_pts, s[0].hair_idx, s[0].hair_nv, s[0].hair_nt)
+    s[0].cur_mat_idx = saved_mat
+    # Mark as flushed — but DON'T free: buffers will be freed by _psc_state_free
+    # (hair_inited stays 1 so the free path in _psc_state_free still runs)
+    s[0].hair_nv = Int32(0)
+    s[0].hair_nt = Int32(0)
+
+
+fn _psc_handle_make_named_medium(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                                  s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Parse MakeNamedMedium \"name\" [params].
+    Supports type = \"homogeneous\" with rgb sigma_a, rgb sigma_s, float g, float scale.
+    """
+    var name_buf = alloc[UInt8](64)
+    _ = mojo_scanner_parse_quoted_string(handle, name_buf, 64)
+    var type_buf  = alloc[UInt8](64)
+    var val_buf   = alloc[UInt8](64)
+    var sa = alloc[Float32](3); sa[0] = Float32(0); sa[1] = Float32(0); sa[2] = Float32(0)
+    var ss = alloc[Float32](3); ss[0] = Float32(0); ss[1] = Float32(0); ss[2] = Float32(0)
+    var g_val = Float32(0)
+    var scale = Float32(1)
+    var is_hom = False
+    var ia = alloc[Int32](1)
+    while True:
+        ia[0] = Int32(0)
+        var ok = mojo_scanner_parse_param_header(handle, type_buf, Int32(64), val_buf, Int32(64), ia)
+        if ok == Int32(0):
+            break
+        var is_arr = ia[0]
+        if _psc_streq(val_buf, "type"):
+            var tmp = alloc[UInt8](64)
+            _ = mojo_scanner_parse_quoted_string(handle, tmp, 64)
+            if _psc_streq(tmp, "homogeneous"):
+                is_hom = True
+            tmp.free()
+        elif _psc_streq(val_buf, "sigma_a") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, sa, is_arr)
+        elif _psc_streq(val_buf, "sigma_s") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, ss, is_arr)
+        elif _psc_streq(val_buf, "g") and _psc_type_is_float(type_buf):
+            g_val = _psc_scan_one_float(handle, is_arr)
+        elif _psc_streq(val_buf, "scale") and _psc_type_is_float(type_buf):
+            scale = _psc_scan_one_float(handle, is_arr)
+        else:
+            _psc_skip_value(handle, type_buf, is_arr)
+            if is_arr:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']' 
+    if is_hom:
+        var n = Int(s[0].n_mediums)
+        if n < 32:
+            var dst = s[0].med_names + n * 64
+            var ni = 0
+            while name_buf[ni] != UInt8(0) and ni < 63:
+                dst[ni] = name_buf[ni]; ni += 1
+            dst[ni] = UInt8(0)
+            s[0].med_sa[n*3]   = sa[0] * scale
+            s[0].med_sa[n*3+1] = sa[1] * scale
+            s[0].med_sa[n*3+2] = sa[2] * scale
+            s[0].med_ss[n*3]   = ss[0] * scale
+            s[0].med_ss[n*3+1] = ss[1] * scale
+            s[0].med_ss[n*3+2] = ss[2] * scale
+            s[0].med_g[n] = g_val
+            s[0].n_mediums = Int32(n + 1)
+    name_buf.free(); sa.free(); ss.free(); type_buf.free(); val_buf.free()
+
+
+fn _psc_lookup_medium(s: UnsafePointer[_PscState, MutAnyOrigin],
+                       name: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
+    """Return medium index for name, or -1 for empty string / not found."""
+    if name[0] == UInt8(0):
+        return Int32(-1)
+    for i in range(Int(s[0].n_mediums)):
+        var entry = s[0].med_names + i * 64
+        var j = 0
+        var match_ok = True
+        while name[j] != UInt8(0) or entry[j] != UInt8(0):
+            if name[j] != entry[j]:
+                match_ok = False
+                break
+            j += 1
+        if match_ok:
+            return Int32(i)
+    return Int32(-1)
+
+
+fn _psc_handle_medium_interface(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                                 s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Parse MediumInterface \"inside_name\" \"outside_name\" and bind to cur_mat_idx."""
+    var inside_buf  = alloc[UInt8](64)
+    var outside_buf = alloc[UInt8](64)
+    _ = mojo_scanner_parse_quoted_string(handle, inside_buf, 64)
+    _ = mojo_scanner_parse_quoted_string(handle, outside_buf, 64)
+    # Set attribute-state medium interface (applied to shapes emitted in this scope)
+    s[0].cur_inside_medium  = _psc_lookup_medium(s, inside_buf)
+    s[0].cur_outside_medium = _psc_lookup_medium(s, outside_buf)
+    inside_buf.free(); outside_buf.free()
+
+fn _psc_handle_sphere_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                             s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Parse Shape "sphere" and store as analytical Sphere_C.
+    The sphere center is the CTM translation column; radius is the parsed float.
+    """
+    var radius = Float32(1.0)
+    var type_buf = alloc[UInt8](64)
+    var name_buf = alloc[UInt8](128)
+    var ia = alloc[Int32](1)
+    ia[0] = Int32(0)
+    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    while found != 0:
+        var is_array = ia[0]
+        if _psc_type_is_float(type_buf) and _psc_streq(name_buf, "radius"):
+            radius = _psc_scan_one_float(handle, is_array)
+        else:
+            _psc_skip_value(handle, type_buf, is_array)
+            if is_array:
+                _ = mojo_scanner_scan_char(handle, UInt8(93))
+        ia[0] = Int32(0)
+        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    ia.free()
+    type_buf.free(); name_buf.free()
+
+    var n = Int(s[0].n_spheres)
+    # World-space center = CTM * (0,0,0,1) = translation column (indices 12,13,14)
+    var ctm = s[0].ctm
+    var cx = ctm[12]
+    var cy = ctm[13]
+    var cz = ctm[14]
+    # Scale radius by the uniform scale of the CTM (length of first column vector)
+    var sx = sqrt(ctm[0]*ctm[0] + ctm[1]*ctm[1] + ctm[2]*ctm[2])
+    if sx < Float32(1e-6): sx = Float32(1.0)
+    radius *= sx
+    s[0].sph_cx[n]  = cx
+    s[0].sph_cy[n]  = cy
+    s[0].sph_cz[n]  = cz
+    s[0].sph_r[n]   = radius
+    s[0].sph_mat[n] = s[0].cur_mat_idx
+    s[0].sph_inside_med[n]  = s[0].cur_inside_medium
+    s[0].sph_outside_med[n] = s[0].cur_outside_medium
+    s[0].sph_al[n]  = Int8(1) if s[0].in_alight != 0 else Int8(0)
+    s[0].sph_rgb[n] = s[0].al
+    s[0].n_spheres  = Int32(n + 1)
 
 fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                      s: UnsafePointer[_PscState, MutAnyOrigin]):
@@ -1475,7 +1883,17 @@ fn _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
 
     var is_tri = _psc_streq(shape_type, "trianglemesh")
     var is_ply = _psc_streq(shape_type, "plymesh")
+    var is_curve = _psc_streq(shape_type, "curve")
+    var is_sphere = _psc_streq(shape_type, "sphere")
     shape_type.free()
+
+    if is_curve:
+        _psc_handle_curve_shape(handle, s)
+        return
+
+    if is_sphere:
+        _psc_handle_sphere_shape(handle, s)
+        return
 
     if not is_tri and not is_ply:
         _psc_skip_params(handle)
@@ -1835,6 +2253,47 @@ fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             _psc_handle_light_source(handle, s)
         elif _psc_streq(kw_buf, "Texture"):
             _psc_handle_texture(handle, s)
+        elif _psc_streq(kw_buf, "Include") or _psc_streq(kw_buf, "Import"):
+            # Read filename, resolve relative to scene_dir, parse sub-file recursively
+            var inc_name = alloc[UInt8](PSC_FILE_MAX)
+            _ = mojo_scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
+            var inc_path = alloc[UInt8](PSC_FILE_MAX * 2)
+            var dlen = 0
+            while s[0].scene_dir[dlen] != UInt8(0):
+                inc_path[dlen] = s[0].scene_dir[dlen]
+                dlen += 1
+            var fi = 0
+            while inc_name[fi] != UInt8(0) and dlen + fi < PSC_FILE_MAX * 2 - 1:
+                inc_path[dlen + fi] = inc_name[fi]
+                fi += 1
+            inc_path[dlen + fi] = UInt8(0)
+            var sub_handle = mojo_scanner_new(inc_path)
+            if mojo_scanner_is_at_end(sub_handle) == 0:
+                _psc_parse(sub_handle, s)
+            mojo_scanner_free(sub_handle)
+            inc_name.free(); inc_path.free()
+        elif _psc_streq(kw_buf, "Material"):
+            # Anonymous inline material: treat like MakeNamedMaterial under a temp name "_mat"
+            # then immediately set cur_mat_idx to it.
+            _psc_handle_make_named_material(handle, s)
+            # The name was parsed as part of make_named_material; find the last added
+            s[0].cur_mat_idx = s[0].n_named - Int32(1)
+        elif _psc_streq(kw_buf, "MakeNamedMedium"):
+            _psc_handle_make_named_medium(handle, s)
+        elif _psc_streq(kw_buf, "MediumInterface"):
+            _psc_handle_medium_interface(handle, s)
+        elif _psc_streq(kw_buf, "ConcatTransform"):
+            # ConcatTransform [16 floats] — multiply CTM on right
+            _ = mojo_scanner_scan_char(handle, UInt8(91))  # '['
+            var tmp = alloc[Float32](16)
+            for i in range(16):
+                _ = mojo_scanner_scan_float(handle, tmp + i)
+            _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+            var result = alloc[Float32](16)
+            mojo_matrix_multiply(s[0].ctm, tmp, result)
+            for i in range(16):
+                s[0].ctm[i] = result[i]
+            tmp.free(); result.free()
         else:
             _ = mojo_scanner_parse_quoted_string(handle, kw_buf, 256)
             _psc_skip_params(handle)
@@ -1928,6 +2387,7 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         mats[i].roughU  = s[0].named_roughU[i]
         mats[i].roughV  = s[0].named_roughV[i]
         mats[i].normal_tex_idx = s[0].named_normal_tex_idx[i]
+        mats[i].medium_interface_idx = Int32(-1)
         if mt == Int8(4):  # dielectric: albedo.r holds IOR
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
@@ -1958,6 +2418,10 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         elif mt == Int8(6):  # diffusetransmission: emission holds the transmittance
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = s[0].named_transmittance[i]
+        elif mt == Int8(11):  # hair: simplified as diffuse with melanin-computed color
+            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+            mats[i].type = Int8(1)  # redirect to diffuse shader
         else:
             mats[i].albedo = s[0].named_albedo[i]
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
@@ -2023,9 +2487,75 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             mats[al_mat_base + al_idx].roughU   = Float32(0)
             mats[al_mat_base + al_idx].roughV   = Float32(0)
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
+            mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             al_count += 1
 
     # ---- BVH construction ----
+    # Build per-shape medium interfaces.
+    # Phase 1: count how many shapes need medium interfaces.
+    var n_with_mi = 0
+    for mi in range(n_meshes):
+        if s[0].mesh_inside_med[mi] >= Int32(0) or s[0].mesh_outside_med[mi] >= Int32(0):
+            n_with_mi += 1
+    for si in range(Int(s[0].n_spheres)):
+        if s[0].sph_inside_med[si] >= Int32(0) or s[0].sph_outside_med[si] >= Int32(0):
+            n_with_mi += 1
+
+    if n_with_mi > 0:
+        # Phase 2: expand mats array to hold duplicates (one per shape with MI)
+        var expanded_n = n_mats + n_with_mi
+        var new_mats = alloc[Material_C](expanded_n)
+        for ci in range(n_mats):
+            new_mats[ci] = mats[ci]
+        mats.free()
+        mats = new_mats
+
+        var iface_buf = alloc[MediumInterface_C](n_with_mi)
+        var dup_idx = n_mats  # next slot for duplicated material
+        var iface_idx = 0
+
+        # Phase 3: for each mesh with MI, create a duplicated material + interface
+        for mi in range(n_meshes):
+            var ins = s[0].mesh_inside_med[mi]
+            var out = s[0].mesh_outside_med[mi]
+            if ins < Int32(0) and out < Int32(0):
+                continue
+            var orig_mat = Int(s[0].mesh_mat_idx[mi])
+            if orig_mat < 0:
+                continue
+            # Duplicate the material
+            mats[dup_idx] = mats[orig_mat]
+            mats[dup_idx].medium_interface_idx = Int32(iface_idx)
+            iface_buf[iface_idx] = MediumInterface_C(ins, out)
+            # Point this mesh at the duplicated material
+            s[0].mesh_mat_idx[mi] = Int32(dup_idx)
+            dup_idx += 1
+            iface_idx += 1
+
+        # Phase 4: same for spheres
+        for si in range(Int(s[0].n_spheres)):
+            var ins = s[0].sph_inside_med[si]
+            var out = s[0].sph_outside_med[si]
+            if ins < Int32(0) and out < Int32(0):
+                continue
+            var orig_mat = Int(s[0].sph_mat[si])
+            if orig_mat < 0:
+                continue
+            mats[dup_idx] = mats[orig_mat]
+            mats[dup_idx].medium_interface_idx = Int32(iface_idx)
+            iface_buf[iface_idx] = MediumInterface_C(ins, out)
+            s[0].sph_mat[si] = Int32(dup_idx)
+            dup_idx += 1
+            iface_idx += 1
+
+        n_mats = dup_idx
+        psc[0].medium_ifaces = iface_buf
+        psc[0].medium_iface_count = Int32(iface_idx)
+
+    else:
+        psc[0].medium_ifaces = UnsafePointer[MediumInterface_C, MutAnyOrigin]()
+        psc[0].medium_iface_count = Int32(0)
+
     var total_tris = Int32(0)
     for i in range(n_meshes):
         total_tris += s[0].mesh_nt[i]
@@ -2284,6 +2814,39 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         psc[0].infinite_lights = UnsafePointer[InfiniteLight_C, MutAnyOrigin]()
     psc[0].infinite_count = Int32(ni)
 
+    # ---- Analytical spheres ----
+    var ns = Int(s[0].n_spheres)
+    if ns > 0:
+        var sph_buf = alloc[Sphere_C](ns)
+        for i in range(ns):
+            var em = SampledSpectrum(s[0].sph_rgb[i].r, s[0].sph_rgb[i].g, s[0].sph_rgb[i].b)
+            sph_buf[i] = Sphere_C(
+                Point3f(s[0].sph_cx[i], s[0].sph_cy[i], s[0].sph_cz[i]),
+                s[0].sph_r[i],
+                s[0].sph_mat[i],
+                s[0].sph_al[i],
+                Int8(0), Int8(0), Int8(0),
+                em)
+        psc[0].spheres = sph_buf
+    else:
+        psc[0].spheres = UnsafePointer[Sphere_C, MutAnyOrigin]()
+    psc[0].sphere_count = Int32(ns)
+
+    # ---- Media ----
+    var nm = Int(s[0].n_mediums)
+    if nm > 0:
+        var med_buf = alloc[Medium_C](nm)
+        for i in range(nm):
+            var sa = SampledSpectrum(s[0].med_sa[i*3], s[0].med_sa[i*3+1], s[0].med_sa[i*3+2])
+            var ss = SampledSpectrum(s[0].med_ss[i*3], s[0].med_ss[i*3+1], s[0].med_ss[i*3+2])
+            med_buf[i] = Medium_C(sa, ss, s[0].med_g[i],
+                                  Float32(0), Float32(0), Float32(0))
+        psc[0].mediums = med_buf
+    else:
+        psc[0].mediums = UnsafePointer[Medium_C, MutAnyOrigin]()
+    psc[0].medium_count = Int32(nm)
+
+
 # ── Exported API ──────────────────────────────────────────────────────────────
 
 fn mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
@@ -2301,6 +2864,7 @@ fn mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
         psc[0].distant_count = Int32(0)
         psc[0].point_count = Int32(0)
         psc[0].infinite_count = Int32(0)
+        psc[0].sphere_count = Int32(0)
         return psc
 
     var s = _psc_state_new()
@@ -2319,6 +2883,8 @@ fn mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
         s[0].scene_dir[0] = UInt8(0)
     _psc_parse(handle, s)
     mojo_scanner_free(handle)
+    # Flush accumulated hair curve geometry into a single mesh (if any)
+    _psc_flush_hair(s)
 
     var psc = alloc[ParsedScene_Mojo](1)
     _psc_finalize(s, psc)
@@ -2367,6 +2933,8 @@ fn mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].point_lights.free()
     if psc[0].infinite_count > 0:
         psc[0].infinite_lights.free()
+    if psc[0].sphere_count > 0:
+        psc[0].spheres.free()
     psc.free()
 
 def mojo_parsed_scene_descriptor(
@@ -2389,4 +2957,10 @@ def mojo_parsed_scene_descriptor(
     sd[0].pointLightCount  = Int64(psc[0].point_count)
     sd[0].infiniteLights   = psc[0].infinite_lights
     sd[0].infiniteLightCount = Int64(psc[0].infinite_count)
+    sd[0].spheres          = psc[0].spheres
+    sd[0].sphereCount      = Int64(psc[0].sphere_count)
+    sd[0].mediums          = psc[0].mediums
+    sd[0].mediumCount      = Int64(psc[0].medium_count)
+    sd[0].mediumInterfaces = psc[0].medium_ifaces
+    sd[0].mediumIfaceCount = Int64(psc[0].medium_iface_count)
     return sd

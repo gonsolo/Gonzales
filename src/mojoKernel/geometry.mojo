@@ -201,6 +201,7 @@ struct Material_C(TrivialRegisterPassable):
     var roughU: Float32     # GGX uroughness (conductor); 0 = perfect mirror
     var roughV: Float32     # GGX vroughness (conductor); 0 = perfect mirror
     var normal_tex_idx: Int32  # -1 = no normal map; >= 0 = index into texture table
+    var medium_interface_idx: Int32  # -1 = no medium interface bound
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
@@ -253,6 +254,7 @@ struct PathState_C(TrivialRegisterPassable):
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32
+    var current_medium_idx: Int32  # -1 = vacuum; >= 0 = index into scene.mediums
 # <</listing>>
 
 # ── Lights ────────────────────────────────────────────────────────────────────
@@ -264,6 +266,43 @@ struct AreaLight_C(TrivialRegisterPassable):
     var n_tris: Int32       # number of triangles in this light mesh
     var emission: SampledSpectrum
     var total_area: Float32 # total surface area of this light mesh
+
+@fieldwise_init
+struct Sphere_C(TrivialRegisterPassable):
+    """Analytical sphere primitive. Exact intersection, exact normals.
+    isAreaLight == 1 → sphere emits light (NEE via solid-angle cone sampling).
+    """
+    var center: Point3f
+    var radius: Float32
+    var materialIndex: Int32
+    var isAreaLight: Int8
+    var _pad0: Int8
+    var _pad1: Int8
+    var _pad2: Int8
+    var emission: SampledSpectrum
+
+
+# ── Homogeneous media ──────────────────────────────────────────────────────────
+
+@fieldwise_init
+struct Medium_C(TrivialRegisterPassable):
+    """Homogeneous participating medium (PBRT-v4 HomogeneousMedium).
+    sigma_a + sigma_s are pre-scaled by 'scale'.
+    g = Henyey-Greenstein anisotropy in [-1, 1]; 0 = isotropic.
+    """
+    var sigma_a: SampledSpectrum   # absorption coefficient (1/m)
+    var sigma_s: SampledSpectrum   # scattering coefficient (1/m)
+    var g:       Float32           # HG anisotropy
+    var _pad0:   Float32
+    var _pad1:   Float32
+    var _pad2:   Float32
+
+@fieldwise_init
+struct MediumInterface_C(TrivialRegisterPassable):
+    """Binds inside/outside media to a surface. -1 = vacuum."""
+    var inside_medium_idx:  Int32
+    var outside_medium_idx: Int32
+
 
 @fieldwise_init
 struct DistantLight_C(TrivialRegisterPassable):
