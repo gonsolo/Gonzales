@@ -7,9 +7,6 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,23 +20,13 @@ jobs:
         run: |
           chown -R builder:builder .
 
-      - name: Cache .build
-        uses: actions/cache@v5
-        with:
-          path: .build
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') || hashFiles('Package.swift') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-
-
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
           enable-cache: true
 
-      - name: Run tests
+      - name: Test
         run: |
           uv sync
-          SWIFT_LIB_PATH=$(find /usr -name libsourcekitdInProc.so | head -n 1 | xargs dirname)
-          export LD_LIBRARY_PATH=$SWIFT_LIB_PATH:$LD_LIBRARY_PATH
-          make testsuite SWIFT_TEST_OPTIONS="--jobs 2"
+          make test_release

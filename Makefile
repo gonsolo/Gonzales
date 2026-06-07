@@ -83,7 +83,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: all c ca clean clean_all e edit es editScene em editMakefile lint lldb p perf tags t test \
+.PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test \
 	test_debug test_release v view wc book book-html book-watch
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
