@@ -6,7 +6,7 @@ from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
 from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
 from std.ffi import external_call
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
 from .shading import shade_core, shade_nee_core
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
@@ -36,9 +36,11 @@ struct GpuSceneHandle(Movable):
     var n_textures: Int
     var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C) = 24
     var n_area_lights: Int
+    var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
+    var n_spheres: Int
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # mojo_gpu_render_sample (interactive) only uses the first n_pixels slots.
-    var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × 88
+    var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × sizeof(PathState_C)=96
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
     var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
@@ -85,6 +87,8 @@ fn mojo_gpu_upload_scene(
     materialCount: Int64,
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int64,
     n_pixels: Int64,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
@@ -238,9 +242,19 @@ fn mojo_gpu_upload_scene(
                     for j in range(Int(areaLightCount) * 24):
                         dst[j] = src[j]
 
+            # Upload spheres (analytical sphere primitives + sphere area lights)
+            var sphere_bytes = max(Int(sphereCount), 1) * 36  # sizeof(Sphere_C) = 36
+            var sphere_buf = ctx.enqueue_create_buffer[DType.uint8](sphere_bytes)
+            if Int(sphereCount) > 0:
+                with sphere_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = spheres.bitcast[UInt8]()
+                    for j in range(Int(sphereCount) * 36):
+                        dst[j] = src[j]
+
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
-            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 88 * WAVEFRONT_BATCH)
+            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 96 * WAVEFRONT_BATCH)
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48 * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
@@ -340,6 +354,8 @@ fn mojo_gpu_upload_scene(
                 n_textures=n_textures_int,
                 area_lights_buf=al_buf^,
                 n_area_lights=Int(areaLightCount),
+                spheres_buf=sphere_buf^,
+                n_spheres=Int(sphereCount),
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
@@ -563,6 +579,8 @@ fn shade_nee_gpu(
     areaLightCount: Int,
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -581,7 +599,7 @@ fn shade_nee_gpu(
         UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
         UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[Sphere_C, MutAnyOrigin](), 0)
+        spheres, n_spheres)
 
 
 fn shade_enqueue_shadow_gpu(
@@ -595,6 +613,8 @@ fn shade_enqueue_shadow_gpu(
     areaLightCount: Int,
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     count: Int,
 ):
@@ -614,7 +634,7 @@ fn shade_enqueue_shadow_gpu(
         UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
         UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[Sphere_C, MutAnyOrigin](), 0)
+        spheres, n_spheres)
 
 
 fn traverse_shadow_rays_gpu(
@@ -755,6 +775,8 @@ fn traverse_paths_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     results: UnsafePointer[Intersection_C, MutAnyOrigin],
     count: Int,
@@ -765,6 +787,7 @@ fn traverse_paths_gpu(
     if paths[tid].active == 0:
         return
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, paths[tid].ray, Float32(1.0e38), results + tid)
+    test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
 
 @export
 fn mojo_gpu_shade_batch(
@@ -782,7 +805,7 @@ fn mojo_gpu_shade_batch(
 
     comptime if has_accelerator():
         try:
-            var path_bytes = n * 88 # sizeof(PathState_C) = 88
+            var path_bytes = n * 96 # sizeof(PathState_C) = 96
             var inter_bytes = n * 48 # sizeof(Intersection_C) = 48
 
             var path_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](path_bytes)
@@ -935,6 +958,8 @@ fn mojo_gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     n_int,
@@ -952,6 +977,8 @@ fn mojo_gpu_render_sample(
                     handle[].n_area_lights,
                     handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
                     handle[].n_textures,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
                     n_int,
                     grid_dim=grid_dim,
                     block_dim=block_size,
@@ -1016,6 +1043,8 @@ fn mojo_gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     n_total,
@@ -1033,6 +1062,8 @@ fn mojo_gpu_render_wavefront(
                     handle[].n_area_lights,
                     handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
                     handle[].n_textures,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
                     n_total,
                     grid_dim=grid_total,
                     block_dim=block_size,
