@@ -151,6 +151,7 @@ fn _gpu_upload_scene(
         psc[0].materials,      Int64(psc[0].material_count),
         psc[0].area_lights,    Int64(psc[0].area_light_count),
         psc[0].spheres,        Int64(psc[0].sphere_count),
+        psc[0].infinite_lights, Int64(psc[0].infinite_count),
         Int64(n_pixels),
         sobol,
         psc[0].raster_to_camera, psc[0].camera_to_world,

@@ -9,7 +9,7 @@ from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
 from .shading import shade_core, shade_nee_core
-from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
+from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
 # path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
@@ -38,6 +38,8 @@ struct GpuSceneHandle(Movable):
     var n_area_lights: Int
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
     var n_spheres: Int
+    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 32
+    var n_infinite_lights: Int
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # mojo_gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × sizeof(PathState_C)=96
@@ -89,6 +91,8 @@ fn mojo_gpu_upload_scene(
     areaLightCount: Int64,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     sphereCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
     n_pixels: Int64,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
@@ -252,6 +256,16 @@ fn mojo_gpu_upload_scene(
                     for j in range(Int(sphereCount) * 36):
                         dst[j] = src[j]
 
+            # Upload infinite/environment lights
+            var il_bytes = max(Int(infiniteLightCount), 1) * 32  # sizeof(InfiniteLight_C) = 32
+            var il_buf = ctx.enqueue_create_buffer[DType.uint8](il_bytes)
+            if Int(infiniteLightCount) > 0:
+                with il_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = infiniteLights.bitcast[UInt8]()
+                    for j in range(Int(infiniteLightCount) * 32):
+                        dst[j] = src[j]
+
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 96 * WAVEFRONT_BATCH)
@@ -356,6 +370,8 @@ fn mojo_gpu_upload_scene(
                 n_area_lights=Int(areaLightCount),
                 spheres_buf=sphere_buf^,
                 n_spheres=Int(sphereCount),
+                infinite_lights_buf=il_buf^,
+                n_infinite_lights=Int(infiniteLightCount),
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
@@ -487,85 +503,6 @@ fn shade_gpu(
         return
     shade_core(paths, intersections, meshes, materials, tid)
 
-
-fn init_active_queue_gpu(
-    active_idx: UnsafePointer[Int32, MutAnyOrigin],
-    n_pix: Int,
-):
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= n_pix:
-        return
-    active_idx[tid] = Int32(tid)
-
-
-fn clear_active_count_gpu(active_count: UnsafePointer[Int32, MutAnyOrigin]):
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid == 0:
-        active_count[0] = Int32(0)
-
-
-fn compactify_gpu(
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
-    active_idx: UnsafePointer[Int32, MutAnyOrigin],
-    active_count: UnsafePointer[Int32, MutAnyOrigin],
-    n_pix: Int,
-):
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= n_pix:
-        return
-    if paths[tid].active == 0:
-        return
-    var slot = Int(Atomic.fetch_add(active_count, Int32(1)))
-    active_idx[slot] = Int32(tid)
-
-
-fn traverse_paths_compact_gpu(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
-    results: UnsafePointer[Intersection_C, MutAnyOrigin],
-    active_idx: UnsafePointer[Int32, MutAnyOrigin],
-    count: Int,
-):
-    var qtid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if qtid >= count:
-        return
-    var tid = Int(active_idx[qtid])
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, paths[tid].ray, Float32(1.0e38), results + tid)
-
-
-fn shade_compact_nee_gpu(
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
-    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int,
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
-    n_textures: Int,
-    active_idx: UnsafePointer[Int32, MutAnyOrigin],
-    count: Int,
-):
-    var qtid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if qtid >= count:
-        return
-    var tid = Int(active_idx[qtid])
-    var path_ptr = paths + tid
-    var inter = intersections[tid]
-    if inter.hit == 0:
-        path_ptr[].active = 0
-        return
-    shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin](),
-        UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[Sphere_C, MutAnyOrigin](), 0)
 
 
 fn shade_nee_gpu(
@@ -723,43 +660,18 @@ fn gen_primary_rays_wavefront_gpu(
         return
     var si_local = ti // n_pixels
     var px_flat  = ti % n_pixels
-    var ix = px_flat % fw
-    var iy = px_flat // fw
-    var px = Int32(ix); var py = Int32(iy)
+    var px = Int32(px_flat % fw)
+    var py = Int32(px_flat // fw)
     var si = si_start + Int32(si_local)
-
-    var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
-    var morton_idx  = morton_base | UInt64(si)
-    var sobol_idx   = sobol_get_sample_index(morton_idx, 0, Int(log2spp), Int(n_base4))
-    var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
-    var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
-    var deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
-    var deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
-    var filmX = Float32(ix) + Float32(0.5) + deltaX
-    var filmY = Float32(iy) + Float32(0.5) + deltaY
-
-    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
-    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
-    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
-    var cw_v = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
-    if cw_v != Float32(0.0) and cw_v != Float32(1.0):
-        cx /= cw_v; cy /= cw_v; cz /= cw_v
-    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
-    if camLen > Float32(0.0):
-        cx /= camLen; cy /= camLen; cz /= camLen
-
-    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
-    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
-    if dirLen > Float32(0.0):
-        dx /= dirLen; dy /= dirLen; dz /= dirLen
-
-    var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
+    var (ray, pcg_state, pcg_inc) = gen_primary_ray_state(
+        px, py, si, Int(log2spp), Int(n_base4),
+        seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
+        filter_norm_x, filter_sigma, filter_support_x,
+        filter_norm_y, filter_support_y,
+    )
     paths[ti] = PathState_C(
-        Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)),
+        ray,
         RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -866,42 +778,17 @@ fn gen_primary_rays_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var ix = tid % fw
-    var iy = tid // fw
-    var px = Int32(ix); var py = Int32(iy)
-
-    var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
-    var morton_idx  = morton_base | UInt64(si)
-    var sobol_idx   = sobol_get_sample_index(morton_idx, 0, Int(log2spp), Int(n_base4))
-    var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
-    var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
-    var deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
-    var deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
-    var filmX = Float32(ix) + Float32(0.5) + deltaX
-    var filmY = Float32(iy) + Float32(0.5) + deltaY
-
-    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
-    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
-    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
-    var cw_v = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
-    if cw_v != Float32(0.0) and cw_v != Float32(1.0):
-        cx /= cw_v; cy /= cw_v; cz /= cw_v
-    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
-    if camLen > Float32(0.0):
-        cx /= camLen; cy /= camLen; cz /= camLen
-
-    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
-    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
-    if dirLen > Float32(0.0):
-        dx /= dirLen; dy /= dirLen; dz /= dirLen
-
-    var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
+    var px = Int32(tid % fw)
+    var py = Int32(tid // fw)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
+    var (ray, pcg_state, pcg_inc) = gen_primary_ray_state(
+        px, py, si, Int(log2spp), Int(n_base4),
+        seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
+        filter_norm_x, filter_sigma, filter_support_x,
+        filter_norm_y, filter_support_y,
+    )
     paths[tid] = PathState_C(
-        Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)),
+        ray,
         RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
         RGB(Float32(0.0), Float32(0.0), Float32(0.0)),

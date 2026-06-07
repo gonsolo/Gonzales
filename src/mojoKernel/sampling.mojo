@@ -1,6 +1,6 @@
-from std.math import sqrt, log, exp, cos, sin
+from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory import alloc
-from .geometry import Vec3f, PI, TWO_PI, INV_PI
+from .geometry import Vec3f, Ray_C, Point3f, PI, TWO_PI, INV_PI
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────
 # See: docs/04_sampling.md — Multiple Importance Sampling
@@ -257,3 +257,59 @@ fn derive_pcg_seeds(px: Int32, py: Int32, si: Int32, seed: UInt64) -> Tuple[UInt
     h ^= h >> 30; h *= UInt64(0xbf58476d1ce4e5b9)
     h ^= h >> 27
     return (state, h | UInt64(1))
+
+
+# ── Shared primary-ray generation ─────────────────────────────────────────────
+# Encapsulates the duplicated Sobol + Gaussian-filter + rasterToCamera +
+# cameraToWorld math used by both the CPU tile renderer and the two GPU
+# gen_primary_rays kernels.
+#
+# Returns the world-space Ray_C and the PCG seed pair for the path.
+# px/py are integer pixel coords; si is the sample index (Int32).
+@always_inline
+fn gen_primary_ray_state(
+    px: Int32, py: Int32, si: Int32,
+    log2spp: Int, n_base4: Int,
+    seed_dim0: UInt32, seed_dim1: UInt32,
+    rng_seed: UInt64,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    r2c: UnsafePointer[Float32, MutAnyOrigin],   # rasterToCamera  (16 Float32, col-major)
+    c2w: UnsafePointer[Float32, MutAnyOrigin],   # cameraToWorld   (16 Float32, col-major)
+    filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
+    filter_norm_y: Float32, filter_support_y: Float32,
+) -> Tuple[Ray_C, UInt64, UInt64]:
+    """Shared Sobol + filter + camera-transform primary ray generator.
+    Returns (ray, pcg_state, pcg_inc).
+    """
+    var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
+    var morton_idx  = morton_base | UInt64(si)
+    var sobol_idx   = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
+    var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
+    var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
+    var deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
+    var deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
+    var filmX = Float32(px) + Float32(0.5) + deltaX
+    var filmY = Float32(py) + Float32(0.5) + deltaY
+
+    # rasterToCamera (column-major 4×4)
+    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
+    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
+    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
+    var cw = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
+    if cw != Float32(0.0) and cw != Float32(1.0):
+        cx /= cw; cy /= cw; cz /= cw
+    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
+    if camLen > Float32(0.0):
+        cx /= camLen; cy /= camLen; cz /= camLen
+
+    # cameraToWorld rotation (upper-left 3×3 of col-major 4×4)
+    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
+    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
+    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
+    if dirLen > Float32(0.0):
+        dx /= dirLen; dy /= dirLen; dz /= dirLen
+
+    var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
+    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
+    return (Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc)

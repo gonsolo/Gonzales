@@ -6,11 +6,11 @@ from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PathState_C, T
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
-from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64
+from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64, gen_primary_ray_state
 
 
 @export
-def mojo_render_tile_v2(
+def render_tile(
     rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
     cameraToWorld: UnsafePointer[Float32, MutAnyOrigin],
     tileMinX: Int32, tileMinY: Int32, tileMaxX: Int32, tileMaxY: Int32,
@@ -40,45 +40,22 @@ def mojo_render_tile_v2(
 
     # Generate primary rays from Sobol film samples
     var idx = 0
+    var rng_seed = sp.rngSeed
     for iy in range(tileH):
         for ix in range(tileW):
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
-            var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
             for si in range(spp):
-                var morton_idx = morton_base | UInt64(si)
-                var sobol_idx = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
-                var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, matrices)
-                var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, matrices)
-                var deltaX = gaussian_sample_1d(u0, sp.filterNormX, sp.filterSigma, sp.filterSupportX)
-                var deltaY = gaussian_sample_1d(u1, sp.filterNormY, sp.filterSigma, sp.filterSupportY)
-                var filmX = Float32(px) + Float32(0.5) + deltaX
-                var filmY = Float32(py) + Float32(0.5) + deltaY
-
-                # rasterToCamera transform (column-major)
-                var cx = rasterToCamera[0]*filmX + rasterToCamera[4]*filmY + rasterToCamera[12]
-                var cy = rasterToCamera[1]*filmX + rasterToCamera[5]*filmY + rasterToCamera[13]
-                var cz = rasterToCamera[2]*filmX + rasterToCamera[6]*filmY + rasterToCamera[14]
-                var cw = rasterToCamera[3]*filmX + rasterToCamera[7]*filmY + rasterToCamera[15]
-                if cw != Float32(0.0) and cw != Float32(1.0):
-                    cx /= cw; cy /= cw; cz /= cw
-                var camDir = SIMD[DType.float32, 3](cx, cy, cz)
-                var camLen = dot(camDir, camDir)
-                if camLen > Float32(0.0):
-                    camDir = camDir * (Float32(1.0) / sqrt(camLen))
-
-                # cameraToWorld rotation (3×3)
-                var dx = cameraToWorld[0]*camDir[0] + cameraToWorld[4]*camDir[1] + cameraToWorld[8]*camDir[2]
-                var dy = cameraToWorld[1]*camDir[0] + cameraToWorld[5]*camDir[1] + cameraToWorld[9]*camDir[2]
-                var dz = cameraToWorld[2]*camDir[0] + cameraToWorld[6]*camDir[1] + cameraToWorld[10]*camDir[2]
-                var worldDir = SIMD[DType.float32, 3](dx, dy, dz)
-                var dirLen = dot(worldDir, worldDir)
-                if dirLen > Float32(0.0):
-                    worldDir = worldDir * (Float32(1.0) / sqrt(dirLen))
-
-                var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, Int32(si), sp.rngSeed)
+                var (ray, pcg_state, pcg_inc) = gen_primary_ray_state(
+                    px, py, Int32(si),
+                    log2spp, n_base4,
+                    seed_dim0, seed_dim1, rng_seed, matrices,
+                    rasterToCamera, cameraToWorld,
+                    sp.filterNormX, sp.filterSigma, sp.filterSupportX,
+                    sp.filterNormY, sp.filterSupportY,
+                )
                 paths[idx] = PathState_C(
-                    Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(worldDir[0], worldDir[1], worldDir[2])),
+                    ray,
                     RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
                     RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
                     RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -297,7 +274,7 @@ def mojo_render_all_tiles(
         var tw_actual = Int(tx_max) - tx
         var th_actual = Int(ty_max) - ty
         var tile_buf = tile_bufs + tile_idx * max_tile_pixels
-        mojo_render_tile_v2(
+        render_tile(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
             sampler_params, scene, tile_buf, max_depth)
