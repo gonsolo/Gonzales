@@ -163,7 +163,6 @@ def _gpu_upload_scene(
     return handle
 
 
-@export
 def mojo_parse_and_render(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],

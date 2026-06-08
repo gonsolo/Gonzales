@@ -67,11 +67,9 @@ struct GpuSceneHandle(Movable):
     var fw: Int
     var fh: Int
 
-@export
 def mojo_gpu_available() -> Bool:
     return has_accelerator()
 
-@export
 def mojo_gpu_upload_scene(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     bvh2NodesCount: Int64,
@@ -423,7 +421,6 @@ def traverse_bvh2_gpu(
     var result_ptr = results + tid
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, tMax, result_ptr)
 
-@export
 def mojo_gpu_traverse_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
@@ -701,7 +698,6 @@ def traverse_paths_gpu(
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, paths[tid].ray, Float32(1.0e38), results + tid)
     test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
 
-@export
 def mojo_gpu_shade_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
@@ -801,7 +797,6 @@ def gen_primary_rays_gpu(
 
 # Render one sample pass into the persistent film buffer.
 # Ray generation runs on GPU — no CPU-side path buffer or PCIe upload needed.
-@export
 def mojo_gpu_render_sample(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
@@ -887,7 +882,6 @@ def mojo_gpu_render_sample(
 # Wavefront render: generates actual_batch samples worth of primary rays for all pixels,
 # runs the full bounce loop over n_pixels × actual_batch paths together, then accumulates.
 # Caller loops over spp in steps of WAVEFRONT_BATCH; progress reporting is up to the caller.
-@export
 def mojo_gpu_render_wavefront(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
@@ -971,7 +965,6 @@ def mojo_gpu_render_wavefront(
             print("GPU wavefront render failed: " + String(e))
 
 
-@export
 def mojo_gpu_download_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
@@ -994,7 +987,6 @@ def mojo_gpu_download_film(
             print("GPU download film failed: " + String(e))
 
 
-@export
 def mojo_gpu_download_albedo(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
@@ -1127,7 +1119,6 @@ def atrous_filter_gpu(
         output[tid*3] = cr; output[tid*3+1] = cg; output[tid*3+2] = cb
 
 
-@export
 def mojo_gpu_atrous_denoise(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     output: UnsafePointer[Float32, MutAnyOrigin],
@@ -1194,7 +1185,6 @@ def mojo_gpu_atrous_denoise(
             print("GPU atrous denoise failed: " + String(e))
 
 
-@export
 def mojo_gpu_clear_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     n: Int64,
@@ -1224,7 +1214,6 @@ def mojo_gpu_clear_film(
             print("GPU clear film failed: " + String(e))
 
 
-@export
 def mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
     if Int(handlePtr) == 0:
         return

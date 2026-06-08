@@ -1,4 +1,5 @@
 from std.ffi import external_call
+from std.time import perf_counter_ns
 from .ply import mojo_load_ply
 from std.math import tan, sqrt, acos, atan2, sin, abs, exp
 from std.memory import alloc
@@ -810,8 +811,13 @@ struct _PscState:
 # ── Utility functions ─────────────────────────────────────────────────────────
 
 def _psc_strcmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
-    return external_call["strcmp", Int32,
-        UnsafePointer[UInt8, MutAnyOrigin], UnsafePointer[UInt8, MutAnyOrigin]](a, b)
+    var i = 0
+    while True:
+        var ca = Int32(a[i]); var cb = Int32(b[i])
+        if ca != cb: return ca - cb
+        if ca == Int32(0): return Int32(0)
+        i += 1
+    # unreachable
 
 def _psc_streq(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral) -> Bool:
     var bp = b.unsafe_ptr()
@@ -2893,9 +2899,7 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var fweight = (Float32(2) * norm_x - Float32(1)) * (Float32(2) * norm_y - Float32(1))
 
     # ---- RNG seed from time ----
-    var t_store = alloc[Int64](1)
-    var rng_seed = UInt64(external_call["time", Int64, UnsafePointer[Int64, MutAnyOrigin]](t_store))
-    t_store.free()
+    var rng_seed = UInt64(perf_counter_ns())
 
     # ---- Film filename copy ----
     var fname = alloc[UInt8](PSC_FILE_MAX)

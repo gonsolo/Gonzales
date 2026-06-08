@@ -14,7 +14,6 @@ def _write_identity(result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
     return Int32(0)
 
 
-@export
 def mojo_matrix_multiply(
     a: UnsafePointer[Float32, MutAnyOrigin],
     b: UnsafePointer[Float32, MutAnyOrigin],
@@ -29,7 +28,6 @@ def mojo_matrix_multiply(
             result[j * 4 + i] = s
 
 
-@export
 def mojo_matrix_invert(
     m: UnsafePointer[Float32, MutAnyOrigin],
     result: UnsafePointer[Float32, MutAnyOrigin],
@@ -100,7 +98,6 @@ def mojo_matrix_invert(
 # Points are 4 floats each (SIMD4 layout: x,y,z,w=1). Normals are 3 floats each.
 # matrix / inv_matrix are 16-float column-major (flat[col*4+row] = m[row,col]).
 
-@export
 def mojo_transform_points(
     matrix: UnsafePointer[Float32, MutAnyOrigin],
     points_in: UnsafePointer[Float32, MutAnyOrigin],
@@ -124,7 +121,6 @@ def mojo_transform_points(
         points_out[b] = rx;  points_out[b+1] = ry;  points_out[b+2] = rz;  points_out[b+3] = Float32(1)
 
 
-@export
 def mojo_transform_normals(
     inv_matrix: UnsafePointer[Float32, MutAnyOrigin],
     normals_in: UnsafePointer[Float32, MutAnyOrigin],

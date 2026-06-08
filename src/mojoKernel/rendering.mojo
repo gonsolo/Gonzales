@@ -9,7 +9,6 @@ from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64, gen_primary_ray_state
 
 
-@export
 def render_tile(
     rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
     cameraToWorld: UnsafePointer[Float32, MutAnyOrigin],
@@ -233,7 +232,6 @@ def _progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> Stri
         + " | Total Est.: " + _fmt_time(est) + "                ")
 
 
-@export
 def mojo_render_all_tiles(
     raster_to_camera: UnsafePointer[Float32, MutAnyOrigin],
     camera_to_world: UnsafePointer[Float32, MutAnyOrigin],
@@ -298,7 +296,6 @@ def mojo_render_all_tiles(
 
 
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
-@export
 def mojo_normalize_film(
     results: UnsafePointer[TileResult_C, MutAnyOrigin],
     count: Int32,

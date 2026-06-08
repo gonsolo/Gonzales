@@ -1756,7 +1756,6 @@ def shade_core_cpu_nee(
         spheres, sphereCount)
 
 
-@export
 def mojo_cpu_shade_batch(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     count: Int64,
