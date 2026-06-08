@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.math import exp
-from std.memory import alloc
+from std.collections import List
 
 # Joint bilateral denoiser guided by albedo.
 # beauty and albedo are width*height*3 float arrays (R,G,B interleaved, row-major).
@@ -22,11 +22,11 @@ def mojo_denoise(
     var diam = 2 * r + 1
 
     # Precompute spatial weights for the (2r+1)×(2r+1) window.
-    var sw = alloc[Float32](diam * diam)
+    var sw = List[Float32](capacity=diam * diam)
     for dy in range(-r, r + 1):
         for dx in range(-r, r + 1):
             var dist2 = Float32(dx * dx + dy * dy)
-            sw[(dy + r) * diam + (dx + r)] = exp(-dist2 * inv2ss)
+            sw.append(exp(-dist2 * inv2ss))
 
     for py in range(h):
         for px in range(w):
@@ -66,8 +66,7 @@ def mojo_denoise(
                 output[ci + 0] = beauty[ci + 0]
                 output[ci + 1] = beauty[ci + 1]
                 output[ci + 2] = beauty[ci + 2]
-
-    sw.free()
+    # sw freed automatically when it goes out of scope
 
 
 # Write a float RGB buffer via the OpenImageIO bridge.
