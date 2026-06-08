@@ -41,7 +41,7 @@ struct GpuSceneHandle(Movable):
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 32
     var n_infinite_lights: Int
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
-    # mojo_gpu_render_sample (interactive) only uses the first n_pixels slots.
+    # gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × sizeof(PathState_C)=96
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
@@ -67,10 +67,10 @@ struct GpuSceneHandle(Movable):
     var fw: Int
     var fh: Int
 
-def mojo_gpu_available() -> Bool:
+def gpu_available() -> Bool:
     return has_accelerator()
 
-def mojo_gpu_upload_scene(
+def gpu_upload_scene(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     bvh2NodesCount: Int64,
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
@@ -421,7 +421,7 @@ def traverse_bvh2_gpu(
     var result_ptr = results + tid
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, tMax, result_ptr)
 
-def mojo_gpu_traverse_batch(
+def gpu_traverse_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
@@ -698,7 +698,7 @@ def traverse_paths_gpu(
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, paths[tid].ray, Float32(1.0e38), results + tid)
     test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
 
-def mojo_gpu_shade_batch(
+def gpu_shade_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     count: Int64,
@@ -797,7 +797,7 @@ def gen_primary_rays_gpu(
 
 # Render one sample pass into the persistent film buffer.
 # Ray generation runs on GPU — no CPU-side path buffer or PCIe upload needed.
-def mojo_gpu_render_sample(
+def gpu_render_sample(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
     si: Int32, log2spp: Int32, n_base4: Int32,
@@ -882,7 +882,7 @@ def mojo_gpu_render_sample(
 # Wavefront render: generates actual_batch samples worth of primary rays for all pixels,
 # runs the full bounce loop over n_pixels × actual_batch paths together, then accumulates.
 # Caller loops over spp in steps of WAVEFRONT_BATCH; progress reporting is up to the caller.
-def mojo_gpu_render_wavefront(
+def gpu_render_wavefront(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
     si_start: Int32, actual_batch: Int32,
@@ -965,7 +965,7 @@ def mojo_gpu_render_wavefront(
             print("GPU wavefront render failed: " + String(e))
 
 
-def mojo_gpu_download_film(
+def gpu_download_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
     n: Int64,
@@ -987,7 +987,7 @@ def mojo_gpu_download_film(
             print("GPU download film failed: " + String(e))
 
 
-def mojo_gpu_download_albedo(
+def gpu_download_albedo(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
     n: Int64,
@@ -1119,7 +1119,7 @@ def atrous_filter_gpu(
         output[tid*3] = cr; output[tid*3+1] = cg; output[tid*3+2] = cb
 
 
-def mojo_gpu_atrous_denoise(
+def gpu_atrous_denoise(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     output: UnsafePointer[Float32, MutAnyOrigin],
     n: Int64,
@@ -1185,7 +1185,7 @@ def mojo_gpu_atrous_denoise(
             print("GPU atrous denoise failed: " + String(e))
 
 
-def mojo_gpu_clear_film(
+def gpu_clear_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     n: Int64,
 ):
@@ -1214,7 +1214,7 @@ def mojo_gpu_clear_film(
             print("GPU clear film failed: " + String(e))
 
 
-def mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
+def gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
     if Int(handlePtr) == 0:
         return
     handlePtr.destroy_pointee()

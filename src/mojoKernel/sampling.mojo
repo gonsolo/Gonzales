@@ -240,7 +240,7 @@ def _erf(x: Float32) -> Float32:
 
 
 # Gaussian filter normalization.
-def mojo_gaussian_norm(support: Float32, sigma: Float32) -> Float32:
+def gaussian_norm(support: Float32, sigma: Float32) -> Float32:
     var x = support / (sigma * sqrt(Float32(2)))
     return Float32(0.5) * (Float32(1) + _erf(x))
 

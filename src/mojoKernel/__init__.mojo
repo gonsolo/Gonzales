@@ -2,7 +2,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
-from mojoKernel.pipeline import _generate_sobol_matrices, mojo_parse_and_render, mojo_render_interactive
+from mojoKernel.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive
 
 def main() raises:
     var t0 = perf_counter_ns()
@@ -42,9 +42,9 @@ def main() raises:
     path_cstr[path_len] = UInt8(0)
 
     if interactive:
-        mojo_render_interactive(path_cstr, sobol, use_gpu)
+        render_interactive(path_cstr, sobol, use_gpu)
     else:
-        _ = mojo_parse_and_render(path_cstr, sobol, use_gpu)
+        _ = parse_and_render(path_cstr, sobol, use_gpu)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 

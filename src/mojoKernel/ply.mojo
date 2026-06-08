@@ -141,7 +141,7 @@ def _ply_read_count(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int, type_size
     else:
         return Int(_ply_i32_be(buf, pos))
 
-def mojo_load_ply(
+def load_ply(
     path_cstr:   UnsafePointer[UInt8, MutAnyOrigin],
     out_pts:     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
     out_n_verts: UnsafePointer[Int32, MutAnyOrigin],

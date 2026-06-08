@@ -358,7 +358,7 @@ def any_hit_bvh2_core(
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
-def mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
+def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, ray, tMax, resultPtr)
@@ -366,7 +366,7 @@ def mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]
 
 # ── CPU batch entry point (sequential loop) ───────────────────────────────────
 
-def mojo_cpu_traverse_batch(
+def cpu_traverse_batch(
     scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
@@ -551,7 +551,7 @@ def build_bvh2_node(
     return Int32(my)
 
 
-def mojo_build_bvh2(
+def build_bvh2(
     primBounds: UnsafePointer[Float32, MutAnyOrigin],   # 6 floats per prim
     primCount: Int32,
     outNodes: UnsafePointer[BVH2Node, MutAnyOrigin],     # capacity >= 2*n

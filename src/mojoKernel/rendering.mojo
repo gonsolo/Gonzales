@@ -6,7 +6,7 @@ from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PathState_C, T
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
-from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, mojo_gaussian_norm, mix_bits_u64, gen_primary_ray_state
+from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 
 
 def render_tile(
@@ -212,7 +212,7 @@ def _fmt_f1(v: Float64) -> String:
         i += 1; frac = 0
     return String(i) + "." + String(frac)
 
-def _fmt_time(s: Float64) -> String:
+def fmt_time(s: Float64) -> String:
     var sec = Int(s)
     var min = sec // 60
     var rem = sec % 60
@@ -222,17 +222,17 @@ def _fmt_time(s: Float64) -> String:
         return String(min) + "m " + rs + "s"
     return _fmt_f1(s) + "s"
 
-def _progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> String:
+def progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> String:
     var pct = _fmt_f1(Float64(done) * 100.0 / Float64(total))
     var est = Float64(0.0)
     if done > 0:
         est = elapsed * Float64(total) / Float64(done)
     return ("Rendering: " + String(done) + " / " + String(total)
-        + " " + unit + " (" + pct + "%) | Elapsed: " + _fmt_time(elapsed)
-        + " | Total Est.: " + _fmt_time(est) + "                ")
+        + " " + unit + " (" + pct + "%) | Elapsed: " + fmt_time(elapsed)
+        + " | Total Est.: " + fmt_time(est) + "                ")
 
 
-def mojo_render_all_tiles(
+def render_all_tiles(
     raster_to_camera: UnsafePointer[Float32, MutAnyOrigin],
     camera_to_world: UnsafePointer[Float32, MutAnyOrigin],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
@@ -285,18 +285,18 @@ def mojo_render_all_tiles(
         var d = Int(done_ptr[0])
         if d % print_step == 0 or d == n_tiles:
             var elapsed = Float64(perf_counter_ns() - t0) / 1.0e9
-            print(_progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
+            print(progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
 
     parallelize[render_one](n_tiles)
     var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
     print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
-        + " tiles (100.0%) | Done: " + _fmt_time(total_s) + "                ")
+        + " tiles (100.0%) | Done: " + fmt_time(total_s) + "                ")
     done_ptr.free()
     tile_bufs.free()
 
 
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
-def mojo_normalize_film(
+def normalize_film(
     results: UnsafePointer[TileResult_C, MutAnyOrigin],
     count: Int32,
     iso: Float32,

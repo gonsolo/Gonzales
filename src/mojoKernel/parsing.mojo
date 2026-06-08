@@ -1,26 +1,26 @@
 from std.ffi import external_call
 from std.time import perf_counter_ns
-from .ply import mojo_load_ply
+from .ply import load_ply
 from std.math import tan, sqrt, acos, atan2, sin, abs, exp
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C, PI, TWO_PI, Medium_C, MediumInterface_C
-from .transform import mojo_matrix_multiply, mojo_matrix_invert, mojo_transform_points
-from .bvh import BVH2Node, SceneDescriptor2_C, mojo_build_bvh2
-from .sampling import mojo_gaussian_norm
+from .transform import matrix_multiply, matrix_invert, transform_points
+from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
+from .sampling import gaussian_norm
 
 # ── pbrt Scanner Helpers ──────────────────────────────────────────────
 
 @always_inline
-def _is_ws(b: UInt8) -> Bool:
+def is_whitespace(b: UInt8) -> Bool:
     return b == UInt8(32) or b == UInt8(9) or b == UInt8(10) or b == UInt8(13)
 
 # Skip whitespace and pbrt line comments (# … \n).
 @always_inline
-def _skip_ws_comments(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int, pos: Int) -> Int:
+def skip_whitespace_and_comments(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int, pos: Int) -> Int:
     var cur = pos
     while cur < length:
         var b = bytes[cur]
-        if _is_ws(b):
+        if is_whitespace(b):
             cur += 1
         elif b == UInt8(35):  # '#'
             while cur < length and bytes[cur] != UInt8(10):
@@ -30,10 +30,10 @@ def _skip_ws_comments(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int, po
     return cur
 
 @always_inline
-def _is_digit(b: UInt8) -> Bool:
+def is_digit(b: UInt8) -> Bool:
     return b >= UInt8(48) and b <= UInt8(57)
 
-def mojo_scan_int(
+def scan_int(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -41,7 +41,7 @@ def mojo_scan_int(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     if cur >= len:
         return Int32(0)
@@ -50,10 +50,10 @@ def mojo_scan_int(
     if bytes[cur] == UInt8(45):       # '-'
         negative = True
         cur += 1
-    if cur >= len or not _is_digit(bytes[cur]):
+    if cur >= len or not is_digit(bytes[cur]):
         return Int32(0)
     var value = Int32(0)
-    while cur < len and _is_digit(bytes[cur]):
+    while cur < len and is_digit(bytes[cur]):
         value = value * Int32(10) + Int32(bytes[cur]) - Int32(48)
         cur += 1
     if negative:
@@ -62,7 +62,7 @@ def mojo_scan_int(
     result[0] = value
     return Int32(1)
 
-def mojo_scan_float(
+def scan_float(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -70,7 +70,7 @@ def mojo_scan_float(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     if cur >= len:
         return Int32(0)
@@ -83,7 +83,7 @@ def mojo_scan_float(
         cur += 1
     var int_part = Int32(0)
     var int_seen = False
-    while cur < len and _is_digit(bytes[cur]):
+    while cur < len and is_digit(bytes[cur]):
         int_part = int_part * Int32(10) + Int32(bytes[cur]) - Int32(48)
         cur += 1
         int_seen = True
@@ -95,7 +95,7 @@ def mojo_scan_float(
     if cur < len and bytes[cur] == UInt8(46):   # '.'
         cur += 1
         var tenth = Float64(0.1)
-        while cur < len and _is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[cur]):
             var d = Float64(Int32(bytes[cur]) - Int32(48))
             if dval < Float64(0.0):
                 dval -= tenth * d
@@ -108,14 +108,14 @@ def mojo_scan_float(
 
     if cur < len and bytes[cur] == UInt8(101):  # 'e'
         cur += 1
-        while cur < len and _is_ws(bytes[cur]):
+        while cur < len and is_whitespace(bytes[cur]):
             cur += 1
         var exp_negative = False
         if cur < len and bytes[cur] == UInt8(45):
             exp_negative = True
             cur += 1
         var exp_val = Int32(0)
-        while cur < len and _is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[cur]):
             exp_val = exp_val * Int32(10) + Int32(bytes[cur]) - Int32(48)
             cur += 1
         if exp_negative:
@@ -137,7 +137,7 @@ def mojo_scan_float(
     result[0] = f
     return Int32(1)
 
-def mojo_count_floats(
+def count_floats(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: Int32,
@@ -146,19 +146,19 @@ def mojo_count_floats(
     var len = Int(length)
     var count = Int32(0)
     while True:
-        while cur < len and _is_ws(bytes[cur]):
+        while cur < len and is_whitespace(bytes[cur]):
             cur += 1
         if cur >= len:
             break
         if cur < len and bytes[cur] == UInt8(45):   # optional '-'
             cur += 1
         var int_seen = False
-        while cur < len and _is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[cur]):
             int_seen = True
             cur += 1
         if cur < len and bytes[cur] == UInt8(46):   # '.'
             cur += 1
-            while cur < len and _is_digit(bytes[cur]):
+            while cur < len and is_digit(bytes[cur]):
                 cur += 1
         elif not int_seen:
             break
@@ -166,12 +166,12 @@ def mojo_count_floats(
             cur += 1
             if cur < len and bytes[cur] == UInt8(45):
                 cur += 1
-            while cur < len and _is_digit(bytes[cur]):
+            while cur < len and is_digit(bytes[cur]):
                 cur += 1
         count += Int32(1)
     return count
 
-def mojo_scan_floats(
+def scan_floats(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -182,7 +182,7 @@ def mojo_scan_floats(
     var len = Int(length)
     var count = Int32(0)
     while count < max_count:
-        while cur < len and _is_ws(bytes[cur]):
+        while cur < len and is_whitespace(bytes[cur]):
             cur += 1
         if cur >= len:
             break
@@ -193,7 +193,7 @@ def mojo_scan_floats(
             cur += 1
         var int_part = Int32(0)
         var int_seen = False
-        while cur < len and _is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[cur]):
             int_part = int_part * Int32(10) + Int32(bytes[cur]) - Int32(48)
             cur += 1
             int_seen = True
@@ -203,7 +203,7 @@ def mojo_scan_floats(
         if cur < len and bytes[cur] == UInt8(46):
             cur += 1
             var tenth = Float64(0.1)
-            while cur < len and _is_digit(bytes[cur]):
+            while cur < len and is_digit(bytes[cur]):
                 var d = Float64(Int32(bytes[cur]) - Int32(48))
                 if dval < Float64(0.0):
                     dval -= tenth * d
@@ -215,14 +215,14 @@ def mojo_scan_floats(
             break
         if cur < len and bytes[cur] == UInt8(101):
             cur += 1
-            while cur < len and _is_ws(bytes[cur]):
+            while cur < len and is_whitespace(bytes[cur]):
                 cur += 1
             var exp_negative = False
             if cur < len and bytes[cur] == UInt8(45):
                 exp_negative = True
                 cur += 1
             var exp_val = Int32(0)
-            while cur < len and _is_digit(bytes[cur]):
+            while cur < len and is_digit(bytes[cur]):
                 exp_val = exp_val * Int32(10) + Int32(bytes[cur]) - Int32(48)
                 cur += 1
             if exp_negative:
@@ -243,7 +243,7 @@ def mojo_scan_floats(
     cursor[0] = Int32(cur)
     return count
 
-def mojo_count_ints(
+def count_ints(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: Int32,
@@ -252,20 +252,20 @@ def mojo_count_ints(
     var len = Int(length)
     var count = Int32(0)
     while True:
-        while cur < len and _is_ws(bytes[cur]):
+        while cur < len and is_whitespace(bytes[cur]):
             cur += 1
         if cur >= len:
             break
         if cur < len and bytes[cur] == UInt8(45):
             cur += 1
-        if cur >= len or not _is_digit(bytes[cur]):
+        if cur >= len or not is_digit(bytes[cur]):
             break
-        while cur < len and _is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[cur]):
             cur += 1
         count += Int32(1)
     return count
 
-def mojo_scan_ints(
+def scan_ints(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -276,7 +276,7 @@ def mojo_scan_ints(
     var len = Int(length)
     var count = Int32(0)
     while count < max_count:
-        while cur < len and _is_ws(bytes[cur]):
+        while cur < len and is_whitespace(bytes[cur]):
             cur += 1
         if cur >= len:
             break
@@ -284,10 +284,10 @@ def mojo_scan_ints(
         if bytes[cur] == UInt8(45):
             negative = True
             cur += 1
-        if cur >= len or not _is_digit(bytes[cur]):
+        if cur >= len or not is_digit(bytes[cur]):
             break
         var value = Int32(0)
-        while cur < len and _is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[cur]):
             value = value * Int32(10) + Int32(bytes[cur]) - Int32(48)
             cur += 1
         if negative:
@@ -297,7 +297,7 @@ def mojo_scan_ints(
     cursor[0] = Int32(cur)
     return count
 
-def mojo_scan_char(
+def scan_char(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -305,7 +305,7 @@ def mojo_scan_char(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != expected:
@@ -313,7 +313,7 @@ def mojo_scan_char(
     cursor[0] = Int32(cur + 1)
     return Int32(1)
 
-def mojo_peek_char(
+def peek_char(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -321,14 +321,14 @@ def mojo_peek_char(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != expected:
         return Int32(0)
     return Int32(1)
 
-def mojo_scan_token(
+def scan_token(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -339,7 +339,7 @@ def mojo_scan_token(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    cur = _skip_ws_comments(bytes, len, cur)
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     cursor[0] = Int32(cur)
     if cur >= len:
         if max_buf > 0:
@@ -366,7 +366,7 @@ def mojo_scan_token(
     cursor[0] = Int32(cur)
     return written
 
-def mojo_parse_quoted_string(
+def parse_quoted_string(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -375,7 +375,7 @@ def mojo_parse_quoted_string(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != UInt8(34):   # '"' = 34
@@ -395,7 +395,7 @@ def mojo_parse_quoted_string(
     cursor[0] = Int32(cur)
     return written
 
-def mojo_parse_param_header(
+def parse_param_header(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
     cursor: UnsafePointer[Int32, MutAnyOrigin],
@@ -407,14 +407,14 @@ def mojo_parse_param_header(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    cur = _skip_ws_comments(bytes, len, cur)
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != UInt8(34):
         return Int32(0)
     cur += 1  # opening '"'
     # type: read until whitespace or '"'
     var t = Int32(0)
-    while cur < len and not _is_ws(bytes[cur]) and bytes[cur] != UInt8(34):
+    while cur < len and not is_whitespace(bytes[cur]) and bytes[cur] != UInt8(34):
         if t < type_max - 1:
             type_buf[Int(t)] = bytes[cur]
         t += Int32(1)
@@ -423,7 +423,7 @@ def mojo_parse_param_header(
         var cap = Int(t) if Int(t) < Int(type_max) - 1 else Int(type_max) - 1
         type_buf[cap] = UInt8(0)
     # skip separator whitespace
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     # name: read until '"'
     var n = Int32(0)
@@ -438,7 +438,7 @@ def mojo_parse_param_header(
     if cur < len and bytes[cur] == UInt8(34):
         cur += 1  # closing '"'
     # skip ws, check for '['
-    while cur < len and _is_ws(bytes[cur]):
+    while cur < len and is_whitespace(bytes[cur]):
         cur += 1
     if cur < len and bytes[cur] == UInt8(91):   # '[' = 91
         cur += 1
@@ -449,9 +449,9 @@ def mojo_parse_param_header(
     return Int32(1)
 
 
-# ── PbrtScanner_Mojo ──────────────────────────────────────────────────────────
+# ── PbrtScanner ──────────────────────────────────────────────────────────
 
-struct PbrtScanner_Mojo:
+struct PbrtScanner:
     var buffer: UnsafePointer[UInt8, MutAnyOrigin]
     var total_bytes: Int32
     var cursor: Int32
@@ -459,32 +459,32 @@ struct PbrtScanner_Mojo:
 
 
 @always_inline
-def _scanner_cursor_ptr(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> UnsafePointer[Int32, MutAnyOrigin]:
+def scanner_cursor_ptr(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> UnsafePointer[Int32, MutAnyOrigin]:
     return UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
 
 
 @always_inline
-def _scanner_call_int(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
+def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_scan_int(handle[0].buffer, handle[0].total_bytes, cur, result)
+    var ret = scan_int(handle[0].buffer, handle[0].total_bytes, cur, result)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
 @always_inline
-def _scanner_call_float(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+def scanner_call_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_scan_float(handle[0].buffer, handle[0].total_bytes, cur, result)
+    var ret = scan_float(handle[0].buffer, handle[0].total_bytes, cur, result)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_new(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]:
-    var handle = alloc[PbrtScanner_Mojo](1)
+def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
+    var handle = alloc[PbrtScanner](1)
     var path_str = String(unsafe_from_utf8_ptr=path.as_immutable())
     try:
         var f = open(path_str, "r")
@@ -507,8 +507,8 @@ def mojo_scanner_new(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[
     return handle
 
 
-def mojo_scanner_new_from_bytes(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int32) -> UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]:
-    var handle = alloc[PbrtScanner_Mojo](1)
+def scanner_from_bytes(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int32) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
+    var handle = alloc[PbrtScanner](1)
     var buf = alloc[UInt8](Int(length) + 1)
     for i in range(Int(length)):
         buf[i] = bytes[i]
@@ -520,104 +520,104 @@ def mojo_scanner_new_from_bytes(bytes: UnsafePointer[UInt8, MutAnyOrigin], lengt
     return handle
 
 
-def mojo_scanner_free(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]):
+def scanner_free(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
     if Int(handle[0].buffer) > 1:
         handle[0].buffer.free()
     handle.free()
 
 
-def mojo_scanner_is_at_end(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
+def scanner_is_at_end(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
     return handle[0].is_at_end
 
 
-def mojo_scanner_scan_location(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
+def scanner_location(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
     return handle[0].cursor
 
 
-def mojo_scanner_peek_char(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], expected: UInt8) -> Int32:
+def scanner_peek_char(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], expected: UInt8) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_peek_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
+    var ret = peek_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_scan_char(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], expected: UInt8) -> Int32:
+def scanner_scan_char(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], expected: UInt8) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_scan_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
+    var ret = scan_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_scan_int(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
-    return _scanner_call_int(handle, result)
+def scanner_scan_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
+    return scanner_call_int(handle, result)
 
 
-def mojo_scanner_scan_float(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
-    return _scanner_call_float(handle, result)
+def scanner_scan_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+    return scanner_call_float(handle, result)
 
 
-def mojo_scanner_count_floats(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
-    return mojo_count_floats(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
+def scanner_count_floats(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
+    return count_floats(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
 
 
-def mojo_scanner_scan_floats(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], dst: UnsafePointer[Float32, MutAnyOrigin], max_count: Int32) -> Int32:
+def scanner_scan_floats(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], dst: UnsafePointer[Float32, MutAnyOrigin], max_count: Int32) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_scan_floats(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
+    var ret = scan_floats(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_count_ints(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]) -> Int32:
-    return mojo_count_ints(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
+def scanner_count_ints(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
+    return count_ints(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
 
 
-def mojo_scanner_scan_ints(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], dst: UnsafePointer[Int32, MutAnyOrigin], max_count: Int32) -> Int32:
+def scanner_scan_ints(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], dst: UnsafePointer[Int32, MutAnyOrigin], max_count: Int32) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_scan_ints(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
+    var ret = scan_ints(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin], buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32) -> Int32:
+def scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_parse_quoted_string(handle[0].buffer, handle[0].total_bytes, cur, buf, max_buf)
+    var ret = parse_quoted_string(handle[0].buffer, handle[0].total_bytes, cur, buf, max_buf)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_parse_param_header(
-    handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def scanner_parse_param_header(
+    handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     type_buf: UnsafePointer[UInt8, MutAnyOrigin], type_max: Int32,
     name_buf: UnsafePointer[UInt8, MutAnyOrigin], name_max: Int32,
     is_array: UnsafePointer[Int32, MutAnyOrigin],
 ) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_parse_param_header(handle[0].buffer, handle[0].total_bytes, cur,
+    var ret = parse_param_header(handle[0].buffer, handle[0].total_bytes, cur,
                                       type_buf, type_max, name_buf, name_max, is_array)
     handle[0].cursor = cur[0]
     cur.free()
     return ret
 
 
-def mojo_scanner_scan_token(
-    handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def scanner_scan_token(
+    handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     delims: UnsafePointer[UInt8, MutAnyOrigin], n_delims: Int32,
     buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32,
 ) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
-    var ret = mojo_scan_token(handle[0].buffer, handle[0].total_bytes, cur,
+    var ret = scan_token(handle[0].buffer, handle[0].total_bytes, cur,
                               delims, n_delims, buf, max_buf)
     handle[0].cursor = cur[0]
     if ret < 0:
@@ -699,7 +699,7 @@ struct ParsedScene_Mojo:
 
 # ── Internal parse state ──────────────────────────────────────────────────────
 
-struct _PscState:
+struct SceneParseState:
     var ctm:       UnsafePointer[Float32, MutAnyOrigin]
     var ctm_stack: UnsafePointer[Float32, MutAnyOrigin]
     var ctm_depth: Int32
@@ -810,7 +810,7 @@ struct _PscState:
 
 # ── Utility functions ─────────────────────────────────────────────────────────
 
-def _psc_strcmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
+def psc_strcmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
     var i = 0
     while True:
         var ca = Int32(a[i]); var cb = Int32(b[i])
@@ -868,53 +868,53 @@ def _psc_matcopy(dst: UnsafePointer[Float32, MutAnyOrigin],
 # All of these RIGHT-multiply the CTM: CTM_new = CTM_old × M
 # CTM is stored column-major; identity has 1 at indices 0,5,10,15.
 
-def _psc_ctm_concat(s: UnsafePointer[_PscState, MutAnyOrigin],
+def _psc_ctm_concat(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                    t: UnsafePointer[Float32, MutAnyOrigin]):
     """Compute s.ctm = s.ctm × t and store back."""
     var result = alloc[Float32](16)
-    mojo_matrix_multiply(s[0].ctm, t, result)
+    matrix_multiply(s[0].ctm, t, result)
     for i in range(16):
         s[0].ctm[i] = result[i]
     result.free()
 
-def _psc_handle_translate(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                         s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_translate(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                         s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Translate tx ty tz  →  CTM = CTM × T(tx,ty,tz)"""
     var v = alloc[Float32](3)
     v[0] = Float32(0); v[1] = Float32(0); v[2] = Float32(0)
-    _ = mojo_scanner_scan_float(handle, v + 0)
-    _ = mojo_scanner_scan_float(handle, v + 1)
-    _ = mojo_scanner_scan_float(handle, v + 2)
+    _ = scanner_scan_float(handle, v + 0)
+    _ = scanner_scan_float(handle, v + 1)
+    _ = scanner_scan_float(handle, v + 2)
     var t = alloc[Float32](16)
     _psc_identity(t)
     t[12] = v[0]; t[13] = v[1]; t[14] = v[2]   # col-major: col3 = (tx,ty,tz,1)
     _psc_ctm_concat(s, t)
     v.free(); t.free()
 
-def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                        s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                        s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Scale sx sy sz  →  CTM = CTM × S(sx,sy,sz)"""
     var v = alloc[Float32](3)
     v[0] = Float32(1); v[1] = Float32(1); v[2] = Float32(1)
-    _ = mojo_scanner_scan_float(handle, v + 0)
-    _ = mojo_scanner_scan_float(handle, v + 1)
-    _ = mojo_scanner_scan_float(handle, v + 2)
+    _ = scanner_scan_float(handle, v + 0)
+    _ = scanner_scan_float(handle, v + 1)
+    _ = scanner_scan_float(handle, v + 2)
     var t = alloc[Float32](16)
     _psc_identity(t)
     t[0] = v[0]; t[5] = v[1]; t[10] = v[2]     # col-major: diagonal
     _psc_ctm_concat(s, t)
     v.free(); t.free()
 
-def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                      s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                      s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Rotate angle ax ay az  →  CTM = CTM × R(angle, axis)"""
     from std.math import sin as _sin, cos as _cos, sqrt as _sqrt
     var rv = alloc[Float32](4)  # angle, ax, ay, az
     rv[0] = Float32(0); rv[1] = Float32(0); rv[2] = Float32(0); rv[3] = Float32(1)
-    _ = mojo_scanner_scan_float(handle, rv + 0)
-    _ = mojo_scanner_scan_float(handle, rv + 1)
-    _ = mojo_scanner_scan_float(handle, rv + 2)
-    _ = mojo_scanner_scan_float(handle, rv + 3)
+    _ = scanner_scan_float(handle, rv + 0)
+    _ = scanner_scan_float(handle, rv + 1)
+    _ = scanner_scan_float(handle, rv + 2)
+    _ = scanner_scan_float(handle, rv + 3)
     var angle = rv[0] * PI / Float32(180)
     var ax = rv[1]; var ay = rv[2]; var az = rv[3]
     var ln = _sqrt(ax*ax + ay*ay + az*az)
@@ -929,14 +929,14 @@ def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     _psc_ctm_concat(s, t)
     rv.free(); t.free()
 
-def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                      s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                      s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """LookAt ex ey ez  lx ly lz  ux uy uz
     Constructs a world-to-camera view matrix and right-multiplies the CTM.
     Matches PBRT's LookAt semantics exactly."""
     from std.math import sqrt as _sqrt
     var v = alloc[Float32](9)
-    for i in range(9): _ = mojo_scanner_scan_float(handle, v + i)
+    for i in range(9): _ = scanner_scan_float(handle, v + i)
     # eye, look, up
     var ex = v[0]; var ey = v[1]; var ez = v[2]
     var lx = v[3]; var ly = v[4]; var lz = v[5]
@@ -1044,7 +1044,7 @@ def _psc_type_is_str(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
     if t[0] == UInt8(115) and t[1] == UInt8(116): return True  # "string"
     return False
 
-def _psc_skip_value(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                    type_buf: UnsafePointer[UInt8, MutAnyOrigin],
                    is_array: Int32):
     var tmp_f = alloc[Float32](65536)
@@ -1052,93 +1052,93 @@ def _psc_skip_value(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     var tmp_s = alloc[UInt8](1024)
     if _psc_type_is_float(type_buf):
         if is_array:
-            _ = mojo_scanner_scan_floats(handle, tmp_f, 65536)
+            _ = scanner_scan_floats(handle, tmp_f, 65536)
         else:
-            _ = mojo_scanner_scan_float(handle, tmp_f)
+            _ = scanner_scan_float(handle, tmp_f)
     elif _psc_type_is_int(type_buf):
         if is_array:
-            _ = mojo_scanner_scan_ints(handle, tmp_i, 16384)
+            _ = scanner_scan_ints(handle, tmp_i, 16384)
         else:
-            _ = mojo_scanner_scan_int(handle, tmp_i)
+            _ = scanner_scan_int(handle, tmp_i)
     elif _psc_type_is_str(type_buf):
-        _ = mojo_scanner_parse_quoted_string(handle, tmp_s, 1024)
+        _ = scanner_parse_quoted_string(handle, tmp_s, 1024)
         if is_array:
-            while mojo_scanner_parse_quoted_string(handle, tmp_s, 1024) >= 0:
+            while scanner_parse_quoted_string(handle, tmp_s, 1024) >= 0:
                 pass
     else:
         var nl_buf = alloc[UInt8](1)
         nl_buf[0] = UInt8(10)
-        _ = mojo_scanner_scan_token(handle, nl_buf, 1, tmp_s, 1024)
+        _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 1024)
         nl_buf.free()
     tmp_f.free()
     tmp_i.free()
     tmp_s.free()
 
-def _psc_skip_params(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]):
+def _psc_skip_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         _psc_skip_value(handle, type_buf, is_array)
         if is_array:
-            _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+            _ = scanner_scan_char(handle, UInt8(93))  # ']'
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     type_buf.free()
     name_buf.free()
 
-def _psc_skip_line(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]):
+def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
     var nl_buf = alloc[UInt8](1)
     nl_buf[0] = UInt8(10)
     var buf = alloc[UInt8](4096)
-    _ = mojo_scanner_scan_token(handle, nl_buf, 1, buf, 4096)
+    _ = scanner_scan_token(handle, nl_buf, 1, buf, 4096)
     nl_buf.free()
     buf.free()
 
-def _psc_scan_one_float(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def _psc_scan_one_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                        is_array: Int32) -> Float32:
     var vp = alloc[Float32](1)
     vp[0] = Float32(0)
-    _ = mojo_scanner_scan_float(handle, vp)
+    _ = scanner_scan_float(handle, vp)
     var v = vp[0]
     vp.free()
     if is_array:
-        _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+        _ = scanner_scan_char(handle, UInt8(93))  # ']'
     return v
 
-def _psc_scan_one_int(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def _psc_scan_one_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                      is_array: Int32) -> Int32:
     var ip = alloc[Int32](1)
     ip[0] = Int32(0)
-    _ = mojo_scanner_scan_int(handle, ip)
+    _ = scanner_scan_int(handle, ip)
     var v = ip[0]
     ip.free()
     if is_array:
-        _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+        _ = scanner_scan_char(handle, UInt8(93))  # ']'
     return v
 
-def _psc_scan_one_str(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def _psc_scan_one_str(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                      dst: UnsafePointer[UInt8, MutAnyOrigin], dst_max: Int32,
                      is_array: Int32):
-    _ = mojo_scanner_parse_quoted_string(handle, dst, dst_max)
+    _ = scanner_parse_quoted_string(handle, dst, dst_max)
     if is_array:
-        _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+        _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
-def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                  rgb: UnsafePointer[Float32, MutAnyOrigin],
                  is_array: Int32):
-    _ = mojo_scanner_scan_float(handle, rgb + 0)
-    _ = mojo_scanner_scan_float(handle, rgb + 1)
-    _ = mojo_scanner_scan_float(handle, rgb + 2)
+    _ = scanner_scan_float(handle, rgb + 0)
+    _ = scanner_scan_float(handle, rgb + 1)
+    _ = scanner_scan_float(handle, rgb + 2)
     if is_array:
-        _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+        _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
-def _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
-    var s = alloc[_PscState](1)
+def _psc_state_new() -> UnsafePointer[SceneParseState, MutAnyOrigin]:
+    var s = alloc[SceneParseState](1)
 
     s[0].ctm       = alloc[Float32](16)
     s[0].ctm_stack = alloc[Float32](PSC_CTM_DEPTH * 16)
@@ -1268,7 +1268,7 @@ def _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
 
     return s
 
-def _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_state_free(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     s[0].ctm.free()
     s[0].ctm_stack.free()
     s[0].attr_mat.free()
@@ -1318,29 +1318,29 @@ def _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].sph_al.free(); s[0].sph_rgb.free()
     s.free()
 
-def _psc_ctm_push(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_ctm_push(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var d = Int(s[0].ctm_depth)
     if d < PSC_CTM_DEPTH:
         for i in range(16):
             s[0].ctm_stack[d * 16 + i] = s[0].ctm[i]
         s[0].ctm_depth += 1
 
-def _psc_ctm_pop(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_ctm_pop(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     if s[0].ctm_depth > 0:
         s[0].ctm_depth -= 1
         var d = Int(s[0].ctm_depth)
         for i in range(16):
             s[0].ctm[i] = s[0].ctm_stack[d * 16 + i]
 
-def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                          s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                          s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, sbuf, 64)
+    _ = scanner_parse_quoted_string(handle, sbuf, 64)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "maxdepth") and _psc_type_is_int(type_buf):
@@ -1348,21 +1348,21 @@ def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin]
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     sbuf.free(); type_buf.free(); name_buf.free()
 
-def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                       s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                       s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, sbuf, 64)
+    _ = scanner_parse_quoted_string(handle, sbuf, 64)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if (_psc_streq(name_buf, "pixelsamples") or _psc_streq(name_buf, "samples")) and _psc_type_is_int(type_buf):
@@ -1370,21 +1370,21 @@ def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     sbuf.free(); type_buf.free(); name_buf.free()
 
-def _psc_handle_filter(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                      s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                      s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, sbuf, 64)
+    _ = scanner_parse_quoted_string(handle, sbuf, 64)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "xradius") and _psc_type_is_float(type_buf):
@@ -1396,21 +1396,21 @@ def _psc_handle_filter(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     sbuf.free(); type_buf.free(); name_buf.free()
 
-def _psc_handle_film(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                    s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                    s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, sbuf, 64)
+    _ = scanner_parse_quoted_string(handle, sbuf, 64)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "xresolution") and _psc_type_is_int(type_buf):
@@ -1426,22 +1426,22 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     sbuf.free(); type_buf.free(); name_buf.free()
 
-def _psc_handle_camera(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                      s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                      s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, sbuf, 64)
+    _ = scanner_parse_quoted_string(handle, sbuf, 64)
     _psc_matcopy(s[0].cam2w_raw, s[0].ctm)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "fov") and _psc_type_is_float(type_buf):
@@ -1449,27 +1449,27 @@ def _psc_handle_camera(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     sbuf.free(); type_buf.free(); name_buf.free()
 
-def _psc_handle_transform(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                         s: UnsafePointer[_PscState, MutAnyOrigin]):
-    _ = mojo_scanner_scan_char(handle, UInt8(91))  # '['
+def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                         s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    _ = scanner_scan_char(handle, UInt8(91))  # '['
     for i in range(16):
-        _ = mojo_scanner_scan_float(handle, s[0].ctm + i)
-    _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+        _ = scanner_scan_float(handle, s[0].ctm + i)
+    _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
-def _psc_handle_world_begin(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_world_begin(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     _psc_identity(s[0].ctm)
     s[0].ctm_depth = Int32(0)
 
-def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                                   s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                                   s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
-    _ = mojo_scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
+    _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
 
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
@@ -1503,13 +1503,13 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutA
     var str_val  = alloc[UInt8](64)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "type") and _psc_type_is_str(type_buf):
-            _ = mojo_scanner_parse_quoted_string(handle, str_val, 64)
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
             if _psc_streq(str_val, "conductor"):
                 mat_type = Int8(3)
             elif _psc_streq(str_val, "dielectric"):
@@ -1530,11 +1530,11 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutA
                 mat_type = Int8(1)
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
             var tmp = alloc[Float32](1)
-            _ = mojo_scanner_scan_float(handle, tmp)
+            _ = scanner_scan_float(handle, tmp)
             mat_ior = tmp[0]
             tmp.free()
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         elif (_psc_streq(name_buf, "uroughness") or _psc_streq(name_buf, "roughness")) and _psc_type_is_float(type_buf):
             mat_roughU = _psc_scan_one_float(handle, is_array)
             if _psc_streq(name_buf, "roughness"):
@@ -1559,9 +1559,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutA
             # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
             # Read the metal name string, look up precomputed F0 per channel.
             var mname = alloc[UInt8](64)
-            _ = mojo_scanner_parse_quoted_string(handle, mname, 64)
+            _ = scanner_parse_quoted_string(handle, mname, 64)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
             # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
             # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
             if _psc_streq(name_buf, "eta"):
@@ -1586,22 +1586,22 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutA
                 has_spectral_conductor = True
             mname.free()
         elif _psc_streq(name_buf, "reflectance") and type_buf[0] == UInt8(116):  # 't' = texture
-            _ = mojo_scanner_parse_quoted_string(handle, str_val, 64)
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
             # Look up str_val in tex_names
             for ti in range(Int(s[0].n_textures)):
-                if _psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
+                if psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
                     tex_idx_for_mat = Int32(ti)
                     break
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(116):  # 't' = texture
-            _ = mojo_scanner_parse_quoted_string(handle, str_val, 64)
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
             for ti in range(Int(s[0].n_textures)):
-                if _psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
+                if psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
                     normal_tex_idx_for_mat = Int32(ti)
                     break
         elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
@@ -1610,19 +1610,19 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutA
             # Two quoted material names for mix
             var tmp1 = alloc[UInt8](PSC_NAME_MAX)
             var tmp2 = alloc[UInt8](PSC_NAME_MAX)
-            _ = mojo_scanner_parse_quoted_string(handle, tmp1, PSC_NAME_MAX)
-            _ = mojo_scanner_parse_quoted_string(handle, tmp2, PSC_NAME_MAX)
+            _ = scanner_parse_quoted_string(handle, tmp1, PSC_NAME_MAX)
+            _ = scanner_parse_quoted_string(handle, tmp2, PSC_NAME_MAX)
             _psc_strncpy(mix_name1, tmp1, PSC_NAME_MAX)
             _psc_strncpy(mix_name2, tmp2, PSC_NAME_MAX)
             tmp1.free(); tmp2.free()
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
 
     var idx = Int(s[0].n_named)
@@ -1669,18 +1669,18 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutA
     trans_rgb.free(); metal_eta.free(); metal_k.free()
     mix_name1.free(); mix_name2.free()
 
-def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                               s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                               s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
-    _ = mojo_scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
+    _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
     s[0].cur_mat_idx = Int32(-1)
     for i in range(Int(s[0].n_named)):
-        if _psc_strcmp(s[0].named_names + i * PSC_NAME_MAX, mat_name) == 0:
+        if psc_strcmp(s[0].named_names + i * PSC_NAME_MAX, mat_name) == 0:
             s[0].cur_mat_idx = Int32(i)
             break
     mat_name.free()
 
-def _psc_handle_attribute_begin(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_attribute_begin(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     _psc_ctm_push(s)
     var d = Int(s[0].attr_depth)
     if d < PSC_ATTR_DEPTH:
@@ -1691,7 +1691,7 @@ def _psc_handle_attribute_begin(s: UnsafePointer[_PscState, MutAnyOrigin]):
         s[0].attr_outside_med[d] = s[0].cur_outside_medium
         s[0].attr_depth += 1
 
-def _psc_handle_attribute_end(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_attribute_end(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     _psc_ctm_pop(s)
     if s[0].attr_depth > 0:
         s[0].attr_depth -= 1
@@ -1703,10 +1703,10 @@ def _psc_handle_attribute_end(s: UnsafePointer[_PscState, MutAnyOrigin]):
         s[0].cur_inside_medium  = s[0].attr_inside_med[d]
         s[0].cur_outside_medium = s[0].attr_outside_med[d]
 
-def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                                 s: UnsafePointer[_PscState, MutAnyOrigin]):
+def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                                 s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, sbuf, 64)
+    _ = scanner_parse_quoted_string(handle, sbuf, 64)
     s[0].in_alight = Int32(1)
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
@@ -1715,7 +1715,7 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAny
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
@@ -1728,16 +1728,16 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAny
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     rgb[0] *= scale; rgb[1] *= scale; rgb[2] *= scale
     s[0].al = RGB(rgb[0], rgb[1], rgb[2])
     sbuf.free(); type_buf.free(); name_buf.free(); rgb.free()
 
-def _psc_mesh_store(
-    s:       UnsafePointer[_PscState, MutAnyOrigin],
+def store_mesh(
+    s:       UnsafePointer[SceneParseState, MutAnyOrigin],
     tmp_f:   UnsafePointer[Float32, MutAnyOrigin],
     tmp_i:   UnsafePointer[Int32, MutAnyOrigin],
     n_verts: Int32,
@@ -1751,7 +1751,7 @@ def _psc_mesh_store(
         raw_pts[v*4+2] = tmp_f[v*3+2]
         raw_pts[v*4+3] = Float32(1)
     var fin_pts = alloc[Float32](Int(n_verts) * 4)
-    mojo_transform_points(s[0].ctm, raw_pts, n_verts, fin_pts)
+    transform_points(s[0].ctm, raw_pts, n_verts, fin_pts)
     raw_pts.free()
     var vis = alloc[Int64](Int(n_tris) * 3)
     var fis = alloc[Int64](Int(n_tris))
@@ -1774,7 +1774,7 @@ def _psc_mesh_store(
 
 # ── Hair curve helpers ────────────────────────────────────────────────────────
 
-def _psc_ensure_hair_buf(s: UnsafePointer[_PscState, MutAnyOrigin]) -> Bool:
+def ensure_hair_buffer(s: UnsafePointer[SceneParseState, MutAnyOrigin]) -> Bool:
     """Lazily allocate the hair accumulation buffers. Returns False if at mesh limit."""
     if s[0].hair_inited != 0:
         return True
@@ -1788,7 +1788,7 @@ def _psc_ensure_hair_buf(s: UnsafePointer[_PscState, MutAnyOrigin]) -> Bool:
     s[0].hair_inited = Int32(1)
     return True
 
-def _psc_bspline3(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
+def bspline3_eval(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
                   u: Float32, pt_out: UnsafePointer[Float32, MutAnyOrigin]):
     """Evaluate uniform cubic B-spline at global parameter u in [0,1].
     cp: interleaved xyz control points, n_cp: number of 3D control points."""
@@ -1809,7 +1809,7 @@ def _psc_bspline3(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
     for k in range(3):
         pt_out[k] = b0*cp[seg*3+k] + b1*cp[(seg+1)*3+k] + b2*cp[(seg+2)*3+k] + b3*cp[(seg+3)*3+k]
 
-def _psc_hair_add_quad(s: UnsafePointer[_PscState, MutAnyOrigin],
+def hair_add_quad(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         p0x: Float32, p0y: Float32, p0z: Float32,
         p1x: Float32, p1y: Float32, p1z: Float32,
         ux: Float32, uy: Float32, uz: Float32, hw: Float32):
@@ -1827,8 +1827,8 @@ def _psc_hair_add_quad(s: UnsafePointer[_PscState, MutAnyOrigin],
     s[0].hair_nv += Int32(4)
     s[0].hair_nt += Int32(2)
 
-def _psc_handle_curve_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                            s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                            s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Parse Shape "curve" B-spline strand and append cross-ribbon triangles."""
     var MAX_CP = 512
     var cp_buf = alloc[Float32](MAX_CP * 3)
@@ -1838,30 +1838,30 @@ def _psc_handle_curve_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_type_is_float(type_buf) and _psc_streq(name_buf, "P"):
-            var n_f = mojo_scanner_scan_floats(handle, cp_buf, Int32(MAX_CP * 3))
+            var n_f = scanner_scan_floats(handle, cp_buf, Int32(MAX_CP * 3))
             n_cp = n_f / Int32(3)
-            if is_array: _ = mojo_scanner_scan_char(handle, UInt8(93))
+            if is_array: _ = scanner_scan_char(handle, UInt8(93))
         elif _psc_type_is_float(type_buf) and (_psc_streq(name_buf, "width") or _psc_streq(name_buf, "width0")):
             width = _psc_scan_one_float(handle, is_array)
         else:
             _psc_skip_value(handle, type_buf, is_array)
-            if is_array: _ = mojo_scanner_scan_char(handle, UInt8(93))
+            if is_array: _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     type_buf.free(); name_buf.free(); ia.free()
     if n_cp < Int32(4):
         cp_buf.free(); return
-    if not _psc_ensure_hair_buf(s):
+    if not ensure_hair_buffer(s):
         cp_buf.free(); return
     # Evaluate HAIR_EVAL_N uniformly-spaced points along the B-spline
     var eval_pts = alloc[Float32](HAIR_EVAL_N * 3)
     for step in range(HAIR_EVAL_N):
         var u = Float32(step) / Float32(HAIR_EVAL_N - 1)
-        _psc_bspline3(cp_buf, Int(n_cp), u, eval_pts + step * 3)
+        bspline3_eval(cp_buf, Int(n_cp), u, eval_pts + step * 3)
     cp_buf.free()
     # Apply current CTM to evaluation points
     var raw4 = alloc[Float32](HAIR_EVAL_N * 4)
@@ -1871,7 +1871,7 @@ def _psc_handle_curve_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin
         raw4[step*4+1] = eval_pts[step*3+1]
         raw4[step*4+2] = eval_pts[step*3+2]
         raw4[step*4+3] = Float32(1)
-    mojo_transform_points(s[0].ctm, raw4, Int32(HAIR_EVAL_N), xfm4)
+    transform_points(s[0].ctm, raw4, Int32(HAIR_EVAL_N), xfm4)
     raw4.free()
     # Tessellate segments into cross-ribbon geometry
     var hw = width / Float32(2)
@@ -1892,17 +1892,17 @@ def _psc_handle_curve_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin
         ux /= ulen; uy /= ulen; uz /= ulen
         # Second perpendicular: V = T x U
         var vx = ty*uz - tz*uy; var vy = tz*ux - tx*uz; var vz = tx*uy - ty*ux
-        _psc_hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, ux,uy,uz, hw)
-        _psc_hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, vx,vy,vz, hw)
+        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, ux,uy,uz, hw)
+        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, vx,vy,vz, hw)
     xfm4.free(); eval_pts.free()
 
-def _psc_flush_hair(s: UnsafePointer[_PscState, MutAnyOrigin]):
+def flush_hair(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Flush all accumulated hair strands into a single scene mesh."""
     if s[0].hair_inited == 0 or s[0].hair_nt == 0:
         return
     var saved_mat = s[0].cur_mat_idx
     s[0].cur_mat_idx = s[0].hair_mat
-    _psc_mesh_store(s, s[0].hair_pts, s[0].hair_idx, s[0].hair_nv, s[0].hair_nt)
+    store_mesh(s, s[0].hair_pts, s[0].hair_idx, s[0].hair_nv, s[0].hair_nt)
     s[0].cur_mat_idx = saved_mat
     # Mark as flushed — but DON'T free: buffers will be freed by _psc_state_free
     # (hair_inited stays 1 so the free path in _psc_state_free still runs)
@@ -1910,13 +1910,13 @@ def _psc_flush_hair(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].hair_nt = Int32(0)
 
 
-def _psc_handle_make_named_medium(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                                  s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                                  s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Parse MakeNamedMedium \"name\" [params].
     Supports type = \"homogeneous\" with rgb sigma_a, rgb sigma_s, float g, float scale.
     """
     var name_buf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, name_buf, 64)
+    _ = scanner_parse_quoted_string(handle, name_buf, 64)
     var type_buf  = alloc[UInt8](64)
     var val_buf   = alloc[UInt8](64)
     var sa = alloc[Float32](3); sa[0] = Float32(0); sa[1] = Float32(0); sa[2] = Float32(0)
@@ -1927,13 +1927,13 @@ def _psc_handle_make_named_medium(handle: UnsafePointer[PbrtScanner_Mojo, MutAny
     var ia = alloc[Int32](1)
     while True:
         ia[0] = Int32(0)
-        var ok = mojo_scanner_parse_param_header(handle, type_buf, Int32(64), val_buf, Int32(64), ia)
+        var ok = scanner_parse_param_header(handle, type_buf, Int32(64), val_buf, Int32(64), ia)
         if ok == Int32(0):
             break
         var is_arr = ia[0]
         if _psc_streq(val_buf, "type"):
             var tmp = alloc[UInt8](64)
-            _ = mojo_scanner_parse_quoted_string(handle, tmp, 64)
+            _ = scanner_parse_quoted_string(handle, tmp, 64)
             if _psc_streq(tmp, "homogeneous"):
                 is_hom = True
             tmp.free()
@@ -1948,7 +1948,7 @@ def _psc_handle_make_named_medium(handle: UnsafePointer[PbrtScanner_Mojo, MutAny
         else:
             _psc_skip_value(handle, type_buf, is_arr)
             if is_arr:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']' 
+                _ = scanner_scan_char(handle, UInt8(93))  # ']' 
     if is_hom:
         var n = Int(s[0].n_mediums)
         if n < 32:
@@ -1968,7 +1968,7 @@ def _psc_handle_make_named_medium(handle: UnsafePointer[PbrtScanner_Mojo, MutAny
     name_buf.free(); sa.free(); ss.free(); type_buf.free(); val_buf.free()
 
 
-def _psc_lookup_medium(s: UnsafePointer[_PscState, MutAnyOrigin],
+def lookup_medium(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                        name: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
     """Return medium index for name, or -1 for empty string / not found."""
     if name[0] == UInt8(0):
@@ -1987,20 +1987,20 @@ def _psc_lookup_medium(s: UnsafePointer[_PscState, MutAnyOrigin],
     return Int32(-1)
 
 
-def _psc_handle_medium_interface(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                                 s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                                 s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Parse MediumInterface \"inside_name\" \"outside_name\" and bind to cur_mat_idx."""
     var inside_buf  = alloc[UInt8](64)
     var outside_buf = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, inside_buf, 64)
-    _ = mojo_scanner_parse_quoted_string(handle, outside_buf, 64)
+    _ = scanner_parse_quoted_string(handle, inside_buf, 64)
+    _ = scanner_parse_quoted_string(handle, outside_buf, 64)
     # Set attribute-state medium interface (applied to shapes emitted in this scope)
-    s[0].cur_inside_medium  = _psc_lookup_medium(s, inside_buf)
-    s[0].cur_outside_medium = _psc_lookup_medium(s, outside_buf)
+    s[0].cur_inside_medium  = lookup_medium(s, inside_buf)
+    s[0].cur_outside_medium = lookup_medium(s, outside_buf)
     inside_buf.free(); outside_buf.free()
 
-def _psc_handle_sphere_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                             s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                             s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     """Parse Shape "sphere" and store as analytical Sphere_C.
     The sphere center is the CTM translation column; radius is the parsed float.
     """
@@ -2009,7 +2009,7 @@ def _psc_handle_sphere_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_type_is_float(type_buf) and _psc_streq(name_buf, "radius"):
@@ -2017,9 +2017,9 @@ def _psc_handle_sphere_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     type_buf.free(); name_buf.free()
 
@@ -2044,10 +2044,10 @@ def _psc_handle_sphere_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
     s[0].sph_rgb[n] = s[0].al
     s[0].n_spheres  = Int32(n + 1)
 
-def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                     s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                     s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var shape_type = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, shape_type, 64)
+    _ = scanner_parse_quoted_string(handle, shape_type, 64)
 
     var is_tri = _psc_streq(shape_type, "trianglemesh")
     var is_ply = _psc_streq(shape_type, "plymesh")
@@ -2056,11 +2056,11 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     shape_type.free()
 
     if is_curve:
-        _psc_handle_curve_shape(handle, s)
+        handle_curve_shape(handle, s)
         return
 
     if is_sphere:
-        _psc_handle_sphere_shape(handle, s)
+        handle_sphere_shape(handle, s)
         return
 
     if not is_tri and not is_ply:
@@ -2079,19 +2079,19 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         var name_buf = alloc[UInt8](128)
         var ia = alloc[Int32](1)
         ia[0] = Int32(0)
-        var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
         while found != 0:
             var is_array = ia[0]
             if _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
-                _ = mojo_scanner_parse_quoted_string(handle, ply_filename, PSC_FILE_MAX)
+                _ = scanner_parse_quoted_string(handle, ply_filename, PSC_FILE_MAX)
                 if is_array:
-                    _ = mojo_scanner_scan_char(handle, UInt8(93))
+                    _ = scanner_scan_char(handle, UInt8(93))
             else:
                 _psc_skip_value(handle, type_buf, is_array)
                 if is_array:
-                    _ = mojo_scanner_scan_char(handle, UInt8(93))
+                    _ = scanner_scan_char(handle, UInt8(93))
             ia[0] = Int32(0)
-            found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+            found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
         ia.free()
         type_buf.free(); name_buf.free()
 
@@ -2115,7 +2115,7 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         var ply_has_uvs = alloc[Int32](1)
         ply_uvs[0] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
         ply_has_uvs[0] = Int32(0)
-        var ok = mojo_load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs)
+        var ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs)
         full_path.free()
         if ok == 0:
             ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
@@ -2132,7 +2132,7 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             return
         var tmp_f2 = ply_pts[0]
         var tmp_i2 = ply_idx[0]
-        _psc_mesh_store(s, tmp_f2, tmp_i2, nv, nt)
+        store_mesh(s, tmp_f2, tmp_i2, nv, nt)
         # Store UVs for this mesh
         var cur_mesh_idx = Int(s[0].n_meshes) - 1
         if ply_has_uvs[0] != 0:
@@ -2156,7 +2156,7 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         var is_P  = (_psc_streq(name_buf, "P") and _psc_type_is_float(type_buf))
@@ -2165,31 +2165,31 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
 
         if is_P:
             if is_array:
-                n_pts = mojo_scanner_scan_floats(handle, tmp_f, 65536)
-                _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+                n_pts = scanner_scan_floats(handle, tmp_f, 65536)
+                _ = scanner_scan_char(handle, UInt8(93))  # ']'
             else:
-                _ = mojo_scanner_scan_float(handle, tmp_f)
+                _ = scanner_scan_float(handle, tmp_f)
                 n_pts = Int32(3)
         elif is_I:
             if is_array:
-                n_idx = mojo_scanner_scan_ints(handle, tmp_i, 16384)
-                _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+                n_idx = scanner_scan_ints(handle, tmp_i, 16384)
+                _ = scanner_scan_char(handle, UInt8(93))  # ']'
             else:
-                _ = mojo_scanner_scan_int(handle, tmp_i)
+                _ = scanner_scan_int(handle, tmp_i)
                 n_idx = Int32(1)
         elif is_UV:
             if is_array:
-                n_uv = mojo_scanner_scan_floats(handle, tmp_uv, 65536)
-                _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+                n_uv = scanner_scan_floats(handle, tmp_uv, 65536)
+                _ = scanner_scan_char(handle, UInt8(93))  # ']'
             else:
-                _ = mojo_scanner_scan_float(handle, tmp_uv)
+                _ = scanner_scan_float(handle, tmp_uv)
                 n_uv = Int32(2)
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     type_buf.free(); name_buf.free()
 
@@ -2200,7 +2200,7 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         tmp_f.free(); tmp_i.free(); tmp_uv.free()
         return
 
-    _psc_mesh_store(s, tmp_f, tmp_i, n_verts, n_tris)
+    store_mesh(s, tmp_f, tmp_i, n_verts, n_tris)
     # Store UVs for inline trianglemesh
     var cur_mesh_idx = Int(s[0].n_meshes) - 1
     if n_uv >= n_verts * Int32(2):
@@ -2213,15 +2213,15 @@ def _psc_handle_shape(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         s[0].mesh_uvs_list[cur_mesh_idx] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
     tmp_f.free(); tmp_i.free(); tmp_uv.free()
 
-def _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                       s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                       s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     # Texture <name> <type> <class> [params]
     var tex_name = alloc[UInt8](PSC_NAME_MAX)
-    _ = mojo_scanner_parse_quoted_string(handle, tex_name, PSC_NAME_MAX)
+    _ = scanner_parse_quoted_string(handle, tex_name, PSC_NAME_MAX)
     var tex_type = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, tex_type, 64)
+    _ = scanner_parse_quoted_string(handle, tex_type, 64)
     var tex_class = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, tex_class, 64)
+    _ = scanner_parse_quoted_string(handle, tex_class, 64)
     if not _psc_streq(tex_class, "imagemap"):
         tex_name.free(); tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
@@ -2232,13 +2232,13 @@ def _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
     var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
-            _ = mojo_scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
+            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
             var idx = Int(s[0].n_textures)
             if idx < PSC_MAX_TEX:
                 # Store name
@@ -2258,17 +2258,17 @@ def _psc_handle_texture(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     tex_name.free(); tex_type.free(); tex_class.free()
     type_buf.free(); name_buf.free(); str_val.free()
 
-def _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-                             s: UnsafePointer[_PscState, MutAnyOrigin]):
+def handle_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                             s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var ltype = alloc[UInt8](64)
-    _ = mojo_scanner_parse_quoted_string(handle, ltype, 64)
+    _ = scanner_parse_quoted_string(handle, ltype, 64)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
@@ -2280,7 +2280,7 @@ def _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
     var scale    = Float32(1.0)
     var ia = alloc[Int32](1)
     ia[0] = Int32(0)
-    var found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     while found != 0:
         var is_array = ia[0]
         if (_psc_streq(name_buf, "L") or _psc_streq(name_buf, "I")) and _psc_type_is_float(type_buf):
@@ -2293,15 +2293,15 @@ def _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
         elif _psc_streq(name_buf, "from") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, xyz, is_array)   # reuse xyz for point-light position
         elif _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
-            _ = mojo_scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
+            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
-                _ = mojo_scanner_scan_char(handle, UInt8(93))
+                _ = scanner_scan_char(handle, UInt8(93))
         ia[0] = Int32(0)
-        found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
 
     comptime MAX_LIGHTS = 64
@@ -2325,7 +2325,7 @@ def _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
             var raw = alloc[Float32](4)
             raw[0] = xyz[0]; raw[1] = xyz[1]; raw[2] = xyz[2]; raw[3] = Float32(1)
             var fin = alloc[Float32](4)
-            mojo_transform_points(s[0].ctm, raw, Int32(1), fin)
+            transform_points(s[0].ctm, raw, Int32(1), fin)
             s[0].pt_pos[idx*3+0] = fin[0]
             s[0].pt_pos[idx*3+1] = fin[1]
             s[0].pt_pos[idx*3+2] = fin[2]
@@ -2378,15 +2378,15 @@ def _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigi
 
     ltype.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free(); xyz.free()
 
-def _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
-              s: UnsafePointer[_PscState, MutAnyOrigin]):
+def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+              s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var kw_buf = alloc[UInt8](256)
     var ws_delims = alloc[UInt8](4)
     ws_delims[0] = UInt8(32); ws_delims[1] = UInt8(9)
     ws_delims[2] = UInt8(10); ws_delims[3] = UInt8(13)
 
-    while mojo_scanner_is_at_end(handle) == 0:
-        var n = mojo_scanner_scan_token(handle, ws_delims, 4, kw_buf, 256)
+    while scanner_is_at_end(handle) == 0:
+        var n = scanner_scan_token(handle, ws_delims, 4, kw_buf, 256)
         if n < 0:
             break
         if n == 0:
@@ -2427,7 +2427,7 @@ def _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         elif _psc_streq(kw_buf, "ObjectBegin"):
             # Start of an object definition — skip shapes inside
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
-            _ = mojo_scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
+            _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
             obj_name.free()
             s[0].object_depth += 1
         elif _psc_streq(kw_buf, "ObjectEnd"):
@@ -2436,11 +2436,11 @@ def _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
         elif _psc_streq(kw_buf, "ObjectInstance"):
             # TODO: implement proper object instancing
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
-            _ = mojo_scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
+            _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
             obj_name.free()
         elif _psc_streq(kw_buf, "Shape"):
             if s[0].object_depth == 0:
-                _psc_handle_shape(handle, s)
+                handle_shape(handle, s)
             else:
                 _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "AttributeBegin"):
@@ -2454,15 +2454,15 @@ def _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                 _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "LightSource"):
             if s[0].object_depth == 0:
-                _psc_handle_light_source(handle, s)
+                handle_light_source(handle, s)
             else:
                 _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "Texture"):
-            _psc_handle_texture(handle, s)
+            handle_texture(handle, s)
         elif _psc_streq(kw_buf, "Include") or _psc_streq(kw_buf, "Import"):
             # Read filename, resolve relative to scene_dir, parse sub-file recursively
             var inc_name = alloc[UInt8](PSC_FILE_MAX)
-            _ = mojo_scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
+            _ = scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
             var inc_path = alloc[UInt8](PSC_FILE_MAX * 2)
             var dlen = 0
             while s[0].scene_dir[dlen] != UInt8(0):
@@ -2473,10 +2473,10 @@ def _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
                 inc_path[dlen + fi] = inc_name[fi]
                 fi += 1
             inc_path[dlen + fi] = UInt8(0)
-            var sub_handle = mojo_scanner_new(inc_path)
-            if mojo_scanner_is_at_end(sub_handle) == 0:
-                _psc_parse(sub_handle, s)
-            mojo_scanner_free(sub_handle)
+            var sub_handle = scanner_open(inc_path)
+            if scanner_is_at_end(sub_handle) == 0:
+                parse_scene_file(sub_handle, s)
+            scanner_free(sub_handle)
             inc_name.free(); inc_path.free()
         elif _psc_streq(kw_buf, "Material"):
             # Anonymous inline material: treat like MakeNamedMaterial under a temp name "_mat"
@@ -2485,29 +2485,29 @@ def _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             # The name was parsed as part of make_named_material; find the last added
             s[0].cur_mat_idx = s[0].n_named - Int32(1)
         elif _psc_streq(kw_buf, "MakeNamedMedium"):
-            _psc_handle_make_named_medium(handle, s)
+            handle_named_medium(handle, s)
         elif _psc_streq(kw_buf, "MediumInterface"):
-            _psc_handle_medium_interface(handle, s)
+            handle_medium_interface(handle, s)
         elif _psc_streq(kw_buf, "ConcatTransform"):
             # ConcatTransform [16 floats] — multiply CTM on right
-            _ = mojo_scanner_scan_char(handle, UInt8(91))  # '['
+            _ = scanner_scan_char(handle, UInt8(91))  # '['
             var tmp = alloc[Float32](16)
             for i in range(16):
-                _ = mojo_scanner_scan_float(handle, tmp + i)
-            _ = mojo_scanner_scan_char(handle, UInt8(93))  # ']'
+                _ = scanner_scan_float(handle, tmp + i)
+            _ = scanner_scan_char(handle, UInt8(93))  # ']'
             var result = alloc[Float32](16)
-            mojo_matrix_multiply(s[0].ctm, tmp, result)
+            matrix_multiply(s[0].ctm, tmp, result)
             for i in range(16):
                 s[0].ctm[i] = result[i]
             tmp.free(); result.free()
         else:
-            _ = mojo_scanner_parse_quoted_string(handle, kw_buf, 256)
+            _ = scanner_parse_quoted_string(handle, kw_buf, 256)
             _psc_skip_params(handle)
 
     kw_buf.free()
     ws_delims.free()
 
-def _psc_make_perspective(fov_deg: Float32, near: Float32,
+def make_perspective_matrix(fov_deg: Float32, near: Float32,
                          dst: UnsafePointer[Float32, MutAnyOrigin]):
     var half_rad = fov_deg * PI / Float32(360)
     var inv_tan = Float32(1) / tan(half_rad)
@@ -2522,7 +2522,7 @@ def _psc_make_perspective(fov_deg: Float32, near: Float32,
     dst[11] = Float32(1)       # M[3,2]
     dst[14] = t23              # M[2,3]
 
-def _psc_make_screen_to_raster(fw: Int32, fh: Int32,
+def make_screen_to_raster(fw: Int32, fh: Int32,
                                smin_x: Float32, smax_x: Float32,
                                smin_y: Float32, smax_y: Float32,
                                dst: UnsafePointer[Float32, MutAnyOrigin]):
@@ -2539,12 +2539,12 @@ def _psc_make_screen_to_raster(fw: Int32, fh: Int32,
     dst[12] = tx           # M[0,3]
     dst[13] = ty           # M[1,3]
 
-def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
+def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                  psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
 
     # ---- Camera matrices ----
     var c2w = alloc[Float32](16)
-    _ = mojo_matrix_invert(s[0].cam2w_raw, c2w)
+    _ = matrix_invert(s[0].cam2w_raw, c2w)
     psc[0].camera_to_world = c2w
 
     # ---- DEBUG: scene summary ----
@@ -2590,7 +2590,7 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     print("=== END DEBUG ===")
 
     var cts = alloc[Float32](16)
-    _psc_make_perspective(s[0].camera_fov, Float32(0.01), cts)
+    make_perspective_matrix(s[0].camera_fov, Float32(0.01), cts)
 
     var frame = Float32(s[0].film_w) / Float32(s[0].film_h)
     var smin_x: Float32; var smax_x: Float32
@@ -2602,17 +2602,17 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
         smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
 
     var str_mat = alloc[Float32](16)
-    _psc_make_screen_to_raster(s[0].film_w, s[0].film_h,
+    make_screen_to_raster(s[0].film_w, s[0].film_h,
                                 smin_x, smax_x, smin_y, smax_y, str_mat)
 
     var rts = alloc[Float32](16)
-    _ = mojo_matrix_invert(str_mat, rts)    # rasterToScreen
+    _ = matrix_invert(str_mat, rts)    # rasterToScreen
 
     var cts_inv = alloc[Float32](16)
-    _ = mojo_matrix_invert(cts, cts_inv)    # inverse(cameraToScreen)
+    _ = matrix_invert(cts, cts_inv)    # inverse(cameraToScreen)
 
     var r2c = alloc[Float32](16)
-    mojo_matrix_multiply(cts_inv, rts, r2c) # rasterToCamera
+    matrix_multiply(cts_inv, rts, r2c) # rasterToCamera
     psc[0].raster_to_camera = r2c
 
     cts.free(); str_mat.free(); rts.free(); cts_inv.free()
@@ -2654,9 +2654,9 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             var idx1 = Int32(0)  # default to first material
             var idx2 = Int32(0)
             for j in range(n_regular):
-                if _psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m1_name) == 0:
+                if psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m1_name) == 0:
                     idx1 = Int32(j)
-                if _psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m2_name) == 0:
+                if psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m2_name) == 0:
                     idx2 = Int32(j)
             # Pack both indices into tex_idx: high 16 bits = idx2, low 16 bits = idx1
             mats[i].tex_idx = (idx2 << 16) | (idx1 & Int32(0xFFFF))
@@ -2838,7 +2838,7 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var max_bvh_nodes = Int(total_tris) * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_bvh_nodes)
     var bvh_order = alloc[Int32](Int(total_tris))
-    var node_count = mojo_build_bvh2(prim_bounds, total_tris, bvh_nodes, bvh_order)
+    var node_count = build_bvh2(prim_bounds, total_tris, bvh_nodes, bvh_order)
 
     prim_bounds.free()
 
@@ -2894,8 +2894,8 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var n_base4 = log2_dim + log4_spp
 
     # ---- Filter norms ----
-    var norm_x = mojo_gaussian_norm(s[0].filter_support_x, s[0].filter_sigma)
-    var norm_y = mojo_gaussian_norm(s[0].filter_support_y, s[0].filter_sigma)
+    var norm_x = gaussian_norm(s[0].filter_support_x, s[0].filter_sigma)
+    var norm_y = gaussian_norm(s[0].filter_support_y, s[0].filter_sigma)
     var fweight = (Float32(2) * norm_x - Float32(1)) * (Float32(2) * norm_y - Float32(1))
 
     # ---- RNG seed from time ----
@@ -3067,7 +3067,7 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
             if is_identity:
                 _psc_identity(w2l)
             else:
-                _ = mojo_matrix_invert(light_ctm, w2l)
+                _ = matrix_invert(light_ctm, w2l)
             il_buf[i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
         psc[0].infinite_lights = il_buf
     else:
@@ -3112,7 +3112,7 @@ def _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
 def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
                     ) -> UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]:
     external_call["createTextureSystem", NoneType]()
-    var handle = mojo_scanner_new(path)
+    var handle = scanner_open(path)
     if handle[0].is_at_end != 0:
         var psc = alloc[ParsedScene_Mojo](1)
         psc[0].mesh_count = Int32(0)
@@ -3144,13 +3144,13 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
         s[0].scene_dir[last_slash + 1] = UInt8(0)
     else:
         s[0].scene_dir[0] = UInt8(0)
-    _psc_parse(handle, s)
-    mojo_scanner_free(handle)
+    parse_scene_file(handle, s)
+    scanner_free(handle)
     # Flush accumulated hair curve geometry into a single mesh (if any)
-    _psc_flush_hair(s)
+    flush_hair(s)
 
     var psc = alloc[ParsedScene_Mojo](1)
-    _psc_finalize(s, psc)
+    finalize_scene(s, psc)
     _psc_state_free(s)
     return psc
 

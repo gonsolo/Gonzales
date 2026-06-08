@@ -5,7 +5,7 @@ from std.collections import List
 # Joint bilateral denoiser guided by albedo.
 # beauty and albedo are width*height*3 float arrays (R,G,B interleaved, row-major).
 # output must hold width*height*3 floats. radius is the filter half-width (window = 2r+1).
-def mojo_denoise(
+def denoise(
     beauty: UnsafePointer[Float32, MutAnyOrigin],
     albedo: UnsafePointer[Float32, MutAnyOrigin],
     width: Int32, height: Int32,
@@ -74,7 +74,7 @@ def mojo_denoise(
 # pixels: width*height*3 floats, R,G,B interleaved, row-major.
 # filename: null-terminated UTF-8 string.
 # Returns 1 on success, 0 on failure.
-def mojo_write_image(
+def write_image(
     pixels: UnsafePointer[Float32, MutAnyOrigin],
     width: Int32, height: Int32,
     filename: UnsafePointer[UInt8, MutAnyOrigin],
