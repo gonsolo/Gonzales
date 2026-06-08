@@ -1965,10 +1965,9 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         type_buf.free(); name_buf.free()
 
         var full_path = alloc[UInt8](PSC_FILE_MAX * 2)
-        var dir_len = 0
-        while s[0].scene_dir.unsafe_ptr()[dir_len] != UInt8(0):
-            full_path[dir_len] = s[0].scene_dir.unsafe_ptr()[dir_len]
-            dir_len += 1
+        var dir_len = len(s[0].scene_dir)
+        for ki in range(dir_len):
+            full_path[ki] = s[0].scene_dir.unsafe_ptr()[ki]
         var fn_i = 0
         while ply_filename[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
             full_path[dir_len + fn_i] = ply_filename[fn_i]
@@ -1985,11 +1984,13 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         ply_uvs[0] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
         ply_has_uvs[0] = Int32(0)
         var ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs)
-        full_path.free()
         if ok == 0:
+            print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_immutable()))
+            full_path.free()
             ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
             ply_uvs.free(); ply_has_uvs.free()
             return
+        full_path.free()
         var nv = ply_nv[0]
         var nt = ply_nt[0]
         if nv <= 0 or nt <= 0:
@@ -2281,10 +2282,9 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             var inc_name = alloc[UInt8](PSC_FILE_MAX)
             _ = scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
             var inc_path = alloc[UInt8](PSC_FILE_MAX * 2)
-            var dlen = 0
-            while s[0].scene_dir.unsafe_ptr()[dlen] != UInt8(0):
-                inc_path[dlen] = s[0].scene_dir.unsafe_ptr()[dlen]
-                dlen += 1
+            var dlen = len(s[0].scene_dir)
+            for ki in range(dlen):
+                inc_path[ki] = s[0].scene_dir.unsafe_ptr()[ki]
             var fi = 0
             while inc_name[fi] != UInt8(0) and dlen + fi < PSC_FILE_MAX * 2 - 1:
                 inc_path[dlen + fi] = inc_name[fi]
