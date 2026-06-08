@@ -51,6 +51,45 @@ def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[
     return SIMD[DType.float32, 2](u, v)
 
 @always_inline
+def _equal_area_square_to_sphere(u: Float32, v: Float32) -> SIMD[DType.float32, 3]:
+    """Inverse of _equal_area_sphere_to_square: [0,1]^2 UV -> unit sphere direction."""
+    var uu = Float32(2) * u - Float32(1)
+    var vv = Float32(2) * v - Float32(1)
+    var up = uu if uu >= Float32(0) else -uu
+    var vp = vv if vv >= Float32(0) else -vv
+    var signed_dist = Float32(1) - (up + vp)
+    var d = signed_dist if signed_dist >= Float32(0) else -signed_dist
+    var r = Float32(1) - d
+    var phi: Float32
+    if r == Float32(0):
+        phi = Float32(0)
+    elif up >= vp:
+        phi = (vp / r) * PI / Float32(4)
+    else:
+        phi = ((vp - up) / r + Float32(1)) * PI / Float32(4)
+    var r2 = r * r
+    var z = Float32(1) - r2
+    if signed_dist < Float32(0): z = -z
+    var cp = cos(phi)
+    var sp = sin(phi)
+    if uu < Float32(0): cp = -cp
+    if vv < Float32(0): sp = -sp
+    var xy_scale = r * sqrt(max(Float32(0), Float32(2) - r2))
+    return SIMD[DType.float32, 3](cp * xy_scale, sp * xy_scale, z)
+
+@always_inline
+def _lower_bound(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
+    """Returns first index i in [lo, hi) s.t. arr[i] >= val. Returns hi if all < val."""
+    var l = lo; var h = hi
+    while l < h:
+        var m = (l + h) >> 1
+        if arr[m] < val:
+            l = m + 1
+        else:
+            h = m
+    return l
+
+@always_inline
 def _srgb_to_linear(c: Float32) -> Float32:
     if c <= Float32(0.04045):
         return c / Float32(12.92)
@@ -1561,71 +1600,88 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     comptime if not use_gpu:
         for inf_i in range(infiniteLightCount):
             var ilight = infiniteLights[inf_i]
-            # Cosine-weighted hemisphere sample for NEE direction
-            var u1_env = pcg.next_float()
-            var u2_env = pcg.next_float()
-            var r_env = sqrt(u1_env)
-            var theta_env = TWO_PI * u2_env
-            var x_env = r_env * cos(theta_env)
-            var y_env = r_env * sin(theta_env)
-            var z2_env = Float32(1.0) - u1_env
-            var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
-            var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-            var a_env = Float32(-1.0) / (sign_env + normal[2])
-            var b_env = normal[0] * normal[1] * a_env
-            var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
-            var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
-            var env_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
-            var env_dlen = dot(env_dir, env_dir)
-            if env_dlen > Float32(0.0):
-                env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
-            var cos_env = dot(normal, env_dir)
-            if cos_env > Float32(0.0):
-                # Transform direction to light space for env-map lookup
-                var w2l = ilight.world_to_light
-                var ld_x = w2l[0]*env_dir[0] + w2l[4]*env_dir[1] + w2l[8]*env_dir[2]
-                var ld_y = w2l[1]*env_dir[0] + w2l[5]*env_dir[1] + w2l[9]*env_dir[2]
-                var ld_z = w2l[2]*env_dir[0] + w2l[6]*env_dir[1] + w2l[10]*env_dir[2]
-                var env_rgb: RGB
-                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and ilight.cdf_w > Int32(0):
-                    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-                    var ea_uv_nee = _equal_area_sphere_to_square(ld_x, ld_y, ld_z)
-                    var u_env = ea_uv_nee[0]; var v_env = ea_uv_nee[1]
-                    var fx = u_env * Float32(iw) - Float32(0.5)
-                    var fy = v_env * Float32(ih) - Float32(0.5)
-                    var x0 = Int(max(Float32(0), min(Float32(iw - 1), floor(fx))))
-                    var y0 = Int(max(Float32(0), min(Float32(ih - 1), floor(fy))))
-                    var x1 = min(x0 + 1, iw - 1)
-                    var y1 = min(y0 + 1, ih - 1)
-                    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
-                    var r00 = ilight.pixels_ptr[(y0*iw+x0)*3+0]; var g00 = ilight.pixels_ptr[(y0*iw+x0)*3+1]; var b00 = ilight.pixels_ptr[(y0*iw+x0)*3+2]
-                    var r10 = ilight.pixels_ptr[(y0*iw+x1)*3+0]; var g10 = ilight.pixels_ptr[(y0*iw+x1)*3+1]; var b10 = ilight.pixels_ptr[(y0*iw+x1)*3+2]
-                    var r01 = ilight.pixels_ptr[(y1*iw+x0)*3+0]; var g01 = ilight.pixels_ptr[(y1*iw+x0)*3+1]; var b01 = ilight.pixels_ptr[(y1*iw+x0)*3+2]
-                    var r11 = ilight.pixels_ptr[(y1*iw+x1)*3+0]; var g11 = ilight.pixels_ptr[(y1*iw+x1)*3+1]; var b11 = ilight.pixels_ptr[(y1*iw+x1)*3+2]
-                    var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
-                    var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
-                    var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
-                    env_rgb = RGB(tr, tg, tb) * ilight.scale
+            var w2l = ilight.world_to_light
+            var env_dir: SIMD[DType.float32, 3]
+            var env_rgb: RGB
+            var pdf_light: Float32
+
+            if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+                # ── CDF importance sampling ──────────────────────────────────
+                var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+                var u1_env = pcg.next_float()
+                var u2_env = pcg.next_float()
+
+                # 1. Sample row from marginal CDF
+                var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
+                row_idx = min(row_idx, ih - 1)
+                var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+
+                # 2. Sample column from conditional CDF for this row
+                var cond_base = (ih + 1) + row_idx * (iw + 1)
+                var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
+                col_idx = min(col_idx, iw - 1)
+                var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+
+                # 3. Texel center UV → light-space direction
+                var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+                var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+                var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
+
+                # 4. Rotate to world space: L2W = transpose(W2L) for pure rotation
+                var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
+                var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
+                var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
+                env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
+
+                # 5. Lookup env-map value at sampled pixel
+                var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+                var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+                var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+                var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+                var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+                env_rgb = RGB(pr, pg, pb) * ilight.scale
+
+                # 6. PDF in solid angle: dp_row * dp_col * (iw * ih) / (4π)
+                if dp_row > Float32(0) and dp_col > Float32(0):
+                    pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
                 else:
-                    env_rgb = ilight.scale
-                if not env_rgb.is_black():
-                    # pdf_light for cosine-weighted hemisphere = cos_env / pi
-                    # same as pdf_bsdf, so MIS weight = 0.5 for equal pdfs
-                    # Actually: we sample with cosine-weighted, so pdf = cos/pi
-                    # The light pdf (if uniform over sphere) = 1/(4pi)
-                    # For now, use simple weight = 1 (no MIS, just NEE)
-                    var pdf_nee = cos_env / PI
-                    var weight = alb * env_rgb * (cos_env / (pdf_nee * PI))
-                    # weight simplifies to alb * env_rgb
-                    var contrib = path_ptr[].throughput * alb * env_rgb
-                    # Shadow ray to infinity
-                    var t_max_env = Float32(100000.0)
-                    comptime if enqueue_shadow:
-                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                    else:
-                        var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
-                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, t_max_env):
-                            path_ptr[].estimate += contrib
+                    pdf_light = INV_FOUR_PI
+            else:
+                # ── Fallback: cosine-weighted hemisphere (no CDF) ─────────────
+                var u1_env = pcg.next_float()
+                var u2_env = pcg.next_float()
+                var r_env = sqrt(u1_env)
+                var theta_env = TWO_PI * u2_env
+                var x_env = r_env * cos(theta_env)
+                var y_env = r_env * sin(theta_env)
+                var z2_env = Float32(1.0) - u1_env
+                var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
+                var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+                var a_env = Float32(-1.0) / (sign_env + normal[2])
+                var b_env = normal[0] * normal[1] * a_env
+                var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
+                var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
+                env_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
+                var env_dlen = dot(env_dir, env_dir)
+                if env_dlen > Float32(0.0):
+                    env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
+                env_rgb = ilight.scale
+                pdf_light = INV_FOUR_PI
+
+            # ── MIS + shadow ray ──────────────────────────────────────────────
+            var cos_env = dot(normal, env_dir)
+            if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
+                var pdf_bsdf_nee = cos_env / PI
+                var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
+                var contrib = path_ptr[].throughput * alb * env_rgb * (cos_env / (PI * pdf_light)) * mis_w
+                var t_max_env = Float32(100000.0)
+                comptime if enqueue_shadow:
+                    shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+                else:
+                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, t_max_env):
+                        path_ptr[].estimate += contrib
+
 
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()

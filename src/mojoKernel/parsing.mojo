@@ -824,6 +824,7 @@ def _psc_streq(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral) -> Bool:
         if ai == UInt8(0):
             return True
         i += 1
+    # unreachable — loop always returns via the ai==0 or ai!=bi branches above
 
 def _psc_strncpy(dst: UnsafePointer[UInt8, MutAnyOrigin],
                 src: UnsafePointer[UInt8, MutAnyOrigin], n: Int32):
