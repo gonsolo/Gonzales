@@ -7,6 +7,50 @@ from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
 
 @always_inline
+fn _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
+    """Convert a unit direction vector to [0,1]^2 UV using PBRT v4's equal-area
+    octahedral mapping (Clarberg 2008)."""
+    var x = dx if dx >= Float32(0) else -dx
+    var y = dy if dy >= Float32(0) else -dy
+    var z = dz if dz >= Float32(0) else -dz
+    # Compute radius r = sqrt(1 - |z|)
+    var r = sqrt(max(Float32(0), Float32(1) - z))
+    # Compute atan(b/a)*2/pi via polynomial approximation
+    var a = max(x, y)
+    var b: Float32
+    if a == Float32(0):
+        b = Float32(0)
+    else:
+        b = min(x, y) / a
+    # Minimax polynomial for atan(b)*2/pi
+    var t1 = Float32(0.406758566246788489601959989e-5)
+    var t2 = Float32(0.636226545274016134946890922156)
+    var t3 = Float32(0.61572017898280213493197203466e-2)
+    var t4 = Float32(-0.247333733281268944196501420480)
+    var t5 = Float32(0.881770664775316294736387951347e-1)
+    var t6 = Float32(0.419038818029165735901852432784e-1)
+    var t7 = Float32(-0.251390972343483509333252996350e-1)
+    var phi = t1 + b*(t2 + b*(t3 + b*(t4 + b*(t5 + b*(t6 + b*t7)))))
+    # If x < y, we're in the 45-90 degree range
+    if x < y:
+        phi = Float32(1) - phi
+    # Find (u, v) from (r, phi)
+    var v = phi * r
+    var u = r - v
+    # Southern hemisphere: mirror
+    if dz < Float32(0):
+        var tmp = u
+        u = Float32(1) - v
+        v = Float32(1) - tmp
+    # Apply sign from original (x, y)
+    if dx < Float32(0): u = -u
+    if dy < Float32(0): v = -v
+    # Transform from [-1,1] to [0,1]
+    u = Float32(0.5) * (u + Float32(1))
+    v = Float32(0.5) * (v + Float32(1))
+    return SIMD[DType.float32, 2](u, v)
+
+@always_inline
 fn _srgb_to_linear(c: Float32) -> Float32:
     if c <= Float32(0.04045):
         return c / Float32(12.92)
@@ -1172,13 +1216,39 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
         for inf_i in range(infiniteLightCount):
             var ilight = infiniteLights[inf_i]
+            # Transform world-space ray direction into light's local frame
+            var w2l = ilight.world_to_light
+            var ld_x = w2l[0]*ray_dir[0] + w2l[4]*ray_dir[1] + w2l[8]*ray_dir[2]
+            var ld_y = w2l[1]*ray_dir[0] + w2l[5]*ray_dir[1] + w2l[9]*ray_dir[2]
+            var ld_z = w2l[2]*ray_dir[0] + w2l[6]*ray_dir[1] + w2l[10]*ray_dir[2]
+            var local_dir = SIMD[DType.float32, 3](ld_x, ld_y, ld_z)
             var env_rgb: RGB
             @parameter
             if not use_gpu:
-                if ilight.tex_idx >= Int32(0):
+                if ilight.tex_idx >= Int32(0) and ilight.pixels_ptr and ilight.cdf_w > Int32(0):
+                    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+                    var ea_uv = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
+                    var u = ea_uv[0]; var v = ea_uv[1]
+                    # Bilinear lookup in raw pixels (cdf_w × cdf_h, 3 floats/pixel)
+                    var fx = u * Float32(iw) - Float32(0.5)
+                    var fy = v * Float32(ih) - Float32(0.5)
+                    var x0 = Int(max(Float32(0), min(Float32(iw - 1), floor(fx))))
+                    var y0 = Int(max(Float32(0), min(Float32(ih - 1), floor(fy))))
+                    var x1 = min(x0 + 1, iw - 1)
+                    var y1 = min(y0 + 1, ih - 1)
+                    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+                    var r00 = ilight.pixels_ptr[(y0*iw+x0)*3+0]; var g00 = ilight.pixels_ptr[(y0*iw+x0)*3+1]; var b00 = ilight.pixels_ptr[(y0*iw+x0)*3+2]
+                    var r10 = ilight.pixels_ptr[(y0*iw+x1)*3+0]; var g10 = ilight.pixels_ptr[(y0*iw+x1)*3+1]; var b10 = ilight.pixels_ptr[(y0*iw+x1)*3+2]
+                    var r01 = ilight.pixels_ptr[(y1*iw+x0)*3+0]; var g01 = ilight.pixels_ptr[(y1*iw+x0)*3+1]; var b01 = ilight.pixels_ptr[(y1*iw+x0)*3+2]
+                    var r11 = ilight.pixels_ptr[(y1*iw+x1)*3+0]; var g11 = ilight.pixels_ptr[(y1*iw+x1)*3+1]; var b11 = ilight.pixels_ptr[(y1*iw+x1)*3+2]
+                    var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
+                    var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
+                    var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
+                    env_rgb = RGB(tr, tg, tb) * ilight.scale
+                elif ilight.tex_idx >= Int32(0):
                     var fname = tex_filenames[Int(ilight.tex_idx)]
-                    var u = (atan2(ray_dir[2], ray_dir[0]) + PI) / TWO_PI
-                    var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / PI
+                    var ea_uv2 = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
+                    var u = ea_uv2[0]; var v = ea_uv2[1]
                     var tr = alloc[Float32](3)
                     tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
                     _ = external_call["texture", Bool,
@@ -1199,19 +1269,18 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     # Use CDF-based pdf when available (env-map importance sampling)
                     if ilight.cdf_w > Int32(0) and ilight.cdf_h > Int32(0):
                         var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-                        var u = (atan2(ray_dir[2], ray_dir[0]) + PI) / TWO_PI
-                        var v = acos(max(Float32(-1.0), min(Float32(1.0), ray_dir[1]))) / PI
+                        var ea_uv3 = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
+                        var u = ea_uv3[0]; var v = ea_uv3[1]
                         var px = Int(min(Float32(iw - 1), max(Float32(0.0), u * Float32(iw))))
                         var py = Int(min(Float32(ih - 1), max(Float32(0.0), v * Float32(ih))))
                         var marginal_base = ih + 1
                         var row_cdf_base = marginal_base + py * (iw + 1)
-                        # pdf of this texel in the CDF
+                        # pdf of this texel in the CDF (equal-area: uniform solid angle)
                         var dp_row = ilight.cdf_ptr[py + 1] - ilight.cdf_ptr[py]
                         var dp_col_base = row_cdf_base + px
                         var dp_col = ilight.cdf_ptr[dp_col_base + 1] - ilight.cdf_ptr[dp_col_base]
-                        var sin_theta = sin(PI * (Float32(py) + Float32(0.5)) / Float32(ih))
-                        if sin_theta > Float32(0.0) and dp_row > Float32(0.0):
-                            pdf_light = (dp_row * dp_col * Float32(iw) * Float32(ih)) / (TWO_PI * PI * sin_theta)
+                        if dp_row > Float32(0.0):
+                            pdf_light = dp_row * dp_col * Float32(iw) * Float32(ih) * INV_FOUR_PI
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
             path_ptr[].estimate += path_ptr[].throughput * env_rgb * mis_weight
         path_ptr[].active = 0
@@ -1497,6 +1566,78 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dc * Float32(0.9999)):
                     path_ptr[].estimate += contrib
 
+    # ── Infinite (env-map) light NEE ──────────────────────────────────────────
+    @parameter
+    if not use_gpu:
+        for inf_i in range(infiniteLightCount):
+            var ilight = infiniteLights[inf_i]
+            # Cosine-weighted hemisphere sample for NEE direction
+            var u1_env = pcg.next_float()
+            var u2_env = pcg.next_float()
+            var r_env = sqrt(u1_env)
+            var theta_env = TWO_PI * u2_env
+            var x_env = r_env * cos(theta_env)
+            var y_env = r_env * sin(theta_env)
+            var z2_env = Float32(1.0) - u1_env
+            var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
+            var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+            var a_env = Float32(-1.0) / (sign_env + normal[2])
+            var b_env = normal[0] * normal[1] * a_env
+            var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
+            var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
+            var env_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
+            var env_dlen = dot(env_dir, env_dir)
+            if env_dlen > Float32(0.0):
+                env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
+            var cos_env = dot(normal, env_dir)
+            if cos_env > Float32(0.0):
+                # Transform direction to light space for env-map lookup
+                var w2l = ilight.world_to_light
+                var ld_x = w2l[0]*env_dir[0] + w2l[4]*env_dir[1] + w2l[8]*env_dir[2]
+                var ld_y = w2l[1]*env_dir[0] + w2l[5]*env_dir[1] + w2l[9]*env_dir[2]
+                var ld_z = w2l[2]*env_dir[0] + w2l[6]*env_dir[1] + w2l[10]*env_dir[2]
+                var env_rgb: RGB
+                if ilight.tex_idx >= Int32(0) and ilight.pixels_ptr and ilight.cdf_w > Int32(0):
+                    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+                    var ea_uv_nee = _equal_area_sphere_to_square(ld_x, ld_y, ld_z)
+                    var u_env = ea_uv_nee[0]; var v_env = ea_uv_nee[1]
+                    var fx = u_env * Float32(iw) - Float32(0.5)
+                    var fy = v_env * Float32(ih) - Float32(0.5)
+                    var x0 = Int(max(Float32(0), min(Float32(iw - 1), floor(fx))))
+                    var y0 = Int(max(Float32(0), min(Float32(ih - 1), floor(fy))))
+                    var x1 = min(x0 + 1, iw - 1)
+                    var y1 = min(y0 + 1, ih - 1)
+                    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+                    var r00 = ilight.pixels_ptr[(y0*iw+x0)*3+0]; var g00 = ilight.pixels_ptr[(y0*iw+x0)*3+1]; var b00 = ilight.pixels_ptr[(y0*iw+x0)*3+2]
+                    var r10 = ilight.pixels_ptr[(y0*iw+x1)*3+0]; var g10 = ilight.pixels_ptr[(y0*iw+x1)*3+1]; var b10 = ilight.pixels_ptr[(y0*iw+x1)*3+2]
+                    var r01 = ilight.pixels_ptr[(y1*iw+x0)*3+0]; var g01 = ilight.pixels_ptr[(y1*iw+x0)*3+1]; var b01 = ilight.pixels_ptr[(y1*iw+x0)*3+2]
+                    var r11 = ilight.pixels_ptr[(y1*iw+x1)*3+0]; var g11 = ilight.pixels_ptr[(y1*iw+x1)*3+1]; var b11 = ilight.pixels_ptr[(y1*iw+x1)*3+2]
+                    var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
+                    var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
+                    var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
+                    env_rgb = RGB(tr, tg, tb) * ilight.scale
+                else:
+                    env_rgb = ilight.scale
+                if not env_rgb.is_black():
+                    # pdf_light for cosine-weighted hemisphere = cos_env / pi
+                    # same as pdf_bsdf, so MIS weight = 0.5 for equal pdfs
+                    # Actually: we sample with cosine-weighted, so pdf = cos/pi
+                    # The light pdf (if uniform over sphere) = 1/(4pi)
+                    # For now, use simple weight = 1 (no MIS, just NEE)
+                    var pdf_nee = cos_env / PI
+                    var weight = alb * env_rgb * (cos_env / (pdf_nee * PI))
+                    # weight simplifies to alb * env_rgb
+                    var contrib = path_ptr[].throughput * alb * env_rgb
+                    # Shadow ray to infinity
+                    var t_max_env = Float32(100000.0)
+                    @parameter
+                    if enqueue_shadow:
+                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+                    else:
+                        var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, t_max_env):
+                            path_ptr[].estimate += contrib
+
     var u1 = pcg.next_float()
     var u2 = pcg.next_float()
     var r = sqrt(u1)
@@ -1562,7 +1703,7 @@ fn shade_core_cpu_nee(
     if path_ptr[].active == 0:
         return
     var inter = intersections[tid]
-    shade_nee_core[False, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
+    shade_nee_core[False, False](path_ptr, tid, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
         tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin](), 0,
         UnsafePointer[ShadowTask_C, MutAnyOrigin](),
         distantLights, distantLightCount, pointLights, pointLightCount,

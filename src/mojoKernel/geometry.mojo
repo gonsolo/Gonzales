@@ -329,9 +329,11 @@ struct InfiniteLight_C(TrivialRegisterPassable):
     """
     var scale: SampledSpectrum
     var tex_idx: Int32   # -1 = solid colour, >= 0 = texture
-    var cdf_w: Int32     # env-map CDF width (0 = no CDF)
-    var cdf_h: Int32     # env-map CDF height
-    var cdf_ptr: UnsafePointer[Float32, MutAnyOrigin]  # flat 2D CDF (marginal + conditional)
+    var cdf_w: Int32     # env-map pixel width (also CDF width; 0 = no texture)
+    var cdf_h: Int32     # env-map pixel height
+    var cdf_ptr: UnsafePointer[Float32, MutAnyOrigin]   # flat 2D CDF (marginal + conditional)
+    var pixels_ptr: UnsafePointer[Float32, MutAnyOrigin] # raw HDR pixels, 3 floats/pixel (CPU only)
+    var world_to_light: UnsafePointer[Float32, MutAnyOrigin]  # 16-float col-major inverse of light CTM
 
 # ── GPU / render pipeline helpers ─────────────────────────────────────────────
 

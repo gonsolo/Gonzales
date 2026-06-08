@@ -257,7 +257,7 @@ fn mojo_gpu_upload_scene(
                         dst[j] = src[j]
 
             # Upload infinite/environment lights
-            var il_bytes = max(Int(infiniteLightCount), 1) * 32  # sizeof(InfiniteLight_C) = 32
+            var il_bytes = max(Int(infiniteLightCount), 1) * 40  # sizeof(InfiniteLight_C) = 40
             var il_buf = ctx.enqueue_create_buffer[DType.uint8](il_bytes)
             if Int(infiniteLightCount) > 0:
                 with il_buf.map_to_host() as host_buf:
@@ -516,6 +516,8 @@ fn shade_nee_gpu(
     areaLightCount: Int,
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    n_infinite_lights: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     count: Int,
@@ -527,15 +529,13 @@ fn shade_nee_gpu(
     if path_ptr[].active == 0:
         return
     var inter = intersections[tid]
-    if inter.hit == 0:
-        path_ptr[].active = 0
-        return
+    # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
         UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures,
         UnsafePointer[ShadowTask_C, MutAnyOrigin](),
         UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0,
+        infiniteLights, n_infinite_lights,
         spheres, n_spheres)
 
 
@@ -550,6 +550,8 @@ fn shade_enqueue_shadow_gpu(
     areaLightCount: Int,
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    n_infinite_lights: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
@@ -563,14 +565,12 @@ fn shade_enqueue_shadow_gpu(
     if path_ptr[].active == 0:
         return
     var inter = intersections[tid]
-    if inter.hit == 0:
-        path_ptr[].active = 0
-        return
+    # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     shade_nee_core[True, True](path_ptr, tid, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
         UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures, shadow_tasks,
         UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin](), 0,
+        infiniteLights, n_infinite_lights,
         spheres, n_spheres)
 
 
@@ -864,6 +864,8 @@ fn mojo_gpu_render_sample(
                     handle[].n_area_lights,
                     handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
                     handle[].n_textures,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     n_int,
@@ -949,6 +951,8 @@ fn mojo_gpu_render_wavefront(
                     handle[].n_area_lights,
                     handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
                     handle[].n_textures,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     n_total,

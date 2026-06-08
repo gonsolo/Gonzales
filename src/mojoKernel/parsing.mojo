@@ -772,6 +772,7 @@ struct _PscState:
     var n_point:       Int32
     var inf_tex_idx:   UnsafePointer[Int32, MutAnyOrigin]     # n_infinite indices
     var inf_rgb:       UnsafePointer[Float32, MutAnyOrigin]   # n_infinite * 3 floats
+    var inf_ctm:       UnsafePointer[Float32, MutAnyOrigin]   # n_infinite * 16 floats (light CTM)
     var n_infinite:    Int32
 
     # Analytical sphere primitives
@@ -803,6 +804,7 @@ struct _PscState:
     var sph_outside_med:  UnsafePointer[Int32, MutAnyOrigin]  # per-sphere outside medium idx
     var attr_inside_med:  UnsafePointer[Int32, MutAnyOrigin]  # attribute stack
     var attr_outside_med: UnsafePointer[Int32, MutAnyOrigin]  # attribute stack
+    var object_depth: Int32  # depth inside ObjectBegin/ObjectEnd blocks
 
 
 # ── Utility functions ─────────────────────────────────────────────────────────
@@ -856,6 +858,122 @@ fn _psc_matcopy(dst: UnsafePointer[Float32, MutAnyOrigin],
     for i in range(16):
         dst[i] = src[i]
 
+# ---- Transform keyword helpers (Translate / Scale / Rotate) ----
+# All of these RIGHT-multiply the CTM: CTM_new = CTM_old × M
+# CTM is stored column-major; identity has 1 at indices 0,5,10,15.
+
+fn _psc_ctm_concat(s: UnsafePointer[_PscState, MutAnyOrigin],
+                   t: UnsafePointer[Float32, MutAnyOrigin]):
+    """Compute s.ctm = s.ctm × t and store back."""
+    var result = alloc[Float32](16)
+    mojo_matrix_multiply(s[0].ctm, t, result)
+    for i in range(16):
+        s[0].ctm[i] = result[i]
+    result.free()
+
+fn _psc_handle_translate(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                         s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Translate tx ty tz  →  CTM = CTM × T(tx,ty,tz)"""
+    var v = alloc[Float32](3)
+    v[0] = Float32(0); v[1] = Float32(0); v[2] = Float32(0)
+    _ = mojo_scanner_scan_float(handle, v + 0)
+    _ = mojo_scanner_scan_float(handle, v + 1)
+    _ = mojo_scanner_scan_float(handle, v + 2)
+    var t = alloc[Float32](16)
+    _psc_identity(t)
+    t[12] = v[0]; t[13] = v[1]; t[14] = v[2]   # col-major: col3 = (tx,ty,tz,1)
+    _psc_ctm_concat(s, t)
+    v.free(); t.free()
+
+fn _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                        s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Scale sx sy sz  →  CTM = CTM × S(sx,sy,sz)"""
+    var v = alloc[Float32](3)
+    v[0] = Float32(1); v[1] = Float32(1); v[2] = Float32(1)
+    _ = mojo_scanner_scan_float(handle, v + 0)
+    _ = mojo_scanner_scan_float(handle, v + 1)
+    _ = mojo_scanner_scan_float(handle, v + 2)
+    var t = alloc[Float32](16)
+    _psc_identity(t)
+    t[0] = v[0]; t[5] = v[1]; t[10] = v[2]     # col-major: diagonal
+    _psc_ctm_concat(s, t)
+    v.free(); t.free()
+
+fn _psc_handle_rotate(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                      s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """Rotate angle ax ay az  →  CTM = CTM × R(angle, axis)"""
+    from std.math import sin as _sin, cos as _cos, sqrt as _sqrt
+    var rv = alloc[Float32](4)  # angle, ax, ay, az
+    rv[0] = Float32(0); rv[1] = Float32(0); rv[2] = Float32(0); rv[3] = Float32(1)
+    _ = mojo_scanner_scan_float(handle, rv + 0)
+    _ = mojo_scanner_scan_float(handle, rv + 1)
+    _ = mojo_scanner_scan_float(handle, rv + 2)
+    _ = mojo_scanner_scan_float(handle, rv + 3)
+    var angle = rv[0] * PI / Float32(180)
+    var ax = rv[1]; var ay = rv[2]; var az = rv[3]
+    var ln = _sqrt(ax*ax + ay*ay + az*az)
+    if ln > Float32(1e-12): ax /= ln; ay /= ln; az /= ln
+    var c = _cos(angle); var sv = _sin(angle); var mc = Float32(1) - c
+    var t = alloc[Float32](16)
+    # Column-major rotation matrix (standard Rodrigues)
+    t[0]  = c + ax*ax*mc;       t[1]  = ay*ax*mc + az*sv;   t[2]  = az*ax*mc - ay*sv;   t[3]  = Float32(0)
+    t[4]  = ax*ay*mc - az*sv;   t[5]  = c + ay*ay*mc;       t[6]  = az*ay*mc + ax*sv;   t[7]  = Float32(0)
+    t[8]  = ax*az*mc + ay*sv;   t[9]  = ay*az*mc - ax*sv;   t[10] = c + az*az*mc;        t[11] = Float32(0)
+    t[12] = Float32(0);         t[13] = Float32(0);          t[14] = Float32(0);          t[15] = Float32(1)
+    _psc_ctm_concat(s, t)
+    rv.free(); t.free()
+
+fn _psc_handle_lookat(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
+                      s: UnsafePointer[_PscState, MutAnyOrigin]):
+    """LookAt ex ey ez  lx ly lz  ux uy uz
+    Constructs a world-to-camera view matrix and right-multiplies the CTM.
+    Matches PBRT's LookAt semantics exactly."""
+    from std.math import sqrt as _sqrt
+    var v = alloc[Float32](9)
+    for i in range(9): _ = mojo_scanner_scan_float(handle, v + i)
+    # eye, look, up
+    var ex = v[0]; var ey = v[1]; var ez = v[2]
+    var lx = v[3]; var ly = v[4]; var lz = v[5]
+    var ux = v[6]; var uy = v[7]; var uz = v[8]
+    v.free()
+
+    # dir = normalize(look - eye)
+    var dx = lx - ex; var dy = ly - ey; var dz = lz - ez
+    var dl = _sqrt(dx*dx + dy*dy + dz*dz)
+    if dl > Float32(1e-12): dx /= dl; dy /= dl; dz /= dl
+
+    # right = normalize(cross(normalize(up), dir))
+    var ul = _sqrt(ux*ux + uy*uy + uz*uz)
+    if ul > Float32(1e-12): ux /= ul; uy /= ul; uz /= ul
+    # cross(up, dir)
+    var rx = uy*dz - uz*dy
+    var ry = uz*dx - ux*dz
+    var rz = ux*dy - uy*dx
+    var rl = _sqrt(rx*rx + ry*ry + rz*rz)
+    if rl > Float32(1e-12): rx /= rl; ry /= rl; rz /= rl
+
+    # newUp = cross(dir, right)
+    var nx = dy*rz - dz*ry
+    var ny = dz*rx - dx*rz
+    var nz = dx*ry - dy*rx
+
+    # PBRT LookAt world-to-camera matrix (row-major):
+    # [ rx  ry  rz  -dot(r,eye) ]
+    # [ nx  ny  nz  -dot(n,eye) ]
+    # [ dx  dy  dz  -dot(d,eye) ]
+    # [ 0   0   0    1          ]
+    # Store in column-major for our CTM convention:
+    var t = alloc[Float32](16)
+    t[0]  = rx;  t[1]  = nx;  t[2]  = dx;  t[3]  = Float32(0)
+    t[4]  = ry;  t[5]  = ny;  t[6]  = dy;  t[7]  = Float32(0)
+    t[8]  = rz;  t[9]  = nz;  t[10] = dz;  t[11] = Float32(0)
+    t[12] = -(rx*ex + ry*ey + rz*ez)
+    t[13] = -(nx*ex + ny*ey + nz*ez)
+    t[14] = -(dx*ex + dy*ey + dz*ez)
+    t[15] = Float32(1)
+    _psc_ctm_concat(s, t)
+    t.free()
+
 fn _psc_row_to_col(col_out: UnsafePointer[Float32, MutAnyOrigin],
                    row_in:  UnsafePointer[Float32, MutAnyOrigin]):
     for row in range(4):
@@ -871,8 +989,46 @@ fn _psc_type_is_float(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
     if c == UInt8(112): return True  # 'p' point/point2/point3
     if c == UInt8(118): return True  # 'v' vector3
     if c == UInt8(115) and t[1] == UInt8(112): return True  # "sp" spectrum
-    if c == UInt8(98) and t[1] == UInt8(108): return True   # "bl" blackbody
+    # NOTE: "blackbody" is intentionally NOT listed here; it is 1 float (temperature),
+    # not 3 floats, so _psc_scan_rgb must NOT be called for it.
     return False
+
+fn _psc_type_is_blackbody(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
+    return t[0] == UInt8(98) and t[1] == UInt8(108)  # 'b','l'
+
+# Mitchell-Charity blackbody colour approximation (normalised, max=1).
+# Reference: http://www.tannerhelland.com/4435/
+@always_inline
+fn _psc_blackbody_to_rgb(temp: Float32, rgb: UnsafePointer[Float32, MutAnyOrigin]):
+    from std.math import log as _log, pow as _pow
+    var t100 = temp / Float32(100.0)
+    var r: Float32; var g: Float32; var b: Float32
+    # Red channel
+    if temp <= Float32(6600):
+        r = Float32(1.0)
+    else:
+        r = Float32(329.698727446) * _pow(t100 - Float32(60), Float32(-0.1332047592)) / Float32(255)
+        r = max(Float32(0), min(Float32(1), r))
+    # Green channel
+    if temp <= Float32(6600):
+        g = (Float32(99.4708025861) * _log(t100) - Float32(161.1195681661)) / Float32(255)
+        g = max(Float32(0), min(Float32(1), g))
+    else:
+        g = Float32(288.1221695283) * _pow(t100 - Float32(60), Float32(-0.0755148492)) / Float32(255)
+        g = max(Float32(0), min(Float32(1), g))
+    # Blue channel
+    if temp >= Float32(6600):
+        b = Float32(1.0)
+    elif temp <= Float32(1900):
+        b = Float32(0.0)
+    else:
+        b = (Float32(138.5177312231) * _log(t100 - Float32(10)) - Float32(305.0447927307)) / Float32(255)
+        b = max(Float32(0), min(Float32(1), b))
+    # Normalise so max component = 1 (scale is applied separately)
+    var mx = max(r, max(g, b))
+    if mx > Float32(0):
+        r /= mx; g /= mx; b /= mx
+    rgb[0] = r; rgb[1] = g; rgb[2] = b
 
 fn _psc_type_is_int(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
     return t[0] == UInt8(105)  # 'i' integer
@@ -1071,6 +1227,8 @@ fn _psc_state_new() -> UnsafePointer[_PscState, MutAnyOrigin]:
     s[0].n_point     = Int32(0)
     s[0].inf_tex_idx = alloc[Int32](MAX_LIGHTS)
     s[0].inf_rgb     = alloc[Float32](MAX_LIGHTS * 3)
+    s[0].inf_ctm     = alloc[Float32](MAX_LIGHTS * 16)
+    s[0].object_depth = Int32(0)
     s[0].n_infinite  = Int32(0)
 
     comptime MAX_SPHERES = 64
@@ -1148,7 +1306,7 @@ fn _psc_state_free(s: UnsafePointer[_PscState, MutAnyOrigin]):
     s[0].tex_files.free()
     s[0].dist_dirs.free(); s[0].dist_rgb.free()
     s[0].pt_pos.free();    s[0].pt_rgb.free()
-    s[0].inf_tex_idx.free(); s[0].inf_rgb.free()
+    s[0].inf_tex_idx.free(); s[0].inf_rgb.free(); s[0].inf_ctm.free()
     s[0].sph_cx.free(); s[0].sph_cy.free(); s[0].sph_cz.free()
     s[0].sph_r.free();  s[0].sph_mat.free()
     s[0].sph_al.free(); s[0].sph_rgb.free()
@@ -1546,6 +1704,7 @@ fn _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyO
     s[0].in_alight = Int32(1)
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
+    var scale = Float32(1.0)  # accumulated separately; applied after loop
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
@@ -1555,9 +1714,11 @@ fn _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyO
         var is_array = ia[0]
         if _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
+        elif _psc_streq(name_buf, "L") and _psc_type_is_blackbody(type_buf):
+            var temp = _psc_scan_one_float(handle, is_array)
+            _psc_blackbody_to_rgb(temp, rgb)
         elif _psc_streq(name_buf, "scale") and _psc_type_is_float(type_buf):
-            var sc = _psc_scan_one_float(handle, is_array)
-            rgb[0] *= sc; rgb[1] *= sc; rgb[2] *= sc
+            scale *= _psc_scan_one_float(handle, is_array)
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
@@ -1565,6 +1726,7 @@ fn _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyO
         ia[0] = Int32(0)
         found = mojo_scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
+    rgb[0] *= scale; rgb[1] *= scale; rgb[2] *= scale
     s[0].al = RGB(rgb[0], rgb[1], rgb[2])
     sbuf.free(); type_buf.free(); name_buf.free(); rgb.free()
 
@@ -2104,6 +2266,7 @@ fn _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
+    str_val[0] = UInt8(0)  # must init: alloc doesn't zero-fill
     var rgb      = alloc[Float32](3)
     var xyz      = alloc[Float32](3)
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
@@ -2116,6 +2279,9 @@ fn _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin
         var is_array = ia[0]
         if (_psc_streq(name_buf, "L") or _psc_streq(name_buf, "I")) and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
+        elif (_psc_streq(name_buf, "L") or _psc_streq(name_buf, "I")) and _psc_type_is_blackbody(type_buf):
+            var temp = _psc_scan_one_float(handle, is_array)
+            _psc_blackbody_to_rgb(temp, rgb)
         elif _psc_streq(name_buf, "scale") and _psc_type_is_float(type_buf):
             scale = _psc_scan_one_float(handle, is_array)
         elif _psc_streq(name_buf, "from") and _psc_type_is_float(type_buf):
@@ -2199,6 +2365,9 @@ fn _psc_handle_light_source(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin
             s[0].inf_rgb[idx*3+0] = rgb[0] * scale
             s[0].inf_rgb[idx*3+1] = rgb[1] * scale
             s[0].inf_rgb[idx*3+2] = rgb[2] * scale
+            # Store the light's CTM for env-map direction transform
+            for ci in range(16):
+                s[0].inf_ctm[idx*16+ci] = s[0].ctm[ci]
             s[0].n_infinite += 1
 
     ltype.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free(); xyz.free()
@@ -2233,6 +2402,14 @@ fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             _psc_handle_camera(handle, s)
         elif _psc_streq(kw_buf, "Transform"):
             _psc_handle_transform(handle, s)
+        elif _psc_streq(kw_buf, "Translate"):
+            _psc_handle_translate(handle, s)
+        elif _psc_streq(kw_buf, "Scale"):
+            _psc_handle_scale_kw(handle, s)
+        elif _psc_streq(kw_buf, "Rotate"):
+            _psc_handle_rotate(handle, s)
+        elif _psc_streq(kw_buf, "LookAt"):
+            _psc_handle_lookat(handle, s)
         elif _psc_streq(kw_buf, "WorldBegin"):
             _psc_handle_world_begin(s)
         elif _psc_streq(kw_buf, "WorldEnd"):
@@ -2241,16 +2418,39 @@ fn _psc_parse(handle: UnsafePointer[PbrtScanner_Mojo, MutAnyOrigin],
             _psc_handle_make_named_material(handle, s)
         elif _psc_streq(kw_buf, "NamedMaterial"):
             _psc_handle_named_material(handle, s)
+        elif _psc_streq(kw_buf, "ObjectBegin"):
+            # Start of an object definition — skip shapes inside
+            var obj_name = alloc[UInt8](PSC_NAME_MAX)
+            _ = mojo_scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
+            obj_name.free()
+            s[0].object_depth += 1
+        elif _psc_streq(kw_buf, "ObjectEnd"):
+            if s[0].object_depth > 0:
+                s[0].object_depth -= 1
+        elif _psc_streq(kw_buf, "ObjectInstance"):
+            # TODO: implement proper object instancing
+            var obj_name = alloc[UInt8](PSC_NAME_MAX)
+            _ = mojo_scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
+            obj_name.free()
         elif _psc_streq(kw_buf, "Shape"):
-            _psc_handle_shape(handle, s)
+            if s[0].object_depth == 0:
+                _psc_handle_shape(handle, s)
+            else:
+                _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "AttributeBegin"):
             _psc_handle_attribute_begin(s)
         elif _psc_streq(kw_buf, "AttributeEnd"):
             _psc_handle_attribute_end(s)
         elif _psc_streq(kw_buf, "AreaLightSource"):
-            _psc_handle_area_light_source(handle, s)
+            if s[0].object_depth == 0:
+                _psc_handle_area_light_source(handle, s)
+            else:
+                _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "LightSource"):
-            _psc_handle_light_source(handle, s)
+            if s[0].object_depth == 0:
+                _psc_handle_light_source(handle, s)
+            else:
+                _psc_skip_params(handle)
         elif _psc_streq(kw_buf, "Texture"):
             _psc_handle_texture(handle, s)
         elif _psc_streq(kw_buf, "Include") or _psc_streq(kw_buf, "Import"):
@@ -2340,6 +2540,48 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
     var c2w = alloc[Float32](16)
     _ = mojo_matrix_invert(s[0].cam2w_raw, c2w)
     psc[0].camera_to_world = c2w
+
+    # ---- DEBUG: scene summary ----
+    print("=== GONZALES DEBUG: Scene Summary ===")
+    print("  Camera position (c2w col3):", c2w[12], c2w[13], c2w[14])
+    print("  Camera forward (-Z):", -c2w[8], -c2w[9], -c2w[10])
+    print("  Camera FOV:", s[0].camera_fov)
+    print("  Film:", s[0].film_w, "x", s[0].film_h)
+    print("  Meshes:", s[0].n_meshes)
+    print("  Named materials:", s[0].n_named)
+    print("  Textures:", s[0].n_textures)
+    print("  Infinite lights:", s[0].n_infinite)
+    print("  Distant lights:", s[0].n_distant)
+    print("  Point lights:", s[0].n_point)
+    print("  Spheres:", s[0].n_spheres)
+    # Print material types
+    for mi in range(min(Int(s[0].n_named), 20)):
+        print("  Mat[" + String(mi) + "] type=" + String(Int(s[0].named_type[mi])),
+              "albedo=(" + String(s[0].named_albedo[mi].r) + "," + String(s[0].named_albedo[mi].g) + "," + String(s[0].named_albedo[mi].b) + ")")
+    # Print infinite light info
+    for ii in range(Int(s[0].n_infinite)):
+        print("  InfLight[" + String(ii) + "] tex_idx=" + String(Int(s[0].inf_tex_idx[ii])),
+              "rgb=(" + String(s[0].inf_rgb[ii*3]) + "," + String(s[0].inf_rgb[ii*3+1]) + "," + String(s[0].inf_rgb[ii*3+2]) + ")")
+        # Print first row of CTM
+        var base = ii * 16
+        print("    CTM row0:", s[0].inf_ctm[base], s[0].inf_ctm[base+4], s[0].inf_ctm[base+8], s[0].inf_ctm[base+12])
+    # Print first 5 mesh bounding boxes
+    for mi2 in range(min(Int(s[0].n_meshes), 5)):
+        var nv = Int(s[0].mesh_nv[mi2])
+        var pts = s[0].mesh_pts_list[mi2]
+        var mnx = pts[0]; var mny = pts[1]; var mnz = pts[2]
+        var mxx = pts[0]; var mxy = pts[1]; var mxz = pts[2]
+        for vi in range(1, nv):
+            if pts[vi*4] < mnx: mnx = pts[vi*4]
+            if pts[vi*4+1] < mny: mny = pts[vi*4+1]
+            if pts[vi*4+2] < mnz: mnz = pts[vi*4+2]
+            if pts[vi*4] > mxx: mxx = pts[vi*4]
+            if pts[vi*4+1] > mxy: mxy = pts[vi*4+1]
+            if pts[vi*4+2] > mxz: mxz = pts[vi*4+2]
+        print("  Mesh[" + String(mi2) + "] verts=" + String(nv) + " tris=" + String(Int(s[0].mesh_nt[mi2])),
+              "bbox=(" + String(mnx) + ".." + String(mxx) + ", " + String(mny) + ".." + String(mxy) + ", " + String(mnz) + ".." + String(mxz) + ")",
+              "mat_idx=" + String(Int(s[0].mesh_mat_idx[mi2])))
+    print("=== END DEBUG ===")
 
     var cts = alloc[Float32](16)
     _psc_make_perspective(s[0].camera_fov, Float32(0.01), cts)
@@ -2740,12 +2982,14 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
 
     var ni = Int(s[0].n_infinite)
     if ni > 0:
+        var il_bytes = max(ni, 1) * 40
         var il_buf = alloc[InfiniteLight_C](ni)
         for i in range(ni):
             var tidx = s[0].inf_tex_idx[i]
             var sc = RGB(s[0].inf_rgb[i*3+0], s[0].inf_rgb[i*3+1], s[0].inf_rgb[i*3+2])
             var cdf_w = Int32(0); var cdf_h = Int32(0)
             var cdf_ptr = UnsafePointer[Float32, MutAnyOrigin]()
+            var raw_pixels = UnsafePointer[Float32, MutAnyOrigin]()  # kept alive for CPU lookup
             if tidx >= Int32(0):
                 # Build 2D importance-sampling CDF from env-map luminance via load_texture_rgb
                 var fname = psc[0].tex_filenames[Int(tidx)]
@@ -2759,23 +3003,23 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
                     fname, pixels_ptr, iw_out, ih_out)
                 var iw = Int(iw_out[0]); var ih = Int(ih_out[0])
                 iw_out.free(); ih_out.free()
-                if load_ok == Int32(0) and iw > 0 and ih > 0:
+                if load_ok != Int32(0) and iw > 0 and ih > 0:  # != 0 = success
                     var pixels = pixels_ptr[0]
+                    raw_pixels = pixels  # keep alive for shade-time lookup
                     # CDF layout: (ih+1) marginal + ih*(iw+1) conditional floats
                     var cdf_size = (ih + 1) + ih * (iw + 1)
                     var cdf_buf = alloc[Float32](cdf_size)
                     # Compute per-row luminance sums (marginal pdf)
                     var row_sums = alloc[Float32](ih)
                     for ry in range(ih):
-                        # Sin-weighted solid angle for lat-long map
-                        var sin_theta = sin(PI * (Float32(ry) + Float32(0.5)) / Float32(ih))
+                        # Equal-area mapping: uniform solid angle per pixel
                         var row_sum = Float32(0.0)
                         for rx in range(iw):
                             var r2 = pixels[(ry * iw + rx) * 3 + 0]
                             var g2 = pixels[(ry * iw + rx) * 3 + 1]
                             var b2 = pixels[(ry * iw + rx) * 3 + 2]
                             var lum = Float32(0.2126) * r2 + Float32(0.7152) * g2 + Float32(0.0722) * b2
-                            row_sum += lum * sin_theta
+                            row_sum += lum
                         row_sums[ry] = row_sum
                     # Build marginal CDF (ih+1 values, starts at 0)
                     cdf_buf[0] = Float32(0.0)
@@ -2788,7 +3032,6 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
                             cdf_buf[ry] *= inv_total
                     # Build per-row conditional CDFs (ih * (iw+1) values)
                     for ry in range(ih):
-                        var sin_theta = sin(PI * (Float32(ry) + Float32(0.5)) / Float32(ih))
                         var base = (ih + 1) + ry * (iw + 1)
                         cdf_buf[base] = Float32(0.0)
                         for rx in range(iw):
@@ -2796,19 +3039,31 @@ fn _psc_finalize(s: UnsafePointer[_PscState, MutAnyOrigin],
                             var g2 = pixels[(ry * iw + rx) * 3 + 1]
                             var b2 = pixels[(ry * iw + rx) * 3 + 2]
                             var lum = Float32(0.2126) * r2 + Float32(0.7152) * g2 + Float32(0.0722) * b2
-                            cdf_buf[base + rx + 1] = cdf_buf[base + rx] + lum * sin_theta
+                            cdf_buf[base + rx + 1] = cdf_buf[base + rx] + lum
                         var row_total = cdf_buf[base + iw]
                         if row_total > Float32(0.0):
                             var inv_rt = Float32(1.0) / row_total
                             for rx in range(iw + 1):
                                 cdf_buf[base + rx] *= inv_rt
                     row_sums.free()
-                    _ = external_call["free_texture_rgb", Int32,
-                        UnsafePointer[Float32, MutAnyOrigin]](pixels)
                     cdf_ptr = cdf_buf
                     cdf_w = Int32(iw); cdf_h = Int32(ih)
                 pixels_ptr.free()
-            il_buf[i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr)
+            # Compute world-to-light transform (inverse of the light's CTM)
+            var w2l = alloc[Float32](16)
+            var light_ctm = s[0].inf_ctm + i * 16
+            # Check if CTM is identity (common case: no transform on light)
+            var is_identity = True
+            for ci in range(16):
+                var expected = Float32(1) if (ci == 0 or ci == 5 or ci == 10 or ci == 15) else Float32(0)
+                if light_ctm[ci] != expected:
+                    is_identity = False
+                    break
+            if is_identity:
+                _psc_identity(w2l)
+            else:
+                _ = mojo_matrix_invert(light_ctm, w2l)
+            il_buf[i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
         psc[0].infinite_lights = il_buf
     else:
         psc[0].infinite_lights = UnsafePointer[InfiniteLight_C, MutAnyOrigin]()
@@ -2932,6 +3187,13 @@ fn mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
     if psc[0].point_count > 0:
         psc[0].point_lights.free()
     if psc[0].infinite_count > 0:
+        var ni = Int(psc[0].infinite_count)
+        for ii in range(ni):
+            if psc[0].infinite_lights[ii].cdf_ptr:
+                psc[0].infinite_lights[ii].cdf_ptr.free()
+            if psc[0].infinite_lights[ii].pixels_ptr:
+                _ = external_call["free_texture_rgb", Int32,
+                    UnsafePointer[Float32, MutAnyOrigin]](psc[0].infinite_lights[ii].pixels_ptr)
         psc[0].infinite_lights.free()
     if psc[0].sphere_count > 0:
         psc[0].spheres.free()
