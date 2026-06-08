@@ -2973,6 +2973,8 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].mesh_pts[i].free()
         psc[0].mesh_vis[i].free()
         psc[0].mesh_fis[i].free()
+        if psc[0].mesh_uv_n_verts[i] > Int32(0):
+            psc[0].meshes[i].uvs.free()
     if psc[0].mesh_count > 0:
         psc[0].mesh_pts.free()
         psc[0].mesh_vis.free()
@@ -3007,11 +3009,12 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
     if psc[0].infinite_count > 0:
         var ni = Int(psc[0].infinite_count)
         for ii in range(ni):
-            if Int(psc[0].infinite_lights[ii].cdf_ptr) > 1:
-                psc[0].infinite_lights[ii].cdf_ptr.free()
-            if Int(psc[0].infinite_lights[ii].pixels_ptr) > 1:
+            var il = psc[0].infinite_lights[ii]
+            if il.cdf_w > Int32(0):
+                il.cdf_ptr.free()
                 _ = external_call["free_texture_rgb", Int32,
-                    UnsafePointer[Float32, MutAnyOrigin]](psc[0].infinite_lights[ii].pixels_ptr)
+                    UnsafePointer[Float32, MutAnyOrigin]](il.pixels_ptr)
+            il.world_to_light.free()
         psc[0].infinite_lights.free()
     if psc[0].sphere_count > 0:
         psc[0].spheres.free()
