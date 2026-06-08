@@ -500,7 +500,7 @@ def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[Pbrt
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(0)
     except:
-        handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+        handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin]()
         handle[0].total_bytes = Int32(0)
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(1)
@@ -701,14 +701,14 @@ struct ParsedScene_Mojo:
 # These types are private to parsing.mojo.
 
 @fieldwise_init
-struct AttributeState(Copyable, Movable):
+struct AttributeState(Copyable, ImplicitlyCopyable, Movable):
     var mat_idx:        Int32
     var is_alight:      Bool
     var al_rgb:         RGB
     var inside_medium:  Int32
     var outside_medium: Int32
 
-struct NamedMaterial(Copyable, Movable):
+struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var name:           String
     var albedo:         RGB
     var kind:           Int8
@@ -955,7 +955,7 @@ def _psc_ctm_concat(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                    t: UnsafePointer[Float32, MutAnyOrigin]):
     """Compute s.ctm = s.ctm × t and store back."""
     var result = alloc[Float32](16)
-    matrix_multiply(s[0].ctm, t, result)
+    matrix_multiply(s[0].ctm.unsafe_ptr(), t, result)
     for i in range(16):
         s[0].ctm[i] = result[i]
     result.free()
@@ -1231,22 +1231,6 @@ def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     if is_array:
         _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
-    s.free()
-
-def _psc_ctm_push(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    var d = Int(Int32(len(s[0].ctm_stack)))
-    if d < PSC_CTM_DEPTH:
-        for i in range(16):
-            s[0].ctm_stack[d * 16 + i] = s[0].ctm[i]
-        Int32(len(s[0].ctm_stack)) += 1
-
-def _psc_ctm_pop(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    if Int32(len(s[0].ctm_stack)) > 0:
-        Int32(len(s[0].ctm_stack)) -= 1
-        var d = Int(Int32(len(s[0].ctm_stack)))
-        for i in range(16):
-            s[0].ctm[i] = s[0].ctm_stack[d * 16 + i]
-
 def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                           s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
@@ -1333,7 +1317,10 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         elif _psc_streq(name_buf, "yresolution") and _psc_type_is_int(type_buf):
             s[0].film_h = _psc_scan_one_int(handle, is_array)
         elif _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
-            _psc_scan_one_str(handle, s[0].film_filename, PSC_FILE_MAX, is_array)
+            var fn_tmp = alloc[UInt8](PSC_FILE_MAX)
+            _psc_scan_one_str(handle, fn_tmp, Int32(PSC_FILE_MAX), is_array)
+            s[0].film_filename = String(unsafe_from_utf8_ptr=fn_tmp.as_immutable())
+            fn_tmp.free()
         elif _psc_streq(name_buf, "iso") and _psc_type_is_float(type_buf):
             s[0].film_iso = _psc_scan_one_float(handle, is_array)
         elif _psc_streq(name_buf, "maxcomponentvalue") and _psc_type_is_float(type_buf):
@@ -1351,7 +1338,8 @@ def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                       s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    _psc_matcopy(s[0].cam2w_raw, s[0].ctm)
+    # Copy current CTM into cam2w_raw
+    for i in range(16): s[0].cam2w_raw[i] = s[0].ctm[i]
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
@@ -1373,13 +1361,18 @@ def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                          s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     _ = scanner_scan_char(handle, UInt8(91))  # '['
+    var tmp = alloc[Float32](1)
     for i in range(16):
-        _ = scanner_scan_float(handle, s[0].ctm + i)
+        _ = scanner_scan_float(handle, tmp)
+        s[0].ctm[i] = tmp[0]
+    tmp.free()
     _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
 def _psc_handle_world_begin(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    _psc_identity(s[0].ctm)
-    Int32(len(s[0].ctm_stack)) = Int32(0)
+    for i in range(16): s[0].ctm[i] = Float32(0)
+    s[0].ctm[0] = Float32(1); s[0].ctm[5] = Float32(1)
+    s[0].ctm[10] = Float32(1); s[0].ctm[15] = Float32(1)
+    s[0].ctm_stack.clear()
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                    s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -1505,8 +1498,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
             # Look up str_val in tex_names
-            for ti in range(Int(Int32(len(s[0].tex_names)))):
-                if psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
+            var str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            for ti in range(len(s[0].tex_names)):
+                if s[0].tex_names[ti] == str_name:
                     tex_idx_for_mat = Int32(ti)
                     break
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
@@ -1515,8 +1509,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             _ = scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-            for ti in range(Int(Int32(len(s[0].tex_names)))):
-                if psc_strcmp(s[0].tex_names + ti * PSC_NAME_MAX, str_val) == 0:
+            var norm_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            for ti in range(len(s[0].tex_names)):
+                if s[0].tex_names[ti] == norm_name:
                     normal_tex_idx_for_mat = Int32(ti)
                     break
         elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
@@ -1540,45 +1535,38 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
         found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
 
-    var idx = Int(Int32(len(s[0].named_materials)))
-    if idx < PSC_MAX_NAMED:
-        _psc_strncpy(s[0].named_names + idx * PSC_NAME_MAX, mat_name, PSC_NAME_MAX)
-        # For named-spectrum conductors: compute Fresnel F0 per channel
-        # F0 = ((eta-1)^2 + k^2) / ((eta+1)^2 + k^2)   (normal-incidence)
-        if has_spectral_conductor and mat_type == Int8(3):
-            var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
-                      ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
-            var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
-                      ((metal_eta[1]+Float32(1.0))*(metal_eta[1]+Float32(1.0)) + metal_k[1]*metal_k[1])
-            var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
-                      ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
-            s[0].named_albedo[idx] = RGB(f0r, f0g, f0b)
-        elif mat_type == Int8(11):
-            # Physically-based melanin -> RGB albedo.
-            # PBRT-v4 sigma_a coefficients at R@630nm, G@530nm, B@450nm:
-            #   eumelanin:   [0.419, 0.697, 1.37]
-            #   pheomelanin: [0.187, 0.400, 1.05]
-            # Color = exp(-sigma_a * scale) where scale = 2.0 is a good typical
-            # effective path length through a hair cross-section ribbon.
-            var ce = eumelanin; var cp = pheomelanin
-            var scale = Float32(2.0)
-            var al_r = exp(-(ce * Float32(0.419) + cp * Float32(0.187)) * scale)
-            var al_g = exp(-(ce * Float32(0.697) + cp * Float32(0.400)) * scale)
-            var al_b = exp(-(ce * Float32(1.370) + cp * Float32(1.050)) * scale)
-            s[0].named_albedo[idx] = RGB(al_r, al_g, al_b)
-        else:
-            s[0].named_albedo[idx] = RGB(rgb[0], rgb[1], rgb[2])
-        s[0].named_transmittance[idx] = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
-        s[0].named_type[idx] = mat_type
-        s[0].named_ior[idx]  = mat_ior
-        s[0].named_roughU[idx] = mat_roughU
-        s[0].named_roughV[idx] = mat_roughV
-        s[0].named_tex_idx[idx] = tex_idx_for_mat
-        s[0].named_normal_tex_idx[idx] = normal_tex_idx_for_mat
-        _psc_strncpy(s[0].named_mix1 + idx * PSC_NAME_MAX, mix_name1, PSC_NAME_MAX)
-        _psc_strncpy(s[0].named_mix2 + idx * PSC_NAME_MAX, mix_name2, PSC_NAME_MAX)
-        s[0].named_amount[idx] = mix_amount
-        Int32(len(s[0].named_materials)) += 1
+    # Store into named_materials List
+    var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
+    # For named-spectrum conductors: compute Fresnel F0 per channel
+    if has_spectral_conductor and mat_type == Int8(3):
+        var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
+                  ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
+        var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
+                  ((metal_eta[1]+Float32(1.0))*(metal_eta[1]+Float32(1.0)) + metal_k[1]*metal_k[1])
+        var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
+                  ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
+        nm.albedo = RGB(f0r, f0g, f0b)
+    elif mat_type == Int8(11):
+        var ce = eumelanin; var cp = pheomelanin
+        var scale2 = Float32(2.0)
+        nm.albedo = RGB(
+            exp(-(ce * Float32(0.419) + cp * Float32(0.187)) * scale2),
+            exp(-(ce * Float32(0.697) + cp * Float32(0.400)) * scale2),
+            exp(-(ce * Float32(1.370) + cp * Float32(1.050)) * scale2),
+        )
+    else:
+        nm.albedo = RGB(rgb[0], rgb[1], rgb[2])
+    nm.transmittance  = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
+    nm.kind           = mat_type
+    nm.ior            = mat_ior
+    nm.roughness_u    = mat_roughU
+    nm.roughness_v    = mat_roughV
+    nm.tex_idx        = tex_idx_for_mat
+    nm.normal_tex_idx = normal_tex_idx_for_mat
+    nm.mix_name1      = String(unsafe_from_utf8_ptr=mix_name1.as_immutable())
+    nm.mix_name2      = String(unsafe_from_utf8_ptr=mix_name2.as_immutable())
+    nm.mix_amount     = mix_amount
+    s[0].named_materials.append(nm^)
 
     mat_name.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free()
     trans_rgb.free(); metal_eta.free(); metal_k.free()
@@ -1589,40 +1577,29 @@ def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
     s[0].cur_attr.mat_idx = Int32(-1)
-    for i in range(Int(Int32(len(s[0].named_materials)))):
-        if psc_strcmp(s[0].named_names + i * PSC_NAME_MAX, mat_name) == 0:
+    var name_str = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+    for i in range(len(s[0].named_materials)):
+        if s[0].named_materials[i].name == name_str:
             s[0].cur_attr.mat_idx = Int32(i)
             break
     mat_name.free()
 
 def _psc_handle_attribute_begin(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     ctm_push(s[0])
-    var d = Int(Int32(len(s[0].attr_stack)))
-    if d < PSC_ATTR_DEPTH:
-        s[0].attr_mat[d]    = s[0].cur_attr.mat_idx
-        s[0].attr_alight[d] = s[0].cur_attr.is_alight
-        s[0].attr_al_rgb[d] = s[0].al
-        s[0].attr_inside_med[d]  = s[0].cur_inside_medium
-        s[0].attr_outside_med[d] = s[0].cur_outside_medium
-        Int32(len(s[0].attr_stack)) += 1
+    s[0].attr_stack.append(s[0].cur_attr)
 
 def _psc_handle_attribute_end(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     ctm_pop(s[0])
-    if Int32(len(s[0].attr_stack)) > 0:
-        Int32(len(s[0].attr_stack)) -= 1
-        var d = Int(Int32(len(s[0].attr_stack)))
-        s[0].cur_attr.mat_idx = s[0].attr_mat[d]
-        s[0].cur_attr.is_alight   = s[0].attr_alight[d]
-        s[0].al = s[0].attr_al_rgb[d]
-        s[0].cur_attr.is_alight = Int32(0)
-        s[0].cur_inside_medium  = s[0].attr_inside_med[d]
-        s[0].cur_outside_medium = s[0].attr_outside_med[d]
+    if len(s[0].attr_stack) > 0:
+        s[0].cur_attr = s[0].attr_stack[len(s[0].attr_stack) - 1]
+        _ = s[0].attr_stack.pop()
 
 def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                  s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    s[0].cur_attr.is_alight = Int32(1)
+    s[0].cur_attr.is_alight = True
+    s[0].cur_attr.al_rgb = RGB(Float32(1), Float32(1), Float32(1))
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
     var scale = Float32(1.0)  # accumulated separately; applied after loop
@@ -1648,7 +1625,7 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigi
         found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
     rgb[0] *= scale; rgb[1] *= scale; rgb[2] *= scale
-    s[0].al = RGB(rgb[0], rgb[1], rgb[2])
+    s[0].cur_attr.al_rgb = RGB(rgb[0], rgb[1], rgb[2])
     sbuf.free(); type_buf.free(); name_buf.free(); rgb.free()
 
 def store_mesh(
@@ -1658,7 +1635,6 @@ def store_mesh(
     n_verts: Int32,
     n_tris:  Int32,
 ):
-    var n_meshes = Int(Int32(len(s[0].meshes)))
     var raw_pts = alloc[Float32](Int(n_verts) * 4)
     for v in range(Int(n_verts)):
         raw_pts[v*4+0] = tmp_f[v*3+0]
@@ -1666,41 +1642,40 @@ def store_mesh(
         raw_pts[v*4+2] = tmp_f[v*3+2]
         raw_pts[v*4+3] = Float32(1)
     var fin_pts = alloc[Float32](Int(n_verts) * 4)
-    transform_points(s[0].ctm, raw_pts, n_verts, fin_pts)
+    transform_points(s[0].ctm.unsafe_ptr(), raw_pts, n_verts, fin_pts)
     raw_pts.free()
-    var vis = alloc[Int64](Int(n_tris) * 3)
-    var fis = alloc[Int64](Int(n_tris))
+    # Build MeshAccum with List fields
+    var ma = MeshAccum(
+        s[0].cur_attr.mat_idx,
+        s[0].cur_attr.inside_medium,
+        s[0].cur_attr.outside_medium,
+    )
+    ma.is_area_light = s[0].cur_attr.is_alight
+    ma.al_rgb = s[0].cur_attr.al_rgb
+    ma.points.reserve(Int(n_verts) * 4)
+    for v in range(Int(n_verts) * 4):
+        ma.points.append(fin_pts[v])
+    fin_pts.free()
+    ma.vert_idxs.reserve(Int(n_tris) * 3)
+    ma.face_idxs.reserve(Int(n_tris))
     for t in range(Int(n_tris)):
-        vis[t*3+0] = Int64(tmp_i[t*3+0])
-        vis[t*3+1] = Int64(tmp_i[t*3+1])
-        vis[t*3+2] = Int64(tmp_i[t*3+2])
-        fis[t] = Int64(3)
-    s[0].mesh_pts_list[n_meshes] = fin_pts
-    s[0].mesh_vis_list[n_meshes] = vis
-    s[0].mesh_fis_list[n_meshes] = fis
-    s[0].mesh_nv[n_meshes] = n_verts
-    s[0].mesh_nt[n_meshes] = n_tris
-    s[0].mesh_mat_idx[n_meshes] = s[0].cur_attr.mat_idx
-    s[0].mesh_inside_med[n_meshes]  = s[0].cur_inside_medium
-    s[0].mesh_outside_med[n_meshes] = s[0].cur_outside_medium
-    s[0].mesh_is_al[n_meshes]   = s[0].cur_attr.is_alight
-    s[0].mesh_al_rgb[n_meshes]  = s[0].al
-    Int32(len(s[0].meshes)) += 1
+        ma.vert_idxs.append(Int64(tmp_i[t*3+0]))
+        ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
+        ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
+        ma.face_idxs.append(Int64(3))
+    s[0].meshes.append(ma^)
 
 # ── Hair curve helpers ────────────────────────────────────────────────────────
 
 def ensure_hair_buffer(s: UnsafePointer[SceneParseState, MutAnyOrigin]) -> Bool:
-    """Lazily allocate the hair accumulation buffers. Returns False if at mesh limit."""
-    if s[0].hair.has_value() != 0:
+    """Lazily init the hair MeshAccum. Returns False if at mesh limit."""
+    if s[0].hair:
         return True
-    if Int32(len(s[0].meshes)) >= Int32(PSC_MAX_MESHES):
-        return False
-    s[0].hair_pts = alloc[Float32](HAIR_MAX_VTX * 3)
-    s[0].hair_idx = alloc[Int32](HAIR_MAX_TRI * 3)
-    s[0].hair_nv  = Int32(0)
-    s[0].hair_nt  = Int32(0)
-    s[0].hair_mat = s[0].cur_attr.mat_idx
-    s[0].hair.has_value() = Int32(1)
+    s[0].hair = MeshAccum(
+        s[0].cur_attr.mat_idx,
+        s[0].cur_attr.inside_medium,
+        s[0].cur_attr.outside_medium,
+    )
     return True
 
 def bspline3_eval(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
@@ -1729,18 +1704,22 @@ def hair_add_quad(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         p1x: Float32, p1y: Float32, p1z: Float32,
         ux: Float32, uy: Float32, uz: Float32, hw: Float32):
     """Append one rectangular quad (2 triangles) to the hair accumulator."""
-    if s[0].hair_nv + Int32(4) > Int32(HAIR_MAX_VTX): return
-    if s[0].hair_nt + Int32(2) > Int32(HAIR_MAX_TRI): return
-    var bv = Int(s[0].hair_nv)
-    var bt = Int(s[0].hair_nt)
-    s[0].hair_pts[bv*3+0] = p0x+ux*hw; s[0].hair_pts[bv*3+1] = p0y+uy*hw; s[0].hair_pts[bv*3+2] = p0z+uz*hw
-    s[0].hair_pts[(bv+1)*3+0] = p0x-ux*hw; s[0].hair_pts[(bv+1)*3+1] = p0y-uy*hw; s[0].hair_pts[(bv+1)*3+2] = p0z-uz*hw
-    s[0].hair_pts[(bv+2)*3+0] = p1x+ux*hw; s[0].hair_pts[(bv+2)*3+1] = p1y+uy*hw; s[0].hair_pts[(bv+2)*3+2] = p1z+uz*hw
-    s[0].hair_pts[(bv+3)*3+0] = p1x-ux*hw; s[0].hair_pts[(bv+3)*3+1] = p1y-uy*hw; s[0].hair_pts[(bv+3)*3+2] = p1z-uz*hw
-    s[0].hair_idx[bt*3+0] = Int32(bv);   s[0].hair_idx[bt*3+1] = Int32(bv+1); s[0].hair_idx[bt*3+2] = Int32(bv+2)
-    s[0].hair_idx[(bt+1)*3+0] = Int32(bv+1); s[0].hair_idx[(bt+1)*3+1] = Int32(bv+3); s[0].hair_idx[(bt+1)*3+2] = Int32(bv+2)
-    s[0].hair_nv += Int32(4)
-    s[0].hair_nt += Int32(2)
+    ref h = s[0].hair.value()
+    var bv = len(h.points) // 4
+    # 4 vertices (xyz + pad)
+    h.points.append(p0x+ux*hw); h.points.append(p0y+uy*hw)
+    h.points.append(p0z+uz*hw); h.points.append(Float32(1))
+    h.points.append(p0x-ux*hw); h.points.append(p0y-uy*hw)
+    h.points.append(p0z-uz*hw); h.points.append(Float32(1))
+    h.points.append(p1x+ux*hw); h.points.append(p1y+uy*hw)
+    h.points.append(p1z+uz*hw); h.points.append(Float32(1))
+    h.points.append(p1x-ux*hw); h.points.append(p1y-uy*hw)
+    h.points.append(p1z-uz*hw); h.points.append(Float32(1))
+    # 2 triangles
+    h.vert_idxs.append(Int64(bv));   h.vert_idxs.append(Int64(bv+1)); h.vert_idxs.append(Int64(bv+2))
+    h.face_idxs.append(Int64(3))
+    h.vert_idxs.append(Int64(bv+1)); h.vert_idxs.append(Int64(bv+3)); h.vert_idxs.append(Int64(bv+2))
+    h.face_idxs.append(Int64(3))
 
 def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                             s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -1786,7 +1765,7 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         raw4[step*4+1] = eval_pts[step*3+1]
         raw4[step*4+2] = eval_pts[step*3+2]
         raw4[step*4+3] = Float32(1)
-    transform_points(s[0].ctm, raw4, Int32(HAIR_EVAL_N), xfm4)
+    transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(HAIR_EVAL_N), xfm4)
     raw4.free()
     # Tessellate segments into cross-ribbon geometry
     var hw = width / Float32(2)
@@ -1812,17 +1791,13 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     xfm4.free(); eval_pts.free()
 
 def flush_hair(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    """Flush all accumulated hair strands into a single scene mesh."""
-    if s[0].hair.has_value() == 0 or s[0].hair_nt == 0:
+    """Flush all accumulated hair strands into the meshes List."""
+    if not s[0].hair:
         return
-    var saved_mat = s[0].cur_attr.mat_idx
-    s[0].cur_attr.mat_idx = s[0].hair_mat
-    store_mesh(s, s[0].hair_pts, s[0].hair_idx, s[0].hair_nv, s[0].hair_nt)
-    s[0].cur_attr.mat_idx = saved_mat
-    # Mark as flushed — but DON'T free: buffers will be freed by _psc_state_free
-    # (hair_inited stays 1 so the free path in _psc_state_free still runs)
-    s[0].hair_nv = Int32(0)
-    s[0].hair_nt = Int32(0)
+    var h = s[0].hair.take()
+    if len(h.face_idxs) == 0:
+        return
+    s[0].meshes.append(h^)
 
 
 def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
@@ -1865,53 +1840,39 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             if is_arr:
                 _ = scanner_scan_char(handle, UInt8(93))  # ']' 
     if is_hom:
-        var n = Int(Int32(len(s[0].med_g)))
-        if n < 32:
-            var dst = s[0].med_names + n * 64
-            var ni = 0
-            while name_buf[ni] != UInt8(0) and ni < 63:
-                dst[ni] = name_buf[ni]; ni += 1
-            dst[ni] = UInt8(0)
-            s[0].med_sa[n*3]   = sa[0] * scale
-            s[0].med_sa[n*3+1] = sa[1] * scale
-            s[0].med_sa[n*3+2] = sa[2] * scale
-            s[0].med_ss[n*3]   = ss[0] * scale
-            s[0].med_ss[n*3+1] = ss[1] * scale
-            s[0].med_ss[n*3+2] = ss[2] * scale
-            s[0].med_g[n] = g_val
-            Int32(len(s[0].med_g)) = Int32(n + 1)
+        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        s[0].med_names.append(name_str)
+        s[0].med_sa.append(sa[0] * scale)
+        s[0].med_sa.append(sa[1] * scale)
+        s[0].med_sa.append(sa[2] * scale)
+        s[0].med_ss.append(ss[0] * scale)
+        s[0].med_ss.append(ss[1] * scale)
+        s[0].med_ss.append(ss[2] * scale)
+        s[0].med_g.append(g_val)
     name_buf.free(); sa.free(); ss.free(); type_buf.free(); val_buf.free()
 
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutAnyOrigin],
-                       name: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
+                  name: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
     """Return medium index for name, or -1 for empty string / not found."""
     if name[0] == UInt8(0):
         return Int32(-1)
-    for i in range(Int(Int32(len(s[0].med_g)))):
-        var entry = s[0].med_names + i * 64
-        var j = 0
-        var match_ok = True
-        while name[j] != UInt8(0) or entry[j] != UInt8(0):
-            if name[j] != entry[j]:
-                match_ok = False
-                break
-            j += 1
-        if match_ok:
+    var name_str = String(unsafe_from_utf8_ptr=name.as_immutable())
+    for i in range(len(s[0].med_names)):
+        if s[0].med_names[i] == name_str:
             return Int32(i)
     return Int32(-1)
 
 
 def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                                 s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    """Parse MediumInterface \"inside_name\" \"outside_name\" and bind to cur_mat_idx."""
+                            s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    """Parse MediumInterface \"inside_name\" \"outside_name\" and bind to cur_attr."""
     var inside_buf  = alloc[UInt8](64)
     var outside_buf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, inside_buf, 64)
     _ = scanner_parse_quoted_string(handle, outside_buf, 64)
-    # Set attribute-state medium interface (applied to shapes emitted in this scope)
-    s[0].cur_inside_medium  = lookup_medium(s, inside_buf)
-    s[0].cur_outside_medium = lookup_medium(s, outside_buf)
+    s[0].cur_attr.inside_medium  = lookup_medium(s, inside_buf)
+    s[0].cur_attr.outside_medium = lookup_medium(s, outside_buf)
     inside_buf.free(); outside_buf.free()
 
 def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
@@ -1940,24 +1901,22 @@ def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
     var n = Int(Int32(len(s[0].spheres_cx)))
     # World-space center = CTM * (0,0,0,1) = translation column (indices 12,13,14)
-    var ctm = s[0].ctm
-    var cx = ctm[12]
-    var cy = ctm[13]
-    var cz = ctm[14]
+    var cx = s[0].ctm[12]
+    var cy = s[0].ctm[13]
+    var cz = s[0].ctm[14]
     # Scale radius by the uniform scale of the CTM (length of first column vector)
-    var sx = sqrt(ctm[0]*ctm[0] + ctm[1]*ctm[1] + ctm[2]*ctm[2])
+    var sx = sqrt(s[0].ctm[0]*s[0].ctm[0] + s[0].ctm[1]*s[0].ctm[1] + s[0].ctm[2]*s[0].ctm[2])
     if sx < Float32(1e-6): sx = Float32(1.0)
     radius *= sx
-    s[0].sph_cx[n]  = cx
-    s[0].sph_cy[n]  = cy
-    s[0].sph_cz[n]  = cz
-    s[0].sph_r[n]   = radius
-    s[0].sph_mat[n] = s[0].cur_attr.mat_idx
-    s[0].sph_inside_med[n]  = s[0].cur_inside_medium
-    s[0].sph_outside_med[n] = s[0].cur_outside_medium
-    s[0].sph_al[n]  = Int8(1) if s[0].cur_attr.is_alight != 0 else Int8(0)
-    s[0].sph_rgb[n] = s[0].al
-    Int32(len(s[0].spheres_cx))  = Int32(n + 1)
+    s[0].spheres_cx.append(cx)
+    s[0].spheres_cy.append(cy)
+    s[0].spheres_cz.append(cz)
+    s[0].spheres_r.append(radius)
+    s[0].spheres_mat.append(s[0].cur_attr.mat_idx)
+    s[0].spheres_inside_med.append(s[0].cur_attr.inside_medium)
+    s[0].spheres_outside_med.append(s[0].cur_attr.outside_medium)
+    s[0].spheres_al.append(s[0].cur_attr.is_alight)
+    s[0].spheres_rgb.append(s[0].cur_attr.al_rgb)
 
 def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                      s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -1979,11 +1938,6 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         return
 
     if not is_tri and not is_ply:
-        _psc_skip_params(handle)
-        return
-
-    var n_meshes = Int(Int32(len(s[0].meshes)))
-    if n_meshes >= PSC_MAX_MESHES:
         _psc_skip_params(handle)
         return
 
@@ -2012,8 +1966,8 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
         var full_path = alloc[UInt8](PSC_FILE_MAX * 2)
         var dir_len = 0
-        while s[0].scene_dir[dir_len] != UInt8(0):
-            full_path[dir_len] = s[0].scene_dir[dir_len]
+        while s[0].scene_dir.unsafe_ptr()[dir_len] != UInt8(0):
+            full_path[dir_len] = s[0].scene_dir.unsafe_ptr()[dir_len]
             dir_len += 1
         var fn_i = 0
         while ply_filename[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
@@ -2048,13 +2002,13 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         var tmp_f2 = ply_pts[0]
         var tmp_i2 = ply_idx[0]
         store_mesh(s, tmp_f2, tmp_i2, nv, nt)
-        # Store UVs for this mesh
-        var cur_mesh_idx = Int(Int32(len(s[0].meshes))) - 1
+        # Store UVs into last mesh's uvs List
         if ply_has_uvs[0] != 0:
-            s[0].mesh_uvs_list[cur_mesh_idx] = ply_uvs[0]
-            s[0].mesh_has_uvs[cur_mesh_idx]  = Int8(1)
-        else:
-            s[0].mesh_uvs_list[cur_mesh_idx] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+            var uv_ptr = ply_uvs[0]
+            var n_uv_floats = Int(nv) * 2
+            for uvi in range(n_uv_floats):
+                s[0].meshes[len(s[0].meshes) - 1].uvs.append(uv_ptr[uvi])
+            uv_ptr.free()
         tmp_f2.free(); tmp_i2.free()
         ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
         ply_uvs.free(); ply_has_uvs.free()
@@ -2117,15 +2071,9 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
     store_mesh(s, tmp_f, tmp_i, n_verts, n_tris)
     # Store UVs for inline trianglemesh
-    var cur_mesh_idx = Int(Int32(len(s[0].meshes))) - 1
     if n_uv >= n_verts * Int32(2):
-        var uv_copy = alloc[Float32](Int(n_verts) * 2)
         for ui in range(Int(n_verts) * 2):
-            uv_copy[ui] = tmp_uv[ui]
-        s[0].mesh_uvs_list[cur_mesh_idx] = uv_copy
-        s[0].mesh_has_uvs[cur_mesh_idx]  = Int8(1)
-    else:
-        s[0].mesh_uvs_list[cur_mesh_idx] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+            s[0].meshes[len(s[0].meshes) - 1].uvs.append(tmp_uv[ui])
     tmp_f.free(); tmp_i.free(); tmp_uv.free()
 
 def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
@@ -2154,22 +2102,10 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-            var idx = Int(Int32(len(s[0].tex_names)))
-            if idx < PSC_MAX_TEX:
-                # Store name
-                _psc_strncpy(s[0].tex_names + idx * PSC_NAME_MAX, tex_name, Int32(PSC_NAME_MAX))
-                # Build full path: scene_dir + filename
-                var full = s[0].tex_files + idx * PSC_FILE_MAX * 2
-                var dir_len = 0
-                while s[0].scene_dir[dir_len] != UInt8(0):
-                    full[dir_len] = s[0].scene_dir[dir_len]
-                    dir_len += 1
-                var fn_i = 0
-                while str_val[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
-                    full[dir_len + fn_i] = str_val[fn_i]
-                    fn_i += 1
-                full[dir_len + fn_i] = UInt8(0)
-                Int32(len(s[0].tex_names)) += 1
+            var name_str = String(unsafe_from_utf8_ptr=tex_name.as_immutable())
+            var file_str = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            s[0].tex_names.append(name_str)
+            s[0].tex_files.append(file_str)
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
@@ -2219,77 +2155,43 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
     ia.free()
 
-    comptime MAX_LIGHTS = 64
     if _psc_streq(ltype, "distant"):
-        var idx = Int(Int32(len(s[0].distant_dirs) / 3))
-        if idx < MAX_LIGHTS:
-            # direction = -from (from describes where light comes from)
-            var len = sqrt(xyz[0]*xyz[0] + xyz[1]*xyz[1] + xyz[2]*xyz[2])
-            if len < Float32(0.0001): len = Float32(1.0)
-            s[0].dist_dirs[idx*3+0] = -xyz[0] / len
-            s[0].dist_dirs[idx*3+1] = -xyz[1] / len
-            s[0].dist_dirs[idx*3+2] = -xyz[2] / len
-            s[0].dist_rgb[idx*3+0] = rgb[0] * scale
-            s[0].dist_rgb[idx*3+1] = rgb[1] * scale
-            s[0].dist_rgb[idx*3+2] = rgb[2] * scale
-            Int32(len(s[0].distant_dirs) / 3) += 1
+        # direction = -from (from describes where light comes from)
+        var dlen = sqrt(xyz[0]*xyz[0] + xyz[1]*xyz[1] + xyz[2]*xyz[2])
+        if dlen < Float32(0.0001): dlen = Float32(1.0)
+        s[0].distant_dirs.append(-xyz[0] / dlen)
+        s[0].distant_dirs.append(-xyz[1] / dlen)
+        s[0].distant_dirs.append(-xyz[2] / dlen)
+        s[0].distant_rgbs.append(rgb[0] * scale)
+        s[0].distant_rgbs.append(rgb[1] * scale)
+        s[0].distant_rgbs.append(rgb[2] * scale)
     elif _psc_streq(ltype, "point"):
-        var idx = Int(Int32(len(s[0].point_pos) / 3))
-        if idx < MAX_LIGHTS:
-            # Apply current CTM to position
-            var raw = alloc[Float32](4)
-            raw[0] = xyz[0]; raw[1] = xyz[1]; raw[2] = xyz[2]; raw[3] = Float32(1)
-            var fin = alloc[Float32](4)
-            transform_points(s[0].ctm, raw, Int32(1), fin)
-            s[0].pt_pos[idx*3+0] = fin[0]
-            s[0].pt_pos[idx*3+1] = fin[1]
-            s[0].pt_pos[idx*3+2] = fin[2]
-            s[0].pt_rgb[idx*3+0] = rgb[0] * scale
-            s[0].pt_rgb[idx*3+1] = rgb[1] * scale
-            s[0].pt_rgb[idx*3+2] = rgb[2] * scale
-            Int32(len(s[0].point_pos) / 3) += 1
-            raw.free(); fin.free()
+        # Apply current CTM to position
+        var raw = alloc[Float32](4)
+        raw[0] = xyz[0]; raw[1] = xyz[1]; raw[2] = xyz[2]; raw[3] = Float32(1)
+        var fin = alloc[Float32](4)
+        transform_points(s[0].ctm.unsafe_ptr(), raw, Int32(1), fin)
+        s[0].point_pos.append(fin[0])
+        s[0].point_pos.append(fin[1])
+        s[0].point_pos.append(fin[2])
+        s[0].point_rgbs.append(rgb[0] * scale)
+        s[0].point_rgbs.append(rgb[1] * scale)
+        s[0].point_rgbs.append(rgb[2] * scale)
+        raw.free(); fin.free()
     elif _psc_streq(ltype, "infinite"):
-        var idx = Int(Int32(len(s[0].inf_tex_idx)))
-        if idx < MAX_LIGHTS:
-            # Try to find texture by filename
-            var tex_i = Int32(-1)
-            if str_val[0] != UInt8(0):
-                # Build full path and register as a texture
-                var full = alloc[UInt8](PSC_FILE_MAX * 2)
-                var dir_len = 0
-                while s[0].scene_dir[dir_len] != UInt8(0):
-                    full[dir_len] = s[0].scene_dir[dir_len]
-                    dir_len += 1
-                var fn_i = 0
-                while str_val[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
-                    full[dir_len + fn_i] = str_val[fn_i]
-                    fn_i += 1
-                full[dir_len + fn_i] = UInt8(0)
-                # Register as a texture entry
-                var ti = Int(Int32(len(s[0].tex_names)))
-                if ti < PSC_MAX_TEX:
-                    # Name = "__inf_N"
-                    s[0].tex_names[ti * PSC_NAME_MAX + 0] = UInt8(95)  # '_'
-                    s[0].tex_names[ti * PSC_NAME_MAX + 1] = UInt8(95)
-                    s[0].tex_names[ti * PSC_NAME_MAX + 2] = UInt8(105) # 'i'
-                    s[0].tex_names[ti * PSC_NAME_MAX + 3] = UInt8(110) # 'n'
-                    s[0].tex_names[ti * PSC_NAME_MAX + 4] = UInt8(102) # 'f'
-                    s[0].tex_names[ti * PSC_NAME_MAX + 5] = UInt8(0)
-                    var dst = s[0].tex_files + ti * PSC_FILE_MAX * 2
-                    for ci in range(dir_len + fn_i + 1):
-                        dst[ci] = full[ci]
-                    tex_i = Int32(ti)
-                    Int32(len(s[0].tex_names)) += 1
-                full.free()
-            s[0].inf_tex_idx[idx] = tex_i
-            s[0].inf_rgb[idx*3+0] = rgb[0] * scale
-            s[0].inf_rgb[idx*3+1] = rgb[1] * scale
-            s[0].inf_rgb[idx*3+2] = rgb[2] * scale
-            # Store the light's CTM for env-map direction transform
-            for ci in range(16):
-                s[0].inf_ctm[idx*16+ci] = s[0].ctm[ci]
-            Int32(len(s[0].inf_tex_idx)) += 1
+        if str_val[0] != UInt8(0):
+            var file_str = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            s[0].tex_names.append(String("__inf"))
+            s[0].tex_files.append(file_str)
+            s[0].inf_tex_idx.append(Int32(len(s[0].tex_names) - 1))
+        else:
+            s[0].inf_tex_idx.append(Int32(-1))
+        s[0].inf_rgb.append(rgb[0] * scale)
+        s[0].inf_rgb.append(rgb[1] * scale)
+        s[0].inf_rgb.append(rgb[2] * scale)
+        # Store the light's CTM for env-map direction transform
+        for ci in range(16):
+            s[0].inf_ctm.append(s[0].ctm[ci])
 
     ltype.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free(); xyz.free()
 
@@ -2380,8 +2282,8 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             _ = scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
             var inc_path = alloc[UInt8](PSC_FILE_MAX * 2)
             var dlen = 0
-            while s[0].scene_dir[dlen] != UInt8(0):
-                inc_path[dlen] = s[0].scene_dir[dlen]
+            while s[0].scene_dir.unsafe_ptr()[dlen] != UInt8(0):
+                inc_path[dlen] = s[0].scene_dir.unsafe_ptr()[dlen]
                 dlen += 1
             var fi = 0
             while inc_name[fi] != UInt8(0) and dlen + fi < PSC_FILE_MAX * 2 - 1:
@@ -2411,7 +2313,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                 _ = scanner_scan_float(handle, tmp + i)
             _ = scanner_scan_char(handle, UInt8(93))  # ']'
             var result = alloc[Float32](16)
-            matrix_multiply(s[0].ctm, tmp, result)
+            matrix_multiply(s[0].ctm.unsafe_ptr(), tmp, result)
             for i in range(16):
                 s[0].ctm[i] = result[i]
             tmp.free(); result.free()
@@ -2459,7 +2361,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     # ---- Camera matrices ----
     var c2w = alloc[Float32](16)
-    _ = matrix_invert(s[0].cam2w_raw, c2w)
+    var cam2w_tmp = alloc[Float32](16)
+    for i in range(16): cam2w_tmp[i] = s[0].cam2w_raw[i]
+    _ = matrix_invert(cam2w_tmp, c2w)
+    cam2w_tmp.free()
     psc[0].camera_to_world = c2w
 
     # ---- DEBUG: scene summary ----
@@ -2474,34 +2379,35 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     print("  Infinite lights:", Int32(len(s[0].inf_tex_idx)))
     print("  Distant lights:", Int32(len(s[0].distant_dirs) / 3))
     print("  Point lights:", Int32(len(s[0].point_pos) / 3))
-    print("  Spheres:", Int32(len(s[0].spheres_cx)))
+    print("  Spheres:", len(s[0].spheres_cx))
     # Print material types
-    for mi in range(min(Int(Int32(len(s[0].named_materials))), 20)):
-        print("  Mat[" + String(mi) + "] type=" + String(Int(s[0].named_type[mi])),
-              "albedo=(" + String(s[0].named_albedo[mi].r) + "," + String(s[0].named_albedo[mi].g) + "," + String(s[0].named_albedo[mi].b) + ")")
+    for mi in range(min(len(s[0].named_materials), 20)):
+        var nm2 = s[0].named_materials[mi]
+        print("  Mat[" + String(mi) + "] type=" + String(Int(nm2.kind)),
+              "albedo=(" + String(nm2.albedo.r) + "," + String(nm2.albedo.g) + "," + String(nm2.albedo.b) + ")")
     # Print infinite light info
-    for ii in range(Int(Int32(len(s[0].inf_tex_idx)))):
+    for ii in range(len(s[0].inf_tex_idx)):
         print("  InfLight[" + String(ii) + "] tex_idx=" + String(Int(s[0].inf_tex_idx[ii])),
               "rgb=(" + String(s[0].inf_rgb[ii*3]) + "," + String(s[0].inf_rgb[ii*3+1]) + "," + String(s[0].inf_rgb[ii*3+2]) + ")")
-        # Print first row of CTM
         var base = ii * 16
         print("    CTM row0:", s[0].inf_ctm[base], s[0].inf_ctm[base+4], s[0].inf_ctm[base+8], s[0].inf_ctm[base+12])
     # Print first 5 mesh bounding boxes
-    for mi2 in range(min(Int(Int32(len(s[0].meshes))), 5)):
-        var nv = Int(s[0].mesh_nv[mi2])
-        var pts = s[0].mesh_pts_list[mi2]
+    for mi2 in range(min(len(s[0].meshes), 5)):
+        var nv2 = len(s[0].meshes[mi2].points) // 4
+        var pts = s[0].meshes[mi2].points.unsafe_ptr()
         var mnx = pts[0]; var mny = pts[1]; var mnz = pts[2]
         var mxx = pts[0]; var mxy = pts[1]; var mxz = pts[2]
-        for vi in range(1, nv):
-            if pts[vi*4] < mnx: mnx = pts[vi*4]
+        for vi in range(1, nv2):
+            if pts[vi*4]   < mnx: mnx = pts[vi*4]
             if pts[vi*4+1] < mny: mny = pts[vi*4+1]
             if pts[vi*4+2] < mnz: mnz = pts[vi*4+2]
-            if pts[vi*4] > mxx: mxx = pts[vi*4]
+            if pts[vi*4]   > mxx: mxx = pts[vi*4]
             if pts[vi*4+1] > mxy: mxy = pts[vi*4+1]
             if pts[vi*4+2] > mxz: mxz = pts[vi*4+2]
-        print("  Mesh[" + String(mi2) + "] verts=" + String(nv) + " tris=" + String(Int(s[0].mesh_nt[mi2])),
+        var nt2 = len(s[0].meshes[mi2].face_idxs)
+        print("  Mesh[" + String(mi2) + "] verts=" + String(nv2) + " tris=" + String(nt2),
               "bbox=(" + String(mnx) + ".." + String(mxx) + ", " + String(mny) + ".." + String(mxy) + ", " + String(mnz) + ".." + String(mxz) + ")",
-              "mat_idx=" + String(Int(s[0].mesh_mat_idx[mi2])))
+              "mat_idx=" + String(Int(s[0].meshes[mi2].mat_idx)))
     print("=== END DEBUG ===")
 
     var cts = alloc[Float32](16)
@@ -2533,116 +2439,125 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     cts.free(); str_mat.free(); rts.free(); cts_inv.free()
 
     # ---- Materials ----
-    var n_regular = Int(Int32(len(s[0].named_materials)))
+    var n_regular = len(s[0].named_materials)
 
-    var n_al = Int32(0)
-    for i in range(Int(Int32(len(s[0].meshes)))):
-        if s[0].mesh_is_al[i] != 0:
+    var n_al = 0
+    for i in range(len(s[0].meshes)):
+        if s[0].meshes[i].is_area_light:
             n_al += 1
 
-    var n_mats = n_regular + Int(n_al)
+    var n_mats = n_regular + n_al
     var mats = alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
-        var mt = s[0].named_type[i]
-        var ior = s[0].named_ior[i]
+        var nm3 = s[0].named_materials[i]
+        var mt = nm3.kind
+        var ior = nm3.ior
         mats[i].type = mt
-        mats[i].tex_idx = s[0].named_tex_idx[i]
-        mats[i].roughU  = s[0].named_roughU[i]
-        mats[i].roughV  = s[0].named_roughV[i]
-        mats[i].normal_tex_idx = s[0].named_normal_tex_idx[i]
+        mats[i].tex_idx = nm3.tex_idx
+        mats[i].roughU  = nm3.roughness_u
+        mats[i].roughV  = nm3.roughness_v
+        mats[i].normal_tex_idx = nm3.normal_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
         if mt == Int8(4):  # dielectric: albedo.r holds IOR
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
         elif mt == Int8(5):  # coated diffuse: emission.r holds IOR
-            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
         elif mt == Int8(7):  # coated conductor: emission.r holds IOR (clearcoat eta)
-            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
         elif mt == Int8(9):  # thin dielectric: albedo.r holds IOR (same as type 4)
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
         elif mt == Int8(8):  # mix: resolve sub-material names to indices
-            var m1_name = s[0].named_mix1 + i * PSC_NAME_MAX
-            var m2_name = s[0].named_mix2 + i * PSC_NAME_MAX
-            var idx1 = Int32(0)  # default to first material
+            var idx1 = Int32(0)
             var idx2 = Int32(0)
             for j in range(n_regular):
-                if psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m1_name) == 0:
-                    idx1 = Int32(j)
-                if psc_strcmp(s[0].named_names + j * PSC_NAME_MAX, m2_name) == 0:
-                    idx2 = Int32(j)
-            # Pack both indices into tex_idx: high 16 bits = idx2, low 16 bits = idx1
+                if s[0].named_materials[j].name == nm3.mix_name1: idx1 = Int32(j)
+                if s[0].named_materials[j].name == nm3.mix_name2: idx2 = Int32(j)
             mats[i].tex_idx = (idx2 << 16) | (idx1 & Int32(0xFFFF))
-            mats[i].roughU  = s[0].named_amount[i]  # blend factor
-            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].roughU  = nm3.mix_amount
+            mats[i].albedo  = nm3.albedo
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
         elif mt == Int8(6):  # diffusetransmission: emission holds the transmittance
-            mats[i].albedo = s[0].named_albedo[i]
-            mats[i].emission = s[0].named_transmittance[i]
+            mats[i].albedo = nm3.albedo
+            mats[i].emission = nm3.transmittance
         elif mt == Int8(11):  # hair: simplified as diffuse with melanin-computed color
-            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
             mats[i].type = Int8(1)  # redirect to diffuse shader
         else:
-            mats[i].albedo = s[0].named_albedo[i]
+            mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
 
     # ---- Meshes + area lights ----
-    var n_meshes = Int(Int32(len(s[0].meshes)))
-    var meshes  = alloc[TriangleMesh_C](max(n_meshes, 1))
-    var out_pts = alloc[UnsafePointer[Float32, MutAnyOrigin]](max(n_meshes, 1))
-    var out_vis = alloc[UnsafePointer[Int64, MutAnyOrigin]](max(n_meshes, 1))
-    var out_fis = alloc[UnsafePointer[Int64, MutAnyOrigin]](max(n_meshes, 1))
+    var n_meshes = len(s[0].meshes)
+    var meshes   = alloc[TriangleMesh_C](max(n_meshes, 1))
+    var out_pts  = alloc[UnsafePointer[Float32, MutAnyOrigin]](max(n_meshes, 1))
+    var out_vis  = alloc[UnsafePointer[Int64, MutAnyOrigin]](max(n_meshes, 1))
+    var out_fis  = alloc[UnsafePointer[Int64, MutAnyOrigin]](max(n_meshes, 1))
     var out_nv    = alloc[Int32](max(n_meshes, 1))
     var out_nt    = alloc[Int32](max(n_meshes, 1))
     var out_uv_nv = alloc[Int32](max(n_meshes, 1))
 
-    var al_list = alloc[AreaLight_C](max(Int(n_al), 1))
+    var al_list  = alloc[AreaLight_C](max(n_al, 1))
     var al_count = Int32(0)
-
     var al_mat_base = n_regular
 
     for i in range(n_meshes):
-        out_pts[i] = s[0].mesh_pts_list[i]
-        out_vis[i] = s[0].mesh_vis_list[i]
-        out_fis[i] = s[0].mesh_fis_list[i]
-        out_nv[i]  = s[0].mesh_nv[i]
-        out_nt[i]  = s[0].mesh_nt[i]
-        meshes[i].points        = out_pts[i]
-        meshes[i].vertexIndices = out_vis[i]
-        meshes[i].faceIndices   = out_fis[i]
-        meshes[i].uvs           = s[0].mesh_uvs_list[i]
-        out_uv_nv[i] = s[0].mesh_nv[i] if s[0].mesh_has_uvs[i] != Int8(0) else Int32(0)
+        ref ma = s[0].meshes[i]
+        var nv = len(ma.points) // 4
+        var nt = len(ma.face_idxs)
+        # Copy points to C array
+        var pts_c = alloc[Float32](nv * 4)
+        for vi in range(nv * 4): pts_c[vi] = ma.points[vi]
+        # Copy vertex indices to C array
+        var vis_c = alloc[Int64](nt * 3)
+        for ti2 in range(nt * 3): vis_c[ti2] = ma.vert_idxs[ti2]
+        # Copy face indices
+        var fis_c = alloc[Int64](nt)
+        for ti2 in range(nt): fis_c[ti2] = ma.face_idxs[ti2]
+        out_pts[i] = pts_c
+        out_vis[i] = vis_c
+        out_fis[i] = fis_c
+        out_nv[i]  = Int32(nv)
+        out_nt[i]  = Int32(nt)
+        meshes[i].points        = pts_c
+        meshes[i].vertexIndices = vis_c
+        meshes[i].faceIndices   = fis_c
+        # Copy UVs if present
+        if len(ma.uvs) >= nv * 2:
+            var uv_c = alloc[Float32](nv * 2)
+            for ui in range(nv * 2): uv_c[ui] = ma.uvs[ui]
+            meshes[i].uvs = uv_c
+            out_uv_nv[i] = Int32(nv)
+        else:
+            meshes[i].uvs = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+            out_uv_nv[i] = Int32(0)
 
-        if s[0].mesh_is_al[i] != 0:
+        if ma.is_area_light:
             var al_idx = Int(al_count)
-            var em = s[0].mesh_al_rgb[i]
-            # Compute total light mesh area from its triangles
-            var al_nt   = Int(s[0].mesh_nt[i])
-            var al_pts  = s[0].mesh_pts_list[i]
-            var al_vis  = s[0].mesh_vis_list[i]
+            var em = ma.al_rgb
             var t_area  = Float32(0.0)
-            for ti in range(al_nt):
-                var vi0 = Int(al_vis[ti*3+0]) * 4
-                var vi1 = Int(al_vis[ti*3+1]) * 4
-                var vi2 = Int(al_vis[ti*3+2]) * 4
-                var ex = al_pts[vi1+0] - al_pts[vi0+0]
-                var ey = al_pts[vi1+1] - al_pts[vi0+1]
-                var ez = al_pts[vi1+2] - al_pts[vi0+2]
-                var fx = al_pts[vi2+0] - al_pts[vi0+0]
-                var fy = al_pts[vi2+1] - al_pts[vi0+1]
-                var fz = al_pts[vi2+2] - al_pts[vi0+2]
-                var cx = ey*fz - ez*fy
-                var cy = ez*fx - ex*fz
-                var cz = ex*fy - ey*fx
-                t_area += Float32(0.5) * sqrt(cx*cx + cy*cy + cz*cz)
+            for ti in range(nt):
+                var vi0 = Int(vis_c[ti*3+0]) * 4
+                var vi1 = Int(vis_c[ti*3+1]) * 4
+                var vi2 = Int(vis_c[ti*3+2]) * 4
+                var ex = pts_c[vi1+0] - pts_c[vi0+0]
+                var ey = pts_c[vi1+1] - pts_c[vi0+1]
+                var ez = pts_c[vi1+2] - pts_c[vi0+2]
+                var fx = pts_c[vi2+0] - pts_c[vi0+0]
+                var fy = pts_c[vi2+1] - pts_c[vi0+1]
+                var fz = pts_c[vi2+2] - pts_c[vi0+2]
+                var cxv = ey*fz - ez*fy
+                var cyv = ez*fx - ex*fz
+                var czv = ex*fy - ey*fx
+                t_area += Float32(0.5) * sqrt(cxv*cxv + cyv*cyv + czv*czv)
             al_list[al_idx].meshIdx    = Int32(i)
-            al_list[al_idx].n_tris     = Int32(al_nt)
+            al_list[al_idx].n_tris     = Int32(nt)
             al_list[al_idx].emission   = em
             al_list[al_idx].total_area = t_area
-
             mats[al_mat_base + al_idx].type     = Int8(2)  # arealight
             mats[al_mat_base + al_idx].albedo   = RGB(Float32(0), Float32(0), Float32(0))
             mats[al_mat_base + al_idx].emission = em
@@ -2655,17 +2570,15 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     # ---- BVH construction ----
     # Build per-shape medium interfaces.
-    # Phase 1: count how many shapes need medium interfaces.
     var n_with_mi = 0
     for mi in range(n_meshes):
-        if s[0].mesh_inside_med[mi] >= Int32(0) or s[0].mesh_outside_med[mi] >= Int32(0):
+        if s[0].meshes[mi].inside_medium >= Int32(0) or s[0].meshes[mi].outside_medium >= Int32(0):
             n_with_mi += 1
-    for si in range(Int(Int32(len(s[0].spheres_cx)))):
-        if s[0].sph_inside_med[si] >= Int32(0) or s[0].sph_outside_med[si] >= Int32(0):
+    for si in range(len(s[0].spheres_cx)):
+        if s[0].spheres_inside_med[si] >= Int32(0) or s[0].spheres_outside_med[si] >= Int32(0):
             n_with_mi += 1
 
     if n_with_mi > 0:
-        # Phase 2: expand mats array to hold duplicates (one per shape with MI)
         var expanded_n = n_mats + n_with_mi
         var new_mats = alloc[Material_C](expanded_n)
         for ci in range(n_mats):
@@ -2674,54 +2587,45 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         mats = new_mats
 
         var iface_buf = alloc[MediumInterface_C](n_with_mi)
-        var dup_idx = n_mats  # next slot for duplicated material
+        var dup_idx = n_mats
         var iface_idx = 0
 
-        # Phase 3: for each mesh with MI, create a duplicated material + interface
         for mi in range(n_meshes):
-            var ins = s[0].mesh_inside_med[mi]
-            var out = s[0].mesh_outside_med[mi]
-            if ins < Int32(0) and out < Int32(0):
-                continue
-            var orig_mat = Int(s[0].mesh_mat_idx[mi])
-            if orig_mat < 0:
-                continue
-            # Duplicate the material
+            var ins = s[0].meshes[mi].inside_medium
+            var out = s[0].meshes[mi].outside_medium
+            if ins < Int32(0) and out < Int32(0): continue
+            var orig_mat = Int(s[0].meshes[mi].mat_idx)
+            if orig_mat < 0: continue
             mats[dup_idx] = mats[orig_mat]
             mats[dup_idx].medium_interface_idx = Int32(iface_idx)
             iface_buf[iface_idx] = MediumInterface_C(ins, out)
-            # Point this mesh at the duplicated material
-            s[0].mesh_mat_idx[mi] = Int32(dup_idx)
+            s[0].meshes[mi].mat_idx = Int32(dup_idx)
             dup_idx += 1
             iface_idx += 1
 
-        # Phase 4: same for spheres
-        for si in range(Int(Int32(len(s[0].spheres_cx)))):
-            var ins = s[0].sph_inside_med[si]
-            var out = s[0].sph_outside_med[si]
-            if ins < Int32(0) and out < Int32(0):
-                continue
-            var orig_mat = Int(s[0].sph_mat[si])
-            if orig_mat < 0:
-                continue
+        for si in range(len(s[0].spheres_cx)):
+            var ins = s[0].spheres_inside_med[si]
+            var out = s[0].spheres_outside_med[si]
+            if ins < Int32(0) and out < Int32(0): continue
+            var orig_mat = Int(s[0].spheres_mat[si])
+            if orig_mat < 0: continue
             mats[dup_idx] = mats[orig_mat]
             mats[dup_idx].medium_interface_idx = Int32(iface_idx)
             iface_buf[iface_idx] = MediumInterface_C(ins, out)
-            s[0].sph_mat[si] = Int32(dup_idx)
+            s[0].spheres_mat[si] = Int32(dup_idx)
             dup_idx += 1
             iface_idx += 1
 
         n_mats = dup_idx
         psc[0].medium_ifaces = iface_buf
         psc[0].medium_iface_count = Int32(iface_idx)
-
     else:
         psc[0].medium_ifaces = UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling()
         psc[0].medium_iface_count = Int32(0)
 
     var total_tris = Int32(0)
     for i in range(n_meshes):
-        total_tris += s[0].mesh_nt[i]
+        total_tris += Int32(len(s[0].meshes[i].face_idxs))
 
     var prim_bounds = alloc[Float32](Int(total_tris) * 6)
     var tri_mesh    = alloc[Int32](Int(total_tris))
@@ -2729,9 +2633,9 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     var flat_idx = Int32(0)
     for mi in range(n_meshes):
-        var pts = s[0].mesh_pts_list[mi]
-        var vis = s[0].mesh_vis_list[mi]
-        var nt  = Int(s[0].mesh_nt[mi])
+        var pts = out_pts[mi]
+        var vis = out_vis[mi]
+        var nt  = Int(out_nt[mi])
         for ti in range(nt):
             var v0 = Int(vis[ti*3+0]) * 4
             var v1 = Int(vis[ti*3+1]) * 4
@@ -2763,7 +2667,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var mesh_al_idx = alloc[Int32](max(n_meshes, 1))
     var running_al = Int32(0)
     for mi in range(n_meshes):
-        if s[0].mesh_is_al[mi] != 0:
+        if s[0].meshes[mi].is_area_light:
             mesh_al_idx[mi] = running_al
             running_al += 1
         else:
@@ -2773,14 +2677,14 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         var orig = Int(bvh_order[k])
         var mi   = Int(tri_mesh[orig])
         var ti   = Int(tri_local[orig])
-        if s[0].mesh_is_al[mi] != 0:
+        if s[0].meshes[mi].is_area_light:
             var al_idx = Int(mesh_al_idx[mi])
             prim_ids[k].type          = Int8(3)
             prim_ids[k].id1           = Int64(al_idx)
             prim_ids[k].id2           = (Int64(mi) << 32) | Int64(ti)
             prim_ids[k].materialIndex = Int64(al_mat_base + al_idx)
         else:
-            var mat_idx = Int(s[0].mesh_mat_idx[mi])
+            var mat_idx = Int(s[0].meshes[mi].mat_idx)
             prim_ids[k].type          = Int8(0)
             prim_ids[k].id1           = Int64(mi)
             prim_ids[k].id2           = Int64(ti * 3)
@@ -2818,20 +2722,19 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     # ---- Film filename copy ----
     var fname = alloc[UInt8](PSC_FILE_MAX)
-    _psc_strncpy(fname, s[0].film_filename, PSC_FILE_MAX)
+    var fnstr = s[0].film_filename
+    var fnlen = min(len(fnstr), PSC_FILE_MAX - 1)
+    for fi in range(fnlen): fname[fi] = fnstr.unsafe_ptr()[fi]
+    fname[fnlen] = UInt8(0)
 
     # ---- Texture filename table ----
-    var n_tex = Int(Int32(len(s[0].tex_names)))
+    var n_tex = len(s[0].tex_names)
     var tex_ptrs = alloc[UnsafePointer[UInt8, MutAnyOrigin]](max(n_tex, 1))
     for ti in range(n_tex):
-        var src = s[0].tex_files + ti * PSC_FILE_MAX * 2
-        # Compute length
-        var slen = 0
-        while src[slen] != UInt8(0):
-            slen += 1
+        var fstr = s[0].tex_files[ti]
+        var slen = len(fstr)
         var copy = alloc[UInt8](slen + 1)
-        for ci in range(slen):
-            copy[ci] = src[ci]
+        for ci in range(slen): copy[ci] = fstr.unsafe_ptr()[ci]
         copy[slen] = UInt8(0)
         tex_ptrs[ti] = copy
 
@@ -2872,35 +2775,35 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].tex_count        = Int32(n_tex)
 
     # ---- Non-area lights ----
-    var nd = Int(Int32(len(s[0].distant_dirs) / 3))
+    var nd = len(s[0].distant_dirs) // 3
     if nd > 0:
         var dl_buf = alloc[DistantLight_C](nd)
         for i in range(nd):
             dl_buf[i] = DistantLight_C(
-                Vec3f(s[0].dist_dirs[i*3+0], s[0].dist_dirs[i*3+1], s[0].dist_dirs[i*3+2]),
+                Vec3f(s[0].distant_dirs[i*3+0], s[0].distant_dirs[i*3+1], s[0].distant_dirs[i*3+2]),
                 Float32(0),
-                RGB(s[0].dist_rgb[i*3+0], s[0].dist_rgb[i*3+1], s[0].dist_rgb[i*3+2]),
+                RGB(s[0].distant_rgbs[i*3+0], s[0].distant_rgbs[i*3+1], s[0].distant_rgbs[i*3+2]),
                 Float32(0))
         psc[0].distant_lights = dl_buf
     else:
         psc[0].distant_lights = UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling()
     psc[0].distant_count = Int32(nd)
 
-    var np2 = Int(Int32(len(s[0].point_pos) / 3))
+    var np2 = len(s[0].point_pos) // 3
     if np2 > 0:
         var pl_buf = alloc[PointLight_C](np2)
         for i in range(np2):
             pl_buf[i] = PointLight_C(
-                Point3f(s[0].pt_pos[i*3+0], s[0].pt_pos[i*3+1], s[0].pt_pos[i*3+2]),
+                Point3f(s[0].point_pos[i*3+0], s[0].point_pos[i*3+1], s[0].point_pos[i*3+2]),
                 Float32(0),
-                RGB(s[0].pt_rgb[i*3+0], s[0].pt_rgb[i*3+1], s[0].pt_rgb[i*3+2]),
+                RGB(s[0].point_rgbs[i*3+0], s[0].point_rgbs[i*3+1], s[0].point_rgbs[i*3+2]),
                 Float32(0))
         psc[0].point_lights = pl_buf
     else:
         psc[0].point_lights = UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling()
     psc[0].point_count = Int32(np2)
 
-    var ni = Int(Int32(len(s[0].inf_tex_idx)))
+    var ni = len(s[0].inf_tex_idx)
     if ni > 0:
         var il_bytes = max(ni, 1) * 40
         var il_buf = alloc[InfiniteLight_C](ni)
@@ -2971,18 +2874,20 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 pixels_ptr.free()
             # Compute world-to-light transform (inverse of the light's CTM)
             var w2l = alloc[Float32](16)
-            var light_ctm = s[0].inf_ctm + i * 16
-            # Check if CTM is identity (common case: no transform on light)
+            var light_ctm_base = i * 16
             var is_identity = True
             for ci in range(16):
                 var expected = Float32(1) if (ci == 0 or ci == 5 or ci == 10 or ci == 15) else Float32(0)
-                if light_ctm[ci] != expected:
+                if s[0].inf_ctm[light_ctm_base + ci] != expected:
                     is_identity = False
                     break
             if is_identity:
                 _psc_identity(w2l)
             else:
-                _ = matrix_invert(light_ctm, w2l)
+                var light_ctm_tmp = alloc[Float32](16)
+                for ci in range(16): light_ctm_tmp[ci] = s[0].inf_ctm[light_ctm_base + ci]
+                _ = matrix_invert(light_ctm_tmp, w2l)
+                light_ctm_tmp.free()
             il_buf[i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
         psc[0].infinite_lights = il_buf
     else:
@@ -2990,16 +2895,17 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].infinite_count = Int32(ni)
 
     # ---- Analytical spheres ----
-    var ns = Int(Int32(len(s[0].spheres_cx)))
+    var ns = len(s[0].spheres_cx)
     if ns > 0:
         var sph_buf = alloc[Sphere_C](ns)
         for i in range(ns):
-            var em = SampledSpectrum(s[0].sph_rgb[i].r, s[0].sph_rgb[i].g, s[0].sph_rgb[i].b)
+            var em = SampledSpectrum(s[0].spheres_rgb[i].r, s[0].spheres_rgb[i].g, s[0].spheres_rgb[i].b)
+            var al_flag = Int8(1) if s[0].spheres_al[i] else Int8(0)
             sph_buf[i] = Sphere_C(
-                Point3f(s[0].sph_cx[i], s[0].sph_cy[i], s[0].sph_cz[i]),
-                s[0].sph_r[i],
-                s[0].sph_mat[i],
-                s[0].sph_al[i],
+                Point3f(s[0].spheres_cx[i], s[0].spheres_cy[i], s[0].spheres_cz[i]),
+                s[0].spheres_r[i],
+                s[0].spheres_mat[i],
+                al_flag,
                 Int8(0), Int8(0), Int8(0),
                 em)
         psc[0].spheres = sph_buf
@@ -3008,7 +2914,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].sphere_count = Int32(ns)
 
     # ---- Media ----
-    var nm = Int(Int32(len(s[0].med_g)))
+    var nm = len(s[0].med_g)
     if nm > 0:
         var med_buf = alloc[Medium_C](nm)
         for i in range(nm):
@@ -3028,24 +2934,13 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
                     ) -> UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]:
     external_call["createTextureSystem", NoneType]()
     var handle = scanner_open(path)
-    if handle[0].is_at_end != 0:
-        var psc = alloc[ParsedScene_Mojo](1)
-        psc[0].mesh_count = Int32(0)
-        psc[0].prim_count = Int32(0)
-        psc[0].bvh_node_count = Int32(0)
-        psc[0].material_count = Int32(0)
-        psc[0].area_light_count = Int32(0)
-        psc[0].tex_count = Int32(0)
-        psc[0].distant_count = Int32(0)
-        psc[0].point_count = Int32(0)
-        psc[0].infinite_count = Int32(0)
-        psc[0].sphere_count = Int32(0)
-        psc[0].raster_to_camera = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-        psc[0].camera_to_world  = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-        psc[0].film_filename    = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
-        return psc
+    if handle[0].is_at_end != Int32(0):
+        print("Error: cannot open scene file:", String(unsafe_from_utf8_ptr=path.as_immutable()))
+        scanner_free(handle)
+        return UnsafePointer[ParsedScene_Mojo, MutAnyOrigin].unsafe_dangling()
 
-    var s = scene_parse_state_new()
+    var s_ptr = alloc[SceneParseState](1)
+    s_ptr.init_pointee_move(SceneParseState())
     var pi = 0
     while path[pi] != UInt8(0):
         pi += 1
@@ -3054,19 +2949,20 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
         if path[ki] == UInt8(47):
             last_slash = ki
     if last_slash >= 0:
+        var dir_tmp = alloc[UInt8](last_slash + 2)
         for ki in range(last_slash + 1):
-            s[0].scene_dir[ki] = path[ki]
-        s[0].scene_dir[last_slash + 1] = UInt8(0)
-    else:
-        s[0].scene_dir[0] = UInt8(0)
-    parse_scene_file(handle, s)
+            dir_tmp[ki] = path[ki]
+        dir_tmp[last_slash + 1] = UInt8(0)
+        s_ptr[0].scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_immutable())
+        dir_tmp.free()
+    parse_scene_file(handle, s_ptr)
     scanner_free(handle)
-    # Flush accumulated hair curve geometry into a single mesh (if any)
-    flush_hair(s)
+    flush_hair(s_ptr)
 
     var psc = alloc[ParsedScene_Mojo](1)
-    finalize_scene(s, psc)
-    # state freed automatically
+    finalize_scene(s_ptr, psc)
+    _ = s_ptr.take_pointee()  # destroys all List fields
+    s_ptr.free()
     return psc
 
 def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):

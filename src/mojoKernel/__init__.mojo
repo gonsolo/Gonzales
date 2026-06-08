@@ -29,6 +29,10 @@ def main() raises:
         print("Usage: gonzales [--interactive] [--gpu] scene.pbrt")
         return
 
+    if not scene_path.endswith(".pbrt"):
+        print("Error: expected a .pbrt scene file, got:", scene_path)
+        return
+
     var data_dir = getenv("GONZALES_DATA_DIR", "src/mojoKernel/data")
     var sobol_opt = _generate_sobol_matrices(data_dir + "/new-joe-kuo-6.21201")
     if not sobol_opt:
