@@ -357,6 +357,10 @@ def parse_and_render(
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
         var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
+        if Int(handle) <= 8:
+            mojo_parsed_free(psc)
+            results.free()
+            return Int32(-1)
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         var seed_dim1 = UInt32(0)
@@ -503,7 +507,6 @@ def render_interactive(
     if use_gpu:
         handle = _gpu_upload_scene(psc, sobol, n_pixels)
         if Int(handle) <= 8:
-            print("GPU: Failed to upload scene")
             mojo_parsed_free(psc)
             return
 
