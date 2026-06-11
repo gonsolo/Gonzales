@@ -7,12 +7,12 @@ from std.math import sqrt, acos, atan2, cos
 # See: docs/01_geometry.md
 
 # <<listing: Math Constants>>
-alias PI         : Float32 = 3.14159265358979323846
-alias TWO_PI     : Float32 = 6.28318530717958647692
-alias INV_PI     : Float32 = 0.31830988618379067154
-alias INV_TWO_PI : Float32 = 0.15915494309189533577
-alias INV_FOUR_PI: Float32 = 0.07957747154594766788
-alias SQRT2      : Float32 = 1.41421356237309504880
+comptime PI         : Float32 = 3.14159265358979323846
+comptime TWO_PI     : Float32 = 6.28318530717958647692
+comptime INV_PI     : Float32 = 0.31830988618379067154
+comptime INV_TWO_PI : Float32 = 0.15915494309189533577
+comptime INV_FOUR_PI: Float32 = 0.07957747154594766788
+comptime SQRT2      : Float32 = 1.41421356237309504880
 # <</listing>>
 
 # ── Point3f / Vec3f ────────────────────────────────────────────────────────────
@@ -32,16 +32,16 @@ struct Point3f(TrivialRegisterPassable):
     var z: Float32
 
     @always_inline
-    fn __add__(self, v: Vec3f) -> Point3f:
+    def __add__(self, v: Vec3f) -> Point3f:
         return Point3f(self.x + v.x, self.y + v.y, self.z + v.z)
 
     @always_inline
-    fn __sub__(self, o: Point3f) -> Vec3f:
+    def __sub__(self, o: Point3f) -> Vec3f:
         """Point minus point yields a displacement vector."""
         return Vec3f(self.x - o.x, self.y - o.y, self.z - o.z)
 
     @always_inline
-    fn to_simd(self) -> SIMD[DType.float32, 3]:
+    def to_simd(self) -> SIMD[DType.float32, 3]:
         return SIMD[DType.float32, 3](self.x, self.y, self.z)
 
 @fieldwise_init
@@ -54,55 +54,55 @@ struct Vec3f(TrivialRegisterPassable):
     var z: Float32
 
     @always_inline
-    fn __neg__(self) -> Vec3f:
+    def __neg__(self) -> Vec3f:
         return Vec3f(-self.x, -self.y, -self.z)
 
     @always_inline
-    fn __add__(self, b: Vec3f) -> Vec3f:
+    def __add__(self, b: Vec3f) -> Vec3f:
         return Vec3f(self.x + b.x, self.y + b.y, self.z + b.z)
 
     @always_inline
-    fn __sub__(self, b: Vec3f) -> Vec3f:
+    def __sub__(self, b: Vec3f) -> Vec3f:
         return Vec3f(self.x - b.x, self.y - b.y, self.z - b.z)
 
     @always_inline
-    fn __mul__(self, s: Float32) -> Vec3f:
+    def __mul__(self, s: Float32) -> Vec3f:
         return Vec3f(self.x * s, self.y * s, self.z * s)
 
     @always_inline
-    fn __truediv__(self, s: Float32) -> Vec3f:
+    def __truediv__(self, s: Float32) -> Vec3f:
         var inv = Float32(1.0) / s
         return Vec3f(self.x * inv, self.y * inv, self.z * inv)
 
     @always_inline
-    fn length_sq(self) -> Float32:
+    def length_sq(self) -> Float32:
         """Squared length — avoids a sqrt when only ordering matters."""
         return self.x * self.x + self.y * self.y + self.z * self.z
 
     @always_inline
-    fn length(self) -> Float32:
+    def length(self) -> Float32:
         return sqrt(self.length_sq())
 
     @always_inline
-    fn normalize(self) -> Vec3f:
+    def normalize(self) -> Vec3f:
         """Returns a unit vector in the same direction."""
         return self * (Float32(1.0) / self.length())
 
     @always_inline
-    fn dot(self, b: Vec3f) -> Float32:
+    def dot(self, b: Vec3f) -> Float32:
         return self.x * b.x + self.y * b.y + self.z * b.z
 
     @always_inline
-    fn to_simd(self) -> SIMD[DType.float32, 3]:
+    def to_simd(self) -> SIMD[DType.float32, 3]:
         return SIMD[DType.float32, 3](self.x, self.y, self.z)
 
 @always_inline
-fn vec3f(s: SIMD[DType.float32, 3]) -> Vec3f:
+def vec3f(s: SIMD[DType.float32, 3]) -> Vec3f:
     """Convert a SIMD[f32,3] to a Vec3f."""
     return Vec3f(s[0], s[1], s[2])
 
 @always_inline
-fn point3f(s: SIMD[DType.float32, 3]) -> Point3f:
+def point3f(s: SIMD[DType.float32, 3]) -> Point3f:
     """Convert a SIMD[f32,3] to a Point3f."""
     return Point3f(s[0], s[1], s[2])
 
@@ -121,52 +121,52 @@ struct RGB(TrivialRegisterPassable):
     var b: Float32
 
     @always_inline
-    fn __add__(self, o: RGB) -> RGB:
+    def __add__(self, o: RGB) -> RGB:
         return RGB(self.r + o.r, self.g + o.g, self.b + o.b)
 
     @always_inline
-    fn __mul__(self, o: RGB) -> RGB:
+    def __mul__(self, o: RGB) -> RGB:
         return RGB(self.r * o.r, self.g * o.g, self.b * o.b)
 
     @always_inline
-    fn __mul__(self, s: Float32) -> RGB:
+    def __mul__(self, s: Float32) -> RGB:
         return RGB(self.r * s, self.g * s, self.b * s)
 
     @always_inline
-    fn __truediv__(self, s: Float32) -> RGB:
+    def __truediv__(self, s: Float32) -> RGB:
         var inv = Float32(1.0) / s
         return RGB(self.r * inv, self.g * inv, self.b * inv)
 
     @always_inline
-    fn __imul__(mut self, o: RGB):
+    def __imul__(mut self, o: RGB):
         self.r *= o.r; self.g *= o.g; self.b *= o.b
 
     @always_inline
-    fn __imul__(mut self, s: Float32):
+    def __imul__(mut self, s: Float32):
         self.r *= s; self.g *= s; self.b *= s
 
     @always_inline
-    fn __iadd__(mut self, o: RGB):
+    def __iadd__(mut self, o: RGB):
         self.r += o.r; self.g += o.g; self.b += o.b
 
     @always_inline
-    fn is_black(self) -> Bool:
+    def is_black(self) -> Bool:
         """Returns True when all channels are zero or negative."""
         return self.r <= Float32(0.0) and self.g <= Float32(0.0) and self.b <= Float32(0.0)
 
     @always_inline
-    fn luma(self) -> Float32:
+    def luma(self) -> Float32:
         """CIE Y luminance (Rec. 709 primaries)."""
         return Float32(0.2126) * self.r + Float32(0.7152) * self.g + Float32(0.0722) * self.b
 
     @always_inline
-    fn clamp(self, lo: Float32, hi: Float32) -> RGB:
+    def clamp(self, lo: Float32, hi: Float32) -> RGB:
         """Per-channel clamp — useful for tonemapping guard values."""
 # <</listing>>
         var clamp_f = fn(v: Float32) -> Float32: return lo if v < lo else (hi if v > hi else v)
         return RGB(clamp_f(self.r), clamp_f(self.g), clamp_f(self.b))
 
-alias SampledSpectrum = RGB
+comptime SampledSpectrum = RGB
 # <<listing: SampledSpectrum>>
 """Placeholder alias for a future spectral type. Currently == RGB.
    See: docs/02_spectra_and_color.md
@@ -386,7 +386,7 @@ struct Frame(TrivialRegisterPassable):
 
     @staticmethod
     @always_inline
-    fn from_z(n: Vec3f) -> Frame:
+    def from_z(n: Vec3f) -> Frame:
         """Build a frame from a single normal vector (Duff et al. 2017).
         Branchless, GPU-friendly, stable for all input directions.
         """
@@ -398,12 +398,12 @@ struct Frame(TrivialRegisterPassable):
         return Frame(tangent, bitangent, n)
 
     @always_inline
-    fn to_local(self, v: Vec3f) -> Vec3f:
+    def to_local(self, v: Vec3f) -> Vec3f:
         """Project world-space vector into the local frame (x,y,z coordinates)."""
         return Vec3f(v.dot(self.x), v.dot(self.y), v.dot(self.z))
 
     @always_inline
-    fn to_world(self, v: Vec3f) -> Vec3f:
+    def to_world(self, v: Vec3f) -> Vec3f:
         """Reconstruct a world-space vector from local-frame coordinates."""
         return self.x * v.x + self.y * v.y + self.z * v.z
 
@@ -412,7 +412,7 @@ struct Frame(TrivialRegisterPassable):
 # <</listing>>
 
 @always_inline
-fn safe_sqrt(x: Float32) -> Float32:
+def safe_sqrt(x: Float32) -> Float32:
 # <<listing: safe_sqrt>>
     """sqrt(max(x, 0)) — avoids NaN from small negative values due to rounding."""
     return sqrt(x if x > Float32(0.0) else Float32(0.0))
@@ -420,7 +420,7 @@ fn safe_sqrt(x: Float32) -> Float32:
 # <</listing>>
 @always_inline
 # <<listing: reflect>>
-fn reflect(wo: Vec3f, n: Vec3f) -> Vec3f:
+def reflect(wo: Vec3f, n: Vec3f) -> Vec3f:
     """Specular reflection of wo about surface normal n.
     Equation: wi = 2(wo·n)n − wo.
     Both wo and n should point away from the surface.
@@ -430,7 +430,7 @@ fn reflect(wo: Vec3f, n: Vec3f) -> Vec3f:
 
 @always_inline
 # <</listing>>
-fn refract(wi: Vec3f, n: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f]:
+def refract(wi: Vec3f, n: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f]:
 # <<listing: refract>>
     """Snell's law refraction. eta = η_i / η_t.
     Returns (True, wt) on success, (False, _) on total internal reflection.
@@ -448,7 +448,7 @@ fn refract(wi: Vec3f, n: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f]:
 # <<listing: schlick_fresnel>>
 
 @always_inline
-fn schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
+def schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
     """Schlick (1994) approximation to the Fresnel reflectance.
     f0 = ((η−1)/(η+1))² is the normal-incidence reflectance.
     See: docs/05_reflection_models.md — Fresnel.
@@ -459,7 +459,7 @@ fn schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
 # <</listing>>
 
 @always_inline
-fn spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> Vec3f:
+def spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> Vec3f:
     """Convert spherical coordinates (θ,φ) to a unit Cartesian vector.
     Convention: y = up (cos θ), xz = equatorial plane.
     See: docs/01_geometry.md — Spherical Coordinates.
@@ -472,12 +472,12 @@ fn spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> 
     return Vec3f(sin_theta * cos_phi, cos_theta, sin_theta * sin_phi)
 
 @always_inline
-fn spherical_theta(v: Vec3f) -> Float32:
+def spherical_theta(v: Vec3f) -> Float32:
     """Polar angle θ ∈ [0, π] of a unit vector (y = up convention)."""
     return acos(max(Float32(-1.0), min(Float32(1.0), v.y)))
 
 @always_inline
-fn spherical_phi(v: Vec3f) -> Float32:
+def spherical_phi(v: Vec3f) -> Float32:
     """Azimuthal angle φ ∈ [0, 2π] of a unit vector (y = up convention)."""
     var p = atan2(v.z, v.x)
     return p if p >= Float32(0.0) else p + TWO_PI
@@ -485,7 +485,7 @@ fn spherical_phi(v: Vec3f) -> Float32:
 # ── SIMD math helpers (used in BVH and shading hot paths) ────────────────────
 
 @always_inline
-fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
+def cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
     var a_yzx = SIMD[DType.float32, 3](a[1], a[2], a[0])
     var b_zxy = SIMD[DType.float32, 3](b[2], b[0], b[1])
     var a_zxy = SIMD[DType.float32, 3](a[2], a[0], a[1])
@@ -493,12 +493,12 @@ fn cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.flo
     return a_yzx * b_zxy - a_zxy * b_yzx
 
 @always_inline
-fn dot(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
+def dot(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
     var prod = a * b
     return prod[0] + prod[1] + prod[2]
 
 @always_inline
-fn intersect_triangle(
+def intersect_triangle(
     ray_org: SIMD[DType.float32, 3],
     ray_dir: SIMD[DType.float32, 3],
     p0: SIMD[DType.float32, 3],

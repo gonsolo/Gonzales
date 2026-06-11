@@ -7,7 +7,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
 
 @always_inline
-fn _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
+def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
     """Convert a unit direction vector to [0,1]^2 UV using PBRT v4's equal-area
     octahedral mapping (Clarberg 2008)."""
     var x = dx if dx >= Float32(0) else -dx
@@ -51,14 +51,14 @@ fn _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[D
     return SIMD[DType.float32, 2](u, v)
 
 @always_inline
-fn _srgb_to_linear(c: Float32) -> Float32:
+def _srgb_to_linear(c: Float32) -> Float32:
     if c <= Float32(0.04045):
         return c / Float32(12.92)
     else:
         return Float32(((c + Float32(0.055)) / Float32(1.055)) ** Float32(2.4))
 
 @always_inline
-fn _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32) -> RGB:
+def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32) -> RGB:
     var tw = Int(tex.width); var th = Int(tex.height)
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
@@ -70,7 +70,7 @@ fn _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32) -> RGB:
     return RGB(tex.data[idx], tex.data[idx+1], tex.data[idx+2])
 
 @always_inline
-fn _tex_lookup[use_gpu: Bool](
+def _tex_lookup[use_gpu: Bool](
     mat: Material_C,
     inter: Intersection_C,
     v0: Int, v1: Int, v2: Int,
@@ -80,8 +80,7 @@ fn _tex_lookup[use_gpu: Bool](
     n_textures: Int,
 ) -> RGB:
     var ti = Int(mat.tex_idx)
-    @parameter
-    if use_gpu:
+    comptime if use_gpu:
         if ti >= 0 and ti < n_textures:
             var tex = textures[ti]
             if Int(tex.width) > 0:
@@ -91,9 +90,9 @@ fn _tex_lookup[use_gpu: Bool](
                 tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
                 return _sample_tex(tex, su, tv)
     else:
-        if ti >= 0 and tex_filenames:
+        if ti >= 0 and Int(tex_filenames) > 1:
             var filename = tex_filenames[ti]
-            if filename and mesh.uvs:
+            if Int(filename) > 1 and Int(mesh.uvs) > 1:
                 var w0 = Float32(1.0) - inter.u - inter.v
                 var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
                 var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
@@ -114,7 +113,7 @@ fn _tex_lookup[use_gpu: Bool](
 
 
 @always_inline
-fn shade_core(
+def shade_core(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -377,7 +376,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 
 # ── CoatedDiffuse (plastic) branch ───────────────────────────────────────────
 @always_inline
-fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
+def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     path_idx: Int,
     inter: Intersection_C,
@@ -481,8 +480,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
                     var weight_cd = alb * al.emission * (cos_s * w_cd / (pdf_light_cd * pi_cd))
                     var contrib = path_ptr[].throughput * weight_cd
-                    @parameter
-                    if enqueue_shadow:
+                    comptime if enqueue_shadow:
                         shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                     else:
                         var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
@@ -534,7 +532,7 @@ fn shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
 @always_inline
-fn shade_dielectric(
+def shade_dielectric(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -625,7 +623,7 @@ fn shade_dielectric(
 # but transmitted ray is NOT refracted (direction unchanged). Models window glass,
 # soap bubbles, thin films. IOR stored in mat.albedo.r like regular dielectric.
 @always_inline
-fn shade_thin_dielectric(
+def shade_thin_dielectric(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -706,7 +704,7 @@ fn shade_thin_dielectric(
 
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
 @always_inline
-fn shade_conductor(
+def shade_conductor(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -764,7 +762,7 @@ fn shade_conductor(
         # Derive UV tangent frame for anisotropy direction
         var t1: SIMD[DType.float32, 3]
         var t2: SIMD[DType.float32, 3]
-        if mesh.uvs and alpha_x != alpha_y:
+        if Int(mesh.uvs) > 1 and alpha_x != alpha_y:
             # UV-gradient tangent: tangent = (duv2.v*dp1 - duv1.v*dp2) / det
             var dp1 = p1 - p0; var dp2 = p2 - p0
             var u0f = mesh.uvs[v0*2]; var v0f = mesh.uvs[v0*2+1]
@@ -877,7 +875,7 @@ fn shade_conductor(
 # selects between coat specular reflection (F) and conducting GGX layer (1-F).
 # This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
 @always_inline
-fn shade_coated_conductor(
+def shade_coated_conductor(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -1008,7 +1006,7 @@ fn shade_coated_conductor(
 # Sub-material indices are packed into mat.tex_idx: low 16 bits = idx1, high 16 bits = idx2.
 # mat.roughU = blend amount (probability of picking mat2).
 @always_inline
-fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
+def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     path_idx: Int,
     inter: Intersection_C,
@@ -1125,7 +1123,7 @@ fn shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
 # rotates it into world space via UV-gradient tangent frame.
 # Returns geom_normal unchanged when normal_tex_idx < 0 or no UVs.
 @always_inline
-fn _apply_normal_map[use_gpu: Bool](
+def _apply_normal_map[use_gpu: Bool](
     mat: Material_C,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh_C,
@@ -1138,7 +1136,7 @@ fn _apply_normal_map[use_gpu: Bool](
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
 ) -> SIMD[DType.float32, 3]:
-    if mat.normal_tex_idx < Int32(0) or not mesh.uvs:
+    if mat.normal_tex_idx < Int32(0) or Int(mesh.uvs) <= 1:
         return geom_normal
     # Compute barycentric UV coordinates
     var dp1 = p1 - p0; var dp2 = p2 - p0
@@ -1164,8 +1162,7 @@ fn _apply_normal_map[use_gpu: Bool](
     var uv_u = (u0f + u1f + u2f) * Float32(0.333333)
     var uv_v = (v0f + v1f + v2f) * Float32(0.333333)
     # Use the normal_tex_idx texture directly via OIIO
-    @parameter
-    if not use_gpu:
+    comptime if not use_gpu:
         var nfname = tex_filenames[Int(mat.normal_tex_idx)]
         var tr = alloc[Float32](3)
         tr[0] = Float32(0.5); tr[1] = Float32(0.5); tr[2] = Float32(1.0)
@@ -1188,7 +1185,7 @@ fn _apply_normal_map[use_gpu: Bool](
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
-fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
+def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     path_idx: Int,
     inter: Intersection_C,
@@ -1223,9 +1220,8 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var ld_z = w2l[2]*ray_dir[0] + w2l[6]*ray_dir[1] + w2l[10]*ray_dir[2]
             var local_dir = SIMD[DType.float32, 3](ld_x, ld_y, ld_z)
             var env_rgb: RGB
-            @parameter
-            if not use_gpu:
-                if ilight.tex_idx >= Int32(0) and ilight.pixels_ptr and ilight.cdf_w > Int32(0):
+            comptime if not use_gpu:
+                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and ilight.cdf_w > Int32(0):
                     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
                     var ea_uv = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
                     var u = ea_uv[0]; var v = ea_uv[1]
@@ -1264,8 +1260,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
                 var pdf_light = INV_FOUR_PI
-                @parameter
-                if not use_gpu:
+                comptime if not use_gpu:
                     # Use CDF-based pdf when available (env-map importance sampling)
                     if ilight.cdf_w > Int32(0) and ilight.cdf_h > Int32(0):
                         var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
@@ -1461,8 +1456,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
                 var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight
-                @parameter
-                if enqueue_shadow:
+                comptime if enqueue_shadow:
                     shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                 else:
                     var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
@@ -1481,8 +1475,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s / pi)
             # Shadow ray at very long distance (scene diameter ~1000)
             var t_max = Float32(2000.0)
-            @parameter
-            if enqueue_shadow:
+            comptime if enqueue_shadow:
                 shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]), t_max, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
             else:
                 var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]))
@@ -1504,8 +1497,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 # f = alb/pi, geometry = cos_s, pdf = delta -> weight = 1
                 # radiance = intensity / dist²
                 var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
-                @parameter
-                if enqueue_shadow:
+                comptime if enqueue_shadow:
                     shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ldir[0], ldir[1], ldir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                 else:
                     var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ldir[0], ldir[1], ldir[2]))
@@ -1558,8 +1550,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
             var weight = alb * sph.emission * (cos_s * w_nee / (pdf_light * PI))
             var contrib = path_ptr[].throughput * weight
-            @parameter
-            if enqueue_shadow:
+            comptime if enqueue_shadow:
                 shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dc * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
             else:
                 var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
@@ -1567,8 +1558,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     path_ptr[].estimate += contrib
 
     # ── Infinite (env-map) light NEE ──────────────────────────────────────────
-    @parameter
-    if not use_gpu:
+    comptime if not use_gpu:
         for inf_i in range(infiniteLightCount):
             var ilight = infiniteLights[inf_i]
             # Cosine-weighted hemisphere sample for NEE direction
@@ -1597,7 +1587,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var ld_y = w2l[1]*env_dir[0] + w2l[5]*env_dir[1] + w2l[9]*env_dir[2]
                 var ld_z = w2l[2]*env_dir[0] + w2l[6]*env_dir[1] + w2l[10]*env_dir[2]
                 var env_rgb: RGB
-                if ilight.tex_idx >= Int32(0) and ilight.pixels_ptr and ilight.cdf_w > Int32(0):
+                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and ilight.cdf_w > Int32(0):
                     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
                     var ea_uv_nee = _equal_area_sphere_to_square(ld_x, ld_y, ld_z)
                     var u_env = ea_uv_nee[0]; var v_env = ea_uv_nee[1]
@@ -1630,8 +1620,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     var contrib = path_ptr[].throughput * alb * env_rgb
                     # Shadow ray to infinity
                     var t_max_env = Float32(100000.0)
-                    @parameter
-                    if enqueue_shadow:
+                    comptime if enqueue_shadow:
                         shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                     else:
                         var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
@@ -1679,7 +1668,7 @@ fn shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 @always_inline
-fn shade_core_cpu_nee(
+def shade_core_cpu_nee(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -1704,15 +1693,15 @@ fn shade_core_cpu_nee(
         return
     var inter = intersections[tid]
     shade_nee_core[False, False](path_ptr, tid, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin](), 0,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin](),
+        tex_filenames, UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         distantLights, distantLightCount, pointLights, pointLightCount,
         infiniteLights, infiniteLightCount,
         spheres, sphereCount)
 
 
 @export
-fn mojo_cpu_shade_batch(
+def mojo_cpu_shade_batch(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     count: Int64,
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],

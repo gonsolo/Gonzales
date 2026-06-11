@@ -4,7 +4,7 @@ from std.memory import alloc
 # Matrix math. 4x4 matrices are 16 Float32 in column-major order:
 # flat[col*4 + row] = matrix[row, col], matching Transform.columnMajorFloats().
 
-fn _write_identity(result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+def _write_identity(result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
     for i in range(16):
         result[i] = Float32(0)
     result[0] = Float32(1)
@@ -15,7 +15,7 @@ fn _write_identity(result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
 
 
 @export
-fn mojo_matrix_multiply(
+def mojo_matrix_multiply(
     a: UnsafePointer[Float32, MutAnyOrigin],
     b: UnsafePointer[Float32, MutAnyOrigin],
     result: UnsafePointer[Float32, MutAnyOrigin],
@@ -30,7 +30,7 @@ fn mojo_matrix_multiply(
 
 
 @export
-fn mojo_matrix_invert(
+def mojo_matrix_invert(
     m: UnsafePointer[Float32, MutAnyOrigin],
     result: UnsafePointer[Float32, MutAnyOrigin],
 ) -> Int32:
@@ -101,7 +101,7 @@ fn mojo_matrix_invert(
 # matrix / inv_matrix are 16-float column-major (flat[col*4+row] = m[row,col]).
 
 @export
-fn mojo_transform_points(
+def mojo_transform_points(
     matrix: UnsafePointer[Float32, MutAnyOrigin],
     points_in: UnsafePointer[Float32, MutAnyOrigin],
     count: Int32,
@@ -125,7 +125,7 @@ fn mojo_transform_points(
 
 
 @export
-fn mojo_transform_normals(
+def mojo_transform_normals(
     inv_matrix: UnsafePointer[Float32, MutAnyOrigin],
     normals_in: UnsafePointer[Float32, MutAnyOrigin],
     count: Int32,

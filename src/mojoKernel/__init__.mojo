@@ -4,7 +4,7 @@ from std.os import getenv
 from std.memory import alloc
 from mojoKernel.pipeline import _generate_sobol_matrices, mojo_parse_and_render, mojo_render_interactive
 
-fn main() raises:
+def main() raises:
     var t0 = perf_counter_ns()
 
     var args = argv()
@@ -25,16 +25,17 @@ fn main() raises:
             scene_path = arg
         i += 1
 
-    if len(scene_path) == 0:
+    if scene_path.byte_length() == 0:
         print("Usage: gonzales [--interactive] [--gpu] scene.pbrt")
         return
 
     var data_dir = getenv("GONZALES_DATA_DIR", "src/mojoKernel/data")
-    var sobol = _generate_sobol_matrices(data_dir + "/new-joe-kuo-6.21201")
-    if not sobol:
+    var sobol_opt = _generate_sobol_matrices(data_dir + "/new-joe-kuo-6.21201")
+    if not sobol_opt:
         return
+    var sobol = sobol_opt.value()
 
-    var path_len = len(scene_path)
+    var path_len = scene_path.byte_length()
     var path_cstr = alloc[UInt8](path_len + 1)
     for k in range(path_len):
         path_cstr[k] = scene_path.as_bytes()[k]

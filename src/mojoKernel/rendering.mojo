@@ -206,14 +206,14 @@ def render_tile(
 
 
 
-fn _fmt_f1(v: Float64) -> String:
+def _fmt_f1(v: Float64) -> String:
     var i = Int(v)
     var frac = Int((v - Float64(i)) * 10.0 + 0.5)
     if frac >= 10:
         i += 1; frac = 0
     return String(i) + "." + String(frac)
 
-fn _fmt_time(s: Float64) -> String:
+def _fmt_time(s: Float64) -> String:
     var sec = Int(s)
     var min = sec // 60
     var rem = sec % 60
@@ -223,7 +223,7 @@ fn _fmt_time(s: Float64) -> String:
         return String(min) + "m " + rs + "s"
     return _fmt_f1(s) + "s"
 
-fn _progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> String:
+def _progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> String:
     var pct = _fmt_f1(Float64(done) * 100.0 / Float64(total))
     var est = Float64(0.0)
     if done > 0:
@@ -264,7 +264,7 @@ def mojo_render_all_tiles(
     var print_step = max(n_tiles // 20, 1)
 
     @parameter
-    fn render_one(tile_idx: Int):
+    def render_one(tile_idx: Int):
         var ty_i = tile_idx // n_tiles_x
         var tx_i = tile_idx % n_tiles_x
         var tx = Int(min_x) + tx_i * tw
@@ -299,7 +299,7 @@ def mojo_render_all_tiles(
 
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
 @export
-fn mojo_normalize_film(
+def mojo_normalize_film(
     results: UnsafePointer[TileResult_C, MutAnyOrigin],
     count: Int32,
     iso: Float32,

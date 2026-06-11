@@ -14,39 +14,39 @@ struct CameraState(TrivialRegisterPassable):
 
 # Opaque C pointer to the Viewer object.  Treat as UInt8* to stay away from
 # the !kgen.pointer<none> representation that Mojo 1.0 rejects.
-alias ViewerHandle = UnsafePointer[UInt8, MutAnyOrigin]
+comptime ViewerHandle = UnsafePointer[UInt8, MutAnyOrigin]
 
-fn viewer_create(width: Int32, height: Int32,
+def viewer_create(width: Int32, height: Int32,
                  title: UnsafePointer[UInt8, MutAnyOrigin]) -> ViewerHandle:
     return external_call["viewer_create", ViewerHandle,
         Int32, Int32, UnsafePointer[UInt8, MutAnyOrigin]](width, height, title)
 
-fn viewer_update_framebuffer(v: ViewerHandle,
+def viewer_update_framebuffer(v: ViewerHandle,
                               pixels: UnsafePointer[Float32, MutAnyOrigin],
                               width: Int32, height: Int32):
     external_call["viewer_update_framebuffer", NoneType,
         ViewerHandle, UnsafePointer[Float32, MutAnyOrigin], Int32, Int32](
         v, pixels, width, height)
 
-fn viewer_should_close(v: ViewerHandle) -> Int32:
+def viewer_should_close(v: ViewerHandle) -> Int32:
     return external_call["viewer_should_close", Int32, ViewerHandle](v)
 
-fn viewer_poll_events(v: ViewerHandle):
+def viewer_poll_events(v: ViewerHandle):
     external_call["viewer_poll_events", NoneType, ViewerHandle](v)
 
 # CameraState is 40 bytes — too large for register return on x86-64.
 # The C API uses output pointers; we wrap them here for ergonomics.
-fn viewer_get_camera_state(v: ViewerHandle, result: UnsafePointer[CameraState, MutAnyOrigin]):
+def viewer_get_camera_state(v: ViewerHandle, result: UnsafePointer[CameraState, MutAnyOrigin]):
     external_call["viewer_get_camera_state", NoneType, ViewerHandle, UnsafePointer[CameraState, MutAnyOrigin]](v, result)
 
-fn viewer_set_camera_state(v: ViewerHandle, state: UnsafePointer[CameraState, MutAnyOrigin]):
+def viewer_set_camera_state(v: ViewerHandle, state: UnsafePointer[CameraState, MutAnyOrigin]):
     external_call["viewer_set_camera_state", NoneType, ViewerHandle, UnsafePointer[CameraState, MutAnyOrigin]](v, state)
 
-fn viewer_destroy(v: ViewerHandle):
+def viewer_destroy(v: ViewerHandle):
     external_call["viewer_destroy", NoneType, ViewerHandle](v)
 
 # Build a column-major camera-to-world matrix from position/direction/up.
-fn build_camera_to_world(cs: UnsafePointer[CameraState, MutAnyOrigin], c2w: UnsafePointer[Float32, MutAnyOrigin]):
+def build_camera_to_world(cs: UnsafePointer[CameraState, MutAnyOrigin], c2w: UnsafePointer[Float32, MutAnyOrigin]):
     var dx = cs[0].direction.x; var dy = cs[0].direction.y; var dz = cs[0].direction.z
     var ux = cs[0].up.x;        var uy = cs[0].up.y;        var uz = cs[0].up.z
 

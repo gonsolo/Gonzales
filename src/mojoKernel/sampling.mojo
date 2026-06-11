@@ -7,7 +7,7 @@ from .geometry import Vec3f, Ray_C, Point3f, PI, TWO_PI, INV_PI
 
 @always_inline
 # <<listing: power_heuristic>>
-fn power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
+def power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
     """Balance heuristic with β=2 (Veach 1997).
     Combines two sampling strategies f and g into a single weight:
         w(f) = f² / (f² + g²)
@@ -26,7 +26,7 @@ fn power_heuristic(pdf_f: Float32, pdf_g: Float32) -> Float32:
 
 @always_inline
 # <<listing: sample_cosine_hemisphere>>
-fn sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
+def sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
     """Cosine-weighted hemisphere sampling via Malley's method.
     Maps uniform (u1,u2) ∈ [0,1)² to a direction proportional to cos θ.
     PDF = cos(θ) / π.  z = cos θ (hemisphere axis).
@@ -43,7 +43,7 @@ fn sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
 
 @always_inline
 # <<listing: sample_ggx_vndf>>
-fn sample_ggx_vndf(
+def sample_ggx_vndf(
     wo_local: Vec3f,           # outgoing direction in the stretched frame
     alpha_x: Float32,          # GGX roughness along tangent
     alpha_y: Float32,          # GGX roughness along bitangent
@@ -105,7 +105,7 @@ struct TileSamplerParams_C(TrivialRegisterPassable):
     var filterWeight: Float32
 
 @always_inline
-fn reverse_bits32(v_in: UInt32) -> UInt32:
+def reverse_bits32(v_in: UInt32) -> UInt32:
     var v = v_in
     v = ((v >> 1) & UInt32(0x55555555)) | ((v & UInt32(0x55555555)) << 1)
     v = ((v >> 2) & UInt32(0x33333333)) | ((v & UInt32(0x33333333)) << 2)
@@ -114,7 +114,7 @@ fn reverse_bits32(v_in: UInt32) -> UInt32:
     return (v >> 16) | (v << 16)
 
 @always_inline
-fn fast_owen_scramble(value_in: UInt32, seed: UInt32) -> UInt32:
+def fast_owen_scramble(value_in: UInt32, seed: UInt32) -> UInt32:
     var v = reverse_bits32(value_in)
     v ^= v * UInt32(0x3d20adea)
     v += seed
@@ -124,7 +124,7 @@ fn fast_owen_scramble(value_in: UInt32, seed: UInt32) -> UInt32:
     return reverse_bits32(v)
 
 @always_inline
-fn mix_bits_u64(v: UInt64) -> UInt32:
+def mix_bits_u64(v: UInt64) -> UInt32:
     var v32 = UInt32(v & UInt64(0xFFFFFFFF))
     v32 ^= UInt32(v >> 32)
     v32 ^= v32 >> 16
@@ -135,7 +135,7 @@ fn mix_bits_u64(v: UInt64) -> UInt32:
     return v32
 
 @always_inline
-fn encode_morton2(x: UInt32, y: UInt32) -> UInt64:
+def encode_morton2(x: UInt32, y: UInt32) -> UInt64:
     var x64 = UInt64(x)
     var y64 = UInt64(y)
     x64 = (x64 | (x64 << 16)) & UInt64(0x0000FFFF0000FFFF)
@@ -152,7 +152,7 @@ fn encode_morton2(x: UInt32, y: UInt32) -> UInt64:
 
 # Compact permutation encoding: each of 24 permutations of {0,1,2,3} stored in one UInt8.
 @always_inline
-fn sobol_perm_lookup(p_idx: Int, digit: Int) -> Int:
+def sobol_perm_lookup(p_idx: Int, digit: Int) -> Int:
     var enc = InlineArray[UInt8, 24](fill=UInt8(0))
     enc[ 0]=27; enc[ 1]=30; enc[ 2]=39; enc[ 3]=45; enc[ 4]=57; enc[ 5]=54
     enc[ 6]=75; enc[ 7]=78; enc[ 8]=99; enc[ 9]=108; enc[10]=120; enc[11]=114
@@ -161,7 +161,7 @@ fn sobol_perm_lookup(p_idx: Int, digit: Int) -> Int:
     return Int((Int(enc[p_idx]) >> (2 * (3 - digit))) & 3)
 
 @always_inline
-fn sobol_get_sample_index(
+def sobol_get_sample_index(
     morton_idx: UInt64, dim: Int, log2spp: Int, n_base4: Int,
 ) -> UInt64:
     var sample_index: UInt64 = 0
@@ -185,7 +185,7 @@ fn sobol_get_sample_index(
     return sample_index
 
 @always_inline
-fn sobol_sample(
+def sobol_sample(
     index: Int, dim: Int, seed: UInt32,
     matrices: UnsafePointer[UInt32, MutAnyOrigin],
 ) -> Float32:
@@ -203,7 +203,7 @@ fn sobol_sample(
 
 # Polynomial erfinv — no Newton refinement, sufficient accuracy for filter sampling.
 @always_inline
-fn gaussian_erfinv(y: Float32) -> Float32:
+def gaussian_erfinv(y: Float32) -> Float32:
     var abs_y = y if y >= Float32(0.0) else -y
     if abs_y <= Float32(0.7):
         var z = y * y
@@ -221,13 +221,13 @@ fn gaussian_erfinv(y: Float32) -> Float32:
 
 # Importance-sample a 1D Gaussian filter.
 @always_inline
-fn gaussian_sample_1d(u: Float32, norm: Float32, sigma: Float32, radius: Float32) -> Float32:
+def gaussian_sample_1d(u: Float32, norm: Float32, sigma: Float32, radius: Float32) -> Float32:
     var u_s = (Float32(1.0) - norm) + u * (Float32(2.0) * norm - Float32(1.0))
     var x = sigma * sqrt(Float32(2.0)) * gaussian_erfinv(Float32(2.0) * u_s - Float32(1.0))
     return max(-radius, min(radius, x))
 
 # erf via Abramowitz & Stegun 7.1.26 (max error ≤ 1.5e-7).
-fn _erf(x: Float32) -> Float32:
+def _erf(x: Float32) -> Float32:
     var sign = Float32(1) if x >= Float32(0) else Float32(-1)
     var ax = x if x >= Float32(0) else -x
     var t = Float32(1) / (Float32(1) + Float32(0.3275911) * ax)
@@ -241,14 +241,14 @@ fn _erf(x: Float32) -> Float32:
 
 # Gaussian filter normalization.
 @export
-fn mojo_gaussian_norm(support: Float32, sigma: Float32) -> Float32:
+def mojo_gaussian_norm(support: Float32, sigma: Float32) -> Float32:
     var x = support / (sigma * sqrt(Float32(2)))
     return Float32(0.5) * (Float32(1) + _erf(x))
 
 
 # Hash pixel + sample index into a unique PCG (state, inc) pair.
 @always_inline
-fn derive_pcg_seeds(px: Int32, py: Int32, si: Int32, seed: UInt64) -> Tuple[UInt64, UInt64]:
+def derive_pcg_seeds(px: Int32, py: Int32, si: Int32, seed: UInt64) -> Tuple[UInt64, UInt64]:
     var h = UInt64(px) * UInt64(2654435761) ^ UInt64(py) * UInt64(1664525) ^ UInt64(si) * UInt64(22695477) ^ seed
     h ^= h >> 30; h *= UInt64(0xbf58476d1ce4e5b9)
     h ^= h >> 27; h *= UInt64(0x94d049bb133111eb)
@@ -267,7 +267,7 @@ fn derive_pcg_seeds(px: Int32, py: Int32, si: Int32, seed: UInt64) -> Tuple[UInt
 # Returns the world-space Ray_C and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
 @always_inline
-fn gen_primary_ray_state(
+def gen_primary_ray_state(
     px: Int32, py: Int32, si: Int32,
     log2spp: Int, n_base4: Int,
     seed_dim0: UInt32, seed_dim1: UInt32,

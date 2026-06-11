@@ -13,7 +13,7 @@ struct BVH2Node(TrivialRegisterPassable):
     var count: Int32        # 0 = interior, >0 = leaf primitive count
 
 @always_inline
-fn intersect_aabb(
+def intersect_aabb(
     bmin: Point3f, bmax: Point3f,
     rdirX: Float32, rdirY: Float32, rdirZ: Float32,
     orgRdirX: Float32, orgRdirY: Float32, orgRdirZ: Float32,
@@ -76,7 +76,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
 # ── Analytical sphere intersection ────────────────────────────────────────────
 
 @always_inline
-fn ray_sphere_hit(center: Point3f, radius: Float32,
+def ray_sphere_hit(center: Point3f, radius: Float32,
                   ray: Ray_C, t_min: Float32, t_max: Float32) -> Float32:
     """Exact ray-sphere intersection. Returns t of first hit in (t_min, t_max), or -1."""
     var ocx = ray.origin.x - center.x
@@ -99,7 +99,7 @@ fn ray_sphere_hit(center: Point3f, radius: Float32,
     return Float32(-1.0)
 
 @always_inline
-fn test_spheres(
+def test_spheres(
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     ray: Ray_C,
@@ -124,7 +124,7 @@ fn test_spheres(
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 
 @always_inline
-fn traverse_bvh2_core(
+def traverse_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -267,7 +267,7 @@ fn traverse_bvh2_core(
 
 # Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
 @always_inline
-fn any_hit_bvh2_core(
+def any_hit_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -359,7 +359,7 @@ fn any_hit_bvh2_core(
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
 @export
-fn mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
+def mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, ray, tMax, resultPtr)
@@ -368,7 +368,7 @@ fn mojo_traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
 # ── CPU batch entry point (sequential loop) ───────────────────────────────────
 
 @export
-fn mojo_cpu_traverse_batch(
+def mojo_cpu_traverse_batch(
     scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
@@ -385,7 +385,7 @@ fn mojo_cpu_traverse_batch(
 # ── BVH2 Construction (SAH) ───────────────────────────────────────────
 
 @always_inline
-fn _bvh_swap(
+def _bvh_swap(
     widx: UnsafePointer[Int32, MutAnyOrigin],
     wmin: UnsafePointer[Float32, MutAnyOrigin],
     wmax: UnsafePointer[Float32, MutAnyOrigin],
@@ -396,7 +396,7 @@ fn _bvh_swap(
         var mn = wmin[i*3+a]; wmin[i*3+a] = wmin[j*3+a]; wmin[j*3+a] = mn
         var mx = wmax[i*3+a]; wmax[i*3+a] = wmax[j*3+a]; wmax[j*3+a] = mx
 
-fn build_bvh2_node(
+def build_bvh2_node(
     widx: UnsafePointer[Int32, MutAnyOrigin],
     wmin: UnsafePointer[Float32, MutAnyOrigin],
     wmax: UnsafePointer[Float32, MutAnyOrigin],

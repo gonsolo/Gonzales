@@ -13,7 +13,7 @@ from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaus
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
 # path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
-alias WAVEFRONT_BATCH: Int = 8
+comptime WAVEFRONT_BATCH: Int = 8
 
 # GPU scene handle — holds DeviceContext and device-resident scene buffers.
 # Allocated on the heap, returned as an opaque pointer.
@@ -68,11 +68,11 @@ struct GpuSceneHandle(Movable):
     var fh: Int
 
 @export
-fn mojo_gpu_available() -> Bool:
+def mojo_gpu_available() -> Bool:
     return has_accelerator()
 
 @export
-fn mojo_gpu_upload_scene(
+def mojo_gpu_upload_scene(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     bvh2NodesCount: Int64,
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
@@ -400,13 +400,13 @@ fn mojo_gpu_upload_scene(
             return handle.bitcast[GpuSceneHandle]()
         except e:
             print("GPU: Failed to upload scene: " + String(e))
-            return UnsafePointer[GpuSceneHandle, MutAnyOrigin]()
+            return UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     else:
-        return UnsafePointer[GpuSceneHandle, MutAnyOrigin]()
+        return UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
 
 
 # GPU kernel function — one thread per ray
-fn traverse_bvh2_gpu(
+def traverse_bvh2_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -424,7 +424,7 @@ fn traverse_bvh2_gpu(
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, tMax, result_ptr)
 
 @export
-fn mojo_gpu_traverse_batch(
+def mojo_gpu_traverse_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
@@ -491,7 +491,7 @@ fn mojo_gpu_traverse_batch(
             print("GPU: Batch traversal failed: " + String(e))
 
 
-fn shade_gpu(
+def shade_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -505,7 +505,7 @@ fn shade_gpu(
 
 
 
-fn shade_nee_gpu(
+def shade_nee_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -531,15 +531,15 @@ fn shade_nee_gpu(
     var inter = intersections[tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin](),
-        UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), textures, n_textures,
+        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
         infiniteLights, n_infinite_lights,
         spheres, n_spheres)
 
 
-fn shade_enqueue_shadow_gpu(
+def shade_enqueue_shadow_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -574,7 +574,7 @@ fn shade_enqueue_shadow_gpu(
         spheres, n_spheres)
 
 
-fn traverse_shadow_rays_gpu(
+def traverse_shadow_rays_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -593,7 +593,7 @@ fn traverse_shadow_rays_gpu(
         paths[tid].estimate += RGB(task.contrib.r, task.contrib.g, task.contrib.b)
 
 
-fn accumulate_film_gpu(
+def accumulate_film_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
     albedo_film: UnsafePointer[Float32, MutAnyOrigin],
@@ -610,7 +610,7 @@ fn accumulate_film_gpu(
     albedo_film[tid*3+2] += paths[tid].albedo.b
 
 
-fn clear_film_gpu(film: UnsafePointer[Float32, MutAnyOrigin], n_pixels: Int):
+def clear_film_gpu(film: UnsafePointer[Float32, MutAnyOrigin], n_pixels: Int):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n_pixels:
         return
@@ -621,7 +621,7 @@ fn clear_film_gpu(film: UnsafePointer[Float32, MutAnyOrigin], n_pixels: Int):
 
 # Wavefront accumulation: thread px sums actual_batch samples from path_buf layout
 # path_buf[si * n_pixels + px] and adds to film[px].  No atomics needed (one thread per pixel).
-fn accumulate_film_wavefront_gpu(
+def accumulate_film_wavefront_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
     albedo_film: UnsafePointer[Float32, MutAnyOrigin],
@@ -642,7 +642,7 @@ fn accumulate_film_wavefront_gpu(
 
 # Wavefront primary-ray generation: thread ti → pixel (ti % n_pixels), sample (si_start + ti // n_pixels).
 # Layout: path_buf[si_local * n_pixels + px_flat] — adjacent threads touch adjacent pixels of same sample.
-fn gen_primary_rays_wavefront_gpu(
+def gen_primary_rays_wavefront_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
@@ -683,7 +683,7 @@ fn gen_primary_rays_wavefront_gpu(
 
 
 # Traversal kernel that reads rays directly from PathState_C (no separate ray buffer).
-fn traverse_paths_gpu(
+def traverse_paths_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -702,7 +702,7 @@ fn traverse_paths_gpu(
     test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
 
 @export
-fn mojo_gpu_shade_batch(
+def mojo_gpu_shade_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     count: Int64,
@@ -762,7 +762,7 @@ fn mojo_gpu_shade_batch(
 
 # GPU kernel: generate primary PathState_C for every pixel in one pass.
 # Each thread handles one pixel.  All sampling is pure math — no host calls.
-fn gen_primary_rays_gpu(
+def gen_primary_rays_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
@@ -802,7 +802,7 @@ fn gen_primary_rays_gpu(
 # Render one sample pass into the persistent film buffer.
 # Ray generation runs on GPU — no CPU-side path buffer or PCIe upload needed.
 @export
-fn mojo_gpu_render_sample(
+def mojo_gpu_render_sample(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
     si: Int32, log2spp: Int32, n_base4: Int32,
@@ -888,7 +888,7 @@ fn mojo_gpu_render_sample(
 # runs the full bounce loop over n_pixels × actual_batch paths together, then accumulates.
 # Caller loops over spp in steps of WAVEFRONT_BATCH; progress reporting is up to the caller.
 @export
-fn mojo_gpu_render_wavefront(
+def mojo_gpu_render_wavefront(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
     si_start: Int32, actual_batch: Int32,
@@ -972,7 +972,7 @@ fn mojo_gpu_render_wavefront(
 
 
 @export
-fn mojo_gpu_download_film(
+def mojo_gpu_download_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
     n: Int64,
@@ -995,7 +995,7 @@ fn mojo_gpu_download_film(
 
 
 @export
-fn mojo_gpu_download_albedo(
+def mojo_gpu_download_albedo(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     film: UnsafePointer[Float32, MutAnyOrigin],
     n: Int64,
@@ -1020,7 +1020,7 @@ fn mojo_gpu_download_albedo(
 # ── À-trous wavelet denoiser (Dammertz et al. 2010) ─────────────────────────
 # Three kernels: normalize, variance estimate, one à-trous pass (5× ping-pong).
 
-fn normalize_beauty_albedo_gpu(
+def normalize_beauty_albedo_gpu(
     film: UnsafePointer[Float32, MutAnyOrigin],
     albedo_film: UnsafePointer[Float32, MutAnyOrigin],
     beauty_out: UnsafePointer[Float32, MutAnyOrigin],
@@ -1050,7 +1050,7 @@ fn normalize_beauty_albedo_gpu(
     albedo_out[tid*3+2] = albedo_film[tid*3+2] * inv_weight
 
 
-fn estimate_variance_gpu(
+def estimate_variance_gpu(
     beauty: UnsafePointer[Float32, MutAnyOrigin],
     variance_out: UnsafePointer[Float32, MutAnyOrigin],
     fw: Int, fh: Int,
@@ -1077,7 +1077,7 @@ fn estimate_variance_gpu(
     variance_out[tid] = v if v > Float32(0) else Float32(0)
 
 
-fn atrous_filter_gpu(
+def atrous_filter_gpu(
     input: UnsafePointer[Float32, MutAnyOrigin],
     albedo: UnsafePointer[Float32, MutAnyOrigin],
     variance: UnsafePointer[Float32, MutAnyOrigin],
@@ -1128,7 +1128,7 @@ fn atrous_filter_gpu(
 
 
 @export
-fn mojo_gpu_atrous_denoise(
+def mojo_gpu_atrous_denoise(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     output: UnsafePointer[Float32, MutAnyOrigin],
     n: Int64,
@@ -1195,7 +1195,7 @@ fn mojo_gpu_atrous_denoise(
 
 
 @export
-fn mojo_gpu_clear_film(
+def mojo_gpu_clear_film(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     n: Int64,
 ):
@@ -1225,8 +1225,8 @@ fn mojo_gpu_clear_film(
 
 
 @export
-fn mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
-    if not handlePtr:
+def mojo_gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
+    if Int(handlePtr) == 0:
         return
     handlePtr.destroy_pointee()
     handlePtr.bitcast[GpuSceneHandle]().free()

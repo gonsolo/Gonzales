@@ -12,7 +12,7 @@ from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_fram
 
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
-fn _generate_sobol_matrices(path: String) -> UnsafePointer[UInt32, MutAnyOrigin]:
+def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutAnyOrigin]]:
     var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
     var file_size: Int
     try:
@@ -26,7 +26,7 @@ fn _generate_sobol_matrices(path: String) -> UnsafePointer[UInt32, MutAnyOrigin]
         file_buf[file_size] = UInt8(0)
     except:
         print("Error: cannot open Sobol data file: " + path)
-        return UnsafePointer[UInt32, MutAnyOrigin]()
+        return None
 
     # Allocate matrices: 21201 dimensions × 52 bits
     comptime N_DIMS = 21201
@@ -122,10 +122,10 @@ fn _generate_sobol_matrices(path: String) -> UnsafePointer[UInt32, MutAnyOrigin]
 
     if dim < 2:
         print("Warning: Sobol file had fewer dimensions than expected")
-    return matrices
+    return Optional(matrices)
 
 
-fn _gpu_upload_scene(
+def _gpu_upload_scene(
     psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     n_pixels: Int,
@@ -164,7 +164,7 @@ fn _gpu_upload_scene(
 
 
 @export
-fn mojo_parse_and_render(
+def mojo_parse_and_render(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
@@ -174,7 +174,7 @@ fn mojo_parse_and_render(
         return Int32(-1)
 
     var psc = mojo_parse_scene(path)
-    if not psc:
+    if Int(psc) == 0:
         return Int32(-1)
 
     var fw = psc[0].film_w
@@ -287,7 +287,7 @@ fn mojo_parse_and_render(
     return Int32(0)
 
 
-fn mojo_render_interactive(
+def mojo_render_interactive(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
@@ -297,7 +297,7 @@ fn mojo_render_interactive(
         return
 
     var psc = mojo_parse_scene(path)
-    if not psc:
+    if Int(psc) == 0:
         print("Failed to parse scene")
         return
 
@@ -305,10 +305,10 @@ fn mojo_render_interactive(
     var fh = psc[0].film_h
     var n_pixels = Int(fw) * Int(fh)
 
-    var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin]()
+    var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     if use_gpu:
         handle = _gpu_upload_scene(psc, sobol, n_pixels)
-        if not handle:
+        if Int(handle) <= 1:
             print("GPU: Failed to upload scene")
             mojo_parsed_free(psc)
             return
@@ -328,7 +328,7 @@ fn mojo_render_interactive(
     title_buf[title_len] = UInt8(0)
     var v = viewer_create(fw, fh, title_buf)
     title_buf.free()
-    if not v:
+    if Int(v) == 0:
         print("Failed to create viewer window")
         if use_gpu:
             mojo_gpu_free_scene(handle)
@@ -355,11 +355,11 @@ fn mojo_render_interactive(
     var denoised = alloc[Float32](n_pixels * 3)
     var frame_count = 0
 
-    # Mode-specific buffers — null until allocated below
-    var sd         = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]()
-    var sp_ptr     = UnsafePointer[TileSamplerParams_C, MutAnyOrigin]()
-    var accum      = UnsafePointer[Float32, MutAnyOrigin]()
-    var albedo_acc = UnsafePointer[Float32, MutAnyOrigin]()
+    # Mode-specific buffers — dangling until allocated below
+    var sd         = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin].unsafe_dangling()
+    var sp_ptr     = UnsafePointer[TileSamplerParams_C, MutAnyOrigin].unsafe_dangling()
+    var accum      = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+    var albedo_acc = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
 
     if use_gpu:
         mojo_gpu_clear_film(handle, Int64(n_pixels))
