@@ -537,7 +537,7 @@ def gpu_upload_scene(
         except e:
             var msg = String(e)
             if "libnvidia" in msg or "nvidia-ml" in msg:
-                print("GPU: NVIDIA hardware required (no NVIDIA driver found)")
+                print("GPU: no supported GPU driver found (requires NVIDIA or AMD)")
             else:
                 print("GPU: Failed to upload scene: " + msg)
             return UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
