@@ -333,12 +333,13 @@ def parse_and_render(
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     no_denoise: Bool = False,
     spp_override: Int32 = Int32(0),
+    verbose: Bool = False,
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return Int32(-1)
 
-    var psc = mojo_parse_scene(path)
+    var psc = mojo_parse_scene(path, verbose)
     if Int(psc) == 0:
         return Int32(-1)
     if override_w > 0 and override_h > 0:
@@ -485,12 +486,13 @@ def render_interactive(
     fullscreen: Bool = False,
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     spp_override: Int32 = Int32(0),
+    verbose: Bool = False,
 ):
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return
 
-    var psc = mojo_parse_scene(path)
+    var psc = mojo_parse_scene(path, verbose)
     if Int(psc) == 0:
         print("Failed to parse scene")
         return

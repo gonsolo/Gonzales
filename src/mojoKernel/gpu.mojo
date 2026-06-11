@@ -535,7 +535,11 @@ def gpu_upload_scene(
             print("GPU: scene uploaded")
             return handle.bitcast[GpuSceneHandle]()
         except e:
-            print("GPU: Failed to upload scene: " + String(e))
+            var msg = String(e)
+            if "libnvidia" in msg or "nvidia-ml" in msg:
+                print("GPU: NVIDIA hardware required (no NVIDIA driver found)")
+            else:
+                print("GPU: Failed to upload scene: " + msg)
             return UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     else:
         return UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()

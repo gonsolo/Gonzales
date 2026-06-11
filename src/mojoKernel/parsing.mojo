@@ -2464,7 +2464,8 @@ def make_screen_to_raster(fw: Int32, fh: Int32,
     dst[13] = ty           # M[1,3]
 
 def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
-                 psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
+                 psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+                 verbose: Bool = False):
 
     # ---- Camera matrices ----
     var c2w = alloc[Float32](16)
@@ -2474,6 +2475,15 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     cam2w_tmp.free()
     psc[0].camera_to_world = c2w
 
+    if verbose:
+        print("=== GONZALES DEBUG: Scene Summary ===")
+        print("  Camera position (c2w col3):", c2w[12], c2w[13], c2w[14])
+        print("  Camera forward (-Z):", -c2w[8], -c2w[9], -c2w[10])
+        print("  Camera FOV:", s[0].camera_fov)
+        print("  Film:", s[0].film_w, "x", s[0].film_h)
+        print("  Meshes:", len(s[0].meshes))
+        print("  Named materials:", len(s[0].named_materials))
+        print("=== END DEBUG ===")
 
     var cts = alloc[Float32](16)
     make_perspective_matrix(s[0].camera_fov, Float32(0.01), cts)
@@ -3056,7 +3066,8 @@ def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
 
 # ── Exported API ──────────────────────────────────────────────────────────────
 
-def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
+def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin],
+                     verbose: Bool = False,
                     ) -> UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]:
     external_call["createTextureSystem", NoneType]()
     var handle = scanner_open(path)
@@ -3086,7 +3097,7 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin]
     flush_hair(s_ptr)
 
     var psc = alloc[ParsedScene_Mojo](1)
-    finalize_scene(s_ptr, psc)
+    finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.take_pointee()  # destroys all List fields
     s_ptr.free()
     return psc

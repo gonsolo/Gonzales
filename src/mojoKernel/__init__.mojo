@@ -43,12 +43,13 @@ def main() raises:
     var pixel_x = Int32(-1)
     var pixel_y = Int32(-1)
     var no_denoise = False
+    var verbose = False
     var spp_override = Int32(0)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--spp N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -59,6 +60,8 @@ def main() raises:
         elif arg == "--fullscreen":
             fullscreen = True
             interactive = True
+        elif arg == "--verbose":
+            verbose = True
         elif arg == "--spp" and i + 1 < len(args):
             i += 1
             spp_override = _parse_int32(String(args[i]), 0)
@@ -89,7 +92,7 @@ def main() raises:
         i += 1
 
     if scene_path.byte_length() == 0:
-        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--spp N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
+        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
         return
 
     if not scene_path.endswith(".pbrt"):
@@ -111,9 +114,9 @@ def main() raises:
     if pixel_x >= 0 and pixel_y >= 0:
         debug_trace_pixel(path_cstr, pixel_x, pixel_y)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override)
+        render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override, verbose)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override)
+        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 
