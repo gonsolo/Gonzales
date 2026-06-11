@@ -242,6 +242,7 @@ def render_all_tiles(
     scene: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     results: UnsafePointer[TileResult_C, MutAnyOrigin],
     max_depth: Int32,
+    quiet: Bool = False,
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -284,14 +285,15 @@ def render_all_tiles(
                 results[dst] = tile_buf[src]
         done_ptr[0] += Int32(1)
         var d = Int(done_ptr[0])
-        if d % print_step == 0 or d == n_tiles:
+        if not quiet and (d % print_step == 0 or d == n_tiles):
             var elapsed = Float64(perf_counter_ns() - t0) / 1.0e9
             print(progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
 
     parallelize[render_one](n_tiles)
-    var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
-    print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
-        + " tiles (100.0%) | Done: " + fmt_time(total_s) + "                ")
+    if not quiet:
+        var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
+        print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
+            + " tiles (100.0%) | Done: " + fmt_time(total_s) + "                ")
     done_ptr.free()
     tile_bufs.free()
 

@@ -646,7 +646,7 @@ def render_interactive(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth)
+                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True)
             if frame_count == 0:
                 render_aux_buffers(
                     psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
