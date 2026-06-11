@@ -2400,6 +2400,12 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             var sub_handle = scanner_open(inc_path)
             if scanner_is_at_end(sub_handle) == 0:
                 parse_scene_file(sub_handle, s)
+            else:
+                var inc_str = String(unsafe_from_utf8_ptr=inc_name.as_immutable())
+                if inc_str.endswith(".xz"):
+                    print("Warning: cannot open include (decompress first with xz -dk):", inc_str)
+                else:
+                    print("Warning: cannot open include:", inc_str)
             scanner_free(sub_handle)
             inc_name.free(); inc_path.free()
         elif _psc_streq(kw_buf, "Material"):
