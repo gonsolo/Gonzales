@@ -410,6 +410,11 @@ def parse_and_render(
         # denoised_gpu, albedo_gpu, and results freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
+    elif psc[0].prim_count == 0:
+        print("Warning: scene has no geometry, skipping render")
+        mojo_parsed_free(psc)
+        results.free()
+        return Int32(0)
     else:
         var zero = TileResult_C(
             estimate=RGB(Float32(0), Float32(0), Float32(0)),
@@ -531,6 +536,11 @@ def render_interactive(
         print("Failed to create viewer window")
         if use_gpu:
             gpu_free_scene(handle)
+        mojo_parsed_free(psc)
+        return
+    if not use_gpu and psc[0].prim_count == 0:
+        print("Warning: scene has no geometry, skipping render")
+        viewer_destroy(v)
         mojo_parsed_free(psc)
         return
 
