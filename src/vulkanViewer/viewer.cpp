@@ -350,7 +350,6 @@ static bool createInstance(Viewer* v) {
     ci.enabledLayerCount = 0;
 
     VK_CHECK(vkCreateInstance(&ci, nullptr, &v->instance));
-    printf("Viewer: Vulkan instance created\n");
     return true;
 }
 
@@ -379,7 +378,6 @@ static bool pickPhysicalDevice(Viewer* v) {
 
                 VkPhysicalDeviceProperties props;
                 vkGetPhysicalDeviceProperties(pd, &props);
-                printf("Viewer: Using GPU: %s\n", props.deviceName);
                 return true;
             }
         }
@@ -406,7 +404,6 @@ static bool createDevice(Viewer* v) {
 
     VK_CHECK(vkCreateDevice(v->physicalDevice, &dci, nullptr, &v->device));
     vkGetDeviceQueue(v->device, v->graphicsFamily, 0, &v->graphicsQueue);
-    printf("Viewer: Logical device created\n");
     return true;
 }
 
@@ -493,8 +490,6 @@ static bool createSwapchain(Viewer* v) {
         VK_CHECK(vkCreateImageView(v->device, &ivci, nullptr,
                                     &v->swapchainImageViews[i]));
     }
-    printf("Viewer: Swapchain created (%ux%u, %u images)\n",
-           extent.width, extent.height, imageCount);
     return true;
 }
 
@@ -764,7 +759,6 @@ static bool createTexture(Viewer* v, int width, int height) {
     }
 
     v->textureReady = true;
-    printf("Viewer: Texture created (%dx%d, RGBA32F)\n", width, height);
     return true;
 }
 
@@ -987,7 +981,6 @@ ViewerHandle viewer_create(int width, int height, const char* title, int fullscr
         return nullptr;
     }
 
-    printf("Viewer: %dx%d window ready\n", width, height);
     return v;
 }
 
