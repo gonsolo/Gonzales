@@ -680,6 +680,7 @@ struct ParsedScene_Mojo:
     var filter_norm_y:    Float32
     var filter_weight:    Float32
     var filter_type:      Int32
+    var camera_fov:       Float32
     var samples_per_pixel: Int32
     var log2_spp:         Int32
     var n_base4_digits:   Int32
@@ -2848,6 +2849,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].filter_norm_x    = norm_x
     psc[0].filter_norm_y    = norm_y
     psc[0].filter_weight    = fweight
+    psc[0].camera_fov       = s[0].camera_fov
     psc[0].samples_per_pixel = spp
     psc[0].log2_spp         = log2_spp
     psc[0].n_base4_digits   = n_base4
@@ -3150,6 +3152,65 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
     if psc[0].sphere_count > 0:
         psc[0].spheres.free()
     psc.free()
+
+def mojo_apply_overrides(
+    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    spp_override: Int32,
+    w_override: Int32,
+    h_override: Int32,
+):
+    if spp_override > Int32(0):
+        var spp = spp_override
+        var log2_spp = Int32(0)
+        var tmp = spp
+        while tmp > Int32(1):
+            tmp >>= 1
+            log2_spp += 1
+        var log4_spp = (log2_spp + Int32(1)) / Int32(2)
+        var dim = max(psc[0].film_w, psc[0].film_h)
+        var log2_dim = Int32(0)
+        var tmp_dim = dim
+        while tmp_dim > Int32(1):
+            tmp_dim >>= 1
+            log2_dim += 1
+        psc[0].samples_per_pixel = spp
+        psc[0].log2_spp          = log2_spp
+        psc[0].n_base4_digits    = log2_dim + log4_spp
+
+    if w_override > Int32(0) and h_override > Int32(0):
+        psc[0].film_w = w_override
+        psc[0].film_h = h_override
+        # Recompute raster_to_camera for new resolution
+        var cts = alloc[Float32](16)
+        _psc_make_perspective(psc[0].camera_fov, Float32(0.01), cts)
+        var frame = Float32(w_override) / Float32(h_override)
+        var smin_x: Float32; var smax_x: Float32
+        var smin_y: Float32; var smax_y: Float32
+        if frame >= Float32(1):
+            smin_x = -frame; smax_x = frame; smin_y = Float32(-1); smax_y = Float32(1)
+        else:
+            smin_x = Float32(-1); smax_x = Float32(1)
+            smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
+        var str_mat = alloc[Float32](16)
+        _psc_make_screen_to_raster(w_override, h_override,
+                                   smin_x, smax_x, smin_y, smax_y, str_mat)
+        var rts = alloc[Float32](16)
+        _ = mojo_matrix_invert(str_mat, rts)
+        var cts_inv = alloc[Float32](16)
+        _ = mojo_matrix_invert(cts, cts_inv)
+        mojo_matrix_multiply(cts_inv, rts, psc[0].raster_to_camera)
+        cts.free(); str_mat.free(); rts.free(); cts_inv.free()
+
+        # Recompute n_base4 with updated dim
+        var log2_spp = psc[0].log2_spp
+        var log4_spp = (log2_spp + Int32(1)) / Int32(2)
+        var dim = max(w_override, h_override)
+        var log2_dim = Int32(0)
+        var tmp_dim = dim
+        while tmp_dim > Int32(1):
+            tmp_dim >>= 1
+            log2_dim += 1
+        psc[0].n_base4_digits = log2_dim + log4_spp
 
 def mojo_parsed_scene_descriptor(
     psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]

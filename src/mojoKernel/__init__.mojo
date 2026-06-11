@@ -4,6 +4,32 @@ from std.os import getenv
 from std.memory import alloc
 from mojoKernel.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel
 
+def _parse_int32(s: String, start: Int) -> Int32:
+    var v = Int32(0)
+    var n = s.byte_length()
+    var j = start
+    while j < n:
+        var c = Int32(s.as_bytes()[j])
+        if c < Int32(48) or c > Int32(57):
+            break
+        v = v * Int32(10) + c - Int32(48)
+        j += 1
+    return v
+
+def _parse_res(s: String, start: Int) -> Tuple[Int32, Int32]:
+    var n = s.byte_length()
+    var j = start
+    var wv = Int32(0)
+    while j < n and s.as_bytes()[j] != UInt8(120):  # 'x'
+        wv = wv * Int32(10) + Int32(s.as_bytes()[j]) - Int32(48)
+        j += 1
+    j += 1
+    var hv = Int32(0)
+    while j < n:
+        hv = hv * Int32(10) + Int32(s.as_bytes()[j]) - Int32(48)
+        j += 1
+    return (wv, hv)
+
 def main() raises:
     var t0 = perf_counter_ns()
 
@@ -17,11 +43,12 @@ def main() raises:
     var pixel_x = Int32(-1)
     var pixel_y = Int32(-1)
     var no_denoise = False
+    var spp_override = Int32(0)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--width W] [--height H] [--pixel X Y] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--spp N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -32,6 +59,20 @@ def main() raises:
         elif arg == "--fullscreen":
             fullscreen = True
             interactive = True
+        elif arg == "--spp" and i + 1 < len(args):
+            i += 1
+            spp_override = _parse_int32(String(args[i]), 0)
+        elif arg.startswith("--spp="):
+            spp_override = _parse_int32(arg, 6)
+        elif arg == "--resolution" and i + 1 < len(args):
+            i += 1
+            var wh = _parse_res(String(args[i]), 0)
+            override_w = wh[0]
+            override_h = wh[1]
+        elif arg.startswith("--resolution="):
+            var wh = _parse_res(arg, 13)
+            override_w = wh[0]
+            override_h = wh[1]
         elif arg == "--width" and i + 1 < len(args):
             i += 1
             override_w = Int32(atol(String(args[i])))
@@ -48,7 +89,7 @@ def main() raises:
         i += 1
 
     if scene_path.byte_length() == 0:
-        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--width W] [--height H] scene.pbrt")
+        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--spp N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
         return
 
     if not scene_path.endswith(".pbrt"):
@@ -70,9 +111,9 @@ def main() raises:
     if pixel_x >= 0 and pixel_y >= 0:
         debug_trace_pixel(path_cstr, pixel_x, pixel_y)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h)
+        render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise)
+        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 
