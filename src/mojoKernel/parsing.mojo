@@ -2608,11 +2608,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             meshes[i].normals = nrm_c
             out_nrm_nv[i] = Int32(nv)
         else:
-            # Sentinel address 1 (UnsafePointer rejects null/address-0) so the
-            # shading-normal guard `Int(mesh.normals) <= 1` works correctly.
-            meshes[i].normals = UnsafePointer[Float32, MutAnyOrigin](
-                unsafe_from_address=1
-            )
+            meshes[i].normals = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
             out_nrm_nv[i] = Int32(0)
 
         if ma.is_area_light:
@@ -3124,9 +3120,9 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].bvh_nodes.free()
     if psc[0].prim_count > 0:
         psc[0].prim_ids.free()
-    if Int(psc[0].raster_to_camera) > 1:
+    if Int(psc[0].raster_to_camera) > 4:
         psc[0].raster_to_camera.free()
-    if Int(psc[0].camera_to_world) > 1:
+    if Int(psc[0].camera_to_world) > 4:
         psc[0].camera_to_world.free()
     if Int(psc[0].film_filename) > 1:
         psc[0].film_filename.free()
@@ -3143,8 +3139,9 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         var ni = Int(psc[0].infinite_count)
         for ii in range(ni):
             var il = psc[0].infinite_lights[ii]
-            if il.cdf_w > Int32(0):
+            if Int(il.cdf_ptr) > 4:
                 il.cdf_ptr.free()
+            if Int(il.pixels_ptr) > 4:
                 _ = external_call["free_texture_rgb", Int32,
                     UnsafePointer[Float32, MutAnyOrigin]](il.pixels_ptr)
             il.world_to_light.free()

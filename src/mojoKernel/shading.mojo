@@ -244,15 +244,36 @@ def _tex_lookup[use_gpu: Bool](
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> RGB:
-    if mat.tex_idx < Int32(0) or Int(mesh.uvs) <= 1:
-        return mat.albedo
-    var w0 = Float32(1.0) - inter.u - inter.v
-    var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
-    var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
-    var found = False
-    var rgb = sample_texture[use_gpu](Int(mat.tex_idx), su, tv, False, pixel_uv, tex_filenames, textures, n_textures, found)
-    if found:
-        return rgb
+    var ti = Int(mat.tex_idx)
+    comptime if use_gpu:
+        if ti >= 0 and ti < n_textures:
+            var tex = textures[ti]
+            if Int(tex.width) > 0:
+                var w0 = Float32(1.0) - inter.u - inter.v
+                var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
+                var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
+                return _sample_tex(tex, su, tv)
+    else:
+        if ti >= 0 and Int(tex_filenames) > 8:
+            var filename = tex_filenames[ti]
+            if Int(filename) > 1 and Int(mesh.uvs) > 4:
+                var w0 = Float32(1.0) - inter.u - inter.v
+                var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
+                var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
+                su = su - Float32(Int(su))
+                if su < Float32(0.0): su += Float32(1.0)
+                tv = tv - Float32(Int(tv))
+                if tv < Float32(0.0): tv += Float32(1.0)
+                var tr = alloc[Float32](3)
+                tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
+                _ = external_call["texture", Bool,
+                    UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+                    UnsafePointer[Float32, MutAnyOrigin]](filename, su, tv, tr)
+                var result = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
+                tr.free()
+                return result
     return mat.albedo
 
 
@@ -1045,7 +1066,7 @@ def shade_conductor(
         # Derive UV tangent frame for anisotropy direction
         var t1: SIMD[DType.float32, 3]
         var t2: SIMD[DType.float32, 3]
-        if Int(mesh.uvs) > 1 and alpha_x != alpha_y:
+        if Int(mesh.uvs) > 4 and alpha_x != alpha_y:
             # UV-gradient tangent: tangent = (duv2.v*dp1 - duv1.v*dp2) / det
             var dp1 = p1 - p0; var dp2 = p2 - p0
             var u0f = mesh.uvs[v0*2]; var v0f = mesh.uvs[v0*2+1]
@@ -1423,7 +1444,7 @@ def _apply_normal_map[use_gpu: Bool](
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> SIMD[DType.float32, 3]:
-    if mat.normal_tex_idx < Int32(0) or Int(mesh.uvs) <= 1:
+    if mat.normal_tex_idx < Int32(0) or Int(mesh.uvs) <= 4:
         return geom_normal
     # Compute barycentric UV coordinates
     var dp1 = p1 - p0; var dp2 = p2 - p0
@@ -1511,7 +1532,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var ld_z = w2l[2]*ray_dir[0] + w2l[6]*ray_dir[1] + w2l[10]*ray_dir[2]
             var local_dir = SIMD[DType.float32, 3](ld_x, ld_y, ld_z)
             var env_rgb: RGB
-            if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and ilight.cdf_w > Int32(0):
+            if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 4 and ilight.cdf_w > Int32(0):
                 # Bilinear lookup in GPU/CPU-resident pixels (cdf_w × cdf_h, 3 floats/pixel)
                 var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
                 var ea_uv = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
@@ -1906,6 +1927,63 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
             var u1_env = pcg.next_float()
             var u2_env = pcg.next_float()
+            var r_env = sqrt(u1_env)
+            var theta_env = TWO_PI * u2_env
+            var x_env = r_env * cos(theta_env)
+            var y_env = r_env * sin(theta_env)
+            var z2_env = Float32(1.0) - u1_env
+            var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
+            var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+            var a_env = Float32(-1.0) / (sign_env + normal[2])
+            var b_env = normal[0] * normal[1] * a_env
+            var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
+            var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
+            var env_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
+            var env_dlen = dot(env_dir, env_dir)
+            if env_dlen > Float32(0.0):
+                env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
+            var cos_env = dot(normal, env_dir)
+            if cos_env > Float32(0.0):
+                # Transform direction to light space for env-map lookup
+                var w2l = ilight.world_to_light
+                var ld_x = w2l[0]*env_dir[0] + w2l[4]*env_dir[1] + w2l[8]*env_dir[2]
+                var ld_y = w2l[1]*env_dir[0] + w2l[5]*env_dir[1] + w2l[9]*env_dir[2]
+                var ld_z = w2l[2]*env_dir[0] + w2l[6]*env_dir[1] + w2l[10]*env_dir[2]
+                var env_rgb: RGB
+                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 4 and ilight.cdf_w > Int32(0):
+                    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+                    var ea_uv_nee = _equal_area_sphere_to_square(ld_x, ld_y, ld_z)
+                    var u_env = ea_uv_nee[0]; var v_env = ea_uv_nee[1]
+                    var fx = u_env * Float32(iw) - Float32(0.5)
+                    var fy = v_env * Float32(ih) - Float32(0.5)
+                    var x0 = Int(max(Float32(0), min(Float32(iw - 1), floor(fx))))
+                    var y0 = Int(max(Float32(0), min(Float32(ih - 1), floor(fy))))
+                    var x1 = min(x0 + 1, iw - 1)
+                    var y1 = min(y0 + 1, ih - 1)
+                    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+                    var r00 = ilight.pixels_ptr[(y0*iw+x0)*3+0]; var g00 = ilight.pixels_ptr[(y0*iw+x0)*3+1]; var b00 = ilight.pixels_ptr[(y0*iw+x0)*3+2]
+                    var r10 = ilight.pixels_ptr[(y0*iw+x1)*3+0]; var g10 = ilight.pixels_ptr[(y0*iw+x1)*3+1]; var b10 = ilight.pixels_ptr[(y0*iw+x1)*3+2]
+                    var r01 = ilight.pixels_ptr[(y1*iw+x0)*3+0]; var g01 = ilight.pixels_ptr[(y1*iw+x0)*3+1]; var b01 = ilight.pixels_ptr[(y1*iw+x0)*3+2]
+                    var r11 = ilight.pixels_ptr[(y1*iw+x1)*3+0]; var g11 = ilight.pixels_ptr[(y1*iw+x1)*3+1]; var b11 = ilight.pixels_ptr[(y1*iw+x1)*3+2]
+                    var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
+                    var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
+                    var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
+                    env_rgb = RGB(tr, tg, tb) * ilight.scale
+                else:
+                    env_rgb = ilight.scale
+                if not env_rgb.is_black():
+                    var pdf_nee = cos_env / PI
+                    var weight = alb * env_rgb * (cos_env / (pdf_nee * PI))
+                    # weight simplifies to alb * env_rgb
+                    var contrib = path_ptr[].throughput * alb * env_rgb
+                    # Shadow ray to infinity
+                    var t_max_env = Float32(100000.0)
+                    comptime if enqueue_shadow:
+                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+                    else:
+                        var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, t_max_env):
+                            path_ptr[].estimate += contrib
 
             # 1. Sample row from marginal CDF
             var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)

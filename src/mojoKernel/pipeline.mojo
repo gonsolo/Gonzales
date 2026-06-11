@@ -502,7 +502,7 @@ def render_interactive(
     var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     if use_gpu:
         handle = _gpu_upload_scene(psc, sobol, n_pixels)
-        if Int(handle) <= 1:
+        if Int(handle) <= 8:
             print("GPU: Failed to upload scene")
             mojo_parsed_free(psc)
             return
