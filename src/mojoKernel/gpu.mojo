@@ -38,7 +38,10 @@ struct GpuSceneHandle(Movable):
     var n_area_lights: Int
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
     var n_spheres: Int
-    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 32
+    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 48
+    var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
+    var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
+    var il_w2l_bufs: List[DeviceBuffer[DType.uint8]]    # per-light world_to_light matrix on GPU
     var n_infinite_lights: Int
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # gpu_render_sample (interactive) only uses the first n_pixels slots.
@@ -254,15 +257,53 @@ def gpu_upload_scene(
                     for j in range(Int(sphereCount) * 36):
                         dst[j] = src[j]
 
-            # Upload infinite/environment lights
-            var il_bytes = max(Int(infiniteLightCount), 1) * 40  # sizeof(InfiniteLight_C) = 40
+            # Upload infinite/environment lights with GPU-resident pixel/CDF data
+            var il_count = Int(infiniteLightCount)
+            var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
+            var il_cdf_bufs    = List[DeviceBuffer[DType.uint8]]()
+            var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
+            var il_patched = alloc[InfiniteLight_C](max(il_count, 1))
+            for ii in range(il_count):
+                var il = infiniteLights[ii]
+                # Upload world_to_light matrix (16 floats = 64 bytes)
+                var w2l_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+                with w2l_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(16):
+                        dst[k] = il.world_to_light[k]
+                il.world_to_light = w2l_buf.unsafe_ptr().bitcast[Float32]()
+                il_w2l_bufs.append(w2l_buf^)
+                # Upload pixels + CDF when texture is present
+                if il.cdf_w > Int32(0) and Int(il.pixels_ptr) > 1:
+                    var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
+                    # Pixel data: iw × ih × 3 floats
+                    var pix_count = iw * ih * 3
+                    var pix_buf = ctx.enqueue_create_buffer[DType.uint8](pix_count * 4)
+                    with pix_buf.map_to_host() as h:
+                        var dst = h.unsafe_ptr().bitcast[Float32]()
+                        for k in range(pix_count):
+                            dst[k] = il.pixels_ptr[k]
+                    il.pixels_ptr = pix_buf.unsafe_ptr().bitcast[Float32]()
+                    il_pixels_bufs.append(pix_buf^)
+                    # CDF data: (ih+1) marginal rows + ih×(iw+1) conditional entries
+                    var cdf_count = (ih + 1) + ih * (iw + 1)
+                    var cdf_buf = ctx.enqueue_create_buffer[DType.uint8](cdf_count * 4)
+                    with cdf_buf.map_to_host() as h:
+                        var dst = h.unsafe_ptr().bitcast[Float32]()
+                        for k in range(cdf_count):
+                            dst[k] = il.cdf_ptr[k]
+                    il.cdf_ptr = cdf_buf.unsafe_ptr().bitcast[Float32]()
+                    il_cdf_bufs.append(cdf_buf^)
+                il_patched[ii] = il
+            var il_bytes = max(il_count, 1) * 48  # sizeof(InfiniteLight_C) = 48
             var il_buf = ctx.enqueue_create_buffer[DType.uint8](il_bytes)
-            if Int(infiniteLightCount) > 0:
-                with il_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = infiniteLights.bitcast[UInt8]()
-                    for j in range(Int(infiniteLightCount) * 32):
-                        dst[j] = src[j]
+            with il_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = il_patched.bitcast[UInt8]()
+                for j in range(il_count * 48):
+                    dst[j] = src[j]
+            il_patched.free()
+            print("GPU: " + String(il_count) + " infinite light(s) uploaded")
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
@@ -369,6 +410,9 @@ def gpu_upload_scene(
                 spheres_buf=sphere_buf^,
                 n_spheres=Int(sphereCount),
                 infinite_lights_buf=il_buf^,
+                il_pixels_bufs=il_pixels_bufs^,
+                il_cdf_bufs=il_cdf_bufs^,
+                il_w2l_bufs=il_w2l_bufs^,
                 n_infinite_lights=Int(infiniteLightCount),
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
