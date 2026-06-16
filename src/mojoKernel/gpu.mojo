@@ -1219,6 +1219,9 @@ def normalize_beauty_albedo_gpu(
     var lr = film[tid*3+0] * inv_weight * iso_scale
     var lg = film[tid*3+1] * inv_weight * iso_scale
     var lb = film[tid*3+2] * inv_weight * iso_scale
+    if lr != lr or lr < Float32(0): lr = Float32(0)
+    if lg != lg or lg < Float32(0): lg = Float32(0)
+    if lb != lb or lb < Float32(0): lb = Float32(0)
     var scale = Float32(1.0)
     if max_comp > Float32(0.0):
         var mx = lr if lr > lg else lg

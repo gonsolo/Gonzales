@@ -422,6 +422,9 @@ def normalize_film(
         var br = r.estimate.r / w * scale
         var bg = r.estimate.g / w * scale
         var bb = r.estimate.b / w * scale
+        if br != br or br < Float32(0): br = Float32(0)
+        if bg != bg or bg < Float32(0): bg = Float32(0)
+        if bb != bb or bb < Float32(0): bb = Float32(0)
         if max_component_value > Float32(0):
             var mx = max(br, max(bg, bb))
             if mx > max_component_value:

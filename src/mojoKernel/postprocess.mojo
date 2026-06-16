@@ -50,7 +50,8 @@ def denoise(
             var n0y = normals[ci + 1]
             var n0z = normals[ci + 2]
             var d0  = depth[pi]
-            var d0_sq = max(d0 * d0, Float32(1e-6))
+            var d0_clamped = min(d0, Float32(1e18))
+            var d0_sq = max(d0_clamped * d0_clamped, Float32(1e-6))
 
             var acc_r = Float32(0)
             var acc_g = Float32(0)
@@ -73,7 +74,7 @@ def denoise(
                     var ndot = normals[ni+0]*n0x + normals[ni+1]*n0y + normals[ni+2]*n0z
                     var normal_diff = max(Float32(0), Float32(1) - ndot)
                     # Depth: relative difference squared.
-                    var ddiff = depth[npi] - d0
+                    var ddiff = min(depth[npi], Float32(1e18)) - d0_clamped
                     var rel_depth2 = (ddiff * ddiff) / d0_sq
                     # Merge all three edge-stopping terms into one exp.
                     var wt = sw[(dy + r) * diam + (dx + r)] * exp(

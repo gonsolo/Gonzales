@@ -2274,6 +2274,10 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             _psc_handle_attribute_begin(s)
         elif _psc_streq(kw_buf, "AttributeEnd"):
             _psc_handle_attribute_end(s)
+        elif _psc_streq(kw_buf, "TransformBegin"):
+            ctm_push(s[0])
+        elif _psc_streq(kw_buf, "TransformEnd"):
+            ctm_pop(s[0])
         elif _psc_streq(kw_buf, "AreaLightSource"):
             if s[0].object_depth == 0:
                 _psc_handle_area_light_source(handle, s)
