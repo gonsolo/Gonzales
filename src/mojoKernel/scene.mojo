@@ -36,6 +36,7 @@ struct FilmSettings(Copyable, Movable):
     var filter_norm_x:    Float32
     var filter_norm_y:    Float32
     var filter_weight:    Float32
+    var filter_type:      Int32
 
 @fieldwise_init
 struct CameraSettings(Copyable, Movable):

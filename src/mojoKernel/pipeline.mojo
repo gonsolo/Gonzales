@@ -163,6 +163,7 @@ def _gpu_upload_scene(
         psc[0].raster_to_camera, psc[0].camera_to_world,
         psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
         psc[0].filter_norm_x, psc[0].filter_norm_y,
+        psc[0].filter_type,
         fw, fh,
     )
     # pts_counts, fi_counts, vi_counts, uv_counts freed automatically
@@ -256,6 +257,7 @@ def parse_and_render(
             filterNormX=psc[0].filter_norm_x,
             filterNormY=psc[0].filter_norm_y,
             filterWeight=psc[0].filter_weight,
+            filterType=psc[0].filter_type,
         )
         var sp_ptr = OwnedPointer[TileSamplerParams_C](sp)
         render_all_tiles(
@@ -376,6 +378,7 @@ def render_interactive(
         filterNormX=psc[0].filter_norm_x,
         filterNormY=psc[0].filter_norm_y,
         filterWeight=psc[0].filter_weight,
+        filterType=psc[0].filter_type,
     ))
 
     if use_gpu:
@@ -433,6 +436,7 @@ def render_interactive(
                 filterNormX=psc[0].filter_norm_x,
                 filterNormY=psc[0].filter_norm_y,
                 filterWeight=psc[0].filter_weight,
+                filterType=psc[0].filter_type,
             )
             for i in range(n_pixels):
                 results[i] = zero

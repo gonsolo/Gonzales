@@ -52,6 +52,7 @@ def render_tile(
                     rasterToCamera, cameraToWorld,
                     sp.filterNormX, sp.filterSigma, sp.filterSupportX,
                     sp.filterNormY, sp.filterSupportY,
+                    sp.filterType,
                 )
                 paths[idx] = PathState_C(
                     ray,

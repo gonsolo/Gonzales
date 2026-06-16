@@ -677,6 +677,7 @@ struct ParsedScene_Mojo:
     var filter_norm_x:    Float32
     var filter_norm_y:    Float32
     var filter_weight:    Float32
+    var filter_type:      Int32
     var samples_per_pixel: Int32
     var log2_spp:         Int32
     var n_base4_digits:   Int32
@@ -820,6 +821,7 @@ struct SceneParseState(Movable):
     var filter_sigma:     Float32
     var filter_support_x: Float32
     var filter_support_y: Float32
+    var filter_type:      Int32      # 0=gaussian 1=triangle 2=box
     var samples_per_pixel: Int32
     var camera_fov:       Float32
     var cam2w_raw:        InlineArray[Float32, 16]
@@ -881,6 +883,7 @@ struct SceneParseState(Movable):
         self.filter_sigma     = Float32(0.5)
         self.filter_support_x = Float32(1.5)
         self.filter_support_y = Float32(1.5)
+        self.filter_type      = Int32(0)
         self.samples_per_pixel = Int32(1)
         self.camera_fov       = Float32(30)
         self.cam2w_raw        = InlineArray[Float32, 16](fill=Float32(0))
@@ -1279,6 +1282,12 @@ def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                       s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
+    if _psc_streq(sbuf, "triangle") or _psc_streq(sbuf, "tent"):
+        s[0].filter_type = Int32(1)
+    elif _psc_streq(sbuf, "box"):
+        s[0].filter_type = Int32(2)
+    else:
+        s[0].filter_type = Int32(0)  # gaussian (default)
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
@@ -2715,7 +2724,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     # ---- Filter norms ----
     var norm_x = gaussian_norm(s[0].filter_support_x, s[0].filter_sigma)
     var norm_y = gaussian_norm(s[0].filter_support_y, s[0].filter_sigma)
-    var fweight = (Float32(2) * norm_x - Float32(1)) * (Float32(2) * norm_y - Float32(1))
+    # Importance-sampling the filter gives uniform sample weights.
+    var fweight = Float32(1.0)
 
     # ---- RNG seed from time ----
     var rng_seed = UInt64(perf_counter_ns())
@@ -2763,6 +2773,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].filter_sigma     = s[0].filter_sigma
     psc[0].filter_support_x = s[0].filter_support_x
     psc[0].filter_support_y = s[0].filter_support_y
+    psc[0].filter_type      = s[0].filter_type
     psc[0].filter_norm_x    = norm_x
     psc[0].filter_norm_y    = norm_y
     psc[0].filter_weight    = fweight

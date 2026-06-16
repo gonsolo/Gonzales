@@ -67,6 +67,7 @@ struct GpuSceneHandle(Movable):
     var filter_support_y: Float32
     var filter_norm_x: Float32
     var filter_norm_y: Float32
+    var filter_type: Int32
     var fw: Int
     var fh: Int
 
@@ -100,6 +101,7 @@ def gpu_upload_scene(
     c2w_init: UnsafePointer[Float32, MutAnyOrigin],
     filter_sigma: Float32, filter_support_x: Float32, filter_support_y: Float32,
     filter_norm_x: Float32, filter_norm_y: Float32,
+    filter_type: Int32,
     fw: Int32, fh: Int32,
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     comptime if has_accelerator():
@@ -434,6 +436,7 @@ def gpu_upload_scene(
                 filter_support_y=filter_support_y,
                 filter_norm_x=filter_norm_x,
                 filter_norm_y=filter_norm_y,
+                filter_type=filter_type,
                 fw=Int(fw),
                 fh=Int(fh),
             ))

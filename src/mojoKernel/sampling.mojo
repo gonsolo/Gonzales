@@ -103,6 +103,7 @@ struct TileSamplerParams_C(TrivialRegisterPassable):
     var filterNormX: Float32
     var filterNormY: Float32
     var filterWeight: Float32
+    var filterType: Int32   # 0=gaussian 1=triangle 2=box
 
 @always_inline
 def reverse_bits32(v_in: UInt32) -> UInt32:
@@ -258,6 +259,13 @@ def derive_pcg_seeds(px: Int32, py: Int32, si: Int32, seed: UInt64) -> Tuple[UIn
     return (state, h | UInt64(1))
 
 
+@always_inline
+def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
+    if u < Float32(0.5):
+        return radius * (sqrt(Float32(2.0) * u) - Float32(1.0))
+    else:
+        return radius * (Float32(1.0) - sqrt(Float32(2.0) * (Float32(1.0) - u)))
+
 # ── Shared primary-ray generation ─────────────────────────────────────────────
 # Encapsulates the duplicated Sobol + Gaussian-filter + rasterToCamera +
 # cameraToWorld math used by both the CPU tile renderer and the two GPU
@@ -276,6 +284,7 @@ def gen_primary_ray_state(
     c2w: UnsafePointer[Float32, MutAnyOrigin],   # cameraToWorld   (16 Float32, col-major)
     filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
+    filter_type: Int32 = Int32(0),
 ) -> Tuple[Ray_C, UInt64, UInt64]:
     """Shared Sobol + filter + camera-transform primary ray generator.
     Returns (ray, pcg_state, pcg_inc).
@@ -285,8 +294,17 @@ def gen_primary_ray_state(
     var sobol_idx   = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
     var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
     var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
-    var deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
-    var deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
+    var deltaX: Float32
+    var deltaY: Float32
+    if filter_type == Int32(1):
+        deltaX = triangle_sample_1d(u0, filter_support_x)
+        deltaY = triangle_sample_1d(u1, filter_support_y)
+    elif filter_type == Int32(2):
+        deltaX = (u0 - Float32(0.5)) * Float32(2.0) * filter_support_x
+        deltaY = (u1 - Float32(0.5)) * Float32(2.0) * filter_support_y
+    else:
+        deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
+        deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
     var filmX = Float32(px) + Float32(0.5) + deltaX
     var filmY = Float32(py) + Float32(0.5) + deltaY
 
