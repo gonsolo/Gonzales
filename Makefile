@@ -133,7 +133,7 @@ $(VIEWER_LIB): $(VIEWER_SRC) $(VIEWER_INC)/viewer.h
 		$(VIEWER_SRC) -lvulkan -lglfw -o $(VIEWER_LIB)
 
 ifdef GITHUB_ACTIONS
-MOJO_BUILD_FLAGS = --target-accelerator sm_89
+MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
 else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
