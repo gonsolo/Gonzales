@@ -500,7 +500,7 @@ def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[Pbrt
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(0)
     except:
-        handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin]()
+        handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
         handle[0].total_bytes = Int32(0)
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(1)
@@ -722,7 +722,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var mix_amount:     Float32
     var transmittance:  RGB
 
-    fn __init__(out self, name: String):
+    def __init__(out self, name: String):
         self.name           = name
         self.albedo         = RGB(Float32(0.8), Float32(0.8), Float32(0.8))
         self.kind           = Int8(0)
@@ -747,7 +747,7 @@ struct MeshAccum(Copyable, Movable):
     var inside_medium:  Int32
     var outside_medium: Int32
 
-    fn __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
+    def __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
         self.points        = List[Float32]()
         self.vert_idxs     = List[Int64]()
         self.face_idxs     = List[Int64]()
@@ -827,7 +827,7 @@ struct SceneParseState(Movable):
     var scene_dir:        String
     var object_depth:     Int32
 
-    fn __init__(out self):
+    def __init__(out self):
         # Identity CTM
         self.ctm = InlineArray[Float32, 16](fill=Float32(0))
         self.ctm[0] = Float32(1); self.ctm[5] = Float32(1)
@@ -1965,7 +1965,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         type_buf.free(); name_buf.free()
 
         var full_path = alloc[UInt8](PSC_FILE_MAX * 2)
-        var dir_len = len(s[0].scene_dir)
+        var dir_len = s[0].scene_dir.byte_length()
         for ki in range(dir_len):
             full_path[ki] = s[0].scene_dir.unsafe_ptr()[ki]
         var fn_i = 0
@@ -2282,7 +2282,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             var inc_name = alloc[UInt8](PSC_FILE_MAX)
             _ = scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
             var inc_path = alloc[UInt8](PSC_FILE_MAX * 2)
-            var dlen = len(s[0].scene_dir)
+            var dlen = s[0].scene_dir.byte_length()
             for ki in range(dlen):
                 inc_path[ki] = s[0].scene_dir.unsafe_ptr()[ki]
             var fi = 0
@@ -2723,7 +2723,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     # ---- Film filename copy ----
     var fname = alloc[UInt8](PSC_FILE_MAX)
     var fnstr = s[0].film_filename
-    var fnlen = min(len(fnstr), PSC_FILE_MAX - 1)
+    var fnlen = min(fnstr.byte_length(), PSC_FILE_MAX - 1)
     for fi in range(fnlen): fname[fi] = fnstr.unsafe_ptr()[fi]
     fname[fnlen] = UInt8(0)
 
@@ -2732,7 +2732,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var tex_ptrs = alloc[UnsafePointer[UInt8, MutAnyOrigin]](max(n_tex, 1))
     for ti in range(n_tex):
         var fstr = s[0].tex_files[ti]
-        var slen = len(fstr)
+        var slen = fstr.byte_length()
         var copy = alloc[UInt8](slen + 1)
         for ci in range(slen): copy[ci] = fstr.unsafe_ptr()[ci]
         copy[slen] = UInt8(0)
