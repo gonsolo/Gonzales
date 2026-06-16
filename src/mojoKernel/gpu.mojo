@@ -1,4 +1,5 @@
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
+from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
@@ -115,10 +116,10 @@ def gpu_upload_scene(
             var free_bytes = mem_info[0]
             var total_bytes = mem_info[1]
 
-            var bvh_bytes = Int(bvh2NodesCount) * 32  # sizeof(BVH2Node) = 32
-            var prim_bytes = Int(primIdsCount) * 32    # sizeof(PrimId_C) = 32
-            var mesh_struct_bytes = Int(meshCount) * 32  # sizeof(TriangleMesh_C) = 4 pointers
-            var material_struct_bytes = Int(materialCount) * 32 # sizeof(Material_C)
+            var bvh_bytes = Int(bvh2NodesCount) * size_of[BVH2Node]()
+            var prim_bytes = Int(primIdsCount) * size_of[PrimId_C]()
+            var mesh_struct_bytes = Int(meshCount) * size_of[TriangleMesh_C]()
+            var material_struct_bytes = Int(materialCount) * size_of[Material_C]()
 
             # Estimate total mesh data
             var mesh_data_bytes = 0
@@ -230,7 +231,7 @@ def gpu_upload_scene(
             mesh_structs_host.free()
 
             # Upload materials array
-            var mat_bytes = Int(materialCount) * 32 # sizeof(Material_C)
+            var mat_bytes = Int(materialCount) * size_of[Material_C]()
             var mat_buf = ctx.enqueue_create_buffer[DType.uint8](mat_bytes)
             if Int(materialCount) > 0:
                 with mat_buf.map_to_host() as host_buf:
@@ -242,23 +243,23 @@ def gpu_upload_scene(
             ctx.synchronize()
 
             # Upload area lights
-            var al_bytes = max(Int(areaLightCount), 1) * 24  # sizeof(AreaLight_C) = 24
+            var al_bytes = max(Int(areaLightCount), 1) * size_of[AreaLight_C]()
             var al_buf = ctx.enqueue_create_buffer[DType.uint8](al_bytes)
             if Int(areaLightCount) > 0:
                 with al_buf.map_to_host() as host_buf:
                     var dst = host_buf.unsafe_ptr()
                     var src = areaLights.bitcast[UInt8]()
-                    for j in range(Int(areaLightCount) * 24):
+                    for j in range(Int(areaLightCount) * size_of[AreaLight_C]()):
                         dst[j] = src[j]
 
             # Upload spheres (analytical sphere primitives + sphere area lights)
-            var sphere_bytes = max(Int(sphereCount), 1) * 36  # sizeof(Sphere_C) = 36
+            var sphere_bytes = max(Int(sphereCount), 1) * size_of[Sphere_C]()
             var sphere_buf = ctx.enqueue_create_buffer[DType.uint8](sphere_bytes)
             if Int(sphereCount) > 0:
                 with sphere_buf.map_to_host() as host_buf:
                     var dst = host_buf.unsafe_ptr()
                     var src = spheres.bitcast[UInt8]()
-                    for j in range(Int(sphereCount) * 36):
+                    for j in range(Int(sphereCount) * size_of[Sphere_C]()):
                         dst[j] = src[j]
 
             # Upload infinite/environment lights with GPU-resident pixel/CDF data
@@ -299,20 +300,20 @@ def gpu_upload_scene(
                     il.cdf_ptr = cdf_buf.unsafe_ptr().bitcast[Float32]()
                     il_cdf_bufs.append(cdf_buf^)
                 il_patched[ii] = il
-            var il_bytes = max(il_count, 1) * 48  # sizeof(InfiniteLight_C) = 48
+            var il_bytes = max(il_count, 1) * size_of[InfiniteLight_C]()
             var il_buf = ctx.enqueue_create_buffer[DType.uint8](il_bytes)
             with il_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
                 var src = il_patched.bitcast[UInt8]()
-                for j in range(il_count * 48):
+                for j in range(il_count * size_of[InfiniteLight_C]()):
                     dst[j] = src[j]
             il_patched.free()
             print("GPU: " + String(il_count) + " infinite light(s) uploaded")
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
-            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 96 * WAVEFRONT_BATCH)
-            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48 * WAVEFRONT_BATCH)
+            var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState_C]() * WAVEFRONT_BATCH)
+            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]() * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
@@ -321,7 +322,7 @@ def gpu_upload_scene(
             var r_atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
+            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]())
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             with r_film_buf.map_to_host() as h:
@@ -703,6 +704,7 @@ def gen_primary_rays_wavefront_gpu(
     rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     filter_sigma: Float32, filter_norm_x: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
+    filter_type: Int32,
     count: Int, n_pixels: Int,
 ):
     var ti = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -719,6 +721,7 @@ def gen_primary_rays_wavefront_gpu(
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
+        filter_type,
     )
     paths[ti] = PathState_C(
         ray,
@@ -766,8 +769,8 @@ def gpu_shade_batch(
 
     comptime if has_accelerator():
         try:
-            var path_bytes = n * 96 # sizeof(PathState_C) = 96
-            var inter_bytes = n * 48 # sizeof(Intersection_C) = 48
+            var path_bytes = n * size_of[PathState_C]()
+            var inter_bytes = n * size_of[Intersection_C]()
 
             var path_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](path_bytes)
             with path_buf.map_to_host() as host_buf:
@@ -822,6 +825,7 @@ def gen_primary_rays_gpu(
     rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     filter_sigma: Float32, filter_norm_x: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
+    filter_type: Int32,
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -835,6 +839,7 @@ def gen_primary_rays_gpu(
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
+        filter_type,
     )
     paths[tid] = PathState_C(
         ray,
@@ -1015,6 +1020,7 @@ def gpu_render_sample(
                 rng_seed_lo, rng_seed_hi,
                 handle[].filter_sigma, handle[].filter_norm_x, handle[].filter_support_x,
                 handle[].filter_norm_y, handle[].filter_support_y,
+                handle[].filter_type,
                 n_int,
                 grid_dim=grid_dim,
                 block_dim=block_size,
@@ -1101,6 +1107,7 @@ def gpu_render_wavefront(
                 seed_dim0, seed_dim1, rng_seed_lo, rng_seed_hi,
                 handle[].filter_sigma, handle[].filter_norm_x, handle[].filter_support_x,
                 handle[].filter_norm_y, handle[].filter_support_y,
+                handle[].filter_type,
                 n_total, n_pix,
                 grid_dim=grid_total,
                 block_dim=block_size,
