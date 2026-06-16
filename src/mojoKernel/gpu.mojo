@@ -882,7 +882,7 @@ def gpu_render_sample(
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
-            for _ in range(Int(maxDepth) + 1):
+            for _ in range(Int(maxDepth)):
                 handle[].ctx.enqueue_function[traverse_paths_gpu, traverse_paths_gpu](
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
@@ -968,7 +968,7 @@ def gpu_render_wavefront(
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
-            for _ in range(Int(maxDepth) + 1):
+            for _ in range(Int(maxDepth)):
                 handle[].ctx.enqueue_function[traverse_paths_gpu, traverse_paths_gpu](
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),

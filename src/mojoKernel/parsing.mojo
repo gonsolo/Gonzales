@@ -2376,48 +2376,6 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     cam2w_tmp.free()
     psc[0].camera_to_world = c2w
 
-    # ---- DEBUG: scene summary ----
-    print("=== GONZALES DEBUG: Scene Summary ===")
-    print("  Camera position (c2w col3):", c2w[12], c2w[13], c2w[14])
-    print("  Camera forward (-Z):", -c2w[8], -c2w[9], -c2w[10])
-    print("  Camera FOV:", s[0].camera_fov)
-    print("  Film:", s[0].film_w, "x", s[0].film_h)
-    print("  Meshes:", Int32(len(s[0].meshes)))
-    print("  Named materials:", Int32(len(s[0].named_materials)))
-    print("  Textures:", Int32(len(s[0].tex_names)))
-    print("  Infinite lights:", Int32(len(s[0].inf_tex_idx)))
-    print("  Distant lights:", Int32(len(s[0].distant_dirs) / 3))
-    print("  Point lights:", Int32(len(s[0].point_pos) / 3))
-    print("  Spheres:", len(s[0].spheres_cx))
-    # Print material types
-    for mi in range(min(len(s[0].named_materials), 20)):
-        var nm2 = s[0].named_materials[mi]
-        print("  Mat[" + String(mi) + "] type=" + String(Int(nm2.kind)),
-              "albedo=(" + String(nm2.albedo.r) + "," + String(nm2.albedo.g) + "," + String(nm2.albedo.b) + ")")
-    # Print infinite light info
-    for ii in range(len(s[0].inf_tex_idx)):
-        print("  InfLight[" + String(ii) + "] tex_idx=" + String(Int(s[0].inf_tex_idx[ii])),
-              "rgb=(" + String(s[0].inf_rgb[ii*3]) + "," + String(s[0].inf_rgb[ii*3+1]) + "," + String(s[0].inf_rgb[ii*3+2]) + ")")
-        var base = ii * 16
-        print("    CTM row0:", s[0].inf_ctm[base], s[0].inf_ctm[base+4], s[0].inf_ctm[base+8], s[0].inf_ctm[base+12])
-    # Print first 5 mesh bounding boxes
-    for mi2 in range(min(len(s[0].meshes), 5)):
-        var nv2 = len(s[0].meshes[mi2].points) // 4
-        var pts = s[0].meshes[mi2].points.unsafe_ptr()
-        var mnx = pts[0]; var mny = pts[1]; var mnz = pts[2]
-        var mxx = pts[0]; var mxy = pts[1]; var mxz = pts[2]
-        for vi in range(1, nv2):
-            if pts[vi*4]   < mnx: mnx = pts[vi*4]
-            if pts[vi*4+1] < mny: mny = pts[vi*4+1]
-            if pts[vi*4+2] < mnz: mnz = pts[vi*4+2]
-            if pts[vi*4]   > mxx: mxx = pts[vi*4]
-            if pts[vi*4+1] > mxy: mxy = pts[vi*4+1]
-            if pts[vi*4+2] > mxz: mxz = pts[vi*4+2]
-        var nt2 = len(s[0].meshes[mi2].face_idxs)
-        print("  Mesh[" + String(mi2) + "] verts=" + String(nv2) + " tris=" + String(nt2),
-              "bbox=(" + String(mnx) + ".." + String(mxx) + ", " + String(mny) + ".." + String(mxy) + ", " + String(mnz) + ".." + String(mxz) + ")",
-              "mat_idx=" + String(Int(s[0].meshes[mi2].mat_idx)))
-    print("=== END DEBUG ===")
 
     var cts = alloc[Float32](16)
     make_perspective_matrix(s[0].camera_fov, Float32(0.01), cts)

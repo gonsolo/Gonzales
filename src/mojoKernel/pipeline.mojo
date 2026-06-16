@@ -268,17 +268,15 @@ def parse_and_render(
         # sp_ptr freed automatically
         sd.free()
 
-    # CPU path: normalize → beauty/albedo, bilateral denoise → denoised
+    # CPU path: normalize → beauty/albedo
     var beauty  = List[Float32](capacity=n_pixels * 3)
     var albedo  = List[Float32](capacity=n_pixels * 3)
-    var denoised = List[Float32](capacity=n_pixels * 3)
-    for _ in range(n_pixels * 3): beauty.append(Float32(0)); albedo.append(Float32(0)); denoised.append(Float32(0))
+    for _ in range(n_pixels * 3): beauty.append(Float32(0)); albedo.append(Float32(0))
     normalize_film(results.unsafe_ptr(), Int32(n_pixels),
                         psc[0].film_iso, psc[0].film_max_comp,
                         beauty.unsafe_ptr(), albedo.unsafe_ptr())
     # results freed automatically after this point is no longer needed
-    denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(), fw, fh, denoised.unsafe_ptr(), Int32(7), Float32(5.0), Float32(0.2))
-    _ = write_image(denoised.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
+    _ = write_image(beauty.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
     var albedo_name_buf = List[UInt8](capacity=11)
     var albedo_name_str = "albedo.exr"
     var anp2 = albedo_name_str.unsafe_ptr()
@@ -286,7 +284,7 @@ def parse_and_render(
     albedo_name_buf.append(UInt8(0))
     _ = write_image(albedo.unsafe_ptr(), fw, fh, albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
     # albedo_name_buf freed automatically
-    # beauty, albedo, denoised freed automatically
+    # beauty, albedo freed automatically
     mojo_parsed_free(psc)
     return Int32(0)
 

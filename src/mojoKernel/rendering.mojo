@@ -67,7 +67,7 @@ def render_tile(
                 idx += 1
 
     # Multi-bounce path trace
-    for _ in range(maxD + 1):
+    for _ in range(maxD):
         var anyActive = False
         for i in range(n):
             if paths[i].active != 0:
