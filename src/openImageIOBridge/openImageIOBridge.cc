@@ -103,7 +103,7 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
         in->close();
         *data = (float *)malloc(n * 3 * sizeof(float));
         if (!*data) return 0;
-        bool hdr = strstr(filename, ".exr") != nullptr || strstr(filename, ".hdr") != nullptr;
+        bool hdr = strstr(filename, ".exr") != nullptr || strstr(filename, ".hdr") != nullptr || strstr(filename, ".pfm") != nullptr;
         for (int i = 0; i < n; ++i) {
                 float r = nc > 0 ? buf[i * nc + 0] : 0.0f;
                 float g = nc > 1 ? buf[i * nc + 1] : r;
@@ -131,7 +131,7 @@ int free_texture_rgb(float *data) {
 static bool is_hdr_ext(const char *filename) {
         const char *dot = strrchr(filename, '.');
         if (!dot) return true;
-        return strcmp(dot, ".exr") == 0 || strcmp(dot, ".hdr") == 0;
+        return strcmp(dot, ".exr") == 0 || strcmp(dot, ".hdr") == 0 || strcmp(dot, ".pfm") == 0;
 }
 
 struct RGB {
