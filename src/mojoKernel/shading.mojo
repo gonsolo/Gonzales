@@ -1347,18 +1347,17 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    if mat.type == 2:
-        # Emissive surface hit.
+    if inter.primId.type == Int8(3):
+        # Area light triangle hit — use emission from AreaLight_C directly so
+        # NamedMaterial area lights (mat.type == 1) also emit correctly.
+        var al_idx = Int(inter.primId.id1)
+        var al = areaLights[al_idx]
+        var emission = al.emission
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            # Camera ray or must-follow specular chain — always add full emission.
-            path_ptr[].estimate += path_ptr[].throughput * mat.emission
+            path_ptr[].estimate += path_ptr[].throughput * emission
         else:
-            # Arrived via BSDF scatter from the previous bounce.
-            # Apply MIS weight using the stored BSDF pdf and the light's solid-angle pdf.
             var pdf_bsdf = path_ptr[].lastBsdfPdf
-            if pdf_bsdf > Float32(0.0) and inter.primId.type == Int8(3):
-                var al_idx = Int(inter.primId.id1)
-                var al = areaLights[al_idx]
+            if pdf_bsdf > Float32(0.0):
                 var lmesh_idx = Int(inter.primId.id2 >> 32)
                 var lbase   = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
                 var lmesh   = meshes[lmesh_idx]
@@ -1379,7 +1378,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
                     var pdf_light = dist2 / (cos_l * al.total_area * Float32(areaLightCount))
                     var w = power_heuristic(pdf_bsdf, pdf_light)
-                    path_ptr[].estimate += path_ptr[].throughput * mat.emission * w
+                    path_ptr[].estimate += path_ptr[].throughput * emission * w
         path_ptr[].active = 0
         return
 
@@ -1753,15 +1752,3 @@ def shade_core_cpu_nee(
         distantLights, distantLightCount, pointLights, pointLightCount,
         infiniteLights, infiniteLightCount,
         spheres, sphereCount)
-
-
-def cpu_shade_batch(
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
-    count: Int64,
-    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-):
-    var n = Int(count)
-    for tid in range(n):
-        shade_core(paths, intersections, meshes, materials, tid)

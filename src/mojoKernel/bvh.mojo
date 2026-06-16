@@ -364,22 +364,6 @@ def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], ray
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, ray, tMax, resultPtr)
 
 
-# ── CPU batch entry point (sequential loop) ───────────────────────────────────
-
-def cpu_traverse_batch(
-    scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
-    rays: UnsafePointer[Ray_C, MutAnyOrigin],
-    tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
-    count: Int64,
-    results: UnsafePointer[Intersection_C, MutAnyOrigin],
-):
-    var scene = scenePtr[0]
-    var n = Int(count)
-    for tid in range(n):
-        traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes,
-                          rays[tid], tMaxValues[tid], results + tid)
-
-
 # ── BVH2 Construction (SAH) ───────────────────────────────────────────
 
 @always_inline
