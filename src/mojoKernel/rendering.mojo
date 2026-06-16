@@ -296,6 +296,108 @@ def render_all_tiles(
     tile_bufs.free()
 
 
+# Shoot one unjittered center ray per pixel; record geometric normal and depth.
+# normals_out: n_pixels*3 floats (Nx,Ny,Nz unit vectors; background = (0,0,1)).
+# depth_out:   n_pixels floats (first-hit tHit; background = 1e38).
+def render_aux_buffers(
+    rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
+    cameraToWorld:  UnsafePointer[Float32, MutAnyOrigin],
+    min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
+    scene: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
+    normals_out: UnsafePointer[Float32, MutAnyOrigin],
+    depth_out:   UnsafePointer[Float32, MutAnyOrigin],
+):
+    var w  = Int(max_x - min_x)
+    var h  = Int(max_y - min_y)
+    var n_pixels = w * h
+    var sd = scene[0]
+    var ox = cameraToWorld[12]
+    var oy = cameraToWorld[13]
+    var oz = cameraToWorld[14]
+    var isects = alloc[Intersection_C](n_pixels)
+
+    @parameter
+    def trace_pixel(i: Int):
+        var py = i // w
+        var px = i % w
+        var filmX = Float32(Int(min_x) + px) + Float32(0.5)
+        var filmY = Float32(Int(min_y) + py) + Float32(0.5)
+
+        # rasterToCamera (column-major 4×4), no filter offset
+        var cx = rasterToCamera[0]*filmX + rasterToCamera[4]*filmY + rasterToCamera[12]
+        var cy = rasterToCamera[1]*filmX + rasterToCamera[5]*filmY + rasterToCamera[13]
+        var cz = rasterToCamera[2]*filmX + rasterToCamera[6]*filmY + rasterToCamera[14]
+        var cw = rasterToCamera[3]*filmX + rasterToCamera[7]*filmY + rasterToCamera[15]
+        if cw != Float32(0.0) and cw != Float32(1.0):
+            cx /= cw; cy /= cw; cz /= cw
+        var cl = sqrt(cx*cx + cy*cy + cz*cz)
+        if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
+
+        # cameraToWorld rotation (upper-left 3×3)
+        var dx = cameraToWorld[0]*cx + cameraToWorld[4]*cy + cameraToWorld[8]*cz
+        var dy = cameraToWorld[1]*cx + cameraToWorld[5]*cy + cameraToWorld[9]*cz
+        var dz = cameraToWorld[2]*cx + cameraToWorld[6]*cy + cameraToWorld[10]*cz
+        var dl = sqrt(dx*dx + dy*dy + dz*dz)
+        if dl > Float32(0): dx /= dl; dy /= dl; dz /= dl
+
+        var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, ray, Float32(1e38), isects + i)
+        if Int(sd.sphereCount) > 0:
+            test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects + i)
+
+        var nx = Float32(0); var ny = Float32(0); var nz = Float32(1)   # background
+        var d  = Float32(1e38)
+
+        if isects[i].hit != Int8(0):
+            d = isects[i].tHit
+            var typ = Int(isects[i].primId.type)
+            if typ == 4:
+                # Sphere: normal = normalize(hit_point - center)
+                var si  = Int(isects[i].primId.id1)
+                var sc  = sd.spheres[si].center
+                var hx  = ox + dx*d - sc.x
+                var hy  = oy + dy*d - sc.y
+                var hz  = oz + dz*d - sc.z
+                var hl  = sqrt(hx*hx + hy*hy + hz*hz)
+                if hl > Float32(0): nx = hx/hl; ny = hy/hl; nz = hz/hl
+            else:
+                # Triangle (types 0, 1, 2, 3): geometric normal from edge cross product
+                var mesh_idx: Int
+                var base_vidx: Int
+                if typ == 0:
+                    mesh_idx  = Int(isects[i].primId.id1)
+                    base_vidx = Int(isects[i].primId.id2)
+                else:
+                    mesh_idx  = Int(isects[i].primId.id2 >> 32)
+                    base_vidx = Int(isects[i].primId.id2 & 0xFFFFFFFF) * 3
+                var mesh = sd.meshes[mesh_idx]
+                var vi0 = Int(mesh.vertexIndices[base_vidx])
+                var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
+                var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
+                var e1x = mesh.points[vi1*4]   - mesh.points[vi0*4]
+                var e1y = mesh.points[vi1*4+1] - mesh.points[vi0*4+1]
+                var e1z = mesh.points[vi1*4+2] - mesh.points[vi0*4+2]
+                var e2x = mesh.points[vi2*4]   - mesh.points[vi0*4]
+                var e2y = mesh.points[vi2*4+1] - mesh.points[vi0*4+1]
+                var e2z = mesh.points[vi2*4+2] - mesh.points[vi0*4+2]
+                nx = e1y*e2z - e1z*e2y
+                ny = e1z*e2x - e1x*e2z
+                nz = e1x*e2y - e1y*e2x
+                var nl = sqrt(nx*nx + ny*ny + nz*nz)
+                if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+            # Flip to face incoming ray
+            if nx*(-dx) + ny*(-dy) + nz*(-dz) < Float32(0):
+                nx = -nx; ny = -ny; nz = -nz
+
+        normals_out[i*3 + 0] = nx
+        normals_out[i*3 + 1] = ny
+        normals_out[i*3 + 2] = nz
+        depth_out[i] = d
+
+    parallelize[trace_pixel](n_pixels)
+    isects.free()
+
+
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
 def normalize_film(
     results: UnsafePointer[TileResult_C, MutAnyOrigin],

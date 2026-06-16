@@ -2,7 +2,7 @@ from std.memory import alloc, OwnedPointer
 from std.collections import List
 from std.math import sqrt
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
-from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
+from .rendering import render_all_tiles, render_aux_buffers, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import denoise, write_image
@@ -266,25 +266,37 @@ def parse_and_render(
             Int32(32), Int32(32),
             sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth)
         # sp_ptr freed automatically
+        # Unjittered normals and depth for edge-preserving denoising.
+        var normals  = List[Float32](capacity=n_pixels * 3)
+        var dept     = List[Float32](capacity=n_pixels)
+        for _ in range(n_pixels * 3): normals.append(Float32(0))
+        for _ in range(n_pixels):     dept.append(Float32(0))
+        render_aux_buffers(
+            psc[0].raster_to_camera, psc[0].camera_to_world,
+            Int32(0), Int32(0), fw, fh, sd,
+            normals.unsafe_ptr(), dept.unsafe_ptr())
         sd.free()
 
-    # CPU path: normalize → beauty/albedo
-    var beauty  = List[Float32](capacity=n_pixels * 3)
-    var albedo  = List[Float32](capacity=n_pixels * 3)
-    for _ in range(n_pixels * 3): beauty.append(Float32(0)); albedo.append(Float32(0))
-    normalize_film(results.unsafe_ptr(), Int32(n_pixels),
-                        psc[0].film_iso, psc[0].film_max_comp,
-                        beauty.unsafe_ptr(), albedo.unsafe_ptr())
-    # results freed automatically after this point is no longer needed
-    _ = write_image(beauty.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
-    var albedo_name_buf = List[UInt8](capacity=11)
-    var albedo_name_str = "albedo.exr"
-    var anp2 = albedo_name_str.unsafe_ptr()
-    for i in range(10): albedo_name_buf.append(anp2[i])
-    albedo_name_buf.append(UInt8(0))
-    _ = write_image(albedo.unsafe_ptr(), fw, fh, albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
-    # albedo_name_buf freed automatically
-    # beauty, albedo freed automatically
+        # Normalize → beauty/albedo → denoise with normals+depth → write
+        var beauty   = List[Float32](capacity=n_pixels * 3)
+        var albedo   = List[Float32](capacity=n_pixels * 3)
+        var denoised = List[Float32](capacity=n_pixels * 3)
+        for _ in range(n_pixels * 3): beauty.append(Float32(0)); albedo.append(Float32(0)); denoised.append(Float32(0))
+        normalize_film(results.unsafe_ptr(), Int32(n_pixels),
+                            psc[0].film_iso, psc[0].film_max_comp,
+                            beauty.unsafe_ptr(), albedo.unsafe_ptr())
+        denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(),
+                normals.unsafe_ptr(), dept.unsafe_ptr(),
+                fw, fh, denoised.unsafe_ptr(),
+                Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+        _ = write_image(denoised.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
+        var albedo_name_buf = List[UInt8](capacity=11)
+        var albedo_name_str = "albedo.exr"
+        var anp2 = albedo_name_str.unsafe_ptr()
+        for i in range(10): albedo_name_buf.append(anp2[i])
+        albedo_name_buf.append(UInt8(0))
+        _ = write_image(albedo.unsafe_ptr(), fw, fh, albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
+        # albedo_name_buf, beauty, albedo, denoised, normals, dept freed automatically
     mojo_parsed_free(psc)
     return Int32(0)
 
@@ -362,9 +374,11 @@ def render_interactive(
     var frame_count = 0
 
     # Mode-specific buffers — dangling until allocated below
-    var sd         = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin].unsafe_dangling()
-    var accum      = List[Float32]()
-    var albedo_acc = List[Float32]()
+    var sd           = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin].unsafe_dangling()
+    var accum        = List[Float32]()
+    var albedo_acc   = List[Float32]()
+    var normals_int  = List[Float32]()
+    var depth_int    = List[Float32]()
     var sp_int     = OwnedPointer[TileSamplerParams_C](TileSamplerParams_C(
         sobolMatrices=sobol,
         rngSeed=UInt64(0), sobolSeed=Int32(0),
@@ -386,6 +400,9 @@ def render_interactive(
         for _ in range(n_pixels * 3):
             accum.append(Float32(0))
             albedo_acc.append(Float32(0))
+            normals_int.append(Float32(0))
+        for _ in range(n_pixels):
+            depth_int.append(Float32(0))
 
     var zero = TileResult_C(
         estimate=RGB(Float32(0), Float32(0), Float32(0)),
@@ -443,6 +460,11 @@ def render_interactive(
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth)
+            if frame_count == 0:
+                render_aux_buffers(
+                    psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
+                    Int32(0), Int32(0), fw, fh, sd,
+                    normals_int.unsafe_ptr(), depth_int.unsafe_ptr())
             var beauty_frame = List[Float32](capacity=n_pixels * 3)
             var albedo_frame = List[Float32](capacity=n_pixels * 3)
             for _ in range(n_pixels * 3): beauty_frame.append(Float32(0)); albedo_frame.append(Float32(0))
@@ -463,7 +485,10 @@ def render_interactive(
             for i in range(n_pixels * 3):
                 beauty[i] = accum[i]
                 albedo[i] = albedo_acc[i]
-            denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(), fw, fh, denoised.unsafe_ptr(), Int32(7), Float32(5.0), Float32(0.5))
+            denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(),
+                    normals_int.unsafe_ptr(), depth_int.unsafe_ptr(),
+                    fw, fh, denoised.unsafe_ptr(),
+                    Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
 
         viewer_update_framebuffer(v, denoised.unsafe_ptr(), fw, fh)
 
