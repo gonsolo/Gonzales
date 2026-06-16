@@ -54,6 +54,8 @@ struct GpuSceneHandle(Movable):
     var atrous_pong_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — ping-pong working buffer
     var atrous_albedo_buf: DeviceBuffer[DType.uint8]   # n_pixels × 12 — normalized albedo, constant across passes
     var atrous_variance_buf: DeviceBuffer[DType.uint8] # n_pixels × 4  — spatial luminance variance
+    var atrous_normals_buf: DeviceBuffer[DType.uint8]  # n_pixels × 12 — unjittered geometric normals
+    var atrous_depth_buf: DeviceBuffer[DType.uint8]    # n_pixels × 4  — unjittered first-hit depth
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -317,6 +319,8 @@ def gpu_upload_scene(
             var r_atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 48)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -424,6 +428,8 @@ def gpu_upload_scene(
                 atrous_pong_buf=r_atrous_pong_buf^,
                 atrous_albedo_buf=r_atrous_albedo_buf^,
                 atrous_variance_buf=r_atrous_variance_buf^,
+                atrous_normals_buf=r_atrous_normals_buf^,
+                atrous_depth_buf=r_atrous_depth_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -842,6 +848,137 @@ def gen_primary_rays_gpu(
     )
 
 
+# GPU kernel: shoot one unjittered center ray per pixel and write normals + depth.
+# Used to guide the à-trous denoiser with geometric edge information.
+def gen_aux_buffers_gpu(
+    r2c: UnsafePointer[Float32, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    isects_tmp: UnsafePointer[Intersection_C, MutAnyOrigin],
+    normals_out: UnsafePointer[Float32, MutAnyOrigin],
+    depth_out: UnsafePointer[Float32, MutAnyOrigin],
+    fw: Int, fh: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= fw * fh:
+        return
+    var px = tid % fw
+    var py = tid // fw
+    var filmX = Float32(px) + Float32(0.5)
+    var filmY = Float32(py) + Float32(0.5)
+
+    # Raster → camera
+    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
+    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
+    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
+    var cw = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
+    if cw != Float32(0.0) and cw != Float32(1.0):
+        cx /= cw; cy /= cw; cz /= cw
+    var cl = sqrt(cx*cx + cy*cy + cz*cz)
+    if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
+
+    # Camera → world
+    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
+    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
+    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dl = sqrt(dx*dx + dy*dy + dz*dz)
+    if dl > Float32(0): dx /= dl; dy /= dl; dz /= dl
+    var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+
+    var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+    var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    isects_tmp[tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, Float32(1e38), isects_tmp + tid)
+    test_spheres(spheres, n_spheres, ray, isects_tmp + tid)
+
+    var nx = Float32(0); var ny = Float32(0); var nz = Float32(1)
+    var d = Float32(1e38)
+
+    if isects_tmp[tid].hit != Int8(0):
+        d = isects_tmp[tid].tHit
+        var typ = Int(isects_tmp[tid].primId.type)
+        if typ == 4:
+            var si = Int(isects_tmp[tid].primId.id1)
+            var sc = spheres[si].center
+            var hx = ox + dx*d - sc.x
+            var hy = oy + dy*d - sc.y
+            var hz = oz + dz*d - sc.z
+            var hl = sqrt(hx*hx + hy*hy + hz*hz)
+            if hl > Float32(0): nx = hx/hl; ny = hy/hl; nz = hz/hl
+        else:
+            var mesh_idx: Int
+            var base_vidx: Int
+            if typ == 0:
+                mesh_idx  = Int(isects_tmp[tid].primId.id1)
+                base_vidx = Int(isects_tmp[tid].primId.id2)
+            else:
+                mesh_idx  = Int(isects_tmp[tid].primId.id2 >> 32)
+                base_vidx = Int(isects_tmp[tid].primId.id2 & 0xFFFFFFFF) * 3
+            var mesh = meshes[mesh_idx]
+            var vi0 = Int(mesh.vertexIndices[base_vidx])
+            var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
+            var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
+            var e1x = mesh.points[vi1*4]   - mesh.points[vi0*4]
+            var e1y = mesh.points[vi1*4+1] - mesh.points[vi0*4+1]
+            var e1z = mesh.points[vi1*4+2] - mesh.points[vi0*4+2]
+            var e2x = mesh.points[vi2*4]   - mesh.points[vi0*4]
+            var e2y = mesh.points[vi2*4+1] - mesh.points[vi0*4+1]
+            var e2z = mesh.points[vi2*4+2] - mesh.points[vi0*4+2]
+            nx = e1y*e2z - e1z*e2y
+            ny = e1z*e2x - e1x*e2z
+            nz = e1x*e2y - e1y*e2x
+            var nl = sqrt(nx*nx + ny*ny + nz*nz)
+            if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+        if nx*(-dx) + ny*(-dy) + nz*(-dz) < Float32(0):
+            nx = -nx; ny = -ny; nz = -nz
+
+    normals_out[tid*3+0] = nx
+    normals_out[tid*3+1] = ny
+    normals_out[tid*3+2] = nz
+    depth_out[tid] = d
+
+
+def gpu_gen_aux_buffers(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    n: Int64,
+):
+    """Generate unjittered normals and depth buffers for the denoiser."""
+    var n_pix = Int(n)
+    if n_pix == 0:
+        return
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            with handle[].c2w_buf.map_to_host() as h:
+                var dst = h.unsafe_ptr().bitcast[Float32]()
+                for i in range(16):
+                    dst[i] = c2w[i]
+            comptime block_size = 256
+            var grid_n = ceildiv(n_pix, block_size)
+            handle[].ctx.enqueue_function[gen_aux_buffers_gpu, gen_aux_buffers_gpu](
+                handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                handle[].n_spheres,
+                handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].fw, handle[].fh,
+                grid_dim=grid_n, block_dim=block_size,
+            )
+            handle[].ctx.synchronize()
+        except e:
+            print("GPU gen aux buffers failed: " + String(e))
+
+
 # Render one sample pass into the persistent film buffer.
 # Ray generation runs on GPU — no CPU-side path buffer or PCIe upload needed.
 def gpu_render_sample(
@@ -1120,11 +1257,15 @@ def atrous_filter_gpu(
     input: UnsafePointer[Float32, MutAnyOrigin],
     albedo: UnsafePointer[Float32, MutAnyOrigin],
     variance: UnsafePointer[Float32, MutAnyOrigin],
+    normals: UnsafePointer[Float32, MutAnyOrigin],
+    depth: UnsafePointer[Float32, MutAnyOrigin],
     output: UnsafePointer[Float32, MutAnyOrigin],
     fw: Int, fh: Int,
     step: Int,
     sigma_l: Float32,
     sigma_a: Float32,
+    sigma_n: Float32,
+    sigma_d: Float32,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= fw * fh:
@@ -1137,6 +1278,13 @@ def atrous_filter_gpu(
     var sigma_l2 = sigma_l * sigma_l * var_p + Float32(1e-6)
     var sigma_a2 = sigma_a * sigma_a
     var car = albedo[tid*3]; var cag = albedo[tid*3+1]; var cab = albedo[tid*3+2]
+    var cnx = normals[tid*3]; var cny = normals[tid*3+1]; var cnz = normals[tid*3+2]
+    var cd = depth[tid]
+    var inv_sn = Float32(1) / sigma_n
+    var inv2sd = Float32(1) / (Float32(2) * sigma_d * sigma_d)
+    # Clamp depth before squaring to avoid Float32 overflow (background sentinel=1e38).
+    var cd_clamped = min(cd, Float32(1e18))
+    var cd_sq = max(cd_clamped * cd_clamped, Float32(1e-6))
 
     var acc_r = Float32(0); var acc_g = Float32(0); var acc_b = Float32(0)
     var acc_w = Float32(0)
@@ -1147,16 +1295,22 @@ def atrous_filter_gpu(
             if nx < 0 or nx >= fw or ny < 0 or ny >= fh:
                 continue
             var ni = (ny * fw + nx) * 3
+            var ni1 = ny * fw + nx
             var ql = Float32(0.2126)*input[ni] + Float32(0.7152)*input[ni+1] + Float32(0.0722)*input[ni+2]
             var dl = ql - cl
             var w_l = exp(-dl * dl / sigma_l2)
             var dar = albedo[ni] - car; var dag = albedo[ni+1] - cag; var dab = albedo[ni+2] - cab
             var w_a = exp(-(dar*dar + dag*dag + dab*dab) / sigma_a2)
+            var ndot = normals[ni]*cnx + normals[ni+1]*cny + normals[ni+2]*cnz
+            var normal_diff = max(Float32(0), Float32(1) - ndot)
+            var dd = min(depth[ni1], Float32(1e18)) - cd_clamped
+            var rel_depth2 = (dd * dd) / cd_sq
+            var w_nd = exp(-(normal_diff * inv_sn + rel_depth2 * inv2sd))
             var adx = dx if dx >= 0 else -dx; var ady = dy if dy >= 0 else -dy
             var hx = Float32(0.0625) if adx == 2 else (Float32(0.25) if adx == 1 else Float32(0.375))
             var hy = Float32(0.0625) if ady == 2 else (Float32(0.25) if ady == 1 else Float32(0.375))
             var w_s = hx * hy
-            var w = w_s * w_l * w_a
+            var w = w_s * w_l * w_a * w_nd
             acc_r += input[ni] * w; acc_g += input[ni+1] * w; acc_b += input[ni+2] * w
             acc_w += w
 
@@ -1205,6 +1359,8 @@ def gpu_atrous_denoise(
             var pong_ptr = handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32]()
             var alb_ptr  = handle[].atrous_albedo_buf.unsafe_ptr().bitcast[Float32]()
             var var_ptr  = handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32]()
+            var nrm_ptr  = handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32]()
+            var dep_ptr  = handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32]()
             # Ramp passes with frame_count: 1 pass at fc=1, 5 passes at fc>=5.
             # Prevents the large effective radius (31px at 5 passes) from averaging
             # lit pixels with unlit ones during fast camera movement.
@@ -1214,9 +1370,9 @@ def gpu_atrous_denoise(
                 var src_ptr = ping_ptr if i % 2 == 0 else pong_ptr
                 var dst_ptr = pong_ptr if i % 2 == 0 else ping_ptr
                 handle[].ctx.enqueue_function[atrous_filter_gpu, atrous_filter_gpu](
-                    src_ptr, alb_ptr, var_ptr, dst_ptr,
+                    src_ptr, alb_ptr, var_ptr, nrm_ptr, dep_ptr, dst_ptr,
                     fw, fh, step,
-                    Float32(4.0), Float32(0.1),
+                    Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05),
                     grid_dim=grid_n, block_dim=block_size,
                 )
             # Result is in pong if n_passes is odd, ping if even.

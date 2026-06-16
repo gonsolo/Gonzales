@@ -8,7 +8,7 @@ from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import denoise, write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
-from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_free_scene
+from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
 # Generate Sobol matrices from the Joe-Kuo data file.
@@ -218,6 +218,7 @@ def parse_and_render(
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)
         for _ in range(n_pixels * 3): denoised_gpu.append(Float32(0)); albedo_gpu.append(Float32(0))
+        gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
         gpu_atrous_denoise(handle, denoised_gpu.unsafe_ptr(), Int64(n_pixels),
                                 Int32(spp), psc[0].film_iso, psc[0].film_max_comp)
         gpu_download_albedo(handle, albedo_gpu.unsafe_ptr(), Int64(n_pixels))
@@ -395,6 +396,7 @@ def render_interactive(
 
     if use_gpu:
         gpu_clear_film(handle, Int64(n_pixels))
+        gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
     else:
         sd = mojo_parsed_scene_descriptor(psc)
         for _ in range(n_pixels * 3):
@@ -417,6 +419,7 @@ def render_interactive(
             build_camera_to_world(cam_buf.unsafe_ptr(), c2w_buf.unsafe_ptr())
             if use_gpu:
                 gpu_clear_film(handle, Int64(n_pixels))
+                gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels))
             else:
                 for i in range(n_pixels * 3):
                     accum[i]      = Float32(0)
