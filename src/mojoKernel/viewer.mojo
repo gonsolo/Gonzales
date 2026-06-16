@@ -50,18 +50,18 @@ def build_camera_to_world(cs: UnsafePointer[CameraState, MutAnyOrigin], c2w: Uns
     var dx = cs[0].direction.x; var dy = cs[0].direction.y; var dz = cs[0].direction.z
     var ux = cs[0].up.x;        var uy = cs[0].up.y;        var uz = cs[0].up.z
 
-    # right = normalize(cross(up, dir))
-    var rx = uy * dz - uz * dy
-    var ry = uz * dx - ux * dz
-    var rz = ux * dy - uy * dx
+    # right = normalize(cross(dir, up))
+    var rx = dy * uz - dz * uy
+    var ry = dz * ux - dx * uz
+    var rz = dx * uy - dy * ux
     var rlen = sqrt(rx * rx + ry * ry + rz * rz)
     if rlen < Float32(1e-6): rlen = Float32(1)
     rx /= rlen; ry /= rlen; rz /= rlen
 
-    # true_up = cross(dir, right)  — reorthogonalize
-    var tux = dy * rz - dz * ry
-    var tuy = dz * rx - dx * rz
-    var tuz = dx * ry - dy * rx
+    # true_up = cross(right, dir)  — reorthogonalize
+    var tux = ry * dz - rz * dy
+    var tuy = rz * dx - rx * dz
+    var tuz = rx * dy - ry * dx
 
     # Column 0: right
     c2w[0] = rx;  c2w[1] = ry;  c2w[2] = rz;  c2w[3] = Float32(0)
