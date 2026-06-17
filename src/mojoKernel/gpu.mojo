@@ -39,6 +39,8 @@ struct GpuSceneHandle(Movable):
     var n_area_lights: Int
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
     var n_spheres: Int
+    var distant_lights_buf: DeviceBuffer[DType.uint8]  # n_distant × sizeof(DistantLight_C) = 32
+    var n_distant_lights: Int
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 48
     var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
@@ -96,6 +98,8 @@ def gpu_upload_scene(
     areaLightCount: Int64,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     sphereCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int64,
     n_pixels: Int64,
@@ -262,6 +266,16 @@ def gpu_upload_scene(
                     for j in range(Int(sphereCount) * size_of[Sphere_C]()):
                         dst[j] = src[j]
 
+            # Upload distant (directional) lights
+            var dl_bytes = max(Int(distantLightCount), 1) * size_of[DistantLight_C]()
+            var dl_buf = ctx.enqueue_create_buffer[DType.uint8](dl_bytes)
+            if Int(distantLightCount) > 0:
+                with dl_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = distantLights.bitcast[UInt8]()
+                    for j in range(Int(distantLightCount) * size_of[DistantLight_C]()):
+                        dst[j] = src[j]
+
             # Upload infinite/environment lights with GPU-resident pixel/CDF data
             var il_count = Int(infiniteLightCount)
             var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
@@ -416,6 +430,8 @@ def gpu_upload_scene(
                 n_area_lights=Int(areaLightCount),
                 spheres_buf=sphere_buf^,
                 n_spheres=Int(sphereCount),
+                distant_lights_buf=dl_buf^,
+                n_distant_lights=Int(distantLightCount),
                 infinite_lights_buf=il_buf^,
                 il_pixels_bufs=il_pixels_bufs^,
                 il_cdf_bufs=il_cdf_bufs^,
@@ -567,6 +583,8 @@ def shade_nee_gpu(
     areaLightCount: Int,
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    n_distant_lights: Int,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     n_infinite_lights: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
@@ -584,7 +602,7 @@ def shade_nee_gpu(
     shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
         UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), textures, n_textures,
         UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        distantLights, n_distant_lights,
         UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
         infiniteLights, n_infinite_lights,
         spheres, n_spheres)
@@ -1049,6 +1067,8 @@ def gpu_render_sample(
                     handle[].n_area_lights,
                     handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
                     handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
                     handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
                     handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
@@ -1136,6 +1156,8 @@ def gpu_render_wavefront(
                     handle[].n_area_lights,
                     handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
                     handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
                     handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
                     handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
