@@ -927,17 +927,20 @@ ViewerHandle viewer_create(int width, int height, const char* title, int fullscr
     v->camera.upX = 0;   v->camera.upY = 1;   v->camera.upZ = 0;
     v->camera.cameraChanged = 0;
 
-    GLFWmonitor* monitor = nullptr;
     if (fullscreen) {
-        monitor = glfwGetPrimaryMonitor();
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
         width  = mode->width;
         height = mode->height;
+        // Windowed fullscreen: borderless window at screen size, no exclusive
+        // fullscreen. This keeps Wayland/GNOME compositor event handling intact
+        // so pings are answered and input is not blocked.
+        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
     }
     v->winWidth = width;
     v->winHeight = height;
 
-    v->window = glfwCreateWindow(width, height, title, monitor, nullptr);
+    v->window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!v->window) {
         fprintf(stderr, "Failed to create GLFW window\n");
         delete v;
