@@ -1,7 +1,7 @@
 from std.memory import alloc, OwnedPointer
 from std.collections import List
 from std.math import sqrt
-from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor
+from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film
 from .rendering import render_all_tiles, render_aux_buffers, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot
@@ -175,6 +175,7 @@ def parse_and_render(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
+    override_w: Int32, override_h: Int32,
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -183,6 +184,8 @@ def parse_and_render(
     var psc = mojo_parse_scene(path)
     if Int(psc) == 0:
         return Int32(-1)
+    if override_w > 0 and override_h > 0:
+        resize_film(psc, override_w, override_h)
 
     var fw = psc[0].film_w
     var fh = psc[0].film_h
@@ -308,6 +311,7 @@ def render_interactive(
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
     fullscreen: Bool,
+    override_w: Int32, override_h: Int32,
 ):
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -317,6 +321,8 @@ def render_interactive(
     if Int(psc) == 0:
         print("Failed to parse scene")
         return
+    if override_w > 0 and override_h > 0:
+        resize_film(psc, override_w, override_h)
 
     var fw = psc[0].film_w
     var fh = psc[0].film_h

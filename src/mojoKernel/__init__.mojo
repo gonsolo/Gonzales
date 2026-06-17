@@ -12,11 +12,13 @@ def main() raises:
     var interactive = False
     var use_gpu = False
     var fullscreen = False
+    var override_w = Int32(0)
+    var override_h = Int32(0)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--width W] [--height H] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -25,12 +27,18 @@ def main() raises:
         elif arg == "--fullscreen":
             fullscreen = True
             interactive = True
+        elif arg == "--width" and i + 1 < len(args):
+            i += 1
+            override_w = Int32(atol(String(args[i])))
+        elif arg == "--height" and i + 1 < len(args):
+            i += 1
+            override_h = Int32(atol(String(args[i])))
         else:
             scene_path = arg
         i += 1
 
     if scene_path.byte_length() == 0:
-        print("Usage: gonzales [--interactive] [--gpu] scene.pbrt")
+        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--width W] [--height H] scene.pbrt")
         return
 
     if not scene_path.endswith(".pbrt"):
@@ -50,9 +58,9 @@ def main() raises:
     path_cstr[path_len] = UInt8(0)
 
     if interactive:
-        render_interactive(path_cstr, sobol, use_gpu, fullscreen)
+        render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu)
+        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 

@@ -668,6 +668,7 @@ struct ParsedScene_Mojo:
     var prim_count:       Int32
     var film_w:           Int32
     var film_h:           Int32
+    var camera_fov:       Float32
     var film_iso:         Float32
     var film_max_comp:    Float32
     var film_filename:    UnsafePointer[UInt8, MutAnyOrigin]      # null-terminated
@@ -2729,6 +2730,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].prim_count       = total_tris
     psc[0].film_w           = s[0].film_w
     psc[0].film_h           = s[0].film_h
+    psc[0].camera_fov       = s[0].camera_fov
     psc[0].film_iso         = s[0].film_iso
     psc[0].film_max_comp    = s[0].film_max_comp
     psc[0].film_filename    = fname
@@ -2899,6 +2901,37 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     else:
         psc[0].mediums = UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling()
     psc[0].medium_count = Int32(nm)
+
+
+def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+               new_w: Int32, new_h: Int32):
+    """Override film resolution and recompute raster_to_camera in place."""
+    psc[0].film_w = new_w
+    psc[0].film_h = new_h
+
+    var frame = Float32(new_w) / Float32(new_h)
+    var smin_x: Float32; var smax_x: Float32
+    var smin_y: Float32; var smax_y: Float32
+    if frame >= Float32(1):
+        smin_x = -frame; smax_x = frame; smin_y = Float32(-1); smax_y = Float32(1)
+    else:
+        smin_x = Float32(-1); smax_x = Float32(1)
+        smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
+
+    var str_mat = alloc[Float32](16)
+    make_screen_to_raster(new_w, new_h, smin_x, smax_x, smin_y, smax_y, str_mat)
+    var rts = alloc[Float32](16)
+    _ = matrix_invert(str_mat, rts)
+    var cts = alloc[Float32](16)
+    make_perspective_matrix(psc[0].camera_fov, Float32(0.01), cts)
+    var cts_inv = alloc[Float32](16)
+    _ = matrix_invert(cts, cts_inv)
+    if Int(psc[0].raster_to_camera) > 1:
+        psc[0].raster_to_camera.free()
+    var r2c = alloc[Float32](16)
+    matrix_multiply(cts_inv, rts, r2c)
+    psc[0].raster_to_camera = r2c
+    cts.free(); str_mat.free(); rts.free(); cts_inv.free()
 
 
 # ── Exported API ──────────────────────────────────────────────────────────────
