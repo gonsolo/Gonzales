@@ -17,9 +17,10 @@ struct CameraState(TrivialRegisterPassable):
 comptime ViewerHandle = UnsafePointer[UInt8, MutAnyOrigin]
 
 def viewer_create(width: Int32, height: Int32,
-                 title: UnsafePointer[UInt8, MutAnyOrigin]) -> ViewerHandle:
+                 title: UnsafePointer[UInt8, MutAnyOrigin],
+                 fullscreen: Int32) -> ViewerHandle:
     return external_call["viewer_create", ViewerHandle,
-        Int32, Int32, UnsafePointer[UInt8, MutAnyOrigin]](width, height, title)
+        Int32, Int32, UnsafePointer[UInt8, MutAnyOrigin], Int32](width, height, title, fullscreen)
 
 def viewer_update_framebuffer(v: ViewerHandle,
                               pixels: UnsafePointer[Float32, MutAnyOrigin],

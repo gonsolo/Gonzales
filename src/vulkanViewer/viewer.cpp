@@ -910,7 +910,7 @@ static void drawFrame(Viewer* v) {
 
 extern "C" {
 
-ViewerHandle viewer_create(int width, int height, const char* title) {
+ViewerHandle viewer_create(int width, int height, const char* title, int fullscreen) {
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
         return nullptr;
@@ -920,8 +920,6 @@ ViewerHandle viewer_create(int width, int height, const char* title) {
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     auto* v = new Viewer{};
-    v->winWidth = width;
-    v->winHeight = height;
 
     // Default camera: look along -Z
     v->camera.posX = 0;  v->camera.posY = 0;  v->camera.posZ = 0;
@@ -929,7 +927,17 @@ ViewerHandle viewer_create(int width, int height, const char* title) {
     v->camera.upX = 0;   v->camera.upY = 1;   v->camera.upZ = 0;
     v->camera.cameraChanged = 0;
 
-    v->window = glfwCreateWindow(width, height, title, nullptr, nullptr);
+    GLFWmonitor* monitor = nullptr;
+    if (fullscreen) {
+        monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        width  = mode->width;
+        height = mode->height;
+    }
+    v->winWidth = width;
+    v->winHeight = height;
+
+    v->window = glfwCreateWindow(width, height, title, monitor, nullptr);
     if (!v->window) {
         fprintf(stderr, "Failed to create GLFW window\n");
         delete v;

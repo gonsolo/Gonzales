@@ -13,7 +13,7 @@ typedef struct {
         int cameraChanged;
 } CameraState;
 
-ViewerHandle viewer_create(int width, int height, const char *title);
+ViewerHandle viewer_create(int width, int height, const char *title, int fullscreen);
 void viewer_update_framebuffer(ViewerHandle viewer, const float *pixels, int width, int height);
 int viewer_should_close(ViewerHandle viewer);
 void viewer_poll_events(ViewerHandle viewer);

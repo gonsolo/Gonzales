@@ -307,6 +307,7 @@ def render_interactive(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
+    fullscreen: Bool,
 ):
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -342,7 +343,7 @@ def render_interactive(
     for i in range(title_len):
         title_buf.append(ts[i])
     title_buf.append(UInt8(0))
-    var v = viewer_create(fw, fh, title_buf.unsafe_ptr())
+    var v = viewer_create(fw, fh, title_buf.unsafe_ptr(), Int32(1) if fullscreen else Int32(0))
     # title_buf freed automatically
     if Int(v) == 0:
         print("Failed to create viewer window")

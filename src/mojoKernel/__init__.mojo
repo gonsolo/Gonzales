@@ -11,16 +11,20 @@ def main() raises:
     var scene_path = String("")
     var interactive = False
     var use_gpu = False
+    var fullscreen = False
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
         elif arg == "--gpu":
             use_gpu = True
+        elif arg == "--fullscreen":
+            fullscreen = True
+            interactive = True
         else:
             scene_path = arg
         i += 1
@@ -46,7 +50,7 @@ def main() raises:
     path_cstr[path_len] = UInt8(0)
 
     if interactive:
-        render_interactive(path_cstr, sobol, use_gpu)
+        render_interactive(path_cstr, sobol, use_gpu, fullscreen)
     else:
         _ = parse_and_render(path_cstr, sobol, use_gpu)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
