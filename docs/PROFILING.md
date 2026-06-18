@@ -97,3 +97,25 @@ children vs ~7). Width amortizes the parent-bounds storage and cuts steps. So:
 **compressed BVH4/BVH8 is the only lever that actually moves traverse
 bandwidth** — narrow compression and register caps are dead ends (both
 measured).
+
+### Measured: compressed BVH4 is correct but SLOWER (dequant ALU > bandwidth)
+Implemented a full compressed BVH4 (64 B/node: parent AABB + 4 children with
+8-bit parent-relative quantized bounds + packed child meta; collapse the SAH
+BVH2 greedily into 4-wide; conservative ±1-cell quantization). It is correct —
+render means byte-identical (cornell 0.1145, car 0.1006, bathroom 2.408 in that
+build env) — and cuts node count ~4× (bathroom 1.03M→0.25M). But it is
+**~26% slower**: bathroom best-of-5 9.3 s vs 7.4 s baseline. Three traversal
+variants tried (gather+sort 10.2 s, scalar nearest-first 9.3 s, full SIMD-4
+13 s — lane extraction spills to local memory). The per-node 8-bit
+dequantization ALU outweighs the saved node-fetch bandwidth on this software
+GPU traverser. Preserved on branch `bvh4-compressed-experiment` (NOT merged).
+
+### Overall conclusion
+Every software lever tried — register cap (#1), SoA (#3, weak premise), narrow
+node compression, and compressed BVH4 (#2) — yields **no speedup**; combined
+with the project's prior failures (material sorting, separate shadow kernel,
+path compaction), the GPU path is at a **software-traversal local optimum**.
+The remaining gap to pbrt is pbrt's use of **hardware RT cores (OptiX)**, which
+Mojo/CUDA cannot access (see project memory). Without hardware RT, the
+realistic wins left are algorithmic (fewer rays/samples, better sampling) or
+quality-vs-time trade-offs — not traversal micro-optimization.
