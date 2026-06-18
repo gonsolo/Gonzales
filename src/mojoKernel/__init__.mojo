@@ -2,7 +2,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
-from mojoKernel.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive
+from mojoKernel.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel
 
 def main() raises:
     var t0 = perf_counter_ns()
@@ -14,11 +14,13 @@ def main() raises:
     var fullscreen = False
     var override_w = Int32(0)
     var override_h = Int32(0)
+    var pixel_x = Int32(-1)
+    var pixel_y = Int32(-1)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--width W] [--height H] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--width W] [--height H] [--pixel X Y] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -33,6 +35,11 @@ def main() raises:
         elif arg == "--height" and i + 1 < len(args):
             i += 1
             override_h = Int32(atol(String(args[i])))
+        elif arg == "--pixel" and i + 2 < len(args):
+            i += 1
+            pixel_x = Int32(atol(String(args[i])))
+            i += 1
+            pixel_y = Int32(atol(String(args[i])))
         else:
             scene_path = arg
         i += 1
@@ -57,7 +64,9 @@ def main() raises:
         path_cstr[k] = scene_path.as_bytes()[k]
     path_cstr[path_len] = UInt8(0)
 
-    if interactive:
+    if pixel_x >= 0 and pixel_y >= 0:
+        debug_trace_pixel(path_cstr, pixel_x, pixel_y)
+    elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h)
     else:
         _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h)

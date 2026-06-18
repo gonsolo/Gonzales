@@ -175,6 +175,157 @@ def _gpu_upload_scene(
     return handle
 
 
+def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
+    return sqrt(x*x + y*y + z*z)
+
+def debug_trace_pixel(
+    path: UnsafePointer[UInt8, MutAnyOrigin],
+    px: Int32, py: Int32,
+):
+    """Trace the centre ray of one pixel and print the path bounce-by-bounce
+    (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
+    envmap lookup). For comparing against `pbrt --pixelmaterial`."""
+    from .bvh import traverse_bvh2_core, test_spheres
+    from .geometry import Intersection_C, Material_C, cross, fr_dielectric
+    from .shading import _equal_area_sphere_to_square
+
+    var psc = mojo_parse_scene(path)
+    if Int(psc) == 0:
+        print("parse failed"); return
+
+    # Centre ray (no jitter): raster_to_camera then camera_to_world rotation.
+    var r2c = psc[0].raster_to_camera
+    var c2w = psc[0].camera_to_world
+    var fX = Float32(px) + Float32(0.5)
+    var fY = Float32(py) + Float32(0.5)
+    var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
+    var cy = r2c[1]*fX + r2c[5]*fY + r2c[13]
+    var cz = r2c[2]*fX + r2c[6]*fY + r2c[14]
+    var cw = r2c[3]*fX + r2c[7]*fY + r2c[15]
+    if cw != Float32(0.0) and cw != Float32(1.0):
+        cx /= cw; cy /= cw; cz /= cw
+    var cl = _dbg_vlen(cx, cy, cz)
+    if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
+    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
+    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
+    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dl = _dbg_vlen(dx, dy, dz)
+    if dl > Float32(0.0): dx /= dl; dy /= dl; dz /= dl
+    var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+    print("PIXEL", px, py, "ray.o", ox, oy, oz, "ray.d", dx, dy, dz)
+
+    var inter = alloc[Intersection_C](1)
+    for bounce in range(8):
+        var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+        inter[0].hit = Int8(0)
+        traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, ray, Float32(1.0e38), inter)
+        if psc[0].sphere_count > 0:
+            test_spheres(psc[0].spheres, Int(psc[0].sphere_count), ray, inter)
+        if inter[0].hit == Int8(0):
+            # envmap miss
+            if psc[0].infinite_count > 0:
+                var il = psc[0].infinite_lights[0]
+                var w2l = il.world_to_light
+                var ldx = w2l[0]*dx + w2l[4]*dy + w2l[8]*dz
+                var ldy = w2l[1]*dx + w2l[5]*dy + w2l[9]*dz
+                var ldz = w2l[2]*dx + w2l[6]*dy + w2l[10]*dz
+                var uv = _equal_area_sphere_to_square(ldx, ldy, ldz)
+                var rgb_str = String("(no pixels)")
+                if Int(il.pixels_ptr) > 1 and il.cdf_w > Int32(0):
+                    var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
+                    var pxe = Int(max(Float32(0), min(Float32(iw-1), uv[0]*Float32(iw))))
+                    var pye = Int(max(Float32(0), min(Float32(ih-1), uv[1]*Float32(ih))))
+                    var rr = il.pixels_ptr[(pye*iw+pxe)*3+0]
+                    var gg = il.pixels_ptr[(pye*iw+pxe)*3+1]
+                    var bb = il.pixels_ptr[(pye*iw+pxe)*3+2]
+                    rgb_str = String(rr) + " " + String(gg) + " " + String(bb)
+                print("  bounce", bounce, "MISS -> envmap localdir", ldx, ldy, ldz, "uv", uv[0], uv[1], "rgb", rgb_str)
+            else:
+                print("  bounce", bounce, "MISS (no envmap)")
+            break
+
+        # Identify mesh + material
+        var mesh_idx: Int; var base_vidx: Int
+        if inter[0].primId.type == 0:
+            mesh_idx = Int(inter[0].primId.id1); base_vidx = Int(inter[0].primId.id2)
+        else:
+            mesh_idx = Int(inter[0].primId.id2 >> 32); base_vidx = Int(inter[0].primId.id2 & 0xFFFFFFFF) * 3
+        var mat = psc[0].materials[Int(inter[0].primId.materialIndex)]
+        var mesh = psc[0].meshes[mesh_idx]
+        var v0 = Int(mesh.vertexIndices[base_vidx]); var v1 = Int(mesh.vertexIndices[base_vidx+1]); var v2 = Int(mesh.vertexIndices[base_vidx+2])
+        var p0x = mesh.points[v0*4]; var p0y = mesh.points[v0*4+1]; var p0z = mesh.points[v0*4+2]
+        var p1x = mesh.points[v1*4]; var p1y = mesh.points[v1*4+1]; var p1z = mesh.points[v1*4+2]
+        var p2x = mesh.points[v2*4]; var p2y = mesh.points[v2*4+1]; var p2z = mesh.points[v2*4+2]
+        var gnx = (p1y-p0y)*(p2z-p0z) - (p1z-p0z)*(p2y-p0y)
+        var gny = (p1z-p0z)*(p2x-p0x) - (p1x-p0x)*(p2z-p0z)
+        var gnz = (p1x-p0x)*(p2y-p0y) - (p1y-p0y)*(p2x-p0x)
+        var gnl = _dbg_vlen(gnx, gny, gnz)
+        if gnl > Float32(0.0): gnx /= gnl; gny /= gnl; gnz /= gnl
+        var hx = ox + dx*inter[0].tHit; var hy = oy + dy*inter[0].tHit; var hz = oz + dz*inter[0].tHit
+        print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
+
+        if Int(mat.type) == 4:
+            # Dielectric — mirror shade_dielectric's decision (no RNG: report Fresnel, follow transmit)
+            var ior = mat.albedo.r
+            var facing = (dx*gnx + dy*gny + dz*gnz) < Float32(0.0)
+            var entering = facing
+            if bounce == 0: entering = True
+            var nx = gnx if facing else -gnx
+            var ny = gny if facing else -gny
+            var nz = gnz if facing else -gnz
+            var eta = (Float32(1.0)/ior) if entering else ior
+            var cos_i = -(dx*nx + dy*ny + dz*nz)
+            var sin2t = eta*eta*(Float32(1.0) - cos_i*cos_i)
+            var tir = sin2t > Float32(1.0)
+            var fres = fr_dielectric(cos_i, Float32(1.0)/eta)
+            print("        DIELECTRIC entering", Int(entering), "eta", eta, "cos_i", cos_i, "fresnel", fres, "tir", Int(tir))
+            # Probe the REFLECTED ray's envmap value (the bright contribution).
+            var rcos = dx*nx + dy*ny + dz*nz
+            var rfx = dx - nx*Float32(2.0)*rcos
+            var rfy = dy - ny*Float32(2.0)*rcos
+            var rfz = dz - nz*Float32(2.0)*rcos
+            var rfl = _dbg_vlen(rfx, rfy, rfz)
+            if rfl > Float32(0.0): rfx /= rfl; rfy /= rfl; rfz /= rfl
+            var rray = Ray_C(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
+            var rint = alloc[Intersection_C](1); rint[0].hit = Int8(0)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, rray, Float32(1.0e38), rint)
+            if rint[0].hit == Int8(0) and psc[0].infinite_count > 0:
+                var il2 = psc[0].infinite_lights[0]
+                var w2 = il2.world_to_light
+                var l2x = w2[0]*rfx + w2[4]*rfy + w2[8]*rfz
+                var l2y = w2[1]*rfx + w2[5]*rfy + w2[9]*rfz
+                var l2z = w2[2]*rfx + w2[6]*rfy + w2[10]*rfz
+                var uv2 = _equal_area_sphere_to_square(l2x, l2y, l2z)
+                var rs = String("")
+                if Int(il2.pixels_ptr) > 1 and il2.cdf_w > Int32(0):
+                    var iw2 = Int(il2.cdf_w); var ih2 = Int(il2.cdf_h)
+                    var ax = Int(max(Float32(0), min(Float32(iw2-1), uv2[0]*Float32(iw2))))
+                    var ay = Int(max(Float32(0), min(Float32(ih2-1), uv2[1]*Float32(ih2))))
+                    rs = String(il2.pixels_ptr[(ay*iw2+ax)*3+0]) + " " + String(il2.pixels_ptr[(ay*iw2+ax)*3+1]) + " " + String(il2.pixels_ptr[(ay*iw2+ax)*3+2])
+                print("        REFLECT dir", rfx, rfy, rfz, "-> envmap uv", uv2[0], uv2[1], "rgb", rs)
+            else:
+                print("        REFLECT dir", rfx, rfy, rfz, "-> hits mesh (occluded), matType", Int(psc[0].materials[Int(rint[0].primId.materialIndex)].type) if rint[0].hit != Int8(0) else -1)
+            rint.free()
+            # Follow transmit branch (what pbrt did) if possible, else reflect
+            if tir:
+                var rl = dx*nx + dy*ny + dz*nz
+                dx = dx - nx*Float32(2.0)*rl; dy = dy - ny*Float32(2.0)*rl; dz = dz - nz*Float32(2.0)*rl
+                ox = hx + nx*Float32(0.0001); oy = hy + ny*Float32(0.0001); oz = hz + nz*Float32(0.0001)
+                print("        -> REFLECT (TIR)")
+            else:
+                var cos_t = sqrt(Float32(1.0) - sin2t)
+                dx = dx*eta + nx*(eta*cos_i - cos_t); dy = dy*eta + ny*(eta*cos_i - cos_t); dz = dz*eta + nz*(eta*cos_i - cos_t)
+                var nl = _dbg_vlen(dx,dy,dz)
+                if nl > Float32(0.0): dx /= nl; dy /= nl; dz /= nl
+                ox = hx - nx*Float32(0.0001); oy = hy - ny*Float32(0.0001); oz = hz - nz*Float32(0.0001)
+                print("        -> TRANSMIT dir", dx, dy, dz)
+        else:
+            print("        STOP (non-glass material)")
+            break
+    inter.free()
+    mojo_parsed_free(psc)
+
+
 def parse_and_render(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
