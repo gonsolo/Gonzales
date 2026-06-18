@@ -75,3 +75,25 @@ Both are multi-hundred-line rewrites of the builder + traversal across the CPU
 and GPU paths. This is the highest-value optimization but should be done
 attended, verifying the render mean is unchanged at each step against this
 baseline.
+
+### Measured: narrow-node compression does NOT help (sector granularity)
+Tried compressing `BVH2Node` 32 B → 24 B (global 16-bit quantized AABB, header
+in node[0]). Output stayed byte-identical (cornell 0.1144, car 0.1051,
+bathroom 2.426 — verified), but **traverse was not faster** (2.26–2.52 ms,
+DRAM still 72–91%, same as 32 B) and registers rose 48→53. Reason: NVIDIA DRAM
+transactions are **32-byte sectors**. Incoherent BVH2 traversal reads one node
+per step from a scattered address ⇒ one 32 B sector per node *regardless* of
+whether the node is 16/24/32 B (24 B is actually worse — its stride straddles
+sector boundaries). So shrinking a 2-wide node below 32 B cannot reduce sector
+traffic. Reverted.
+
+**Implication:** the bandwidth win requires **wide nodes**, and even an
+*uncompressed* BVH4 node (~112 B ≈ 4 sectors for 4 children) barely beats the
+~3 sectors of the BVH2 subtree it replaces. The real win is a **compressed**
+wide node: CWBVH-style — parent bounds (24 B) + N children quantized 8-bit
+relative to the parent + child refs, sized to span few sectors (BVH4 ≈ 64 B ≈
+2 sectors for 4 children vs ~3 for BVH2; BVH8/CWBVH ≈ 80 B ≈ 3 sectors for 8
+children vs ~7). Width amortizes the parent-bounds storage and cuts steps. So:
+**compressed BVH4/BVH8 is the only lever that actually moves traverse
+bandwidth** — narrow compression and register caps are dead ends (both
+measured).
