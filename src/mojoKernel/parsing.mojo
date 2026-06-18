@@ -1446,7 +1446,13 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_type = Int8(11)
             else:
                 mat_type = Int8(1)
-        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and _psc_type_is_float(type_buf):
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
+            if _psc_streq(name_buf, "eta"):
+                _psc_scan_rgb(handle, metal_eta, is_array)
+            else:
+                _psc_scan_rgb(handle, metal_k, is_array)
+            has_spectral_conductor = True
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and type_buf[0] == UInt8(102):  # 'f' float IOR for dielectric
             var tmp = alloc[Float32](1)
             _ = scanner_scan_float(handle, tmp)
             mat_ior = tmp[0]

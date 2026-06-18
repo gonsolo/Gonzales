@@ -476,12 +476,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var fresnel = r0 + (Float32(1.0) - r0) * one_minus2 * one_minus2 * one_minus
 
     if pcg.next_float() < fresnel:
-        # Specular reflection from coating — throughput unchanged
+        # Specular reflection from coating — delta BSDF, throughput unchanged
         var refl = ray_dir + normal * (Float32(2.0) * cos_i)
         var rlen = dot(refl, refl)
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
+        path_ptr[].specularBounce = Int8(1)
+        path_ptr[].lastBsdfPdf = Float32(0.0)
     else:
         # Diffuse bounce through coating — NEE direct light sampling
         if areaLightCount > 0:
@@ -787,7 +789,9 @@ def shade_conductor(
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var scatter_dir: SIMD[DType.float32, 3]
-    var fresnel_weight: Float32
+    # Per-channel conductor Fresnel reflectance (F0 = mat.albedo, brightens to
+    # white at grazing via Schlick). Used directly as the throughput multiplier.
+    var fresnel_rgb: RGB
 
     if not is_rough:
         # Perfect specular reflection
@@ -795,7 +799,11 @@ def shade_conductor(
         var rlen = dot(scatter_dir, scatter_dir)
         if rlen > Float32(0.0):
             scatter_dir = scatter_dir * (Float32(1.0) / sqrt(rlen))
-        fresnel_weight = Float32(1.0)
+        var cos_i = max(Float32(0.0), -dot(ray_dir, normal))
+        var one_m = Float32(1.0) - cos_i
+        var schlick = one_m * one_m * one_m * one_m * one_m
+        var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+        fresnel_rgb = mat.albedo + (white - mat.albedo) * schlick
     else:
         # True anisotropic GGX VNDF (Heitz 2018)
         # Derive UV tangent frame for anisotropy direction
@@ -877,13 +885,13 @@ def shade_conductor(
         if sd_len > Float32(0.0):
             scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
 
-        # Schlick Fresnel for conductor using albedo as F0
+        # Per-channel Schlick Fresnel for conductor using albedo as F0
         var cos_wh = max(Float32(0.0), wo_dot_wh)
         var one_m = Float32(1.0) - cos_wh
         var one_m2 = one_m * one_m
         var schlick = one_m2 * one_m2 * one_m
-        var f0_luma = mat.albedo.luma()
-        fresnel_weight = f0_luma + (Float32(1.0) - f0_luma) * schlick
+        var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+        fresnel_rgb = mat.albedo + (white - mat.albedo) * schlick
 
         if dot(scatter_dir, normal) <= Float32(0.0):
             path_ptr[].active = 0
@@ -893,7 +901,7 @@ def shade_conductor(
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(scatter_dir[0], scatter_dir[1], scatter_dir[2]))
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = mat.albedo
-    path_ptr[].throughput *= mat.albedo * fresnel_weight
+    path_ptr[].throughput *= fresnel_rgb
     path_ptr[].specularBounce = Int8(1)
     path_ptr[].lastBsdfPdf = Float32(0.0)
     path_ptr[].bounce += 1
