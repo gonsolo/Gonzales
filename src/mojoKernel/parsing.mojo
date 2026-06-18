@@ -1678,10 +1678,18 @@ def store_mesh(
     fin_pts.free()
     ma.vert_idxs.reserve(Int(n_tris) * 3)
     ma.face_idxs.reserve(Int(n_tris))
+    # PBRT ReverseOrientation flips the geometric (winding) normal. Reverse the
+    # triangle winding by swapping the 2nd and 3rd vertex so cross(p1-p0,p2-p0)
+    # negates; shading-normal interpolation stays consistent (same indices).
+    var rev = s[0].cur_attr.reverse_orient
     for t in range(Int(n_tris)):
         ma.vert_idxs.append(Int64(tmp_i[t*3+0]))
-        ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
-        ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
+        if rev:
+            ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
+            ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
+        else:
+            ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
+            ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
         ma.face_idxs.append(Int64(3))
     s[0].meshes.append(ma^)
 
@@ -2045,14 +2053,12 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             transform_normals(ctm_inv, nrm_ptr, nv, nrm_world)
             ref last_mesh = s[0].meshes[len(s[0].meshes) - 1]
             last_mesh.normals.reserve(Int(nv) * 3)
-            # PBRT ReverseOrientation flips the surface normal direction.
-            var nsign = Float32(-1.0) if s[0].cur_attr.reverse_orient else Float32(1.0)
             for ni in range(Int(nv)):
                 # Renormalize after transform
                 var nx = nrm_world[ni*3+0]; var ny = nrm_world[ni*3+1]; var nz = nrm_world[ni*3+2]
                 var nlen = sqrt(nx*nx + ny*ny + nz*nz)
                 if nlen > Float32(1e-12):
-                    var inv = nsign / nlen
+                    var inv = Float32(1.0) / nlen
                     nx *= inv; ny *= inv; nz *= inv
                 last_mesh.normals.append(nx)
                 last_mesh.normals.append(ny)
