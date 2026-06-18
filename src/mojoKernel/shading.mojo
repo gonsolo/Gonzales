@@ -800,12 +800,9 @@ def shade_dielectric(
     var sin2_t = eta * eta * (Float32(1.0) - cos_i * cos_i)
     var tir = sin2_t > Float32(1.0)
 
-    # Schlick Fresnel
-    var r0 = (Float32(1.0) - ior) / (Float32(1.0) + ior)
-    r0 = r0 * r0
-    var one_minus = Float32(1.0) - cos_i
-    var one_minus2 = one_minus * one_minus
-    var fresnel = r0 + (Float32(1.0) - r0) * one_minus2 * one_minus2 * one_minus
+    # Exact unpolarized dielectric Fresnel (eta here is η_i/η_t, so pass its
+    # reciprocal as the relative IOR). Returns 1.0 on total internal reflection.
+    var fresnel = fr_dielectric(cos_i, Float32(1.0) / eta)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -888,14 +885,12 @@ def shade_thin_dielectric(
     var cos_i = max(Float32(0.0), -dot(ray_dir, normal))
     var ior = mat.albedo.r
 
-    # Two-way Fresnel for thin slab: account for internal reflection too
-    # Effective reflectance = F + (1-F)*F*(1-F) / (1 - F^2) ≈ 2F/(1+F)
-    # Simplification: just use single-interface Schlick
-    var r0 = (ior - Float32(1.0)) / (ior + Float32(1.0))
-    r0 = r0 * r0
-    var one_m = Float32(1.0) - cos_i
-    var one_m2 = one_m * one_m
-    var fresnel = r0 + (Float32(1.0) - r0) * one_m2 * one_m2 * one_m
+    # Exact single-interface dielectric Fresnel, then compound the two slab
+    # interfaces: R' = R + (1-R)^2 R / (1 - R^2) = 2R / (1 + R)  (PBRT thin glass).
+    var r_single = fr_dielectric(cos_i, ior)
+    var fresnel = r_single
+    if r_single < Float32(1.0):
+        fresnel = Float32(2.0) * r_single / (Float32(1.0) + r_single)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
