@@ -451,6 +451,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int,
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
@@ -535,6 +537,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var exited = False
     var exit_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
     var did_nee = False
+    var did_env_nee = False
 
     comptime MAX_COAT_DEPTH = 10
     for _ in range(MAX_COAT_DEPTH):
@@ -584,6 +587,74 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                         if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                             path_ptr[].estimate += contrib
 
+        # ── Env-map (infinite light) NEE at the base, once. Light enters via
+        #    the coat so the contribution is weighted by 1 - F(cos_env). The
+        #    view-side coat transmittance is implicit in reaching this branch. ──
+        if not did_env_nee and infiniteLightCount > 0:
+            did_env_nee = True
+            for inf_i in range(infiniteLightCount):
+                var ilight = infiniteLights[inf_i]
+                var w2l = ilight.world_to_light
+                var env_dir: SIMD[DType.float32, 3]
+                var env_rgb: RGB
+                var pdf_light: Float32
+                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+                    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+                    var u1_env = pcg.next_float()
+                    var u2_env = pcg.next_float()
+                    var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
+                    row_idx = min(row_idx, ih - 1)
+                    var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+                    var cond_base = (ih + 1) + row_idx * (iw + 1)
+                    var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
+                    col_idx = min(col_idx, iw - 1)
+                    var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+                    var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+                    var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+                    var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
+                    var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
+                    var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
+                    var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
+                    env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
+                    var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+                    var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+                    var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+                    var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+                    var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+                    env_rgb = RGB(pr, pg, pb) * ilight.scale
+                    if dp_row > Float32(0) and dp_col > Float32(0):
+                        pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
+                    else:
+                        pdf_light = INV_FOUR_PI
+                else:
+                    var u1_env = pcg.next_float()
+                    var u2_env = pcg.next_float()
+                    var r_env = sqrt(u1_env)
+                    var theta_env = TWO_PI * u2_env
+                    var x_env = r_env * cos(theta_env)
+                    var y_env = r_env * sin(theta_env)
+                    var z2_env = Float32(1.0) - u1_env
+                    var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
+                    env_dir = tangent * x_env + bitangent * y_env + normal * z_env
+                    var env_dlen = dot(env_dir, env_dir)
+                    if env_dlen > Float32(0.0):
+                        env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
+                    env_rgb = ilight.scale
+                    pdf_light = INV_FOUR_PI
+                var cos_env = dot(normal, env_dir)
+                if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
+                    var t_env = Float32(1.0) - fr_dielectric(cos_env, ior)
+                    var pdf_bsdf_nee = cos_env / PI
+                    var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
+                    var contrib_e = path_ptr[].throughput * alb * env_rgb * (cos_env * t_env / (PI * pdf_light)) * mis_w
+                    var t_max_env = Float32(100000.0)
+                    comptime if enqueue_shadow:
+                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib_e.r, contrib_e.g, contrib_e.b), Int32(1), Int32(0))
+                    else:
+                        var shadow_ray_e = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray_e, t_max_env):
+                            path_ptr[].estimate += contrib_e
+
         # Lambertian base: sample a cosine-weighted up-going direction.
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
@@ -622,8 +693,13 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(exit_dir[0], exit_dir[1], exit_dir[2]))
-    var cos_e = dot(exit_dir, normal)
-    path_ptr[].lastBsdfPdf = (cos_e if cos_e > Float32(0.0) else Float32(0.0)) / PI
+    # NEE-only for direct lighting: the layered exit ray's true pdf is
+    # intractable (refracted, multi-bounce) so it can't be MIS-combined with
+    # NEE. Setting lastBsdfPdf = 0 makes the miss/emitter handlers drop this
+    # ray's *direct* light contribution (mis_weight → 0); NEE supplies direct
+    # lighting while the exit ray still carries indirect bounces. Avoids the
+    # double-count between the multi-scatter exit and single-scatter NEE.
+    path_ptr[].lastBsdfPdf = Float32(0.0)
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].throughput *= beta
     path_ptr[].bounce += 1
@@ -1137,6 +1213,8 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int,
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
@@ -1169,7 +1247,8 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     elif sub_mat.type == Int8(5):
         shade_coated_diffuse[use_gpu, enqueue_shadow](
             path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, sub_mat,
-            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
+            areaLights, areaLightCount, infiniteLights, infiniteLightCount,
+            tex_filenames, textures, n_textures, shadow_tasks)
     elif sub_mat.type == Int8(6):
         shade_diffuse_transmission[use_gpu, enqueue_shadow](
             path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
@@ -1473,7 +1552,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     if mat.type == 5:
-        shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, mat, areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
+        shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, mat, areaLights, areaLightCount, infiniteLights, infiniteLightCount, tex_filenames, textures, n_textures, shadow_tasks)
         return
 
     if mat.type == 6:
@@ -1489,7 +1568,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     if mat.type == 8:
         shade_mix[use_gpu, enqueue_shadow](
             path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
-            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks, mat)
+            areaLights, areaLightCount, infiniteLights, infiniteLightCount,
+            tex_filenames, textures, n_textures, shadow_tasks, mat)
         return
 
     if mat.type == 9:
