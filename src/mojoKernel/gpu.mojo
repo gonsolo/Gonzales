@@ -122,10 +122,13 @@ def gpu_upload_scene(
             var free_bytes = mem_info[0]
             var total_bytes = mem_info[1]
 
-            var bvh_bytes = Int(bvh2NodesCount) * size_of[BVH2Node]()
-            var prim_bytes = Int(primIdsCount) * size_of[PrimId_C]()
-            var mesh_struct_bytes = Int(meshCount) * size_of[TriangleMesh_C]()
-            var material_struct_bytes = Int(materialCount) * size_of[Material_C]()
+            # Guard against zero-size device buffers (scene with no geometry):
+            # a 0-byte enqueue_create_buffer yields a misaligned/invalid device
+            # pointer that crashes on use and on free. Allocate at least 1 elem.
+            var bvh_bytes = max(Int(bvh2NodesCount), 1) * size_of[BVH2Node]()
+            var prim_bytes = max(Int(primIdsCount), 1) * size_of[PrimId_C]()
+            var mesh_struct_bytes = max(Int(meshCount), 1) * size_of[TriangleMesh_C]()
+            var material_struct_bytes = max(Int(materialCount), 1) * size_of[Material_C]()
 
             # Estimate total mesh data
             var mesh_data_bytes = 0
@@ -143,21 +146,24 @@ def gpu_upload_scene(
             if total_scene_bytes > Int(free_bytes):
                 print("WARNING: Scene (" + String(scene_mb) + " MB) may exceed available GPU memory (" + String(free_mb) + " MB)!")
 
-            # Upload BVH nodes
+            # Upload BVH nodes (copy only the real bytes; the buffer may be a
+            # 1-element placeholder when the scene has no geometry).
             var bvh_buf = ctx.enqueue_create_buffer[DType.uint8](bvh_bytes)
-            with bvh_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = bvh2Nodes.bitcast[UInt8]()
-                for i in range(bvh_bytes):
-                    dst[i] = src[i]
+            if Int(bvh2NodesCount) > 0:
+                with bvh_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = bvh2Nodes.bitcast[UInt8]()
+                    for i in range(Int(bvh2NodesCount) * size_of[BVH2Node]()):
+                        dst[i] = src[i]
 
             # Upload prim IDs
             var prim_buf = ctx.enqueue_create_buffer[DType.uint8](prim_bytes)
-            with prim_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = primIds.bitcast[UInt8]()
-                for i in range(prim_bytes):
-                    dst[i] = src[i]
+            if Int(primIdsCount) > 0:
+                with prim_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = primIds.bitcast[UInt8]()
+                    for i in range(Int(primIdsCount) * size_of[PrimId_C]()):
+                        dst[i] = src[i]
 
             # Upload per-mesh vertex/index/uv data and build device-side mesh structs
             var points_bufs = List[DeviceBuffer[DType.uint8]]()
@@ -166,7 +172,7 @@ def gpu_upload_scene(
             var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
             var nrm_bufs  = List[DeviceBuffer[DType.uint8]]()
 
-            var mesh_structs_host = alloc[TriangleMesh_C](Int(meshCount))
+            var mesh_structs_host = alloc[TriangleMesh_C](max(Int(meshCount), 1))
 
             for i in range(Int(meshCount)):
                 var host_mesh = meshes[i]
@@ -253,8 +259,8 @@ def gpu_upload_scene(
 
             mesh_structs_host.free()
 
-            # Upload materials array
-            var mat_bytes = Int(materialCount) * size_of[Material_C]()
+            # Upload materials array (>= 1 elem to avoid a zero-size buffer)
+            var mat_bytes = max(Int(materialCount), 1) * size_of[Material_C]()
             var mat_buf = ctx.enqueue_create_buffer[DType.uint8](mat_bytes)
             if Int(materialCount) > 0:
                 with mat_buf.map_to_host() as host_buf:
