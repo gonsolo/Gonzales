@@ -464,6 +464,28 @@ def schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
 # <</listing>>
 
 @always_inline
+def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
+    """Exact unpolarized Fresnel reflectance for a dielectric interface.
+    eta = η_t / η_i (relative IOR). Returns 1.0 on total internal reflection.
+    Handles both sides: a negative cos_theta_i means the ray arrives from the
+    transmitted side, so the interface is flipped. Mirrors PBRT's FrDielectric.
+    See: docs/05_reflection_models.md — Fresnel.
+    """
+    var cos_theta_i = max(Float32(-1.0), min(Float32(1.0), cos_theta_i_in))
+    var eta = eta_in
+    if cos_theta_i < Float32(0.0):
+        eta = Float32(1.0) / eta
+        cos_theta_i = -cos_theta_i
+    var sin2_theta_i = max(Float32(0.0), Float32(1.0) - cos_theta_i * cos_theta_i)
+    var sin2_theta_t = sin2_theta_i / (eta * eta)
+    if sin2_theta_t >= Float32(1.0):
+        return Float32(1.0)   # total internal reflection
+    var cos_theta_t = safe_sqrt(Float32(1.0) - sin2_theta_t)
+    var r_parl = (eta * cos_theta_i - cos_theta_t) / (eta * cos_theta_i + cos_theta_t)
+    var r_perp = (cos_theta_i - eta * cos_theta_t) / (cos_theta_i + eta * cos_theta_t)
+    return (r_parl * r_parl + r_perp * r_perp) * Float32(0.5)
+
+@always_inline
 def spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> Vec3f:
     """Convert spherical coordinates (θ,φ) to a unit Cartesian vector.
     Convention: y = up (cos θ), xz = equatorial plane.

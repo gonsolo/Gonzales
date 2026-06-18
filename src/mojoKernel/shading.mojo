@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
@@ -494,27 +494,54 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
-    # Schlick Fresnel for the dielectric coating (IOR stored in emission.r)
-    var ior = mat.emission.r
-    var cos_i = -dot(ray_dir, normal)
-    var r0 = (Float32(1.0) - ior) / (Float32(1.0) + ior)
-    r0 = r0 * r0
-    var one_minus = Float32(1.0) - cos_i
-    var one_minus2 = one_minus * one_minus
-    var fresnel = r0 + (Float32(1.0) - r0) * one_minus2 * one_minus2 * one_minus
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = alb
 
-    if pcg.next_float() < fresnel:
-        # Specular reflection from coating — delta BSDF, throughput unchanged
-        var refl = ray_dir + normal * (Float32(2.0) * cos_i)
+    # ── Layered BSDF: smooth dielectric coat over a Lambertian base ──────────
+    # Stochastic random walk (PBRT LayeredBxDF, CoatedDiffuse). The coat's air
+    # interface reflects a glossy lobe (exact dielectric Fresnel) and transmits
+    # the rest into the coat, where light scatters off the diffuse base and is
+    # partially recycled by (total internal) reflection at the coat underside.
+    # That multiple scattering is what brightens and saturates the base colour.
+    # Fresnel at each interface is handled by the reflect/transmit probability
+    # split, so the throughput accumulator beta only gathers the base albedo.
+    var ior = mat.emission.r            # coat IOR (η_coat/η_air), set at parse
+    var inv_ior = Float32(1.0) / ior
+    var cos_o = -dot(ray_dir, normal)   # view cosine at the coat (>0)
+    var f_entry = fr_dielectric(cos_o, ior)
+
+    # Tangent frame (Frisvad) around the shading normal for hemisphere sampling.
+    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+    var a = Float32(-1.0) / (sign + normal[2])
+    var b = normal[0] * normal[1] * a
+    var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
+    var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+
+    if pcg.next_float() < f_entry:
+        # Glossy reflection off the coat's air interface — smooth ⇒ delta BSDF.
+        var refl = ray_dir + normal * (Float32(2.0) * cos_o)
         var rlen = dot(refl, refl)
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
         path_ptr[].specularBounce = Int8(1)
         path_ptr[].lastBsdfPdf = Float32(0.0)
-    else:
-        # Diffuse bounce through coating — NEE direct light sampling
-        if areaLightCount > 0:
+        path_ptr[].bounce += 1
+        path_ptr[].pcgState = pcg.state
+        return
+
+    # Transmitted into the coat: random-walk the base/coat-underside layers.
+    var beta = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+    var exited = False
+    var exit_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var did_nee = False
+
+    comptime MAX_COAT_DEPTH = 10
+    for _ in range(MAX_COAT_DEPTH):
+        # ── Diffuse base: NEE (single scatter) once, weighted by the coat's
+        #    transmittance for the incoming light direction. ──
+        if not did_nee and areaLightCount > 0:
+            did_nee = True
             var light_idx = Int(pcg.next_uint() % UInt32(areaLightCount))
             var al = areaLights[light_idx]
             var lmesh = meshes[Int(al.meshIdx)]
@@ -543,11 +570,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 var cos_s = dot(normal, shadow_dir)
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_s > Float32(0.0) and cos_l > Float32(0.0):
+                    # Light must transmit through the coat to reach the base.
+                    var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
                     var pdf_light_cd = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
-                    var pi_cd = PI
-                    var pdf_bsdf_cd = cos_s / pi_cd
+                    var pdf_bsdf_cd = cos_s / PI
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
-                    var weight_cd = alb * al.emission * (cos_s * w_cd / (pdf_light_cd * pi_cd))
+                    var weight_cd = alb * al.emission * (cos_s * t_light * w_cd / (pdf_light_cd * PI))
                     var contrib = path_ptr[].throughput * weight_cd
                     comptime if enqueue_shadow:
                         shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
@@ -556,6 +584,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                         if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
                             path_ptr[].estimate += contrib
 
+        # Lambertian base: sample a cosine-weighted up-going direction.
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
         var r = sqrt(u1)
@@ -564,27 +593,39 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         var y = r * sin(theta)
         var z2 = Float32(1.0) - u1
         var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
+        var w_up = tangent * x + bitangent * y + normal * z
+        var wlen = dot(w_up, w_up)
+        if wlen > Float32(0.0):
+            w_up = w_up * (Float32(1.0) / sqrt(wlen))
+        beta *= alb
 
-        var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-        var a = Float32(-1.0) / (sign + normal[2])
-        var b = normal[0] * normal[1] * a
-        var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
-        var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+        # Coat underside: transmit out (exit) or reflect back (recycle).
+        var cos_up = dot(w_up, normal)
+        var f_exit = fr_dielectric(cos_up, inv_ior)
+        if pcg.next_float() < (Float32(1.0) - f_exit):
+            var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]),
+                             Vec3f(-normal[0], -normal[1], -normal[2]), ior)
+            if rr[0]:
+                var wt = rr[1]
+                exit_dir = SIMD[DType.float32, 3](wt.x, wt.y, wt.z)
+                var elen = dot(exit_dir, exit_dir)
+                if elen > Float32(0.0):
+                    exit_dir = exit_dir * (Float32(1.0) / sqrt(elen))
+                exited = True
+                break
+            # Refraction failed numerically → fall through and recycle.
+        # Internal reflection: light recycled; next iteration re-samples base.
 
-        var dir = tangent * x + bitangent * y + normal * z
-        var dlen = dot(dir, dir)
-        if dlen > Float32(0.0):
-            dir = dir * (Float32(1.0) / sqrt(dlen))
+    if not exited:
+        path_ptr[].active = 0
+        path_ptr[].pcgState = pcg.state
+        return
 
-        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
-        # Store BSDF pdf for next-bounce MIS (cosine hemisphere: cos/pi).
-        var cos_sc = dot(dir, normal)
-        path_ptr[].lastBsdfPdf = (cos_sc if cos_sc > Float32(0.0) else Float32(0.0)) / PI
-        path_ptr[].specularBounce = Int8(0)
-        path_ptr[].throughput *= alb
-
-    if path_ptr[].bounce == 0:
-        path_ptr[].albedo = alb
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(exit_dir[0], exit_dir[1], exit_dir[2]))
+    var cos_e = dot(exit_dir, normal)
+    path_ptr[].lastBsdfPdf = (cos_e if cos_e > Float32(0.0) else Float32(0.0)) / PI
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].throughput *= beta
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
