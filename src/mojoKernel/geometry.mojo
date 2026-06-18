@@ -125,6 +125,10 @@ struct RGB(TrivialRegisterPassable):
         return RGB(self.r + o.r, self.g + o.g, self.b + o.b)
 
     @always_inline
+    def __sub__(self, o: RGB) -> RGB:
+        return RGB(self.r - o.r, self.g - o.g, self.b - o.b)
+
+    @always_inline
     def __mul__(self, o: RGB) -> RGB:
         return RGB(self.r * o.r, self.g * o.g, self.b * o.b)
 
