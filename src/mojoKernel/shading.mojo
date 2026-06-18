@@ -785,8 +785,21 @@ def shade_dielectric(
     if nlen > Float32(0.0):
         geom_normal = geom_normal * (Float32(1.0) / sqrt(nlen))
 
-    # Use interpolated shading normal for smooth glass surfaces
-    geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geom_normal)
+    # A dielectric must know which side is "outside" to choose entering vs
+    # exiting (and hence the refraction ratio). The PLY vertex normals encode
+    # that outward orientation, so use the RAW interpolated vertex normal here
+    # — NOT _shading_normal, which re-aligns to the winding/geometric normal
+    # and would flip it inward when the mesh winding disagrees, inverting
+    # entering/exiting and causing spurious TIR (the windshield mirrors the sky).
+    if Int(mesh.normals) > 1:
+        var w0n = Float32(1.0) - inter.u - inter.v
+        var sn0 = SIMD[DType.float32, 3](mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
+        var sn1 = SIMD[DType.float32, 3](mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
+        var sn2 = SIMD[DType.float32, 3](mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
+        var sn = sn0 * w0n + sn1 * inter.u + sn2 * inter.v
+        var snl = dot(sn, sn)
+        if snl > Float32(1e-12):
+            geom_normal = sn * (Float32(1.0) / sqrt(snl))
 
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)

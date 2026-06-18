@@ -710,6 +710,7 @@ struct AttributeState(Copyable, ImplicitlyCopyable, Movable):
     var al_rgb:         RGB
     var inside_medium:  Int32
     var outside_medium: Int32
+    var reverse_orient: Bool   # PBRT ReverseOrientation: flip surface normals
 
 struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var name:           String
@@ -842,7 +843,7 @@ struct SceneParseState(Movable):
 
         self.cur_attr  = AttributeState(Int32(-1), False,
                              RGB(Float32(0),Float32(0),Float32(0)),
-                             Int32(-1), Int32(-1))
+                             Int32(-1), Int32(-1), False)
         self.attr_stack = List[AttributeState]()
 
         self.named_materials = List[NamedMaterial]()
@@ -2044,12 +2045,14 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             transform_normals(ctm_inv, nrm_ptr, nv, nrm_world)
             ref last_mesh = s[0].meshes[len(s[0].meshes) - 1]
             last_mesh.normals.reserve(Int(nv) * 3)
+            # PBRT ReverseOrientation flips the surface normal direction.
+            var nsign = Float32(-1.0) if s[0].cur_attr.reverse_orient else Float32(1.0)
             for ni in range(Int(nv)):
                 # Renormalize after transform
                 var nx = nrm_world[ni*3+0]; var ny = nrm_world[ni*3+1]; var nz = nrm_world[ni*3+2]
                 var nlen = sqrt(nx*nx + ny*ny + nz*nz)
                 if nlen > Float32(1e-12):
-                    var inv = Float32(1.0) / nlen
+                    var inv = nsign / nlen
                     nx *= inv; ny *= inv; nz *= inv
                 last_mesh.normals.append(nx)
                 last_mesh.normals.append(ny)
@@ -2314,6 +2317,8 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             ctm_push(s[0])
         elif _psc_streq(kw_buf, "TransformEnd"):
             ctm_pop(s[0])
+        elif _psc_streq(kw_buf, "ReverseOrientation"):
+            s[0].cur_attr.reverse_orient = not s[0].cur_attr.reverse_orient
         elif _psc_streq(kw_buf, "AreaLightSource"):
             if s[0].object_depth == 0:
                 _psc_handle_area_light_source(handle, s)
