@@ -156,6 +156,22 @@ test_debug: debug
 tr: test_release
 test_release: release
 	@$(RUN_RELEASE)
+
+# GPU profiling with Nsight Compute (needs nsight-compute + admin perf-counter
+# access). `sudo -E` preserves the env so the Mojo runtime libs load. Profiles
+# the hot kernels (traverse/shade) on cornell-box; import the report with:
+#   ncu --import build/gonzales.ncu-rep --page details
+PROFILE_SCENE ?= Scenes/cornell-box.pbrt
+profile: release
+	sudo -E ncu --set basic --launch-count 8 -o build/gonzales -f \
+		$(GONZALES) --gpu $(PROFILE_SCENE)
+# Profile just the shade kernel (registers/occupancy/duration):
+profile-shade: release
+	sudo -E ncu --set basic --kernel-name "regex:shade_nee" --launch-count 2 \
+		-o build/gonzales_shade -f $(GONZALES) --gpu $(PROFILE_SCENE)
+	@sudo -E ncu --import build/gonzales_shade.ncu-rep --page details 2>/dev/null \
+		| grep -iE "Registers Per Thread|Achieved Occupancy|Duration|Memory Throughput|Compute"
+
 tags:
 	ctags -R src
 	
