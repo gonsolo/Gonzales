@@ -7,6 +7,32 @@ from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
 
 @always_inline
+def _shading_normal(
+    mesh: TriangleMesh_C,
+    v0: Int, v1: Int, v2: Int,
+    bu: Float32, bv: Float32,
+    geo_normal: SIMD[DType.float32, 3],
+) -> SIMD[DType.float32, 3]:
+    """Interpolate per-vertex shading normals with barycentric (bu, bv).
+    Falls back to the geometric normal if the mesh has no shading normals.
+    The result is aligned to the same hemisphere as geo_normal (which the
+    caller has already oriented against the incoming ray)."""
+    if Int(mesh.normals) <= 1:
+        return geo_normal
+    var w0 = Float32(1.0) - bu - bv
+    var n0 = SIMD[DType.float32, 3](mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
+    var n1 = SIMD[DType.float32, 3](mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
+    var n2 = SIMD[DType.float32, 3](mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
+    var sn = n0 * w0 + n1 * bu + n2 * bv
+    var slen = dot(sn, sn)
+    if slen <= Float32(1e-12):
+        return geo_normal
+    sn = sn * (Float32(1.0) / sqrt(slen))
+    if dot(sn, geo_normal) < Float32(0.0):
+        sn = -sn
+    return sn
+
+@always_inline
 def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
     """Convert a unit direction vector to [0,1]^2 UV using PBRT v4's equal-area
     octahedral mapping (Clarberg 2008)."""
@@ -463,6 +489,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+    # Use interpolated shading normal (geometric normal still drives hit-point offset)
+    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -603,6 +631,9 @@ def shade_dielectric(
     var nlen = dot(geom_normal, geom_normal)
     if nlen > Float32(0.0):
         geom_normal = geom_normal * (Float32(1.0) / sqrt(nlen))
+
+    # Use interpolated shading normal for smooth glass surfaces
+    geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geom_normal)
 
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
@@ -782,6 +813,8 @@ def shade_conductor(
 
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+    # Use interpolated shading normal for smooth specular reflections
+    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
 
     var alpha_x = max(mat.roughU * mat.roughU, Float32(0.0001))
     var alpha_y = max(mat.roughV * mat.roughV, Float32(0.0001))
@@ -1453,6 +1486,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
+
+    # Use interpolated shading normal as the base for smooth diffuse shading
+    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
 
     # Apply normal map if present (CPU only; GPU path uses geometric normal)
     normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,

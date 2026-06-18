@@ -4,7 +4,7 @@ from .ply import load_ply
 from std.math import tan, sqrt, acos, atan2, sin, abs, exp
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C, PI, TWO_PI, Medium_C, MediumInterface_C
-from .transform import matrix_multiply, matrix_invert, transform_points
+from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .sampling import gaussian_norm
 
@@ -661,6 +661,7 @@ struct ParsedScene_Mojo:
     var mesh_n_verts:     UnsafePointer[Int32, MutAnyOrigin]
     var mesh_n_tris:      UnsafePointer[Int32, MutAnyOrigin]
     var mesh_uv_n_verts:  UnsafePointer[Int32, MutAnyOrigin]  # per-mesh UV vertex count; 0 = no UVs
+    var mesh_nrm_n_verts: UnsafePointer[Int32, MutAnyOrigin]  # per-mesh normal vertex count; 0 = no shading normals
     var mesh_count:       Int32
     var bvh_nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
     var prim_ids:         UnsafePointer[PrimId_C, MutAnyOrigin]
@@ -743,6 +744,7 @@ struct MeshAccum(Copyable, Movable):
     var vert_idxs:      List[Int64]    # flat vertex indices
     var face_idxs:      List[Int64]    # flat face indices
     var uvs:            List[Float32]  # 2 floats per vertex (or empty)
+    var normals:        List[Float32]  # 3 floats per vertex (or empty) — world-space shading normals
     var mat_idx:        Int32
     var is_area_light:  Bool
     var al_rgb:         RGB
@@ -754,6 +756,7 @@ struct MeshAccum(Copyable, Movable):
         self.vert_idxs     = List[Int64]()
         self.face_idxs     = List[Int64]()
         self.uvs           = List[Float32]()
+        self.normals       = List[Float32]()
         self.mat_idx       = mat_idx
         self.is_area_light = False
         self.al_rgb        = RGB(Float32(0), Float32(0), Float32(0))
@@ -1997,14 +2000,18 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         var ply_nt      = alloc[Int32](1)
         var ply_uvs     = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
         var ply_has_uvs = alloc[Int32](1)
+        var ply_nrm     = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
+        var ply_has_nrm = alloc[Int32](1)
         ply_uvs[0] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
         ply_has_uvs[0] = Int32(0)
-        var ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs)
+        ply_nrm[0] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+        ply_has_nrm[0] = Int32(0)
+        var ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
         if ok == 0:
             print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_immutable()))
             full_path.free()
             ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
-            ply_uvs.free(); ply_has_uvs.free()
+            ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
             return
         full_path.free()
         var nv = ply_nv[0]
@@ -2013,8 +2020,10 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             ply_pts[0].free(); ply_idx[0].free()
             if ply_has_uvs[0] != 0:
                 ply_uvs[0].free()
+            if ply_has_nrm[0] != 0:
+                ply_nrm[0].free()
             ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
-            ply_uvs.free(); ply_has_uvs.free()
+            ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
             return
         var tmp_f2 = ply_pts[0]
         var tmp_i2 = ply_idx[0]
@@ -2026,9 +2035,29 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             for uvi in range(n_uv_floats):
                 s[0].meshes[len(s[0].meshes) - 1].uvs.append(uv_ptr[uvi])
             uv_ptr.free()
+        # Store shading normals (transformed to world space by inverse-transpose CTM)
+        if ply_has_nrm[0] != 0:
+            var nrm_ptr = ply_nrm[0]
+            var ctm_inv = alloc[Float32](16)
+            _ = matrix_invert(s[0].ctm.unsafe_ptr(), ctm_inv)
+            var nrm_world = alloc[Float32](Int(nv) * 3)
+            transform_normals(ctm_inv, nrm_ptr, nv, nrm_world)
+            ref last_mesh = s[0].meshes[len(s[0].meshes) - 1]
+            last_mesh.normals.reserve(Int(nv) * 3)
+            for ni in range(Int(nv)):
+                # Renormalize after transform
+                var nx = nrm_world[ni*3+0]; var ny = nrm_world[ni*3+1]; var nz = nrm_world[ni*3+2]
+                var nlen = sqrt(nx*nx + ny*ny + nz*nz)
+                if nlen > Float32(1e-12):
+                    var inv = Float32(1.0) / nlen
+                    nx *= inv; ny *= inv; nz *= inv
+                last_mesh.normals.append(nx)
+                last_mesh.normals.append(ny)
+                last_mesh.normals.append(nz)
+            nrm_world.free(); ctm_inv.free(); nrm_ptr.free()
         tmp_f2.free(); tmp_i2.free()
         ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
-        ply_uvs.free(); ply_has_uvs.free()
+        ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
         return
 
     var tmp_f = alloc[Float32](65536)
@@ -2478,6 +2507,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var out_nv    = alloc[Int32](max(n_meshes, 1))
     var out_nt    = alloc[Int32](max(n_meshes, 1))
     var out_uv_nv = alloc[Int32](max(n_meshes, 1))
+    var out_nrm_nv = alloc[Int32](max(n_meshes, 1))
 
     var al_list  = alloc[AreaLight_C](max(n_al, 1))
     var al_count = Int32(0)
@@ -2513,6 +2543,17 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         else:
             meshes[i].uvs = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
             out_uv_nv[i] = Int32(0)
+        # Copy shading normals if present
+        if len(ma.normals) >= nv * 3:
+            var nrm_c = alloc[Float32](nv * 3)
+            for ni in range(nv * 3): nrm_c[ni] = ma.normals[ni]
+            meshes[i].normals = nrm_c
+            out_nrm_nv[i] = Int32(nv)
+        else:
+            # NULL pointer (not unsafe_dangling, which is address 4) so the
+            # shading-normal guard `Int(mesh.normals) <= 1` works correctly.
+            meshes[i].normals = UnsafePointer[Float32, MutAnyOrigin]()
+            out_nrm_nv[i] = Int32(0)
 
         if ma.is_area_light:
             var al_idx = Int(al_count)
@@ -2729,6 +2770,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].mesh_n_verts     = out_nv
     psc[0].mesh_n_tris      = out_nt
     psc[0].mesh_uv_n_verts  = out_uv_nv
+    psc[0].mesh_nrm_n_verts = out_nrm_nv
     psc[0].mesh_count       = Int32(n_meshes)
     psc[0].bvh_nodes        = bvh_nodes
     psc[0].prim_ids         = prim_ids
@@ -2987,6 +3029,8 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].mesh_fis[i].free()
         if psc[0].mesh_uv_n_verts[i] > Int32(0):
             psc[0].meshes[i].uvs.free()
+        if psc[0].mesh_nrm_n_verts[i] > Int32(0):
+            psc[0].meshes[i].normals.free()
     if psc[0].mesh_count > 0:
         psc[0].mesh_pts.free()
         psc[0].mesh_vis.free()
@@ -2994,6 +3038,7 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].mesh_n_verts.free()
         psc[0].mesh_n_tris.free()
         psc[0].mesh_uv_n_verts.free()
+        psc[0].mesh_nrm_n_verts.free()
         psc[0].meshes.free()
     if psc[0].material_count > 0:
         psc[0].materials.free()

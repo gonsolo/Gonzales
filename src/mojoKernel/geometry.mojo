@@ -213,6 +213,7 @@ struct TriangleMesh_C(TrivialRegisterPassable):
     var faceIndices: UnsafePointer[Int64, MutAnyOrigin]
     var vertexIndices: UnsafePointer[Int64, MutAnyOrigin]
     var uvs: UnsafePointer[Float32, MutAnyOrigin]   # nullable; stride 2 floats per vertex
+    var normals: UnsafePointer[Float32, MutAnyOrigin]  # nullable; stride 3 floats per vertex (shading normals)
 
 # ── Ray ───────────────────────────────────────────────────────────────────────
 # See: docs/03_shapes_and_acceleration.md

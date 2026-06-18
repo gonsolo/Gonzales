@@ -139,20 +139,24 @@ def _gpu_upload_scene(
     var fi_counts  = List[Int64](capacity=max(n_meshes, 1))
     var vi_counts  = List[Int64](capacity=max(n_meshes, 1))
     var uv_counts  = List[Int64](capacity=max(n_meshes, 1))
+    var nrm_counts = List[Int64](capacity=max(n_meshes, 1))
     for _ in range(max(n_meshes, 1)):
         pts_counts.append(Int64(0)); fi_counts.append(Int64(0))
         vi_counts.append(Int64(0)); uv_counts.append(Int64(0))
+        nrm_counts.append(Int64(0))
     for i in range(n_meshes):
         pts_counts[i] = Int64(psc[0].mesh_n_verts[i]) * 4
         fi_counts[i]  = Int64(psc[0].mesh_n_tris[i])
         vi_counts[i]  = Int64(psc[0].mesh_n_tris[i]) * 3
         uv_counts[i]  = Int64(psc[0].mesh_uv_n_verts[i])
+        nrm_counts[i] = Int64(psc[0].mesh_nrm_n_verts[i])
     var handle = gpu_upload_scene(
         psc[0].bvh_nodes,      Int64(psc[0].bvh_node_count),
         psc[0].prim_ids,       Int64(psc[0].prim_count),
         psc[0].meshes,         Int64(n_meshes),
         pts_counts.unsafe_ptr(), fi_counts.unsafe_ptr(),
         vi_counts.unsafe_ptr(), uv_counts.unsafe_ptr(),
+        nrm_counts.unsafe_ptr(),
         psc[0].tex_filenames,  psc[0].tex_count,
         psc[0].materials,      Int64(psc[0].material_count),
         psc[0].area_lights,    Int64(psc[0].area_light_count),

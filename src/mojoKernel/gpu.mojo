@@ -32,6 +32,7 @@ struct GpuSceneHandle(Movable):
     var faceIndices_bufs: List[DeviceBuffer[DType.uint8]]
     var vertexIndices_bufs: List[DeviceBuffer[DType.uint8]]
     var uv_bufs: List[DeviceBuffer[DType.uint8]]
+    var nrm_bufs: List[DeviceBuffer[DType.uint8]]
     var tex_data_bufs: List[DeviceBuffer[DType.uint8]]
     var textures_buf: DeviceBuffer[DType.uint8]  # array of GpuTexture_C
     var n_textures: Int
@@ -90,6 +91,7 @@ def gpu_upload_scene(
     meshFaceIndicesCounts: UnsafePointer[Int64, MutAnyOrigin],
     meshVertexIndicesCounts: UnsafePointer[Int64, MutAnyOrigin],
     meshUvNVerts: UnsafePointer[Int64, MutAnyOrigin],
+    meshNrmNVerts: UnsafePointer[Int64, MutAnyOrigin],
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     n_tex: Int32,
     materials: UnsafePointer[Material_C, MutAnyOrigin],
@@ -162,6 +164,7 @@ def gpu_upload_scene(
             var face_bufs = List[DeviceBuffer[DType.uint8]]()
             var vert_bufs = List[DeviceBuffer[DType.uint8]]()
             var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
+            var nrm_bufs  = List[DeviceBuffer[DType.uint8]]()
 
             var mesh_structs_host = alloc[TriangleMesh_C](Int(meshCount))
 
@@ -212,17 +215,33 @@ def gpu_upload_scene(
                         for j in range(uv_bytes):
                             dst[j] = UInt8(0)
 
+                # Upload shading normals (3 floats per vertex; zeros if mesh has none)
+                var nrm_n = Int(meshNrmNVerts[i])
+                var nrm_bytes = max(nrm_n * 3 * 4, 4)
+                var nrm_buf = ctx.enqueue_create_buffer[DType.uint8](nrm_bytes)
+                with nrm_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    if nrm_n > 0:
+                        var src = host_mesh.normals.bitcast[UInt8]()
+                        for j in range(nrm_n * 3 * 4):
+                            dst[j] = src[j]
+                    else:
+                        for j in range(nrm_bytes):
+                            dst[j] = UInt8(0)
+
                 mesh_structs_host[i] = TriangleMesh_C(
                     pts_buf.unsafe_ptr().bitcast[Float32](),
                     fi_buf.unsafe_ptr().bitcast[Int64](),
                     vi_buf.unsafe_ptr().bitcast[Int64](),
                     uv_buf.unsafe_ptr().bitcast[Float32](),
+                    nrm_buf.unsafe_ptr().bitcast[Float32]() if nrm_n > 0 else UnsafePointer[Float32, MutAnyOrigin](),
                 )
 
                 points_bufs.append(pts_buf^)
                 face_bufs.append(fi_buf^)
                 vert_bufs.append(vi_buf^)
                 uv_bufs.append(uv_buf^)
+                nrm_bufs.append(nrm_buf^)
 
             # Upload mesh struct array
             var meshes_buf = ctx.enqueue_create_buffer[DType.uint8](mesh_struct_bytes)
@@ -423,6 +442,7 @@ def gpu_upload_scene(
                 faceIndices_bufs=face_bufs^,
                 vertexIndices_bufs=vert_bufs^,
                 uv_bufs=uv_bufs^,
+                nrm_bufs=nrm_bufs^,
                 tex_data_bufs=tex_data_bufs^,
                 textures_buf=textures_gpu_buf^,
                 n_textures=n_textures_int,

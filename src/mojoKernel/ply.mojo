@@ -6,6 +6,9 @@ comptime PLY_Z    = 2
 comptime PLY_SKIP = 3
 comptime PLY_U    = 4
 comptime PLY_V    = 5
+comptime PLY_NX   = 6
+comptime PLY_NY   = 7
+comptime PLY_NZ   = 8
 comptime PLY_MAX_PROPS = 32
 
 def _ply_read_line(
@@ -149,6 +152,8 @@ def load_ply(
     out_n_tris:  UnsafePointer[Int32, MutAnyOrigin],
     out_uvs:     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
     out_has_uvs: UnsafePointer[Int32, MutAnyOrigin],
+    out_normals: UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
+    out_has_normals: UnsafePointer[Int32, MutAnyOrigin],
 ) -> Int32:
     var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_immutable())
     var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
@@ -220,6 +225,12 @@ def load_ply(
                     prop_roles[n_props] = Int32(PLY_U)
                 elif _ply_word_eq(line_buf, 2, "v") or _ply_word_eq(line_buf, 2, "t"):
                     prop_roles[n_props] = Int32(PLY_V)
+                elif _ply_word_eq(line_buf, 2, "nx"):
+                    prop_roles[n_props] = Int32(PLY_NX)
+                elif _ply_word_eq(line_buf, 2, "ny"):
+                    prop_roles[n_props] = Int32(PLY_NY)
+                elif _ply_word_eq(line_buf, 2, "nz"):
+                    prop_roles[n_props] = Int32(PLY_NZ)
                 else:
                     prop_roles[n_props] = Int32(PLY_SKIP)
                 n_props += 1
@@ -235,26 +246,30 @@ def load_ply(
 
     var pts     = alloc[Float32](n_verts * 3)
     var uvs_buf = alloc[Float32](n_verts * 2)
+    var nrm_buf = alloc[Float32](n_verts * 3)
     var max_idx = n_faces * 6   # worst case: quads → 2 triangles each
     var idx_buf = alloc[Int32](max_idx)
     var n_tris  = 0
     var found_uvs = False
+    var found_normals = False
 
-    # Check if we have any U/V properties
+    # Check if we have any U/V or normal properties
     for pi in range(n_props):
         var role = Int(prop_roles[pi])
         if role == PLY_U or role == PLY_V:
             found_uvs = True
-            break
+        elif role == PLY_NX or role == PLY_NY or role == PLY_NZ:
+            found_normals = True
 
     for v in range(n_verts):
         var vx = Float32(0); var vy = Float32(0); var vz = Float32(0)
         var vu = Float32(0); var vv = Float32(0)
+        var vnx = Float32(0); var vny = Float32(0); var vnz = Float32(0)
         for pi in range(n_props):
             var sz   = Int(prop_sizes[pi])
             var role = Int(prop_roles[pi])
             var is_d = Int(prop_is_double[pi]) == 1
-            if role == PLY_X or role == PLY_Y or role == PLY_Z or role == PLY_U or role == PLY_V:
+            if role != PLY_SKIP:
                 var val: Float32
                 if is_d:
                     val = _ply_f64_le(file_buf, pos) if is_le else _ply_f64_be(file_buf, pos)
@@ -270,9 +285,16 @@ def load_ply(
                     vu = val
                 elif role == PLY_V:
                     vv = val
+                elif role == PLY_NX:
+                    vnx = val
+                elif role == PLY_NY:
+                    vny = val
+                elif role == PLY_NZ:
+                    vnz = val
             pos += sz
         pts[v*3+0] = vx; pts[v*3+1] = vy; pts[v*3+2] = vz
         uvs_buf[v*2+0] = vu; uvs_buf[v*2+1] = vv
+        nrm_buf[v*3+0] = vnx; nrm_buf[v*3+1] = vny; nrm_buf[v*3+2] = vnz
 
     for _ in range(n_faces):
         var cnt = _ply_read_count(file_buf, pos, face_count_size, is_le)
@@ -312,5 +334,13 @@ def load_ply(
         uvs_buf.free()
         out_uvs[0]     = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
         out_has_uvs[0] = Int32(0)
+
+    if found_normals:
+        out_normals[0]     = nrm_buf
+        out_has_normals[0] = Int32(1)
+    else:
+        nrm_buf.free()
+        out_normals[0]     = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+        out_has_normals[0] = Int32(0)
 
     return Int32(1)
