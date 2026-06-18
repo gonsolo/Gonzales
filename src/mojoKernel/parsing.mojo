@@ -2862,6 +2862,20 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 iw_out.free(); ih_out.free()
                 if load_ok != Int32(0) and iw > 0 and ih > 0:  # != 0 = success
                     var pixels = pixels_ptr[0]
+                    # OIIO returns this PFM bottom-to-top, but the equal-area
+                    # lookup (and PBRT) index it top-to-bottom — so the envmap
+                    # was upside down (reflections/background sampled the wrong
+                    # rows). Flip rows in place before CDF build & shade lookups.
+                    var tmp_row = alloc[Float32](iw * 3)
+                    for r in range(ih // 2):
+                        var r2 = ih - 1 - r
+                        var off1 = r * iw * 3
+                        var off2 = r2 * iw * 3
+                        for c in range(iw * 3):
+                            tmp_row[c] = pixels[off1 + c]
+                            pixels[off1 + c] = pixels[off2 + c]
+                            pixels[off2 + c] = tmp_row[c]
+                    tmp_row.free()
                     raw_pixels = pixels  # keep alive for shade-time lookup
                     # CDF layout: (ih+1) marginal + ih*(iw+1) conditional floats
                     var cdf_size = (ih + 1) + ih * (iw + 1)
