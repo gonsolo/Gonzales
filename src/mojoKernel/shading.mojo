@@ -509,8 +509,11 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # split, so the throughput accumulator beta only gathers the base albedo.
     var ior = mat.emission.r            # coat IOR (η_coat/η_air), set at parse
     var inv_ior = Float32(1.0) / ior
-    var cos_o = -dot(ray_dir, normal)   # view cosine at the coat (>0)
-    var f_entry = fr_dielectric(cos_o, ior)
+    # Coat GGX roughness (remaproughness=false ⇒ roughness IS alpha). 0 ⇒ smooth
+    # mirror coat (e.g. car paint 0.001); larger ⇒ soft sheen (e.g. tyres 0.4).
+    var coat_alpha = max(mat.roughU, mat.roughV)
+    var is_rough_coat = coat_alpha > Float32(0.001)
+    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
 
     # Tangent frame (Frisvad) around the shading normal for hemisphere sampling.
     var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
@@ -519,12 +522,33 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
     var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
 
+    # Microfacet normal at the coat's air interface: the surface normal when
+    # smooth, else a GGX visible-normal sample (Heitz VNDF). Fresnel is taken
+    # at this microfacet; the VNDF G2/G1 weight is approximated as 1 (matching
+    # the conductor path), so the throughput accumulator stays albedo-only.
+    var wm = normal
+    if is_rough_coat:
+        var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
+        var wm_l = sample_ggx_vndf(wo_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
+        wm = tangent * wm_l.x + bitangent * wm_l.y + normal * wm_l.z
+        var wmlen = dot(wm, wm)
+        if wmlen > Float32(0.0):
+            wm = wm * (Float32(1.0) / sqrt(wmlen))
+    var cos_wm = dot(wo, wm)
+    var f_entry = fr_dielectric(cos_wm, ior)
+
     if pcg.next_float() < f_entry:
-        # Glossy reflection off the coat's air interface — smooth ⇒ delta BSDF.
-        var refl = ray_dir + normal * (Float32(2.0) * cos_o)
+        # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
+        # Single-strategy lobe (no NEE) ⇒ specularBounce=1 takes full light on
+        # miss and the exact pdf is irrelevant.
+        var refl = wm * (Float32(2.0) * cos_wm) - wo
         var rlen = dot(refl, refl)
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
+        if dot(refl, normal) <= Float32(0.0):
+            path_ptr[].active = 0          # reflected below the surface — discard
+            path_ptr[].pcgState = pcg.state
+            return
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
         path_ptr[].specularBounce = Int8(1)
         path_ptr[].lastBsdfPdf = Float32(0.0)
@@ -671,20 +695,32 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         beta *= alb
 
         # Coat underside: transmit out (exit) or reflect back (recycle).
-        var cos_up = dot(w_up, normal)
+        # The interface microfacet is the surface normal when smooth, else a
+        # GGX VNDF sample seen from w_up — this softens the exit direction.
+        var wm_e = normal
+        if is_rough_coat:
+            var wup_l = Vec3f(dot(w_up, tangent), dot(w_up, bitangent), dot(w_up, normal))
+            var wm_e_l = sample_ggx_vndf(wup_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
+            wm_e = tangent * wm_e_l.x + bitangent * wm_e_l.y + normal * wm_e_l.z
+            var wmelen = dot(wm_e, wm_e)
+            if wmelen > Float32(0.0):
+                wm_e = wm_e * (Float32(1.0) / sqrt(wmelen))
+        var cos_up = dot(w_up, wm_e)
         var f_exit = fr_dielectric(cos_up, inv_ior)
         if pcg.next_float() < (Float32(1.0) - f_exit):
             var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]),
-                             Vec3f(-normal[0], -normal[1], -normal[2]), ior)
+                             Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), ior)
             if rr[0]:
                 var wt = rr[1]
                 exit_dir = SIMD[DType.float32, 3](wt.x, wt.y, wt.z)
                 var elen = dot(exit_dir, exit_dir)
                 if elen > Float32(0.0):
                     exit_dir = exit_dir * (Float32(1.0) / sqrt(elen))
-                exited = True
-                break
-            # Refraction failed numerically → fall through and recycle.
+                # A rough microfacet can refract below the surface; recycle then.
+                if dot(exit_dir, normal) > Float32(0.0):
+                    exited = True
+                    break
+            # Refraction failed / exited below surface → fall through and recycle.
         # Internal reflection: light recycled; next iteration re-samples base.
 
     if not exited:
