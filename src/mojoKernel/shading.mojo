@@ -129,10 +129,28 @@ def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32) -> RGB:
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
     if t < Float32(0.0): t += Float32(1.0)
-    var px = min(Int(s * Float32(tw)), tw - 1)
-    var py = min(Int(t * Float32(th)), th - 1)
-    var idx = (py * tw + px) * 3
-    return RGB(tex.data[idx], tex.data[idx+1], tex.data[idx+2])
+    # Bilinear filtering (pixel centres at +0.5), with wrap-around on both axes.
+    var fx = s * Float32(tw) - Float32(0.5)
+    var fy = t * Float32(th) - Float32(0.5)
+    var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
+    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+    var x0w = ((x0 % tw) + tw) % tw
+    var y0w = ((y0 % th) + th) % th
+    var x1w = (x0w + 1) % tw
+    var y1w = (y0w + 1) % th
+    var i00 = (y0w * tw + x0w) * 3
+    var i10 = (y0w * tw + x1w) * 3
+    var i01 = (y1w * tw + x0w) * 3
+    var i11 = (y1w * tw + x1w) * 3
+    var w00 = (Float32(1.0) - wx) * (Float32(1.0) - wy)
+    var w10 = wx * (Float32(1.0) - wy)
+    var w01 = (Float32(1.0) - wx) * wy
+    var w11 = wx * wy
+    return RGB(
+        tex.data[i00]   * w00 + tex.data[i10]   * w10 + tex.data[i01]   * w01 + tex.data[i11]   * w11,
+        tex.data[i00+1] * w00 + tex.data[i10+1] * w10 + tex.data[i01+1] * w01 + tex.data[i11+1] * w11,
+        tex.data[i00+2] * w00 + tex.data[i10+2] * w10 + tex.data[i01+2] * w01 + tex.data[i11+2] * w11,
+    )
 
 @always_inline
 def _tex_lookup[use_gpu: Bool](
