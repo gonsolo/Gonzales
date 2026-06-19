@@ -331,6 +331,7 @@ def parse_and_render(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
     override_w: Int32, override_h: Int32,
+    no_denoise: Bool = False,
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -379,7 +380,8 @@ def parse_and_render(
         for _ in range(n_pixels * 3): denoised_gpu.append(Float32(0)); albedo_gpu.append(Float32(0))
         gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
         gpu_atrous_denoise(handle, denoised_gpu.unsafe_ptr(), Int64(n_pixels),
-                                Int32(spp), psc[0].film_iso, psc[0].film_max_comp)
+                                Int32(spp), psc[0].film_iso, psc[0].film_max_comp,
+                                apply_denoise=not no_denoise)
         gpu_download_albedo(handle, albedo_gpu.unsafe_ptr(), Int64(n_pixels))
         var inv_spp = Float32(1.0) / Float32(spp)
         for i in range(n_pixels * 3):
@@ -445,10 +447,14 @@ def parse_and_render(
         normalize_film(results.unsafe_ptr(), Int32(n_pixels),
                             psc[0].film_iso, psc[0].film_max_comp,
                             beauty.unsafe_ptr(), albedo.unsafe_ptr())
-        denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(),
-                normals.unsafe_ptr(), dept.unsafe_ptr(),
-                fw, fh, denoised.unsafe_ptr(),
-                Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+        if no_denoise:
+            # --no-denoise: write the normalized beauty directly (raw render).
+            for i in range(n_pixels * 3): denoised[i] = beauty[i]
+        else:
+            denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(),
+                    normals.unsafe_ptr(), dept.unsafe_ptr(),
+                    fw, fh, denoised.unsafe_ptr(),
+                    Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
         _ = write_image(denoised.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
         var albedo_name_buf = List[UInt8](capacity=11)
         var albedo_name_str = "albedo.exr"

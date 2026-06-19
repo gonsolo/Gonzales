@@ -1399,6 +1399,7 @@ def gpu_atrous_denoise(
     frame_count: Int32,
     film_iso: Float32,
     film_max_comp: Float32,
+    apply_denoise: Bool = True,
 ):
     var n_pix = Int(n)
     if n_pix == 0:
@@ -1420,6 +1421,17 @@ def gpu_atrous_denoise(
                 n_pix, inv_weight, iso_scale, film_max_comp,
                 grid_dim=grid_n, block_dim=block_size,
             )
+            # --no-denoise: emit the normalized beauty (atrous_ping_buf) without
+            # the à-trous blur passes, so the written image is the raw render.
+            if not apply_denoise:
+                handle[].ctx.synchronize()
+                var bytes_b = n_pix * 12
+                with handle[].atrous_ping_buf.map_to_host() as h:
+                    var src = h.unsafe_ptr()
+                    var dst = output.bitcast[UInt8]()
+                    for i in range(bytes_b):
+                        dst[i] = src[i]
+                return
             handle[].ctx.enqueue_function[estimate_variance_gpu](
                 handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32](),

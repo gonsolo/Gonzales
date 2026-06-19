@@ -16,16 +16,19 @@ def main() raises:
     var override_h = Int32(0)
     var pixel_x = Int32(-1)
     var pixel_y = Int32(-1)
+    var no_denoise = False
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--width W] [--height H] [--pixel X Y] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--width W] [--height H] [--pixel X Y] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
         elif arg == "--gpu":
             use_gpu = True
+        elif arg == "--no-denoise":
+            no_denoise = True
         elif arg == "--fullscreen":
             fullscreen = True
             interactive = True
@@ -45,7 +48,7 @@ def main() raises:
         i += 1
 
     if scene_path.byte_length() == 0:
-        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--width W] [--height H] scene.pbrt")
+        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--width W] [--height H] scene.pbrt")
         return
 
     if not scene_path.endswith(".pbrt"):
@@ -69,7 +72,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h)
+        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 
