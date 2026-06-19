@@ -1402,9 +1402,12 @@ def _apply_normal_map[use_gpu: Bool](
     var blen = dot(bitangent, bitangent)
     if blen <= Float32(0.0): return geom_normal
     bitangent = bitangent * (Float32(1.0) / sqrt(blen))
-    # Interpolate UV at hit point (use centroid as approximation — barycentrics not stored)
-    var uv_u = (u0f + u1f + u2f) * Float32(0.333333)
-    var uv_v = (v0f + v1f + v2f) * Float32(0.333333)
+    # Interpolate UV at the hit point using the barycentrics (inter.u, inter.v).
+    # (A centroid approximation here makes the normal map constant per triangle,
+    #  so bumps vanish on low-poly meshes like a 2-triangle floor.)
+    var bw0 = Float32(1.0) - inter.u - inter.v
+    var uv_u = bw0 * u0f + inter.u * u1f + inter.v * u2f
+    var uv_v = bw0 * v0f + inter.u * v1f + inter.v * v2f
     # Use the normal_tex_idx texture directly via OIIO
     comptime if not use_gpu:
         var nfname = tex_filenames[Int(mat.normal_tex_idx)]
