@@ -449,8 +449,11 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
+    # Texture lookup for reflectance (same path as shade_nee_core).
+    var base_albedo = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
+
     # Balance heuristic: choose reflect vs transmit proportional to luminance
-    var refl = mat.albedo
+    var refl = base_albedo
     var trans = mat.emission
     var pr = refl.luma()
     var pt = trans.luma()

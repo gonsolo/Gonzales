@@ -857,6 +857,68 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         crgb.free(); ctype.free(); cname.free(); cia.free()
         tex_name.free(); tex_type.free(); tex_class.free()
         return
+    if _psc_streq(tex_class, "checkerboard"):
+        var c1 = alloc[Float32](3); c1[0]=Float32(0.4); c1[1]=Float32(0.4); c1[2]=Float32(0.4)
+        var c2 = alloc[Float32](3); c2[0]=Float32(0.9); c2[1]=Float32(0.9); c2[2]=Float32(0.9)
+        var uscale = Float32(1.0)
+        var vscale = Float32(1.0)
+        var ctype2 = alloc[UInt8](64)
+        var cname2 = alloc[UInt8](128)
+        var cia2 = alloc[Int32](1); cia2[0] = Int32(0)
+        var cfound2 = scanner_parse_param_header(handle, ctype2, 64, cname2, 128, cia2)
+        while cfound2 != 0:
+            var c_is_arr = cia2[0]
+            if _psc_streq(cname2, "tex1") or _psc_streq(cname2, "tex2"):
+                var dst = c1 if _psc_streq(cname2, "tex1") else c2
+                if ctype2[0] == UInt8(102):  # 'f' float
+                    var tmp = _psc_scan_one_float(handle, c_is_arr)
+                    dst[0] = tmp; dst[1] = tmp; dst[2] = tmp
+                elif _psc_type_is_float(ctype2):
+                    _psc_scan_rgb(handle, dst, c_is_arr)
+                else:
+                    _psc_skip_value(handle, ctype2, c_is_arr)
+                    if c_is_arr:
+                        _ = scanner_scan_char(handle, UInt8(93))
+            elif _psc_streq(cname2, "uscale") and _psc_type_is_float(ctype2):
+                uscale = _psc_scan_one_float(handle, c_is_arr)
+            elif _psc_streq(cname2, "vscale") and _psc_type_is_float(ctype2):
+                vscale = _psc_scan_one_float(handle, c_is_arr)
+            else:
+                _psc_skip_value(handle, ctype2, c_is_arr)
+                if c_is_arr:
+                    _ = scanner_scan_char(handle, UInt8(93))
+            cia2[0] = Int32(0)
+            cfound2 = scanner_parse_param_header(handle, ctype2, 64, cname2, 128, cia2)
+        # Bake a 256x256 checker pattern to a temp EXR and register as an imagemap.
+        comptime W = 256
+        comptime H = 256
+        var pixels = alloc[Float32](W * H * 3)
+        for j in range(H):
+            for i in range(W):
+                var cu = Int(Float32(i) / Float32(W) * uscale) & 1
+                var cv = Int(Float32(j) / Float32(H) * vscale) & 1
+                var src = c1 if (cu ^ cv) == 0 else c2
+                var idx = (j * W + i) * 3
+                pixels[idx] = src[0]; pixels[idx+1] = src[1]; pixels[idx+2] = src[2]
+        var checker_idx = len(s[0].tex_names)
+        var fname_str = "/tmp/gonzales_checker_" + String(checker_idx) + ".exr"
+        var fname_buf = alloc[UInt8](256)
+        var slen = fname_str.byte_length()
+        for k in range(slen):
+            fname_buf[k] = fname_str.unsafe_ptr()[k]
+        fname_buf[slen] = UInt8(0)
+        _ = external_call["write_image_rgb", Int32,
+            UnsafePointer[UInt8, MutAnyOrigin],
+            UnsafePointer[Float32, MutAnyOrigin],
+            Int32, Int32, Int32, Int32,
+        ](fname_buf, pixels, Int32(W), Int32(H), Int32(W), Int32(H))
+        pixels.free(); fname_buf.free()
+        c1.free(); c2.free(); ctype2.free(); cname2.free(); cia2.free()
+        var name_str2 = String(unsafe_from_utf8_ptr=tex_name.as_immutable())
+        s[0].tex_names.append(name_str2)
+        s[0].tex_files.append(fname_str)
+        tex_name.free(); tex_type.free(); tex_class.free()
+        return
     if not _psc_streq(tex_class, "imagemap"):
         tex_name.free(); tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
