@@ -11,23 +11,20 @@ Camera "perspective" "float fov" [ 19.5 ]
 WorldBegin
 
 # Constant textures
-Texture "tex_left"    "rgb" "constant" "rgb value" [ 0.63 0.065 0.05 ]
-Texture "tex_right"   "rgb" "constant" "rgb value" [ 0.14 0.45 0.091 ]
-Texture "tex_white"   "rgb" "constant" "rgb value" [ 0.725 0.71 0.68 ]
-Texture "tex_black"   "rgb" "constant" "rgb value" [ 0 0 0 ]
-Texture "tex_blue"    "rgb" "constant" "rgb value" [ 0.05 0.1 0.8 ]
+Texture "tex_left"    "spectrum" "constant" "rgb value" [ 0.63 0.065 0.05 ]
+Texture "tex_right"   "spectrum" "constant" "rgb value" [ 0.14 0.45 0.091 ]
+Texture "tex_white"   "spectrum" "constant" "rgb value" [ 0.725 0.71 0.68 ]
+Texture "tex_black"   "spectrum" "constant" "rgb value" [ 0 0 0 ]
+Texture "tex_blue"    "spectrum" "constant" "rgb value" [ 0.05 0.1 0.8 ]
 
 # Checkerboard texture: dark grey / light grey tiles, 4 tiles across the box
-Texture "tex_checker" "rgb" "checkerboard"
+Texture "tex_checker" "spectrum" "checkerboard"
     "rgb tex1"    [ 0.1 0.1 0.1 ]
     "rgb tex2"    [ 0.9 0.9 0.9 ]
     "float uscale" [ 4 ]
 
 # Imagemap texture: wood grain on the tall box
-Texture "tex_nmap" "rgb" "imagemap"
-    "string filename" [ "normalmap.png" ]
-
-Texture "tex_wood" "rgb" "imagemap"
+Texture "tex_wood" "spectrum" "imagemap"
     "string filename" [ "wood.tga" ]
 
 MakeNamedMaterial "LeftWall"
@@ -39,7 +36,7 @@ MakeNamedMaterial "RightWall"
 MakeNamedMaterial "Floor"
     "string type" [ "diffuse" ]
     "texture reflectance" [ "tex_white" ]
-    "texture normalmap" [ "tex_nmap" ]
+    "string normalmap" "normalmap.png"
 MakeNamedMaterial "Ceiling"
     "string type" [ "diffuse" ]
     "texture reflectance" [ "tex_white" ]
