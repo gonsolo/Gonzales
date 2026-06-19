@@ -1588,7 +1588,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var mis_weight = Float32(1.0)
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
-                var pdf_light = INV_FOUR_PI
+                # Uniform env: NEE cosine-hemisphere samples it, so the light pdf
+                # for this (cosine-sampled) direction equals pdf_bsdf -> MIS 0.5.
+                # (Was INV_FOUR_PI, inconsistent with the NEE sampler.)
+                var pdf_light = pdf_bsdf
                 # Use CDF-based pdf when available (env-map importance sampling)
                 if ilight.cdf_w > Int32(0) and ilight.cdf_h > Int32(0):
                         var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
@@ -1996,7 +1999,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if env_dlen > Float32(0.0):
                 env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
             env_rgb = ilight.scale
-            pdf_light = INV_FOUR_PI
+            # Direction is cosine-hemisphere sampled (z_env = sqrt(1-u1)), so the
+            # solid-angle pdf is cos/pi = z_env/pi — NOT the uniform-sphere 1/4pi.
+            # The mismatch made uniform env lights ~pi too dark.
+            pdf_light = z_env / PI
 
         # ── MIS + shadow ray ──────────────────────────────────────────────────
         var cos_env = dot(normal, env_dir)
