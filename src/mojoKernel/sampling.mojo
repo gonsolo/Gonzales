@@ -1,6 +1,6 @@
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory import alloc
-from .geometry import Vec3f, Ray_C, Point3f, PI, TWO_PI, INV_PI
+from .geometry import Vec3f, Ray_C, Point3f, dot, PI, TWO_PI, INV_PI
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────
 # See: docs/04_sampling.md — Multiple Importance Sampling
@@ -40,6 +40,36 @@ def sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
     var z     = sqrt(z_sq if z_sq > Float32(0.0) else Float32(0.0))
 # <</listing>>
     return Vec3f(x, y, z)
+
+@always_inline
+def sample_cosine_hemisphere_world(
+    u1: Float32, u2: Float32,
+    normal: SIMD[DType.float32, 3],
+) -> Tuple[SIMD[DType.float32, 3], Float32]:
+    """Cosine-weighted hemisphere sample in world space, coupled with its pdf.
+    Returns (direction, pdf) where pdf = cos(θ)/π — they cannot drift apart.
+    Uses a Duff et al. (2017) orthonormal frame from `normal`.
+    """
+    var r   = sqrt(u1)
+    var phi = TWO_PI * u2
+    var x   = r * cos(phi)
+    var y   = r * sin(phi)
+    var z2  = Float32(1.0) - u1
+    var z   = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
+    var pdf = z / PI  # cos(θ)/π — coupled, cannot diverge from the sampled direction
+
+    # Duff et al. 2017 orthonormal frame
+    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+    var a = Float32(-1.0) / (sign + normal[2])
+    var b = normal[0] * normal[1] * a
+    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a,  sign * b, -sign * normal[0])
+    var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+
+    var dir  = tangent * x + bitangent * y + normal * z
+    var dlen = dot(dir, dir)
+    if dlen > Float32(0.0):
+        dir = dir * (Float32(1.0) / sqrt(dlen))
+    return Tuple[SIMD[DType.float32, 3], Float32](dir, pdf)
 
 @always_inline
 # <<listing: sample_ggx_vndf>>

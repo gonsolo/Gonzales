@@ -4,7 +4,7 @@ from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
-from .sampling import power_heuristic, sample_cosine_hemisphere, sample_ggx_vndf
+from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf
 
 @always_inline
 def _shading_normal(
@@ -468,25 +468,8 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
                         path_ptr[].estimate += contrib
 
     # ── BSDF scatter ───────────────────────────────────────────────────────────
-    var u1 = pcg.next_float()
-    var u2 = pcg.next_float()
-    var r = sqrt(u1)
-    var theta = TWO_PI * u2
-    var sx = r * cos(theta)
-    var sy = r * sin(theta)
-    var z2 = Float32(1.0) - u1
-    var sz = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
-
-    var sign = Float32(1.0) if bounce_normal[2] >= Float32(0.0) else Float32(-1.0)
-    var aa = Float32(-1.0) / (sign + bounce_normal[2])
-    var bb = bounce_normal[0] * bounce_normal[1] * aa
-    var tangent  = SIMD[DType.float32, 3](Float32(1.0) + sign * bounce_normal[0] * bounce_normal[0] * aa, sign * bb, -sign * bounce_normal[0])
-    var bitangent = SIMD[DType.float32, 3](bb, sign + bounce_normal[1] * bounce_normal[1] * aa, -bounce_normal[1])
-
-    var dir = tangent * sx + bitangent * sy + bounce_normal * sz
-    var dlen = dot(dir, dir)
-    if dlen > Float32(0.0):
-        dir = dir * (Float32(1.0) / sqrt(dlen))
+    var _scatter = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), bounce_normal)
+    var dir = _scatter[0]
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
 
@@ -730,20 +713,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     else:
                         pdf_light = INV_FOUR_PI
                 else:
-                    var u1_env = pcg.next_float()
-                    var u2_env = pcg.next_float()
-                    var r_env = sqrt(u1_env)
-                    var theta_env = TWO_PI * u2_env
-                    var x_env = r_env * cos(theta_env)
-                    var y_env = r_env * sin(theta_env)
-                    var z2_env = Float32(1.0) - u1_env
-                    var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
-                    env_dir = tangent * x_env + bitangent * y_env + normal * z_env
-                    var env_dlen = dot(env_dir, env_dir)
-                    if env_dlen > Float32(0.0):
-                        env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
+                    var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+                    env_dir = _env_s[0]
+                    pdf_light = _env_s[1]
                     env_rgb = ilight.scale
-                    pdf_light = INV_FOUR_PI
                 var cos_env = dot(normal, env_dir)
                 if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
                     var t_env = Float32(1.0) - fr_dielectric(cos_env, ior)
@@ -759,18 +732,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                             path_ptr[].estimate += contrib_e
 
         # Lambertian base: sample a cosine-weighted up-going direction.
-        var u1 = pcg.next_float()
-        var u2 = pcg.next_float()
-        var r = sqrt(u1)
-        var theta = TWO_PI * u2
-        var x = r * cos(theta)
-        var y = r * sin(theta)
-        var z2 = Float32(1.0) - u1
-        var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
-        var w_up = tangent * x + bitangent * y + normal * z
-        var wlen = dot(w_up, w_up)
-        if wlen > Float32(0.0):
-            w_up = w_up * (Float32(1.0) / sqrt(wlen))
+        var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+        var w_up = _w_up_sample[0]
         beta *= alb
 
         # Coat underside: transmit out (exit) or reflect back (recycle).
@@ -1981,28 +1944,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 pdf_light = INV_FOUR_PI
         else:
             # ── Fallback: cosine-weighted hemisphere (no CDF) ─────────────────
-            var u1_env = pcg.next_float()
-            var u2_env = pcg.next_float()
-            var r_env = sqrt(u1_env)
-            var theta_env = TWO_PI * u2_env
-            var x_env = r_env * cos(theta_env)
-            var y_env = r_env * sin(theta_env)
-            var z2_env = Float32(1.0) - u1_env
-            var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
-            var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-            var a_env = Float32(-1.0) / (sign_env + normal[2])
-            var b_env = normal[0] * normal[1] * a_env
-            var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
-            var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
-            env_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
-            var env_dlen = dot(env_dir, env_dir)
-            if env_dlen > Float32(0.0):
-                env_dir = env_dir * (Float32(1.0) / sqrt(env_dlen))
+            var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+            env_dir = _env_s[0]
+            pdf_light = _env_s[1]
             env_rgb = ilight.scale
-            # Direction is cosine-hemisphere sampled (z_env = sqrt(1-u1)), so the
-            # solid-angle pdf is cos/pi = z_env/pi — NOT the uniform-sphere 1/4pi.
-            # The mismatch made uniform env lights ~pi too dark.
-            pdf_light = z_env / PI
 
         # ── MIS + shadow ray ──────────────────────────────────────────────────
         var cos_env = dot(normal, env_dir)
@@ -2019,31 +1964,14 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     path_ptr[].estimate += contrib
 
 
-    var u1 = pcg.next_float()
-    var u2 = pcg.next_float()
-    var r = sqrt(u1)
-    var theta = TWO_PI * u2
-    var x = r * cos(theta)
-    var y = r * sin(theta)
-    var z2 = Float32(1.0) - u1
-    var z = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
-    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-    var a = Float32(-1.0) / (sign + normal[2])
-    var b = normal[0] * normal[1] * a
-    var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
-    var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
-    var dir = tangent * x + bitangent * y + normal * z
-    var dlen = dot(dir, dir)
-    if dlen > Float32(0.0):
-        dir = dir * (Float32(1.0) / sqrt(dlen))
+    var _scatter = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+    var dir = _scatter[0]
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = alb
-    # Store BSDF pdf for MIS weighting if the next bounce hits an emitter.
-    # For cosine-weighted hemisphere: pdf = cos(theta) / pi = dot(dir, normal) / pi
-    var cos_scatter = dot(dir, normal)
-    path_ptr[].lastBsdfPdf = (cos_scatter if cos_scatter > Float32(0.0) else Float32(0.0)) / PI
+    # pdf = _scatter[1] = cos(θ)/π, stored for next-bounce MIS
+    path_ptr[].lastBsdfPdf = _scatter[1]
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].throughput *= alb
     path_ptr[].bounce += 1
