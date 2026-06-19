@@ -1,0 +1,31 @@
+Integrator "path" "integer maxdepth" [ 4 ]
+Sampler "sobol" "integer pixelsamples" [ 64 ]
+PixelFilter "gaussian" "float xradius" [ 1.5 ] "float yradius" [ 1.5 ] "float sigma" [ 0.5 ]
+Film "rgb"
+    "string filename" [ "floor-normalmap.exr" ]
+    "integer xresolution" [ 768 ] "integer yresolution" [ 512 ]
+# Camera tilted down onto the floor at a grazing angle (relief is strongest here).
+LookAt 0 2.2 9   0 0 -2   0 1 0
+Camera "perspective" "float fov" [ 40 ]
+
+WorldBegin
+
+# Faint uniform fill so the unlit sides of the bumps are not pure black.
+LightSource "infinite" "rgb L" [ 0.04 0.04 0.04 ]
+# Raking distant light from the upper-left. "to" must be the origin so gonzales
+# (direction = -from) and pbrt (direction = to-from) agree.
+LightSource "distant" "point3 from" [ -6 3 4 ] "point3 to" [ 0 0 0 ] "rgb L" [ 3 3 3 ]
+
+Texture "tex_white" "spectrum" "constant" "rgb value" [ 0.7 0.7 0.7 ]
+
+MakeNamedMaterial "FloorMat"
+    "string type" [ "diffuse" ]
+    "texture reflectance" [ "tex_white" ]
+    "string normalmap" "normalmap.png"
+
+NamedMaterial "FloorMat"
+Shape "trianglemesh"
+    "point3 P" [ -6 0 -10   6 0 -10   6 0 10   -6 0 10 ]
+    "normal N" [ 0 1 0   0 1 0   0 1 0   0 1 0 ]
+    "point2 uv" [ 0 0   3 0   3 5   0 5 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
