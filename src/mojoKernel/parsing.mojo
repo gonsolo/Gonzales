@@ -816,6 +816,9 @@ struct SceneParseState(Movable):
     # Textures
     var tex_names: List[String]
     var tex_files: List[String]
+    # Constant textures: name -> RGB value (3 floats per entry, parallel to names)
+    var const_tex_names: List[String]
+    var const_tex_rgb: List[Float32]
 
     # Film / camera / sampler settings
     var film_w:           Int32
@@ -879,6 +882,8 @@ struct SceneParseState(Movable):
 
         self.tex_names = List[String]()
         self.tex_files = List[String]()
+        self.const_tex_names = List[String]()
+        self.const_tex_rgb = List[Float32]()
 
         self.film_w           = Int32(512)
         self.film_h           = Int32(512)
@@ -1517,23 +1522,30 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             _ = scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-            # Look up str_val in tex_names
+            # Look up str_val in tex_names (imagemap) first, then constant textures.
             var str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
             for ti in range(len(s[0].tex_names)):
                 if s[0].tex_names[ti] == str_name:
                     tex_idx_for_mat = Int32(ti)
                     break
+            for ci in range(len(s[0].const_tex_names)):
+                if s[0].const_tex_names[ci] == str_name:
+                    rgb[0] = s[0].const_tex_rgb[ci*3+0]
+                    rgb[1] = s[0].const_tex_rgb[ci*3+1]
+                    rgb[2] = s[0].const_tex_rgb[ci*3+2]
+                    break
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
-        elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(116):  # 't' = texture
-            _ = scanner_parse_quoted_string(handle, str_val, 64)
+        elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
+            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-            var norm_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
-            for ti in range(len(s[0].tex_names)):
-                if s[0].tex_names[ti] == norm_name:
-                    normal_tex_idx_for_mat = Int32(ti)
-                    break
+            # Register the file as an (unnamed) imagemap texture and point the
+            # material's normal_tex_idx at it — same path as a texture reference.
+            var nm_file = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            normal_tex_idx_for_mat = Int32(len(s[0].tex_names))
+            s[0].tex_names.append(String("__normalmap"))
+            s[0].tex_files.append(nm_file)
         elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
             mix_amount = _psc_scan_one_float(handle, is_array)
         elif _psc_streq(name_buf, "materials") and _psc_type_is_str(type_buf):
@@ -2140,6 +2152,40 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     _ = scanner_parse_quoted_string(handle, tex_type, 64)
     var tex_class = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, tex_class, 64)
+    if _psc_streq(tex_class, "constant"):
+        # Constant texture: register name -> RGB so a material referencing it
+        # (texture reflectance) resolves to a colour instead of the default albedo.
+        var ctype = alloc[UInt8](64)
+        var cname = alloc[UInt8](128)
+        var cia   = alloc[Int32](1); cia[0] = Int32(0)
+        var crgb  = alloc[Float32](3)
+        crgb[0] = Float32(0.5); crgb[1] = Float32(0.5); crgb[2] = Float32(0.5)
+        var cfound = scanner_parse_param_header(handle, ctype, 64, cname, 128, cia)
+        while cfound != 0:
+            var c_is_array = cia[0]
+            if _psc_streq(cname, "value"):
+                if ctype[0] == UInt8(102):  # 'f' float -> replicate to all channels
+                    var tmp = alloc[Float32](1)
+                    _ = scanner_scan_float(handle, tmp)
+                    crgb[0] = tmp[0]; crgb[1] = tmp[0]; crgb[2] = tmp[0]
+                    tmp.free()
+                    if c_is_array:
+                        _ = scanner_scan_char(handle, UInt8(93))
+                else:                       # rgb / spectrum -> 3 floats
+                    _psc_scan_rgb(handle, crgb, c_is_array)
+            else:
+                _psc_skip_value(handle, ctype, c_is_array)
+                if c_is_array:
+                    _ = scanner_scan_char(handle, UInt8(93))
+            cia[0] = Int32(0)
+            cfound = scanner_parse_param_header(handle, ctype, 64, cname, 128, cia)
+        s[0].const_tex_names.append(String(unsafe_from_utf8_ptr=tex_name.as_immutable()))
+        s[0].const_tex_rgb.append(crgb[0])
+        s[0].const_tex_rgb.append(crgb[1])
+        s[0].const_tex_rgb.append(crgb[2])
+        crgb.free(); ctype.free(); cname.free(); cia.free()
+        tex_name.free(); tex_type.free(); tex_class.free()
+        return
     if not _psc_streq(tex_class, "imagemap"):
         tex_name.free(); tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
