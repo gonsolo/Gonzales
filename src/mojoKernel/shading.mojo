@@ -1411,12 +1411,15 @@ def _apply_normal_map[use_gpu: Bool](
     if det == Float32(0.0):
         return geom_normal
     var inv_det = Float32(1.0) / det
-    # Tangent and bitangent from UV gradients
+    # Tangent (dP/du) and bitangent (dP/dv) from the UV gradients. The bitangent
+    # MUST come from dP/dv, not cross(N, tangent): the cross product loses the V
+    # handedness, flipping the green channel's tilt direction and producing a
+    # shading seam across each feature when the light has a V-aligned component.
     var tangent = (dp1 * dv2 - dp2 * dv1) * inv_det
     var tlen = dot(tangent, tangent)
     if tlen <= Float32(0.0): return geom_normal
     tangent = tangent * (Float32(1.0) / sqrt(tlen))
-    var bitangent = cross(geom_normal, tangent)
+    var bitangent = (dp2 * du1 - dp1 * du2) * inv_det
     var blen = dot(bitangent, bitangent)
     if blen <= Float32(0.0): return geom_normal
     bitangent = bitangent * (Float32(1.0) / sqrt(blen))
