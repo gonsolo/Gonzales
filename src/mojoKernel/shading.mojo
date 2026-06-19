@@ -1,4 +1,4 @@
-from std.math import sqrt, cos, sin, floor, acos, atan2
+from std.math import sqrt, cos, sin, floor, acos, atan2, log2
 from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
@@ -189,6 +189,7 @@ def sample_texture[use_gpu: Bool](
     tex_idx: Int,
     u: Float32, v: Float32,
     raw: Bool,
+    pixel_uv: Float32,   # texture-space footprint of one pixel (uv units); <=0 => LOD 0
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
@@ -204,7 +205,13 @@ def sample_texture[use_gpu: Bool](
             var tex = textures[tex_idx]
             if Int(tex.width) > 0:
                 found = True
-                return _sample_tex(tex, su, tv)
+                # LOD = log2(texels covered by one pixel). pixel_uv is the uv
+                # footprint; * width converts to texels. (CPU branch lets OIIO filter.)
+                var texels = pixel_uv * Float32(tex.width)
+                var lod = Float32(0.0)
+                if texels > Float32(1.0):
+                    lod = log2(texels)
+                return _sample_tex(tex, su, tv, lod)
     else:
         if Int(tex_filenames) > 1:
             var filename = tex_filenames[tex_idx]
@@ -235,6 +242,7 @@ def _tex_lookup[use_gpu: Bool](
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    pixel_uv: Float32 = Float32(0.0),
 ) -> RGB:
     if mat.tex_idx < Int32(0) or Int(mesh.uvs) <= 1:
         return mat.albedo
@@ -242,7 +250,7 @@ def _tex_lookup[use_gpu: Bool](
     var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
     var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
     var found = False
-    var rgb = sample_texture[use_gpu](Int(mat.tex_idx), su, tv, False, tex_filenames, textures, n_textures, found)
+    var rgb = sample_texture[use_gpu](Int(mat.tex_idx), su, tv, False, pixel_uv, tex_filenames, textures, n_textures, found)
     if found:
         return rgb
     return mat.albedo
@@ -1450,6 +1458,7 @@ def _apply_normal_map[use_gpu: Bool](
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
+    pixel_uv: Float32 = Float32(0.0),
 ) -> SIMD[DType.float32, 3]:
     if mat.normal_tex_idx < Int32(0) or Int(mesh.uvs) <= 1:
         return geom_normal
@@ -1487,7 +1496,7 @@ def _apply_normal_map[use_gpu: Bool](
     var uv_v = bw0 * v0f + inter.u * v1f + inter.v * v2f  # unflipped; sample_texture applies the V-flip
     # Sample the normal map raw (no sRGB) and decode [0,1] -> [-1,1].
     var found = False
-    var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), uv_u, uv_v, True, tex_filenames, textures, n_textures, found)
+    var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), uv_u, uv_v, True, pixel_uv, tex_filenames, textures, n_textures, found)
     if found:
         var nx = ns.r * Float32(2.0) - Float32(1.0)
         var ny = ns.g * Float32(2.0) - Float32(1.0)
@@ -1525,6 +1534,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     infiniteLightCount: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     sphereCount: Int,
+    px_scale: Float32 = Float32(0.0),  # world units per pixel per unit distance (mip LOD); 0 => base level
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
@@ -1729,12 +1739,30 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     # kept on this side below (NOT flipped to the view ray).
     var ng_ff = normal
 
+    # Texture-space footprint of one pixel at this hit, for the mip LOD.
+    # Analytic primary-ray estimate: pixel_world = tHit * px_scale / |cos(ray,N)|,
+    # then to uv via the triangle's dP/du. (CPU passes px_scale=0 -> 0; OIIO filters.)
+    var pixel_uv = Float32(0.0)
+    if px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
+        var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
+        var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
+        var det = fu1*fv2 - fu2*fv1
+        if det != Float32(0.0):
+            var inv = Float32(1.0) / det
+            var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
+            var dpdu_len = sqrt(dot(dpdu, dpdu))
+            if dpdu_len > Float32(0.0):
+                var rc = dot(ng_ff, ray_dir)
+                if rc < Float32(0.0): rc = -rc
+                if rc < Float32(0.05): rc = Float32(0.05)
+                pixel_uv = (inter.tHit * px_scale / rc) / dpdu_len
+
     # Use interpolated shading normal as the base for smooth diffuse shading
     normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
 
     # Apply normal map if present
     normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
-        tex_filenames, textures, n_textures)
+        tex_filenames, textures, n_textures, pixel_uv)
     # Faceforward the bumped normal to the geometric normal — never to the view
     # ray. Flipping to the ray inverts bumps that tilt away from the camera at
     # grazing angles, washing out the relief (pbrt faceforwards to Ng).
@@ -1744,7 +1772,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
-    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
+    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures, pixel_uv)
 
     # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
     # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map

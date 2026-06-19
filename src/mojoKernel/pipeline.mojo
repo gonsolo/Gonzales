@@ -1,6 +1,6 @@
 from std.memory import alloc, OwnedPointer
 from std.collections import List
-from std.math import sqrt
+from std.math import sqrt, tan
 from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film
 from .rendering import render_all_tiles, render_aux_buffers, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
@@ -350,6 +350,9 @@ def parse_and_render(
 
     if use_gpu:
         var spp = Int(psc[0].samples_per_pixel)
+        # World units spanned by one pixel per unit distance (for mip LOD):
+        # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
+        var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -368,6 +371,7 @@ def parse_and_render(
                 UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
                 UInt32(psc[0].rng_seed >> UInt64(32)),
                 Int64(n_pixels), psc[0].max_depth,
+                px_scale,
             )
             si += actual_batch
             var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9

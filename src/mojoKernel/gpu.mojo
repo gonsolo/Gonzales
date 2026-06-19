@@ -658,6 +658,7 @@ def shade_nee_gpu(
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     count: Int,
+    px_scale: Float32,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -673,7 +674,7 @@ def shade_nee_gpu(
         distantLights, n_distant_lights,
         UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres)
+        spheres, n_spheres, px_scale)
 
 
 def shade_enqueue_shadow_gpu(
@@ -1080,6 +1081,7 @@ def gpu_render_sample(
     rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     n: Int64,
     maxDepth: Int32,
+    px_scale: Float32 = Float32(0.0),
 ):
     var n_int = Int(n)
     if n_int == 0:
@@ -1142,6 +1144,7 @@ def gpu_render_sample(
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     n_int,
+                    px_scale,
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
@@ -1169,6 +1172,7 @@ def gpu_render_wavefront(
     rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     n: Int64,
     maxDepth: Int32,
+    px_scale: Float32 = Float32(0.0),
 ):
     var n_pix = Int(n)
     var batch  = Int(actual_batch)
@@ -1231,6 +1235,7 @@ def gpu_render_wavefront(
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     n_total,
+                    px_scale,
                     grid_dim=grid_total,
                     block_dim=block_size,
                 )
