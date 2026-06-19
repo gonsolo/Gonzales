@@ -1714,6 +1714,21 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
 
+    # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
+    # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map
+    # can tilt the shading normal past the viewer at grazing angles; those faces
+    # reflect no direct light (without this, the away side of each bump is wrongly
+    # lit — the top/bottom split across each bead). They still receive ambient
+    # from a uniform environment light (albedo * L), which is pbrt's dim grey
+    # there — so add that rather than going black, then stop.
+    if dot(normal, ray_dir) >= Float32(0.0):
+        for inf_i in range(infiniteLightCount):
+            var il = infiniteLights[inf_i]
+            if il.tex_idx < Int32(0):
+                path_ptr[].estimate += path_ptr[].throughput * (alb * il.scale)
+        path_ptr[].active = 0
+        return
+
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if areaLightCount > 0:
