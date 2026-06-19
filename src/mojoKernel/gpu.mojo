@@ -403,20 +403,48 @@ def gpu_upload_scene(
                     Int32](filename, data_out, w_out, h_out, raw_flag)
                 if ok != 0 and Int(w_out[0]) > 0:
                     var tw = Int(w_out[0]); var th = Int(h_out[0])
-                    var tex_bytes = tw * th * 3 * 4
-                    var tex_buf = ctx.enqueue_create_buffer[DType.uint8](tex_bytes)
+                    # Mip pyramid: levels until 1x1, box-downsampled (in linear
+                    # space, which is what load_texture_rgb returns). Anti-aliases
+                    # minified textures; trilinear-sampled on the GPU via the LOD.
+                    var nlev = 1; var ww = tw; var hh = th
+                    while ww > 1 or hh > 1:
+                        ww = max(1, ww // 2); hh = max(1, hh // 2); nlev += 1
+                    var total = 0; ww = tw; hh = th
+                    for _k in range(nlev):
+                        total += ww * hh * 3
+                        ww = max(1, ww // 2); hh = max(1, hh // 2)
+                    var pyr = alloc[Float32](total)
+                    var src0 = data_out[0]
+                    for j in range(tw * th * 3):
+                        pyr[j] = src0[j]
+                    var off_prev = 0; var pw = tw; var ph = th
+                    var off_cur = tw * th * 3
+                    for _k in range(1, nlev):
+                        var cw = max(1, pw // 2); var ch = max(1, ph // 2)
+                        for y in range(ch):
+                            for x in range(cw):
+                                var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
+                                var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
+                                for c in range(3):
+                                    var a = pyr[off_prev + (y0 * pw + x0) * 3 + c]
+                                    var b = pyr[off_prev + (y0 * pw + x1) * 3 + c]
+                                    var cc = pyr[off_prev + (y1 * pw + x0) * 3 + c]
+                                    var d = pyr[off_prev + (y1 * pw + x1) * 3 + c]
+                                    pyr[off_cur + (y * cw + x) * 3 + c] = (a + b + cc + d) * Float32(0.25)
+                        off_prev = off_cur; off_cur += cw * ch * 3; pw = cw; ph = ch
+                    var tex_buf = ctx.enqueue_create_buffer[DType.uint8](total * 4)
                     with tex_buf.map_to_host() as h:
                         var dst = h.unsafe_ptr().bitcast[Float32]()
-                        var src = data_out[0]
-                        for j in range(tw * th * 3):
-                            dst[j] = src[j]
-                    gpu_textures_host[ti] = GpuTexture_C(tex_buf.unsafe_ptr().bitcast[Float32](), Int32(tw), Int32(th))
+                        for j in range(total):
+                            dst[j] = pyr[j]
+                    pyr.free()
+                    gpu_textures_host[ti] = GpuTexture_C(tex_buf.unsafe_ptr().bitcast[Float32](), Int32(tw), Int32(th), Int32(nlev))
                     _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutAnyOrigin]](data_out[0])
                     tex_data_bufs.append(tex_buf^)
                 else:
-                    gpu_textures_host[ti] = GpuTexture_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0))
+                    gpu_textures_host[ti] = GpuTexture_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0))
                 data_out.free(); w_out.free(); h_out.free()
-            var tex_struct_bytes = max(n_textures_int, 1) * 16  # sizeof(GpuTexture_C) = 16
+            var tex_struct_bytes = max(n_textures_int, 1) * size_of[GpuTexture_C]()
             var textures_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](tex_struct_bytes)
             with textures_gpu_buf.map_to_host() as h:
                 var dst = h.unsafe_ptr()

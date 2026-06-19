@@ -344,9 +344,10 @@ struct InfiniteLight_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):
-    var data: UnsafePointer[Float32, MutAnyOrigin]  # device pointer, pre-linearised float RGB
-    var width: Int32
-    var height: Int32
+    var data: UnsafePointer[Float32, MutAnyOrigin]  # device pointer: full mip pyramid, contiguous, pre-linearised float RGB
+    var width: Int32                                 # level-0 width
+    var height: Int32                                # level-0 height
+    var n_levels: Int32                              # number of mip levels stored in `data` (>=1)
 
 @fieldwise_init
 struct ShadowTask_C(TrivialRegisterPassable):

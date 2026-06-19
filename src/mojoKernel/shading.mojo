@@ -123,34 +123,61 @@ def _srgb_to_linear(c: Float32) -> Float32:
         return Float32(((c + Float32(0.055)) / Float32(1.055)) ** Float32(2.4))
 
 @always_inline
-def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32) -> RGB:
-    var tw = Int(tex.width); var th = Int(tex.height)
+# Bilinear sample of ONE mip level: `off` = float offset of the level in
+# tex.data, (lw, lh) = that level's dimensions. Pixel centres at +0.5, wrap.
+@always_inline
+def _sample_level(data: UnsafePointer[Float32, MutAnyOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
     if t < Float32(0.0): t += Float32(1.0)
-    # Bilinear filtering (pixel centres at +0.5), with wrap-around on both axes.
-    var fx = s * Float32(tw) - Float32(0.5)
-    var fy = t * Float32(th) - Float32(0.5)
+    var fx = s * Float32(lw) - Float32(0.5)
+    var fy = t * Float32(lh) - Float32(0.5)
     var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
     var wx = fx - Float32(x0); var wy = fy - Float32(y0)
-    var x0w = ((x0 % tw) + tw) % tw
-    var y0w = ((y0 % th) + th) % th
-    var x1w = (x0w + 1) % tw
-    var y1w = (y0w + 1) % th
-    var i00 = (y0w * tw + x0w) * 3
-    var i10 = (y0w * tw + x1w) * 3
-    var i01 = (y1w * tw + x0w) * 3
-    var i11 = (y1w * tw + x1w) * 3
+    var x0w = ((x0 % lw) + lw) % lw
+    var y0w = ((y0 % lh) + lh) % lh
+    var x1w = (x0w + 1) % lw
+    var y1w = (y0w + 1) % lh
+    var i00 = off + (y0w * lw + x0w) * 3
+    var i10 = off + (y0w * lw + x1w) * 3
+    var i01 = off + (y1w * lw + x0w) * 3
+    var i11 = off + (y1w * lw + x1w) * 3
     var w00 = (Float32(1.0) - wx) * (Float32(1.0) - wy)
     var w10 = wx * (Float32(1.0) - wy)
     var w01 = (Float32(1.0) - wx) * wy
     var w11 = wx * wy
     return RGB(
-        tex.data[i00]   * w00 + tex.data[i10]   * w10 + tex.data[i01]   * w01 + tex.data[i11]   * w11,
-        tex.data[i00+1] * w00 + tex.data[i10+1] * w10 + tex.data[i01+1] * w01 + tex.data[i11+1] * w11,
-        tex.data[i00+2] * w00 + tex.data[i10+2] * w10 + tex.data[i01+2] * w01 + tex.data[i11+2] * w11,
+        data[i00]   * w00 + data[i10]   * w10 + data[i01]   * w01 + data[i11]   * w11,
+        data[i00+1] * w00 + data[i10+1] * w10 + data[i01+1] * w01 + data[i11+1] * w11,
+        data[i00+2] * w00 + data[i10+2] * w10 + data[i01+2] * w01 + data[i11+2] * w11,
     )
+
+# Trilinear mip sample. lod 0 = base level (full res); higher = coarser.
+# With a 1-level texture (no pyramid) this is plain bilinear on the base.
+@always_inline
+def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float32(0.0)) -> RGB:
+    var nl = Int(tex.n_levels)
+    if nl <= 1:
+        return _sample_level(tex.data, 0, Int(tex.width), Int(tex.height), u, v)
+    var clamped = lod
+    if clamped < Float32(0.0): clamped = Float32(0.0)
+    var maxl = Float32(nl - 1)
+    if clamped > maxl: clamped = maxl
+    var l0 = Int(floor(clamped))
+    var f = clamped - Float32(l0)
+    # Walk to level l0, tracking its float offset and dims.
+    var off = 0; var w = Int(tex.width); var h = Int(tex.height)
+    for _k in range(l0):
+        off += w * h * 3
+        w = max(1, w // 2); h = max(1, h // 2)
+    var c0 = _sample_level(tex.data, off, w, h, u, v)
+    if f <= Float32(0.0) or l0 >= nl - 1:
+        return c0
+    var off1 = off + w * h * 3
+    var w1 = max(1, w // 2); var h1 = max(1, h // 2)
+    var c1 = _sample_level(tex.data, off1, w1, h1, u, v)
+    return c0 + (c1 - c0) * f
 
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
 # GPU reads the uploaded GpuTexture_C table; CPU reads via OIIO by filename.
