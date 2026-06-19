@@ -1687,14 +1687,20 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(normal, ray_dir) > Float32(0.0):
         normal = -normal
+    # Geometric normal oriented to the camera side; the shading/bumped normal is
+    # kept on this side below (NOT flipped to the view ray).
+    var ng_ff = normal
 
     # Use interpolated shading normal as the base for smooth diffuse shading
     normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
 
-    # Apply normal map if present (CPU only; GPU path uses geometric normal)
+    # Apply normal map if present
     normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
         tex_filenames, textures, n_textures)
-    if dot(normal, ray_dir) > Float32(0.0):
+    # Faceforward the bumped normal to the geometric normal — never to the view
+    # ray. Flipping to the ray inverts bumps that tilt away from the camera at
+    # grazing angles, washing out the relief (pbrt faceforwards to Ng).
+    if dot(normal, ng_ff) < Float32(0.0):
         normal = -normal
 
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
