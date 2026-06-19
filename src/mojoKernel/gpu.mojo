@@ -240,7 +240,9 @@ def gpu_upload_scene(
                     fi_buf.unsafe_ptr().bitcast[Int64](),
                     vi_buf.unsafe_ptr().bitcast[Int64](),
                     uv_buf.unsafe_ptr().bitcast[Float32](),
-                    nrm_buf.unsafe_ptr().bitcast[Float32]() if nrm_n > 0 else UnsafePointer[Float32, MutAnyOrigin](),
+                    nrm_buf.unsafe_ptr().bitcast[Float32]() if nrm_n > 0 else UnsafePointer[
+                        Float32, MutAnyOrigin
+                    ](unsafe_from_address=1),
                 )
 
                 points_bufs.append(pts_buf^)
@@ -560,7 +562,7 @@ def gpu_traverse_batch(
             comptime block_size = 256
             var grid_dim = ceildiv(n, block_size)
 
-            handle[].ctx.enqueue_function[traverse_bvh2_gpu, traverse_bvh2_gpu](
+            handle[].ctx.enqueue_function[traverse_bvh2_gpu](
                 handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                 handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                 handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
@@ -834,7 +836,7 @@ def gpu_shade_batch(
             comptime block_size = 256
             var grid_dim = ceildiv(n, block_size)
 
-            handle[].ctx.enqueue_function[shade_gpu, shade_gpu](
+            handle[].ctx.enqueue_function[shade_gpu](
                 path_buf.unsafe_ptr().bitcast[PathState_C](),
                 inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                 handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
@@ -1009,7 +1011,7 @@ def gpu_gen_aux_buffers(
                     dst[i] = c2w[i]
             comptime block_size = 256
             var grid_n = ceildiv(n_pix, block_size)
-            handle[].ctx.enqueue_function[gen_aux_buffers_gpu, gen_aux_buffers_gpu](
+            handle[].ctx.enqueue_function[gen_aux_buffers_gpu](
                 handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
@@ -1053,7 +1055,7 @@ def gpu_render_sample(
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
             # Generate primary rays on GPU
-            handle[].ctx.enqueue_function[gen_primary_rays_gpu, gen_primary_rays_gpu](
+            handle[].ctx.enqueue_function[gen_primary_rays_gpu](
                 handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                 handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
@@ -1070,7 +1072,7 @@ def gpu_render_sample(
                 block_dim=block_size,
             )
             for _ in range(Int(maxDepth)):
-                handle[].ctx.enqueue_function[traverse_paths_gpu, traverse_paths_gpu](
+                handle[].ctx.enqueue_function[traverse_paths_gpu](
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
@@ -1082,7 +1084,7 @@ def gpu_render_sample(
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
-                handle[].ctx.enqueue_function[shade_nee_gpu, shade_nee_gpu](
+                handle[].ctx.enqueue_function[shade_nee_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
@@ -1103,7 +1105,7 @@ def gpu_render_sample(
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
-            handle[].ctx.enqueue_function[accumulate_film_gpu, accumulate_film_gpu](
+            handle[].ctx.enqueue_function[accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
@@ -1143,7 +1145,7 @@ def gpu_render_wavefront(
             comptime block_size = 256
             var grid_total = ceildiv(n_total, block_size)
             var grid_pix   = ceildiv(n_pix, block_size)
-            handle[].ctx.enqueue_function[gen_primary_rays_wavefront_gpu, gen_primary_rays_wavefront_gpu](
+            handle[].ctx.enqueue_function[gen_primary_rays_wavefront_gpu](
                 handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                 handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
@@ -1159,7 +1161,7 @@ def gpu_render_wavefront(
                 block_dim=block_size,
             )
             for _ in range(Int(maxDepth)):
-                handle[].ctx.enqueue_function[traverse_paths_gpu, traverse_paths_gpu](
+                handle[].ctx.enqueue_function[traverse_paths_gpu](
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
@@ -1171,7 +1173,7 @@ def gpu_render_wavefront(
                     grid_dim=grid_total,
                     block_dim=block_size,
                 )
-                handle[].ctx.enqueue_function[shade_nee_gpu, shade_nee_gpu](
+                handle[].ctx.enqueue_function[shade_nee_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
@@ -1192,7 +1194,7 @@ def gpu_render_wavefront(
                     grid_dim=grid_total,
                     block_dim=block_size,
                 )
-            handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu, accumulate_film_wavefront_gpu](
+            handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
@@ -1398,7 +1400,7 @@ def gpu_atrous_denoise(
             var inv_weight = Float32(1.0) / Float32(max(Int(frame_count), 1))
             var iso_scale = film_iso / Float32(100.0)
 
-            handle[].ctx.enqueue_function[normalize_beauty_albedo_gpu, normalize_beauty_albedo_gpu](
+            handle[].ctx.enqueue_function[normalize_beauty_albedo_gpu](
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
@@ -1406,7 +1408,7 @@ def gpu_atrous_denoise(
                 n_pix, inv_weight, iso_scale, film_max_comp,
                 grid_dim=grid_n, block_dim=block_size,
             )
-            handle[].ctx.enqueue_function[estimate_variance_gpu, estimate_variance_gpu](
+            handle[].ctx.enqueue_function[estimate_variance_gpu](
                 handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32](),
                 fw, fh,
@@ -1427,7 +1429,7 @@ def gpu_atrous_denoise(
                 var step = 1 << i   # 1, 2, 4, 8, 16
                 var src_ptr = ping_ptr if i % 2 == 0 else pong_ptr
                 var dst_ptr = pong_ptr if i % 2 == 0 else ping_ptr
-                handle[].ctx.enqueue_function[atrous_filter_gpu, atrous_filter_gpu](
+                handle[].ctx.enqueue_function[atrous_filter_gpu](
                     src_ptr, alb_ptr, var_ptr, nrm_ptr, dep_ptr, dst_ptr,
                     fw, fh, step,
                     Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05),
@@ -1458,13 +1460,13 @@ def gpu_clear_film(
             var handle = handlePtr
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
-            handle[].ctx.enqueue_function[clear_film_gpu, clear_film_gpu](
+            handle[].ctx.enqueue_function[clear_film_gpu](
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
                 n_int,
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
-            handle[].ctx.enqueue_function[clear_film_gpu, clear_film_gpu](
+            handle[].ctx.enqueue_function[clear_film_gpu](
                 handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 n_int,
                 grid_dim=grid_dim,

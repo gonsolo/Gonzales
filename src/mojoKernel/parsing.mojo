@@ -2561,9 +2561,11 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             meshes[i].normals = nrm_c
             out_nrm_nv[i] = Int32(nv)
         else:
-            # NULL pointer (not unsafe_dangling, which is address 4) so the
+            # Sentinel address 1 (UnsafePointer rejects null/address-0) so the
             # shading-normal guard `Int(mesh.normals) <= 1` works correctly.
-            meshes[i].normals = UnsafePointer[Float32, MutAnyOrigin]()
+            meshes[i].normals = UnsafePointer[Float32, MutAnyOrigin](
+                unsafe_from_address=1
+            )
             out_nrm_nv[i] = Int32(0)
 
         if ma.is_area_light:
