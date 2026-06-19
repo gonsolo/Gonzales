@@ -377,6 +377,15 @@ def gpu_upload_scene(
 
             # Load and upload textures
             var n_textures_int = Int(n_tex)
+            # Textures referenced as normal maps hold linear data and must NOT be
+            # sRGB-decoded on load. Mark those indices by scanning the materials.
+            var tex_is_raw = alloc[Bool](max(n_textures_int, 1))
+            for ti in range(n_textures_int):
+                tex_is_raw[ti] = False
+            for mi in range(Int(materialCount)):
+                var nidx = Int(materials[mi].normal_tex_idx)
+                if nidx >= 0 and nidx < n_textures_int:
+                    tex_is_raw[nidx] = True
             var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
             var gpu_textures_host = alloc[GpuTexture_C](max(n_textures_int, 1))
             for ti in range(n_textures_int):
@@ -385,11 +394,13 @@ def gpu_upload_scene(
                 var w_out = alloc[Int32](1)
                 var h_out = alloc[Int32](1)
                 w_out[0] = Int32(0); h_out[0] = Int32(0)
+                var raw_flag = Int32(1) if tex_is_raw[ti] else Int32(0)
                 var ok = external_call["load_texture_rgb", Int32,
                     UnsafePointer[UInt8, MutAnyOrigin],
                     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
                     UnsafePointer[Int32, MutAnyOrigin],
-                    UnsafePointer[Int32, MutAnyOrigin]](filename, data_out, w_out, h_out)
+                    UnsafePointer[Int32, MutAnyOrigin],
+                    Int32](filename, data_out, w_out, h_out, raw_flag)
                 if ok != 0 and Int(w_out[0]) > 0:
                     var tw = Int(w_out[0]); var th = Int(h_out[0])
                     var tex_bytes = tw * th * 3 * 4
@@ -413,6 +424,7 @@ def gpu_upload_scene(
                 for j in range(tex_struct_bytes):
                     dst[j] = src[j]
             gpu_textures_host.free()
+            tex_is_raw.free()
             print("GPU: " + String(n_textures_int) + " texture(s) uploaded")
 
             # Upload Sobol matrices: first 2 dimensions × 52 UInt32 = 416 bytes

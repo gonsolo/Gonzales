@@ -10,7 +10,8 @@ void destroyTextureSystem();
 bool texture(const char *filename_c, float s, float t, float result[3]);
 
 // Load full texture image as linear-space float RGB (malloc'd — free with free_texture_rgb).
-int load_texture_rgb(const char *filename, float **data, int *width, int *height);
+// raw != 0 skips the sRGB→linear decode (for non-colour data such as normal maps).
+int load_texture_rgb(const char *filename, float **data, int *width, int *height, int raw);
 int free_texture_rgb(float *data);
 
 // --- New Tiled Image Writing Functions ---

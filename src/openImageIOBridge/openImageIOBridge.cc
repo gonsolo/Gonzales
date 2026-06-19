@@ -90,7 +90,7 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
 }
 
-int load_texture_rgb(const char *filename, float **data, int *width, int *height) {
+int load_texture_rgb(const char *filename, float **data, int *width, int *height, int raw) {
         auto in = OIIO::ImageInput::open(filename);
         if (!in) return 0;
         const OIIO::ImageSpec &spec = in->spec();
@@ -108,7 +108,9 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
                 float r = nc > 0 ? buf[i * nc + 0] : 0.0f;
                 float g = nc > 1 ? buf[i * nc + 1] : r;
                 float b = nc > 2 ? buf[i * nc + 2] : r;
-                if (!hdr) {
+                // raw != 0 keeps linear data (e.g. normal maps); only sRGB
+                // colour textures get decoded.
+                if (!hdr && !raw) {
                         // sRGB → linear (same conversion as CPU shader's _srgb_to_linear)
                         auto cvt = [](float c) {
                                 return c <= 0.04045f ? c / 12.92f

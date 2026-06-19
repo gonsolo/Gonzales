@@ -2858,8 +2858,9 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 var load_ok = external_call["load_texture_rgb", Int32,
                     UnsafePointer[UInt8, MutAnyOrigin],
                     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
-                    UnsafePointer[Int32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin]](
-                    fname, pixels_ptr, iw_out, ih_out)
+                    UnsafePointer[Int32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
+                    Int32](
+                    fname, pixels_ptr, iw_out, ih_out, Int32(0))
                 var iw = Int(iw_out[0]); var ih = Int(ih_out[0])
                 iw_out.free(); ih_out.free()
                 if load_ok != Int32(0) and iw > 0 and ih > 0:  # != 0 = success

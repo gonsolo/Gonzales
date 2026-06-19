@@ -1423,6 +1423,21 @@ def _apply_normal_map[use_gpu: Bool](
         var wn_len = dot(world_n, world_n)
         if wn_len > Float32(0.0):
             return world_n * (Float32(1.0) / sqrt(wn_len))
+    else:
+        # GPU: sample the uploaded (raw, non-sRGB) normal-map texture. Same uv
+        # and decode as the CPU/OIIO path so the two match.
+        var ti = Int(mat.normal_tex_idx)
+        if ti >= 0 and ti < n_textures:
+            var tex = textures[ti]
+            if Int(tex.width) > 0:
+                var ns = _sample_tex(tex, uv_u, uv_v)
+                var nx = ns.r * Float32(2.0) - Float32(1.0)
+                var ny = ns.g * Float32(2.0) - Float32(1.0)
+                var nz = ns.b * Float32(2.0) - Float32(1.0)
+                var world_n = tangent * nx + bitangent * ny + geom_normal * nz
+                var wn_len = dot(world_n, world_n)
+                if wn_len > Float32(0.0):
+                    return world_n * (Float32(1.0) / sqrt(wn_len))
     return geom_normal
 
 
