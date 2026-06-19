@@ -1411,15 +1411,18 @@ def _apply_normal_map[use_gpu: Bool](
     if det == Float32(0.0):
         return geom_normal
     var inv_det = Float32(1.0) / det
-    # Tangent (dP/du) and bitangent (dP/dv) from the UV gradients. The bitangent
-    # MUST come from dP/dv, not cross(N, tangent): the cross product loses the V
-    # handedness, flipping the green channel's tilt direction and producing a
-    # shading seam across each feature when the light has a V-aligned component.
+    # Tangent = dP/du; bitangent = cross(N, tangent). This matches pbrt's shading
+    # frame Frame::FromXZ(dpdu, n) (whose Y axis is cross(n, dpdu)) — NOT dP/dv,
+    # which has the opposite handedness here and mirrors the relief in a grazing
+    # view (the seam this once showed was the view-ray faceforward bug, fixed
+    # separately).
     var tangent = (dp1 * dv2 - dp2 * dv1) * inv_det
     var tlen = dot(tangent, tangent)
     if tlen <= Float32(0.0): return geom_normal
     tangent = tangent * (Float32(1.0) / sqrt(tlen))
-    var bitangent = (dp2 * du1 - dp1 * du2) * inv_det
+    # pbrt's frame is FromXZ(dpdu, n): the bitangent is cross(n, dpdu) (matches
+    # materials.h NormalMap), NOT dP/dv.
+    var bitangent = cross(geom_normal, tangent)
     var blen = dot(bitangent, bitangent)
     if blen <= Float32(0.0): return geom_normal
     bitangent = bitangent * (Float32(1.0) / sqrt(blen))
@@ -1428,7 +1431,7 @@ def _apply_normal_map[use_gpu: Bool](
     #  so bumps vanish on low-poly meshes like a 2-triangle floor.)
     var bw0 = Float32(1.0) - inter.u - inter.v
     var uv_u = bw0 * u0f + inter.u * u1f + inter.v * u2f
-    var uv_v = bw0 * v0f + inter.u * v1f + inter.v * v2f
+    var uv_v = Float32(1.0) - (bw0 * v0f + inter.u * v1f + inter.v * v2f)  # pbrt V-flip (1 - v)
     # Use the normal_tex_idx texture directly via OIIO
     comptime if not use_gpu:
         var nfname = tex_filenames[Int(mat.normal_tex_idx)]
