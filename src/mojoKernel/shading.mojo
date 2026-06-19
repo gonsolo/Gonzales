@@ -152,6 +152,53 @@ def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32) -> RGB:
         tex.data[i00+2] * w00 + tex.data[i10+2] * w10 + tex.data[i01+2] * w01 + tex.data[i11+2] * w11,
     )
 
+# Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
+# GPU reads the uploaded GpuTexture_C table; CPU reads via OIIO by filename.
+# (u, v) are the interpolated, NOT-yet-V-flipped coords; this applies pbrt's
+# V-flip (1 - v) and (CPU) wrap. raw=True skips the sRGB decode (normal maps).
+# Sets `found` False when there is no texture/data (caller uses its fallback).
+@always_inline
+def sample_texture[use_gpu: Bool](
+    tex_idx: Int,
+    u: Float32, v: Float32,
+    raw: Bool,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    mut found: Bool,
+) -> RGB:
+    found = False
+    if tex_idx < 0:
+        return RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+    var su = u
+    var tv = Float32(1.0) - v  # pbrt V-flip: V=0 at top
+    comptime if use_gpu:
+        if tex_idx < n_textures:
+            var tex = textures[tex_idx]
+            if Int(tex.width) > 0:
+                found = True
+                return _sample_tex(tex, su, tv)
+    else:
+        if Int(tex_filenames) > 1:
+            var filename = tex_filenames[tex_idx]
+            if Int(filename) > 1:
+                su = su - Float32(Int(su))
+                if su < Float32(0.0): su += Float32(1.0)
+                tv = tv - Float32(Int(tv))
+                if tv < Float32(0.0): tv += Float32(1.0)
+                var tr = alloc[Float32](3)
+                tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
+                _ = external_call["texture", Bool,
+                    UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
+                    UnsafePointer[Float32, MutAnyOrigin]](filename, su, tv, tr)
+                var rr = tr[0]; var gg = tr[1]; var bb = tr[2]
+                tr.free()
+                found = True
+                if raw:
+                    return RGB(rr, gg, bb)
+                return RGB(_srgb_to_linear(rr), _srgb_to_linear(gg), _srgb_to_linear(bb))
+    return RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+
 @always_inline
 def _tex_lookup[use_gpu: Bool](
     mat: Material_C,
@@ -162,36 +209,15 @@ def _tex_lookup[use_gpu: Bool](
     textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
     n_textures: Int,
 ) -> RGB:
-    var ti = Int(mat.tex_idx)
-    comptime if use_gpu:
-        if ti >= 0 and ti < n_textures:
-            var tex = textures[ti]
-            if Int(tex.width) > 0:
-                var w0 = Float32(1.0) - inter.u - inter.v
-                var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
-                var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
-                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
-                return _sample_tex(tex, su, tv)
-    else:
-        if ti >= 0 and Int(tex_filenames) > 1:
-            var filename = tex_filenames[ti]
-            if Int(filename) > 1 and Int(mesh.uvs) > 1:
-                var w0 = Float32(1.0) - inter.u - inter.v
-                var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
-                var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
-                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
-                su = su - Float32(Int(su))
-                if su < Float32(0.0): su += Float32(1.0)
-                tv = tv - Float32(Int(tv))
-                if tv < Float32(0.0): tv += Float32(1.0)
-                var tr = alloc[Float32](3)
-                tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
-                _ = external_call["texture", Bool,
-                    UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-                    UnsafePointer[Float32, MutAnyOrigin]](filename, su, tv, tr)
-                var result = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
-                tr.free()
-                return result
+    if mat.tex_idx < Int32(0) or Int(mesh.uvs) <= 1:
+        return mat.albedo
+    var w0 = Float32(1.0) - inter.u - inter.v
+    var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
+    var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+    var found = False
+    var rgb = sample_texture[use_gpu](Int(mat.tex_idx), su, tv, False, tex_filenames, textures, n_textures, found)
+    if found:
+        return rgb
     return mat.albedo
 
 
@@ -1431,40 +1457,19 @@ def _apply_normal_map[use_gpu: Bool](
     #  so bumps vanish on low-poly meshes like a 2-triangle floor.)
     var bw0 = Float32(1.0) - inter.u - inter.v
     var uv_u = bw0 * u0f + inter.u * u1f + inter.v * u2f
-    var uv_v = Float32(1.0) - (bw0 * v0f + inter.u * v1f + inter.v * v2f)  # pbrt V-flip (1 - v)
-    # Use the normal_tex_idx texture directly via OIIO
-    comptime if not use_gpu:
-        var nfname = tex_filenames[Int(mat.normal_tex_idx)]
-        var tr = alloc[Float32](3)
-        tr[0] = Float32(0.5); tr[1] = Float32(0.5); tr[2] = Float32(1.0)
-        _ = external_call["texture", Bool,
-            UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-            UnsafePointer[Float32, MutAnyOrigin]](nfname, uv_u, uv_v, tr)
-        # Decode: [0,1] → [-1,1]
-        var nx = tr[0] * Float32(2.0) - Float32(1.0)
-        var ny = tr[1] * Float32(2.0) - Float32(1.0)
-        var nz = tr[2] * Float32(2.0) - Float32(1.0)
-        tr.free()
+    var uv_v = bw0 * v0f + inter.u * v1f + inter.v * v2f  # unflipped; sample_texture applies the V-flip
+    # Sample the normal map raw (no sRGB) and decode [0,1] -> [-1,1].
+    var found = False
+    var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), uv_u, uv_v, True, tex_filenames, textures, n_textures, found)
+    if found:
+        var nx = ns.r * Float32(2.0) - Float32(1.0)
+        var ny = ns.g * Float32(2.0) - Float32(1.0)
+        var nz = ns.b * Float32(2.0) - Float32(1.0)
         # Rotate tangent-space normal to world space
         var world_n = tangent * nx + bitangent * ny + geom_normal * nz
         var wn_len = dot(world_n, world_n)
         if wn_len > Float32(0.0):
             return world_n * (Float32(1.0) / sqrt(wn_len))
-    else:
-        # GPU: sample the uploaded (raw, non-sRGB) normal-map texture. Same uv
-        # and decode as the CPU/OIIO path so the two match.
-        var ti = Int(mat.normal_tex_idx)
-        if ti >= 0 and ti < n_textures:
-            var tex = textures[ti]
-            if Int(tex.width) > 0:
-                var ns = _sample_tex(tex, uv_u, uv_v)
-                var nx = ns.r * Float32(2.0) - Float32(1.0)
-                var ny = ns.g * Float32(2.0) - Float32(1.0)
-                var nz = ns.b * Float32(2.0) - Float32(1.0)
-                var world_n = tangent * nx + bitangent * ny + geom_normal * nz
-                var wn_len = dot(world_n, world_n)
-                if wn_len > Float32(0.0):
-                    return world_n * (Float32(1.0) / sqrt(wn_len))
     return geom_normal
 
 
