@@ -266,7 +266,7 @@ struct PathState_C(TrivialRegisterPassable):
     var pcgInc: UInt64
     var active: Int8
     var specularBounce: Int8   # 1 if previous scatter was a delta BSDF (mirror/glass)
-    var _pad2: Int8
+    var pending_mat: Int8      # GPU only: MatKind of material awaiting per-material kernel (0 = none)
     var _pad3: Int8
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.

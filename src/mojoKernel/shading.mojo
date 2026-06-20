@@ -2592,7 +2592,11 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    _shade_dispatch[use_gpu, enqueue_shadow](mat, path_ptr, inter, ctx)
+    comptime if use_gpu:
+        # GPU: mark material for its dedicated per-material kernel
+        path_ptr[].pending_mat = mat.type
+    else:
+        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx)
 
 
 @always_inline
