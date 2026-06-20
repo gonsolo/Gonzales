@@ -40,6 +40,7 @@ def main() raises:
     var fullscreen = False
     var override_w = Int32(0)
     var override_h = Int32(0)
+    var override_spp = Int32(0)
     var pixel_x = Int32(-1)
     var pixel_y = Int32(-1)
     var no_denoise = False

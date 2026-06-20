@@ -12,7 +12,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX,
                            HAIR_EVAL_N)
-from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, AreaLight_C,
+from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, PI,
                         LightSampler_C)
@@ -438,9 +438,14 @@ def bspline3_eval(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
 def hair_add_quad(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         p0x: Float32, p0y: Float32, p0z: Float32,
         p1x: Float32, p1y: Float32, p1z: Float32,
-        ux: Float32, uy: Float32, uz: Float32, hw: Float32):
+        ux: Float32, uy: Float32, uz: Float32, hw: Float32,
+        tx: Float32, ty: Float32, tz: Float32):
+    """Append one rectangular quad (2 triangles) to the hair accumulator.
+    tx,ty,tz is the fiber tangent direction (normalized), stored as shading normals
+    so the hair BSDF can recover it. UVs encode the ribbon position (u=0/1 across fiber)."""
     ref h = s[0].hair.value()
     var bv = len(h.points) // 4
+    # 4 vertices (xyz + pad): p0+, p0-, p1+, p1-
     h.points.append(p0x+ux*hw); h.points.append(p0y+uy*hw)
     h.points.append(p0z+uz*hw); h.points.append(Float32(1))
     h.points.append(p0x-ux*hw); h.points.append(p0y-uy*hw)
@@ -453,6 +458,19 @@ def hair_add_quad(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     h.face_idxs.append(Int64(3))
     h.vert_idxs.append(Int64(bv+1)); h.vert_idxs.append(Int64(bv+3)); h.vert_idxs.append(Int64(bv+2))
     h.face_idxs.append(Int64(3))
+    # Per-vertex shading normals = fiber tangent (used by hair BSDF to recover fiber direction)
+    # All 4 vertices get the same tangent direction
+    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
+    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
+    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
+    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
+    # Per-vertex UVs: u encodes +hw (u=1) vs -hw (u=0) edge; v=0 at p0, v=1 at p1
+    # vertex 0 (p0+): (1, 0), vertex 1 (p0-): (0, 0)
+    # vertex 2 (p1+): (1, 1), vertex 3 (p1-): (0, 1)
+    h.uvs.append(Float32(1)); h.uvs.append(Float32(0))
+    h.uvs.append(Float32(0)); h.uvs.append(Float32(0))
+    h.uvs.append(Float32(1)); h.uvs.append(Float32(1))
+    h.uvs.append(Float32(0)); h.uvs.append(Float32(1))
 
 def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                             s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -513,8 +531,8 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         var ulen = sqrt(ux*ux + uy*uy + uz*uz)
         ux /= ulen; uy /= ulen; uz /= ulen
         var vx = ty*uz - tz*uy; var vy = tz*ux - tx*uz; var vz = tx*uy - ty*ux
-        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, ux,uy,uz, hw)
-        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, vx,vy,vz, hw)
+        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, ux,uy,uz, hw, tx,ty,tz)
+        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, vx,vy,vz, hw, tx,ty,tz)
     xfm4.free(); eval_pts.free()
 
 def flush_hair(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -857,68 +875,6 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         crgb.free(); ctype.free(); cname.free(); cia.free()
         tex_name.free(); tex_type.free(); tex_class.free()
         return
-    if _psc_streq(tex_class, "checkerboard"):
-        var c1 = alloc[Float32](3); c1[0]=Float32(0.4); c1[1]=Float32(0.4); c1[2]=Float32(0.4)
-        var c2 = alloc[Float32](3); c2[0]=Float32(0.9); c2[1]=Float32(0.9); c2[2]=Float32(0.9)
-        var uscale = Float32(1.0)
-        var vscale = Float32(1.0)
-        var ctype2 = alloc[UInt8](64)
-        var cname2 = alloc[UInt8](128)
-        var cia2 = alloc[Int32](1); cia2[0] = Int32(0)
-        var cfound2 = scanner_parse_param_header(handle, ctype2, 64, cname2, 128, cia2)
-        while cfound2 != 0:
-            var c_is_arr = cia2[0]
-            if _psc_streq(cname2, "tex1") or _psc_streq(cname2, "tex2"):
-                var dst = c1 if _psc_streq(cname2, "tex1") else c2
-                if ctype2[0] == UInt8(102):  # 'f' float
-                    var tmp = _psc_scan_one_float(handle, c_is_arr)
-                    dst[0] = tmp; dst[1] = tmp; dst[2] = tmp
-                elif _psc_type_is_float(ctype2):
-                    _psc_scan_rgb(handle, dst, c_is_arr)
-                else:
-                    _psc_skip_value(handle, ctype2, c_is_arr)
-                    if c_is_arr:
-                        _ = scanner_scan_char(handle, UInt8(93))
-            elif _psc_streq(cname2, "uscale") and _psc_type_is_float(ctype2):
-                uscale = _psc_scan_one_float(handle, c_is_arr)
-            elif _psc_streq(cname2, "vscale") and _psc_type_is_float(ctype2):
-                vscale = _psc_scan_one_float(handle, c_is_arr)
-            else:
-                _psc_skip_value(handle, ctype2, c_is_arr)
-                if c_is_arr:
-                    _ = scanner_scan_char(handle, UInt8(93))
-            cia2[0] = Int32(0)
-            cfound2 = scanner_parse_param_header(handle, ctype2, 64, cname2, 128, cia2)
-        # Bake a 256x256 checker pattern to a temp EXR and register as an imagemap.
-        comptime W = 256
-        comptime H = 256
-        var pixels = alloc[Float32](W * H * 3)
-        for j in range(H):
-            for i in range(W):
-                var cu = Int(Float32(i) / Float32(W) * uscale) & 1
-                var cv = Int(Float32(j) / Float32(H) * vscale) & 1
-                var src = c1 if (cu ^ cv) == 0 else c2
-                var idx = (j * W + i) * 3
-                pixels[idx] = src[0]; pixels[idx+1] = src[1]; pixels[idx+2] = src[2]
-        var checker_idx = len(s[0].tex_names)
-        var fname_str = "/tmp/gonzales_checker_" + String(checker_idx) + ".exr"
-        var fname_buf = alloc[UInt8](256)
-        var slen = fname_str.byte_length()
-        for k in range(slen):
-            fname_buf[k] = fname_str.unsafe_ptr()[k]
-        fname_buf[slen] = UInt8(0)
-        _ = external_call["write_image_rgb", Int32,
-            UnsafePointer[UInt8, MutAnyOrigin],
-            UnsafePointer[Float32, MutAnyOrigin],
-            Int32, Int32, Int32, Int32,
-        ](fname_buf, pixels, Int32(W), Int32(H), Int32(W), Int32(H))
-        pixels.free(); fname_buf.free()
-        c1.free(); c2.free(); ctype2.free(); cname2.free(); cia2.free()
-        var name_str2 = String(unsafe_from_utf8_ptr=tex_name.as_immutable())
-        s[0].tex_names.append(name_str2)
-        s[0].tex_files.append(fname_str)
-        tex_name.free(); tex_type.free(); tex_class.free()
-        return
     if not _psc_streq(tex_class, "imagemap"):
         tex_name.free(); tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
@@ -1183,27 +1139,27 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var mats = alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
         var nm3 = s[0].named_materials[i]
-        var mt = nm3.kind
+        var material_kind = nm3.kind
         var ior = nm3.ior
-        mats[i].type = mt
+        mats[i].type = material_kind
         mats[i].tex_idx = nm3.tex_idx
         mats[i].roughU  = nm3.roughness_u
         mats[i].roughV  = nm3.roughness_v
         mats[i].normal_tex_idx = nm3.normal_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
-        if mt == Int8(4):
+        if material_kind == MatKind.dielectric:
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
-        elif mt == Int8(5):
+        elif material_kind == MatKind.coated_diffuse:
             mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
-        elif mt == Int8(7):
+        elif material_kind == MatKind.coated_conductor:
             mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
-        elif mt == Int8(9):
+        elif material_kind == MatKind.thin_dielectric:
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
-        elif mt == Int8(8):
+        elif material_kind == MatKind.mix:
             var idx1 = Int32(0)
             var idx2 = Int32(0)
             for j in range(n_regular):
@@ -1213,13 +1169,21 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[i].roughU  = nm3.mix_amount
             mats[i].albedo  = nm3.albedo
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
-        elif mt == Int8(6):
+        elif material_kind == MatKind.diffuse_transmit:
             mats[i].albedo = nm3.albedo
             mats[i].emission = nm3.transmittance
-        elif mt == Int8(11):
-            mats[i].albedo = nm3.albedo
-            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
-            mats[i].type = Int8(1)
+        elif material_kind == MatKind.hair:
+            mats[i].albedo = nm3.albedo   # sigma_a per channel (absorption coefficient)
+            mats[i].emission = RGB(Float32(1.55), Float32(0), Float32(0))  # IOR for hair cuticle
+            if nm3.roughness_u == Float32(0):
+                mats[i].roughU = Float32(0.3)  # betaM default
+            else:
+                mats[i].roughU = nm3.roughness_u
+            if nm3.roughness_v == Float32(0):
+                mats[i].roughV = Float32(0.3)  # betaN default
+            else:
+                mats[i].roughV = nm3.roughness_v
+            mats[i].type = MatKind.hair
         else:
             mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))

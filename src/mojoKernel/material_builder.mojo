@@ -7,7 +7,7 @@ from .lexer import (PbrtScanner, scanner_parse_quoted_string, scanner_parse_para
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
                     _psc_skip_value)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
-from .geometry import RGB
+from .geometry import RGB, MatKind
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                    s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -31,7 +31,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var sigma_a_rgb = alloc[Float32](3)
     sigma_a_rgb[0] = Float32(-1); sigma_a_rgb[1] = Float32(-1); sigma_a_rgb[2] = Float32(-1)
     var has_sigma_a = False
-    var mat_type = Int8(1)  # default: diffuse
+    var mat_type = MatKind.diffuse
     var mat_ior  = Float32(1.5)
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
@@ -54,23 +54,23 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
             if _psc_streq(str_val, "conductor"):
-                mat_type = Int8(3)
+                mat_type = MatKind.conductor
             elif _psc_streq(str_val, "dielectric"):
-                mat_type = Int8(4)
+                mat_type = MatKind.dielectric
             elif _psc_streq(str_val, "coateddiffuse"):
-                mat_type = Int8(5)
+                mat_type = MatKind.coated_diffuse
             elif _psc_streq(str_val, "diffusetransmission"):
-                mat_type = Int8(6)
+                mat_type = MatKind.diffuse_transmit
             elif _psc_streq(str_val, "coatedconductor"):
-                mat_type = Int8(7)
+                mat_type = MatKind.coated_conductor
             elif _psc_streq(str_val, "mix"):
-                mat_type = Int8(8)
+                mat_type = MatKind.mix
             elif _psc_streq(str_val, "thindielectric"):
-                mat_type = Int8(9)
+                mat_type = MatKind.thin_dielectric
             elif _psc_streq(str_val, "hair"):
-                mat_type = Int8(11)
+                mat_type = MatKind.hair
             else:
-                mat_type = Int8(1)
+                mat_type = MatKind.diffuse
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
             if _psc_streq(name_buf, "eta"):
                 _psc_scan_rgb(handle, metal_eta, is_array)
@@ -186,7 +186,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     # Store into named_materials List
     var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
     # For named-spectrum conductors: compute Fresnel F0 per channel
-    if has_spectral_conductor and mat_type == Int8(3):
+    if has_spectral_conductor and mat_type == MatKind.conductor:
         var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
                   ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
         var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
@@ -194,14 +194,16 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
         var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
                   ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
         nm.albedo = RGB(f0r, f0g, f0b)
-    elif mat_type == Int8(11):
+    elif mat_type == MatKind.hair:
         var ce = eumelanin; var cp = pheomelanin
-        var scale2 = Float32(2.0)
-        nm.albedo = RGB(
-            exp(-(ce * Float32(0.419) + cp * Float32(0.187)) * scale2),
-            exp(-(ce * Float32(0.697) + cp * Float32(0.400)) * scale2),
-            exp(-(ce * Float32(1.370) + cp * Float32(1.050)) * scale2),
-        )
+        if has_sigma_a:
+            nm.albedo = RGB(sigma_a_rgb[0], sigma_a_rgb[1], sigma_a_rgb[2])
+        else:
+            nm.albedo = RGB(
+                ce * Float32(0.419) + cp * Float32(0.187),
+                ce * Float32(0.697) + cp * Float32(0.400),
+                ce * Float32(1.370) + cp * Float32(1.050),
+            )
     else:
         nm.albedo = RGB(rgb[0], rgb[1], rgb[2])
     nm.transmittance  = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])

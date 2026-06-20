@@ -346,7 +346,6 @@ def parse_and_render(
         return Int32(-1)
     if override_w > 0 and override_h > 0:
         resize_film(psc, override_w, override_h)
-
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0))
 
     var fw = psc[0].film_w

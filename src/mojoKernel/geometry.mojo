@@ -193,6 +193,18 @@ struct PrimId_C(TrivialRegisterPassable):
     var _pad5: Int8
     var _pad6: Int8
 
+struct MatKind:
+    comptime diffuse           = Int8(1)
+    comptime area_light        = Int8(2)
+    comptime conductor         = Int8(3)
+    comptime dielectric        = Int8(4)
+    comptime coated_diffuse    = Int8(5)
+    comptime diffuse_transmit  = Int8(6)
+    comptime coated_conductor  = Int8(7)
+    comptime mix               = Int8(8)
+    comptime thin_dielectric   = Int8(9)
+    comptime hair              = Int8(11)
+
 @fieldwise_init
 struct Material_C(TrivialRegisterPassable):
     var type: Int8
