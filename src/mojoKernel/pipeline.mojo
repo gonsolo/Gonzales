@@ -162,6 +162,7 @@ def _gpu_upload_scene(
         psc[0].area_lights,    Int64(psc[0].area_light_count),
         psc[0].spheres,        Int64(psc[0].sphere_count),
         psc[0].distant_lights, Int64(psc[0].distant_count),
+        psc[0].point_lights,   Int64(psc[0].point_count),
         psc[0].infinite_lights, Int64(psc[0].infinite_count),
         Int64(n_pixels),
         sobol,
