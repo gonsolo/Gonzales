@@ -1822,6 +1822,14 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     u_env2: Float32,
     mut pcg: PCG32,
 ):
+    # NEE sampling asymmetry: area lights use CDF-weighted selection (one light per
+    # bounce, weight = power), while infinite/env lights are ALL sampled every bounce.
+    # Rationale: area lights are finite and numerous (N can be large), so stochastic
+    # selection with MIS is necessary. Infinite lights are typically 1-2 env maps,
+    # and their contribution is often dominant — sampling all of them every bounce
+    # costs little and avoids the variance of single-sample env selection. At N>2
+    # env lights this asymmetry would need revisiting.
+
     # ── Area light NEE ────────────────────────────────────────────────────────
     if ctx.area_light_count > 0:
         var ls_u_nee = u_light
