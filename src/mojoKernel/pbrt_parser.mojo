@@ -14,7 +14,8 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            HAIR_EVAL_N)
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, AreaLight_C,
                         Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C,
-                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, PI)
+                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, PI,
+                        LightSampler_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .sampling import gaussian_norm
@@ -76,6 +77,7 @@ struct ParsedScene_Mojo:
     var medium_count:     Int32
     var medium_ifaces:    UnsafePointer[MediumInterface_C, MutAnyOrigin]
     var medium_iface_count: Int32
+    var light_sampler:    LightSampler_C
 
 # ── Matrix utilities ──────────────────────────────────────────────────────────
 
@@ -1606,6 +1608,25 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         psc[0].mediums = UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling()
     psc[0].medium_count = Int32(nm)
 
+    # ---- Build power-weighted area light CDF ----
+    var ls_n = Int(psc[0].area_light_count)
+    var ls_cdf = alloc[Float32](max(ls_n + 1, 2))
+    ls_cdf[0] = Float32(0.0)
+    var ls_total_power = Float32(0.0)
+    for i in range(ls_n):
+        var al = psc[0].area_lights[i]
+        var power = al.emission.luma() * al.total_area
+        ls_total_power += power
+        ls_cdf[i + 1] = ls_cdf[i] + power
+    if ls_total_power > Float32(0.0):
+        var inv = Float32(1.0) / ls_total_power
+        for i in range(1, ls_n + 1):
+            ls_cdf[i] *= inv
+    else:
+        for i in range(1, ls_n + 1):
+            ls_cdf[i] = Float32(i) / Float32(max(ls_n, 1))
+    psc[0].light_sampler = LightSampler_C(ls_cdf, Int32(ls_n), Int32(0))
+
 # ── Exported API ──────────────────────────────────────────────────────────────
 
 def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
@@ -1730,6 +1751,8 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].infinite_lights.free()
     if psc[0].sphere_count > 0:
         psc[0].spheres.free()
+    if Int(psc[0].light_sampler.cdf) > 4:
+        psc[0].light_sampler.cdf.free()
     psc.free()
 
 def mojo_apply_overrides(
@@ -1815,4 +1838,5 @@ def mojo_parsed_scene_descriptor(
     sd[0].mediumCount      = Int64(psc[0].medium_count)
     sd[0].mediumInterfaces = psc[0].medium_ifaces
     sd[0].mediumIfaceCount = Int64(psc[0].medium_iface_count)
+    sd[0].lightSampler    = psc[0].light_sampler
     return sd

@@ -359,6 +359,30 @@ struct ShadowTask_C(TrivialRegisterPassable):
     var active: Int32
     var _pad: Int32
 
+@fieldwise_init
+struct LightSampler_C(TrivialRegisterPassable):
+    """Power-weighted CDF over area lights.
+    cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] = power_i / total_power.
+    Built at parse time; on GPU the cdf pointer is patched to device memory.
+    """
+    var cdf: UnsafePointer[Float32, MutAnyOrigin]  # n+1 entries
+    var n: Int32
+    var _pad: Int32
+
+@always_inline
+def light_sampler_sample(ls: LightSampler_C, u: Float32) -> Tuple[Int, Float32]:
+    """Binary-search the CDF. Returns (light_index, selection_pdf)."""
+    var lo = 0
+    var hi = Int(ls.n) - 1
+    while lo < hi:
+        var mid = (lo + hi) >> 1
+        if ls.cdf[mid + 1] <= u:
+            lo = mid + 1
+        else:
+            hi = mid
+    var pdf = ls.cdf[lo + 1] - ls.cdf[lo]
+    return (lo, max(pdf, Float32(1e-6)))
+
 
 @fieldwise_init
 struct TileResult_C(TrivialRegisterPassable):

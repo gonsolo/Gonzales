@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, dot, cross
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
@@ -44,6 +44,8 @@ struct GpuSceneHandle(Movable):
     var n_distant_lights: Int
     var point_lights_buf: DeviceBuffer[DType.uint8]    # n_point × sizeof(PointLight_C) = 16
     var n_point_lights: Int
+    var light_sampler_buf: DeviceBuffer[DType.uint8]   # (n_area+1) × sizeof(Float32) CDF
+    var n_light_sampler: Int                           # n_area lights (CDF has n+1 entries)
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 48
     var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
@@ -106,6 +108,8 @@ def gpu_upload_scene(
     distantLightCount: Int64,
     pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
     pointLightCount: Int64,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    lightSamplerN: Int64,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int64,
     n_pixels: Int64,
@@ -317,6 +321,16 @@ def gpu_upload_scene(
                     for j in range(Int(pointLightCount) * size_of[PointLight_C]()):
                         dst[j] = src[j]
 
+            # Upload light sampler CDF (n+1 Float32 entries)
+            var ls_entries = Int(lightSamplerN) + 1
+            var ls_bytes = max(ls_entries, 2) * size_of[Float32]()
+            var ls_buf = ctx.enqueue_create_buffer[DType.uint8](ls_bytes)
+            if ls_entries > 0:
+                with ls_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                    for j in range(ls_entries):
+                        dst[j] = lightSamplerCdf[j]
+
             # Upload infinite/environment lights with GPU-resident pixel/CDF data
             var il_count = Int(infiniteLightCount)
             var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
@@ -516,6 +530,8 @@ def gpu_upload_scene(
                 n_distant_lights=Int(distantLightCount),
                 point_lights_buf=pl_buf^,
                 n_point_lights=Int(pointLightCount),
+                light_sampler_buf=ls_buf^,
+                n_light_sampler=Int(lightSamplerN),
                 infinite_lights_buf=il_buf^,
                 il_pixels_bufs=il_pixels_bufs^,
                 il_cdf_bufs=il_cdf_bufs^,
@@ -675,6 +691,8 @@ def shade_nee_gpu(
     n_distant_lights: Int,
     pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
     n_point_lights: Int,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    n_light_sampler: Int,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     n_infinite_lights: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
@@ -689,6 +707,7 @@ def shade_nee_gpu(
     if path_ptr[].active == 0:
         return
     var inter = intersections[tid]
+    var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ctx_no_shadow = ShadeContext(
         0, bvh2Nodes, primIds, meshes, materials,
@@ -699,7 +718,7 @@ def shade_nee_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale)
+        spheres, n_spheres, px_scale, ls)
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
@@ -1171,6 +1190,8 @@ def gpu_render_sample(
                     handle[].n_distant_lights,
                     handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
                     handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
                     handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
                     handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
@@ -1264,6 +1285,8 @@ def gpu_render_wavefront(
                     handle[].n_distant_lights,
                     handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
                     handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
                     handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
                     handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),

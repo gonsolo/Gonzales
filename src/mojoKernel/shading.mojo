@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf
@@ -29,6 +29,7 @@ struct ShadeContext:
     var spheres:          UnsafePointer[Sphere_C, MutAnyOrigin]
     var sphere_count:     Int
     var px_scale:         Float32
+    var light_sampler:    LightSampler_C
 
 trait ShadeMaterial:
     """Interface for material shaders: evaluate BSDF and enqueue NEE shadow rays."""
@@ -469,7 +470,10 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 
     # ── NEE direct light sampling (MIS weighted) ───────────────────────────────
     if ctx.area_light_count > 0:
-        var light_idx = Int(pcg.next_uint() % UInt32(ctx.area_light_count))
+        var ls_u = pcg.next_float()
+        var ls_result = light_sampler_sample(ctx.light_sampler, ls_u)
+        var light_idx = ls_result[0]
+        var light_sel_pdf = ls_result[1]
         var al = ctx.area_lights[light_idx]
         var lmesh = ctx.meshes[Int(al.meshIdx)]
         var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
@@ -498,7 +502,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
                 var pi = PI
-                var pdf_light = dist_sq / (cos_l * al.total_area * Float32(ctx.area_light_count))
+                var pdf_light = dist_sq * light_sel_pdf / (cos_l * al.total_area)
                 var pdf_bsdf_dt = cos_s / pi
                 var w_dt = power_heuristic(pdf_light, pdf_bsdf_dt)
                 # f = lobe_alb/π * lobe_w (lobe selection weight already folded in)
@@ -664,7 +668,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         #    transmittance for the incoming light direction. ──
         if not did_nee and ctx.area_light_count > 0:
             did_nee = True
-            var light_idx = Int(pcg.next_uint() % UInt32(ctx.area_light_count))
+            var ls_u_cd = pcg.next_float()
+            var ls_result_cd = light_sampler_sample(ctx.light_sampler, ls_u_cd)
+            var light_idx = ls_result_cd[0]
+            var light_sel_pdf_cd = ls_result_cd[1]
             var al = ctx.area_lights[light_idx]
             var lmesh = ctx.meshes[Int(al.meshIdx)]
             var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
@@ -694,7 +701,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 if cos_s > Float32(0.0) and cos_l > Float32(0.0):
                     # Light must transmit through the coat to reach the base.
                     var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
-                    var pdf_light_cd = dist_sq / (cos_l * al.total_area * Float32(ctx.area_light_count))
+                    var pdf_light_cd = dist_sq * light_sel_pdf_cd / (cos_l * al.total_area)
                     var pdf_bsdf_cd = cos_s / PI
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
                     var weight_cd = alb * al.emission * (cos_s * t_light * w_cd / (pdf_light_cd * PI))
@@ -1498,7 +1505,10 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if ctx.area_light_count > 0:
-        var light_idx = Int(pcg.next_uint() % UInt32(ctx.area_light_count))
+        var ls_u_nee = pcg.next_float()
+        var ls_result_nee = light_sampler_sample(ctx.light_sampler, ls_u_nee)
+        var light_idx = ls_result_nee[0]
+        var light_sel_pdf_nee = ls_result_nee[1]
         var al = ctx.area_lights[light_idx]
         var lmesh = ctx.meshes[Int(al.meshIdx)]
         var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
@@ -1526,7 +1536,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_s = dot(normal, shadow_dir)
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                var pdf_light = dist_sq / (cos_l * al.total_area * Float32(ctx.area_light_count))
+                var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
                 var pi = PI
                 var pdf_bsdf_nee = cos_s / pi
                 var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
@@ -2043,7 +2053,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var dist  = inter.tHit
                 var dist2 = dist * dist
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
-                    var pdf_light = dist2 / (cos_l * al.total_area * Float32(ctx.area_light_count))
+                    var ls = ctx.light_sampler
+                    var al_sel_pdf = ls.cdf[al_idx + 1] - ls.cdf[al_idx]
+                    var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += path_ptr[].throughput * emission * w
         path_ptr[].active = 0
@@ -2072,6 +2084,7 @@ def shade_core_cpu_nee(
     infiniteLightCount: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     sphereCount: Int,
+    light_sampler: LightSampler_C,
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2085,5 +2098,5 @@ def shade_core_cpu_nee(
         distantLights, distantLightCount,
         pointLights, pointLightCount,
         infiniteLights, infiniteLightCount,
-        spheres, sphereCount, Float32(0.0))
+        spheres, sphereCount, Float32(0.0), light_sampler)
     shade_nee_core[False, False](path_ptr, inter, ctx)

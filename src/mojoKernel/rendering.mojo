@@ -136,7 +136,8 @@ def render_tile(
                                scene.distantLights, Int(scene.distantLightCount),
                                scene.pointLights, Int(scene.pointLightCount),
                                scene.infiniteLights, Int(scene.infiniteLightCount),
-                               scene.spheres, Int(scene.sphereCount))
+                               scene.spheres, Int(scene.sphereCount),
+                               scene.lightSampler)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
