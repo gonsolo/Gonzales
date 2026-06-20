@@ -360,7 +360,6 @@ def parse_and_render(
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
         if Int(handle) <= 8:
             mojo_parsed_free(psc)
-            results.free()
             return Int32(-1)
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -413,7 +412,6 @@ def parse_and_render(
     elif psc[0].prim_count == 0:
         print("Warning: scene has no geometry, skipping render")
         mojo_parsed_free(psc)
-        results.free()
         return Int32(0)
     else:
         var zero = TileResult_C(

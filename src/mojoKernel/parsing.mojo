@@ -680,7 +680,6 @@ struct ParsedScene_Mojo:
     var filter_norm_y:    Float32
     var filter_weight:    Float32
     var filter_type:      Int32
-    var camera_fov:       Float32
     var samples_per_pixel: Int32
     var log2_spp:         Int32
     var n_base4_digits:   Int32
@@ -3196,7 +3195,7 @@ def mojo_apply_overrides(
         psc[0].film_h = h_override
         # Recompute raster_to_camera for new resolution
         var cts = alloc[Float32](16)
-        _psc_make_perspective(psc[0].camera_fov, Float32(0.01), cts)
+        make_perspective_matrix(psc[0].camera_fov, Float32(0.01), cts)
         var frame = Float32(w_override) / Float32(h_override)
         var smin_x: Float32; var smax_x: Float32
         var smin_y: Float32; var smax_y: Float32
@@ -3206,13 +3205,13 @@ def mojo_apply_overrides(
             smin_x = Float32(-1); smax_x = Float32(1)
             smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
         var str_mat = alloc[Float32](16)
-        _psc_make_screen_to_raster(w_override, h_override,
-                                   smin_x, smax_x, smin_y, smax_y, str_mat)
+        make_screen_to_raster(w_override, h_override,
+                              smin_x, smax_x, smin_y, smax_y, str_mat)
         var rts = alloc[Float32](16)
-        _ = mojo_matrix_invert(str_mat, rts)
+        _ = matrix_invert(str_mat, rts)
         var cts_inv = alloc[Float32](16)
-        _ = mojo_matrix_invert(cts, cts_inv)
-        mojo_matrix_multiply(cts_inv, rts, psc[0].raster_to_camera)
+        _ = matrix_invert(cts, cts_inv)
+        matrix_multiply(cts_inv, rts, psc[0].raster_to_camera)
         cts.free(); str_mat.free(); rts.free(); cts_inv.free()
 
         # Recompute n_base4 with updated dim
