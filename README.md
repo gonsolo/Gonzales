@@ -18,14 +18,14 @@ documentation with annotated source code.
 
 ## Architecture
 
-The renderer is written entirely in **Mojo** (~10,500 lines) and organized
+The renderer is written entirely in **Mojo** (~10,700 lines) and organized
 into focused modules:
 
 | Module | Lines | Responsibility |
 |--------|------:|---------------|
 | `parsing.mojo` | 3,254 | PBRT-v4 scene parser — geometry, materials, lights, textures |
-| `shading.mojo` | 2,094 | Material shading — diffuse, coated, conductor, dielectric |
-| `gpu.mojo` | 1,545 | GPU kernels: wavefront path tracing, à-trous denoiser, film |
+| `shading.mojo` | 2,225 | Material shading — diffuse, coated, conductor, dielectric |
+| `gpu.mojo` | 1,553 | GPU kernels: wavefront path tracing, à-trous denoiser, film |
 | `pipeline.mojo` | 697 | Batch and interactive rendering pipelines |
 | `bvh.mojo` | 569 | BVH construction (SAH) and traversal |
 | `geometry.mojo` | 566 | Ray, intersection, path state structs |
@@ -85,7 +85,7 @@ evaluation (geometry traversal only).
 
 | Project | Lines (own code) |
 |---|---|
-| **Gonzales** | **~10,500** |
+| **Gonzales** | **~10,700** |
 | pbrt-v4 | ~84,000 (excluding bundled data tables and third-party libs) |
 | Embree kernel | ~96,000 (BVH/traversal only, no rendering) |
 

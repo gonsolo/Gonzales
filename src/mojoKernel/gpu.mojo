@@ -9,7 +9,7 @@ from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, Tria
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
-from .shading import shade_core, shade_nee_core
+from .shading import shade_core, shade_nee_core, ShadeContext
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
@@ -672,13 +672,17 @@ def shade_nee_gpu(
         return
     var inter = intersections[tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
-    shade_nee_core[True, False](path_ptr, 0, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), textures, n_textures,
+    var ctx_no_shadow = ShadeContext(
+        0, bvh2Nodes, primIds, meshes, materials,
+        areaLights, areaLightCount,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures, n_textures,
         UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         distantLights, n_distant_lights,
         UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
         infiniteLights, n_infinite_lights,
         spheres, n_spheres, px_scale)
+    shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
 def shade_enqueue_shadow_gpu(
@@ -708,12 +712,16 @@ def shade_enqueue_shadow_gpu(
         return
     var inter = intersections[tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
-    shade_nee_core[True, True](path_ptr, tid, inter, bvh2Nodes, primIds, meshes, materials, areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](), textures, n_textures, shadow_tasks,
+    var ctx_shadow = ShadeContext(
+        tid, bvh2Nodes, primIds, meshes, materials,
+        areaLights, areaLightCount,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](),
+        textures, n_textures, shadow_tasks,
         UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres)
+        spheres, n_spheres, Float32(0.0))
+    shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 
 def traverse_shadow_rays_gpu(
