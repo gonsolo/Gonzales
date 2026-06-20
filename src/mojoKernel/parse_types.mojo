@@ -16,8 +16,8 @@ comptime PSC_MAX_TEX    = 64
 # giving HAIR_EVAL_N-1 ribbon segments. Each segment becomes 2 perpendicular
 # quads (4 triangles) forming a cross-shaped profile visible from any angle.
 comptime HAIR_EVAL_N    = 8          # sample points along each strand
-comptime HAIR_MAX_VTX   = 15_000_000 # lazy buffer: max accumulated hair vertices
-comptime HAIR_MAX_TRI   = 10_000_000 # lazy buffer: max accumulated hair triangles
+comptime HAIR_MAX_VTX   = 30_000_000 # lazy buffer: max accumulated hair vertices
+comptime HAIR_MAX_TRI   = 15_000_000 # lazy buffer: max accumulated hair triangles
 
 # ── Internal parse state ──────────────────────────────────────────────────────
 # These types are private to the parsing subsystem.

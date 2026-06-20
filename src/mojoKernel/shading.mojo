@@ -1610,13 +1610,37 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         exp(-sigma_a.b * Float32(2.0) * cos_gamma_t),
     )
 
-    var fr = fr_dielectric(cos_theta_o, eta)
+    # PBRT evaluates Fresnel at the local surface angle cos(theta_o)*cos(gamma_o)
+    var cos_gamma_o = safe_sqrt(Float32(1.0) - h_clamped * h_clamped)
+    var fr = fr_dielectric(cos_theta_o * cos_gamma_o, eta)
     var omfr = Float32(1.0) - fr
 
     # Per-lobe attenuation
     var A0 = RGB(fr, fr, fr)               # R: one reflection
     var A1 = T * (omfr * omfr)            # TT: two refractions
     var A2 = T * T * (omfr * omfr * fr)   # TRT: two refractions + one internal reflection
+    # Remainder lobe (p≥3): geometric series A3 = A2 * f*T / (1 - f*T)
+    var A3 = RGB(
+        A2.r * fr * T.r / max(Float32(1e-6), Float32(1.0) - fr * T.r),
+        A2.g * fr * T.g / max(Float32(1e-6), Float32(1.0) - fr * T.g),
+        A2.b * fr * T.b / max(Float32(1e-6), Float32(1.0) - fr * T.b),
+    )
+
+    # Cuticle scale tilt α=2°: per-lobe longitudinal peak shift
+    # Doubled-angle table: index 0=α, 1=2α, 2=4α
+    var sin2k_0 = Float32(0.034899)   # sin(2°)
+    var cos2k_0 = Float32(0.999391)   # cos(2°)
+    var sin2k_1 = Float32(2.0) * cos2k_0 * sin2k_0
+    var cos2k_1 = cos2k_0 * cos2k_0 - sin2k_0 * sin2k_0
+    var sin2k_2 = Float32(2.0) * cos2k_1 * sin2k_1
+    var cos2k_2 = cos2k_1 * cos2k_1 - sin2k_1 * sin2k_1
+    # R (p=0): -2α;  TT (p=1): +α;  TRT (p=2): +4α
+    var sin_tp0_o = sin_theta_o * cos2k_1 - cos_theta_o * sin2k_1
+    var cos_tp0_o = cos_theta_o * cos2k_1 + sin_theta_o * sin2k_1
+    var sin_tp1_o = sin_theta_o * cos2k_0 + cos_theta_o * sin2k_0
+    var cos_tp1_o = cos_theta_o * cos2k_0 - sin_theta_o * sin2k_0
+    var sin_tp2_o = sin_theta_o * cos2k_2 + cos_theta_o * sin2k_2
+    var cos_tp2_o = cos_theta_o * cos2k_2 - sin_theta_o * sin2k_2
 
     # ── Step 9: Longitudinal variance per lobe ────────────────────────────────
     # PBRT formula: v[0] = (0.726β + 0.812β² + 3.7β^20)²
@@ -1651,7 +1675,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var lum0 = A0.luma() + Float32(1e-6)
     var lum1 = A1.luma() + Float32(1e-6)
     var lum2 = A2.luma() + Float32(1e-6)
-    var total_lum = lum0 + lum1 + lum2
+    var lum3 = A3.luma() + Float32(1e-6)
+    var total_lum = lum0 + lum1 + lum2 + lum3
 
     # ── Hit point for shadow rays (always offset toward incoming side) ────────
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
@@ -1713,21 +1738,20 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
             var x0e = _hair_wrap(dphi_ie - dphi0)
             var x1e = _hair_wrap(dphi_ie - dphi1)
             var x2e = _hair_wrap(dphi_ie - dphi2)
-            var M0e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm0, mp_c0) / cos_ti_e
-            var M1e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm1, mp_c1) / cos_ti_e
-            var M2e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm2, mp_c2) / cos_ti_e
+            var M0e = _hair_Mp(cos_ti_e, cos_tp0_o, sin_ti_e, sin_tp0_o, inv_vm0, mp_c0) / cos_ti_e
+            var M1e = _hair_Mp(cos_ti_e, cos_tp1_o, sin_ti_e, sin_tp1_o, inv_vm1, mp_c1) / cos_ti_e
+            var M2e = _hair_Mp(cos_ti_e, cos_tp2_o, sin_ti_e, sin_tp2_o, inv_vm2, mp_c2) / cos_ti_e
+            var M3e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm2, mp_c2) / cos_ti_e
             var N0e = _hair_logistic(x0e, s)
             var N1e = _hair_logistic(x1e, s)
             var N2e = _hair_logistic(x2e, s)
-            var fe_r = A0.r*M0e*N0e + A1.r*M1e*N1e + A2.r*M2e*N2e
-            var fe_g = A0.g*M0e*N0e + A1.g*M1e*N1e + A2.g*M2e*N2e
-            var fe_b = A0.b*M0e*N0e + A1.b*M1e*N1e + A2.b*M2e*N2e
+            var N3e = Float32(0.5) * INV_PI  # uniform azimuthal for remainder lobe
+            var fe_r = A0.r*M0e*N0e + A1.r*M1e*N1e + A2.r*M2e*N2e + A3.r*M3e*N3e
+            var fe_g = A0.g*M0e*N0e + A1.g*M1e*N1e + A2.g*M2e*N2e + A3.g*M3e*N3e
+            var fe_b = A0.b*M0e*N0e + A1.b*M1e*N1e + A2.b*M2e*N2e + A3.b*M3e*N3e
             # MIS: pdf_bsdf in solid angle = cos_ti_e * (lum-weighted M*N sum) / total_lum
-            # M0e already has /cos_ti_e baked in, so multiply back to get raw Mp
-            var pdf_bsdf_nee = max(cos_ti_e * (lum0*M0e*N0e + lum1*M1e*N1e + lum2*M2e*N2e) / total_lum, Float32(1e-6))
+            var pdf_bsdf_nee = max(cos_ti_e * (lum0*M0e*N0e + lum1*M1e*N1e + lum2*M2e*N2e + lum3*M3e*N3e) / total_lum, Float32(1e-6))
             var mis_w_e = power_heuristic(pdf_env, pdf_bsdf_nee)
-            # Multiply by cos_ti_e: cancels the /cos_ti_e embedded in M0e/M1e/M2e,
-            # matching PBRT's f * AbsCosTheta(wi) formula which gives Σ Ap·Mp·Np (no angle factor).
             var contrib_e = path_ptr[].throughput * cos_ti_e * RGB(fe_r, fe_g, fe_b) * env_rgb * (mis_w_e / pdf_env)
             if not contrib_e.is_black():
                 var esign = Float32(1.0) if dot(wi_e, geo_normal) >= Float32(0.0) else Float32(-1.0)
@@ -1762,20 +1786,20 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var x1 = _hair_wrap(dphi_i - dphi1)
         var x2 = _hair_wrap(dphi_i - dphi2)
 
-        # Evaluate 3-lobe BSDF (/ cos_ti converts to solid angle measure)
-        var M0 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm0, mp_c0) / cos_ti
-        var M1 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm1, mp_c1) / cos_ti
-        var M2 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
+        var M0 = _hair_Mp(cos_ti, cos_tp0_o, sin_ti, sin_tp0_o, inv_vm0, mp_c0) / cos_ti
+        var M1 = _hair_Mp(cos_ti, cos_tp1_o, sin_ti, sin_tp1_o, inv_vm1, mp_c1) / cos_ti
+        var M2 = _hair_Mp(cos_ti, cos_tp2_o, sin_ti, sin_tp2_o, inv_vm2, mp_c2) / cos_ti
+        var M3 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
 
         var N0 = _hair_logistic(x0, s)
         var N1 = _hair_logistic(x1, s)
         var N2 = _hair_logistic(x2, s)
+        var N3 = Float32(0.5) * INV_PI
 
-        var fr_val = A0.r * M0 * N0 + A1.r * M1 * N1 + A2.r * M2 * N2
-        var fg_val = A0.g * M0 * N0 + A1.g * M1 * N1 + A2.g * M2 * N2
-        var fb_val = A0.b * M0 * N0 + A1.b * M1 * N1 + A2.b * M2 * N2
+        var fr_val = A0.r * M0 * N0 + A1.r * M1 * N1 + A2.r * M2 * N2 + A3.r * M3 * N3
+        var fg_val = A0.g * M0 * N0 + A1.g * M1 * N1 + A2.g * M2 * N2 + A3.g * M3 * N3
+        var fb_val = A0.b * M0 * N0 + A1.b * M1 * N1 + A2.b * M2 * N2 + A3.b * M3 * N3
 
-        # Multiply by cos_ti: cancels the /cos_ti in M0/M1/M2, matching PBRT's f*AbsCosTheta(wi).
         var contrib = path_ptr[].throughput * cos_ti * RGB(fr_val, fg_val, fb_val) * dl.emission
 
         var t_max = Float32(2000.0)
@@ -1794,17 +1818,28 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
                 path_ptr[].estimate += contrib
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
-    # Pick lobe proportional to luminance (lum0/lum1/lum2/total_lum from above)
+    # Pick lobe proportional to luminance; carry tilted angles for selected lobe
     var r_lobe = pcg.next_float() * total_lum
     var vm_p: Float32
     var e2vm_p: Float32
     var dphi_p: Float32
+    var sin_tp_o_s: Float32
+    var cos_tp_o_s: Float32
+    var uniform_phi_s = False
     if r_lobe < lum0:
         vm_p = vm0; e2vm_p = e2vm0; dphi_p = dphi0
+        sin_tp_o_s = sin_tp0_o; cos_tp_o_s = cos_tp0_o
     elif r_lobe < lum0 + lum1:
         vm_p = vm1; e2vm_p = e2vm1; dphi_p = dphi1
-    else:
+        sin_tp_o_s = sin_tp1_o; cos_tp_o_s = cos_tp1_o
+    elif r_lobe < lum0 + lum1 + lum2:
         vm_p = vm2; e2vm_p = e2vm2; dphi_p = dphi2
+        sin_tp_o_s = sin_tp2_o; cos_tp_o_s = cos_tp2_o
+    else:
+        # Remainder lobe: same vm as TRT, uniform azimuthal
+        vm_p = vm2; e2vm_p = e2vm2; dphi_p = Float32(0.0)
+        sin_tp_o_s = sin_theta_o; cos_tp_o_s = cos_theta_o
+        uniform_phi_s = True
 
     # Sample theta from vMF inverse CDF (PBRT formula)
     var u_th = max(pcg.next_float(), Float32(1e-6))
@@ -1814,13 +1849,17 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var sin_th = safe_sqrt(Float32(1.0) - cos_th * cos_th)
     var cos_phi_v = cos(TWO_PI * u_phi_v)
     # PBRT: sinTheta_i = -cosTheta * sinThetap_o + sinTheta * cosPhi * cosThetap_o
-    var sin_ti_s = max(Float32(-1.0), min(Float32(1.0), -cos_th * sin_theta_o + sin_th * cos_phi_v * cos_theta_o))
+    var sin_ti_s = max(Float32(-1.0), min(Float32(1.0), -cos_th * sin_tp_o_s + sin_th * cos_phi_v * cos_tp_o_s))
     var cos_ti_s = safe_sqrt(Float32(1.0) - sin_ti_s * sin_ti_s)
     cos_ti_s = max(cos_ti_s, Float32(1e-5))
 
-    # Sample phi from logistic inverse CDF: x = s * log(u / (1-u))
+    # Sample phi: logistic inverse CDF for lobes 0-2, uniform for remainder
     var u3 = max(pcg.next_float(), Float32(1e-6))
-    var phi_i_s = phi_o + dphi_p + s * log(u3 / max(Float32(1.0) - u3, Float32(1e-6)))
+    var phi_i_s: Float32
+    if uniform_phi_s:
+        phi_i_s = phi_o + TWO_PI * u3 - PI
+    else:
+        phi_i_s = phi_o + dphi_p + s * log(u3 / max(Float32(1.0) - u3, Float32(1e-6)))
 
     # Reconstruct wi from (sin_ti_s, cos_ti_s, phi_i_s)
     var wi_s = sin_ti_s * tangent + cos(phi_i_s) * cos_ti_s * n_perp + sin(phi_i_s) * cos_ti_s * b_perp
@@ -1834,21 +1873,23 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var x1s = _hair_wrap(dphi_s - dphi1)
     var x2s = _hair_wrap(dphi_s - dphi2)
 
-    var M0s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm0, mp_c0) / cos_ti_s
-    var M1s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm1, mp_c1) / cos_ti_s
-    var M2s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm2, mp_c2) / cos_ti_s
+    var M0s = _hair_Mp(cos_ti_s, cos_tp0_o, sin_ti_s, sin_tp0_o, inv_vm0, mp_c0) / cos_ti_s
+    var M1s = _hair_Mp(cos_ti_s, cos_tp1_o, sin_ti_s, sin_tp1_o, inv_vm1, mp_c1) / cos_ti_s
+    var M2s = _hair_Mp(cos_ti_s, cos_tp2_o, sin_ti_s, sin_tp2_o, inv_vm2, mp_c2) / cos_ti_s
+    var M3s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm2, mp_c2) / cos_ti_s
 
     var N0s = _hair_logistic(x0s, s)
     var N1s = _hair_logistic(x1s, s)
     var N2s = _hair_logistic(x2s, s)
+    var N3s = Float32(0.5) * INV_PI
 
-    var frs = A0.r * M0s * N0s + A1.r * M1s * N1s + A2.r * M2s * N2s
-    var fgs = A0.g * M0s * N0s + A1.g * M1s * N1s + A2.g * M2s * N2s
-    var fbs = A0.b * M0s * N0s + A1.b * M1s * N1s + A2.b * M2s * N2s
+    var frs = A0.r * M0s * N0s + A1.r * M1s * N1s + A2.r * M2s * N2s + A3.r * M3s * N3s
+    var fgs = A0.g * M0s * N0s + A1.g * M1s * N1s + A2.g * M2s * N2s + A3.g * M3s * N3s
+    var fbs = A0.b * M0s * N0s + A1.b * M1s * N1s + A2.b * M2s * N2s + A3.b * M3s * N3s
 
     # Compute sampling PDF — same M * N factors as BSDF (including /cos_ti_s) so
     # f/pdf cancels the divergence at grazing angles.
-    var pdf = (lum0 * M0s * N0s + lum1 * M1s * N1s + lum2 * M2s * N2s) / total_lum
+    var pdf = (lum0 * M0s * N0s + lum1 * M1s * N1s + lum2 * M2s * N2s + lum3 * M3s * N3s) / total_lum
     pdf = max(pdf, Float32(1e-6))
     # Solid-angle PDF (remove the embedded /cos_ti_s) — used for MIS when indirect path hits env.
     # M0s = _hair_Mp / cos_ti_s, so pdf already includes 1/cos_ti_s; multiply back to get solid angle.

@@ -501,22 +501,25 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         cp_buf.free(); return
     if not ensure_hair_buffer(s):
         cp_buf.free(); return
-    var eval_pts = alloc[Float32](HAIR_EVAL_N * 3)
-    for step in range(HAIR_EVAL_N):
-        var u = Float32(step) / Float32(HAIR_EVAL_N - 1)
+    # Sample one point per control point so curl geometry is fully captured.
+    var eval_n = max(8, Int(n_cp))
+    var eval_pts = alloc[Float32](eval_n * 3)
+    for step in range(eval_n):
+        var u = Float32(step) / Float32(eval_n - 1)
         bspline3_eval(cp_buf, Int(n_cp), u, eval_pts + step * 3)
     cp_buf.free()
-    var raw4 = alloc[Float32](HAIR_EVAL_N * 4)
-    var xfm4 = alloc[Float32](HAIR_EVAL_N * 4)
-    for step in range(HAIR_EVAL_N):
+    # Apply current CTM to evaluation points
+    var raw4 = alloc[Float32](eval_n * 4)
+    var xfm4 = alloc[Float32](eval_n * 4)
+    for step in range(eval_n):
         raw4[step*4+0] = eval_pts[step*3+0]
         raw4[step*4+1] = eval_pts[step*3+1]
         raw4[step*4+2] = eval_pts[step*3+2]
         raw4[step*4+3] = Float32(1)
-    transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(HAIR_EVAL_N), xfm4)
+    transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(eval_n), xfm4)
     raw4.free()
     var hw = width / Float32(2)
-    for seg in range(HAIR_EVAL_N - 1):
+    for seg in range(eval_n - 1):
         var p0x = xfm4[seg*4+0]; var p0y = xfm4[seg*4+1]; var p0z = xfm4[seg*4+2]
         var p1x = xfm4[(seg+1)*4+0]; var p1y = xfm4[(seg+1)*4+1]; var p1z = xfm4[(seg+1)*4+2]
         var tx = p1x-p0x; var ty = p1y-p0y; var tz = p1z-p0z
