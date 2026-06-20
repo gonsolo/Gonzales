@@ -4,7 +4,7 @@ from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
-from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf
+from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 
 @fieldwise_init
 struct ShadeContext:
@@ -30,6 +30,7 @@ struct ShadeContext:
     var sphere_count:     Int
     var px_scale:         Float32
     var light_sampler:    LightSampler_C
+    var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
 
 trait ShadeMaterial:
     """Interface for material shaders: evaluate BSDF and enqueue NEE shadow rays."""
@@ -1504,8 +1505,24 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
+    # Pre-draw 8 Z-Sobol samples for this bounce's key decisions.
+    # Dims are consecutive starting at path_ptr[].sampler_dim (which begins at 2).
+    # Per-dimension scrambling is derived from pcgInc (unique per path).
+    var _sidx = Int(path_ptr[].sobol_idx)
+    var _sdim = Int(path_ptr[].sampler_dim)
+    var _sinc = path_ptr[].pcgInc
+    var u_light = sobol_sample(_sidx, _sdim + 0, mix_bits_u64(_sinc ^ UInt64(_sdim + 0)), ctx.sobol_matrices)
+    var u_bary1 = sobol_sample(_sidx, _sdim + 1, mix_bits_u64(_sinc ^ UInt64(_sdim + 1)), ctx.sobol_matrices)
+    var u_bary2 = sobol_sample(_sidx, _sdim + 2, mix_bits_u64(_sinc ^ UInt64(_sdim + 2)), ctx.sobol_matrices)
+    var u_env1  = sobol_sample(_sidx, _sdim + 3, mix_bits_u64(_sinc ^ UInt64(_sdim + 3)), ctx.sobol_matrices)
+    var u_env2  = sobol_sample(_sidx, _sdim + 4, mix_bits_u64(_sinc ^ UInt64(_sdim + 4)), ctx.sobol_matrices)
+    var u_scat1 = sobol_sample(_sidx, _sdim + 5, mix_bits_u64(_sinc ^ UInt64(_sdim + 5)), ctx.sobol_matrices)
+    var u_scat2 = sobol_sample(_sidx, _sdim + 6, mix_bits_u64(_sinc ^ UInt64(_sdim + 6)), ctx.sobol_matrices)
+    var u_rr    = sobol_sample(_sidx, _sdim + 7, mix_bits_u64(_sinc ^ UInt64(_sdim + 7)), ctx.sobol_matrices)
+    path_ptr[].sampler_dim += Int32(8)
+
     if ctx.area_light_count > 0:
-        var ls_u_nee = pcg.next_float()
+        var ls_u_nee = u_light
         var ls_result_nee = light_sampler_sample(ctx.light_sampler, ls_u_nee)
         var light_idx = ls_result_nee[0]
         var light_sel_pdf_nee = ls_result_nee[1]
@@ -1519,8 +1536,8 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
         var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
         var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-        var r1 = pcg.next_float()
-        var r2 = pcg.next_float()
+        var r1 = u_bary1
+        var r2 = u_bary2
         var sqrt_r1 = sqrt(r1)
         var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
         var lcross = cross(lp1 - lp0, lp2 - lp0)
@@ -1654,8 +1671,8 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
             # ── CDF importance sampling ──────────────────────────────────────
             var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-            var u1_env = pcg.next_float()
-            var u2_env = pcg.next_float()
+            var u1_env = u_env1
+            var u2_env = u_env2
             var r_env = sqrt(u1_env)
             var theta_env = TWO_PI * u2_env
             var x_env = r_env * cos(theta_env)
@@ -1767,7 +1784,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     path_ptr[].estimate += contrib
 
 
-    var _scatter = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+    var _scatter = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
     var dir = _scatter[0]
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
@@ -1782,7 +1799,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if path_ptr[].bounce > 1:
         var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
+        if u_rr < q:
             path_ptr[].active = 0
         else:
             path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
@@ -2085,6 +2102,7 @@ def shade_core_cpu_nee(
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     sphereCount: Int,
     light_sampler: LightSampler_C,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2098,5 +2116,5 @@ def shade_core_cpu_nee(
         distantLights, distantLightCount,
         pointLights, pointLightCount,
         infiniteLights, infiniteLightCount,
-        spheres, sphereCount, Float32(0.0), light_sampler)
+        spheres, sphereCount, Float32(0.0), light_sampler, sobol_matrices)
     shade_nee_core[False, False](path_ptr, inter, ctx)

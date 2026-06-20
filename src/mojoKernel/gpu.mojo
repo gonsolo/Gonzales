@@ -69,7 +69,7 @@ struct GpuSceneHandle(Movable):
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
     var n_pixels: Int
     # Camera and sampling data for GPU-side ray generation
-    var sobol_buf: DeviceBuffer[DType.uint8]  # 2 dims × 52 UInt32 = 416 bytes
+    var sobol_buf: DeviceBuffer[DType.uint8]  # 1024 dims × 52 UInt32 = 212992 bytes
     var r2c_buf: DeviceBuffer[DType.uint8]    # raster_to_camera: 16 Float32 = 64 bytes
     var c2w_buf: DeviceBuffer[DType.uint8]    # camera_to_world: 16 Float32 = 64 bytes (updated each frame)
     var filter_sigma: Float32
@@ -483,11 +483,14 @@ def gpu_upload_scene(
             tex_is_raw.free()
             print("GPU: " + String(n_textures_int) + " texture(s) uploaded")
 
-            # Upload Sobol matrices: first 2 dimensions × 52 UInt32 = 416 bytes
-            var sobol_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](416)
+            # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
+            comptime N_SOBOL_GPU_DIMS = 1024
+            comptime N_SOBOL_GPU_WORDS = N_SOBOL_GPU_DIMS * 52
+            comptime N_SOBOL_GPU_BYTES = N_SOBOL_GPU_WORDS * 4
+            var sobol_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](N_SOBOL_GPU_BYTES)
             with sobol_gpu_buf.map_to_host() as h:
                 var dst = h.unsafe_ptr().bitcast[UInt32]()
-                for i in range(104):
+                for i in range(N_SOBOL_GPU_WORDS):
                     dst[i] = sobol_matrices[i]
 
             # Upload raster_to_camera (16 floats = 64 bytes)
@@ -697,6 +700,7 @@ def shade_nee_gpu(
     n_infinite_lights: Int,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
 ):
@@ -718,7 +722,7 @@ def shade_nee_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls)
+        spheres, n_spheres, px_scale, ls, sobol_matrices)
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
@@ -749,6 +753,7 @@ def shade_enqueue_shadow_gpu(
         return
     var inter = intersections[tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
+    var ls_shadow = LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
         tid, bvh2Nodes, primIds, meshes, materials,
         areaLights, areaLightCount,
@@ -757,7 +762,8 @@ def shade_enqueue_shadow_gpu(
         UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, Float32(0.0))
+        spheres, n_spheres, Float32(0.0), ls_shadow,
+        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling())
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 
@@ -852,7 +858,7 @@ def gen_primary_rays_wavefront_gpu(
     var py = Int32(px_flat // fw)
     var si = si_start + Int32(si_local)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (ray, pcg_state, pcg_inc) = gen_primary_ray_state(
+    var (ray, pcg_state, pcg_inc, sobol_idx) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
@@ -868,6 +874,7 @@ def gen_primary_rays_wavefront_gpu(
         Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0),
         Int32(-1),
+        Int32(2), sobol_idx,
     )
 
 
@@ -970,7 +977,7 @@ def gen_primary_rays_gpu(
     var px = Int32(tid % fw)
     var py = Int32(tid // fw)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (ray, pcg_state, pcg_inc) = gen_primary_ray_state(
+    var (ray, pcg_state, pcg_inc, sobol_idx) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
@@ -986,6 +993,7 @@ def gen_primary_rays_gpu(
         Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0),
         Int32(-1),
+        Int32(2), sobol_idx,
     )
 
 
@@ -1196,6 +1204,7 @@ def gpu_render_sample(
                     handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int,
                     px_scale,
                     grid_dim=grid_dim,
@@ -1291,6 +1300,7 @@ def gpu_render_wavefront(
                     handle[].n_infinite_lights,
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total,
                     px_scale,
                     grid_dim=grid_total,

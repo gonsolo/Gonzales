@@ -260,7 +260,10 @@ struct PathState_C(TrivialRegisterPassable):
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32
     var current_medium_idx: Int32  # -1 = vacuum; >= 0 = index into scene.mediums
+    var sampler_dim: Int32         # next Sobol dimension; 2 after primary ray (dims 0+1), +8 per bounce
+    var sobol_idx: UInt64          # path's Z-Sobol sample index (from Morton code + si)
 # <</listing>>
+# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8 = 104 bytes (no trailing pad needed)
 
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md

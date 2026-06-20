@@ -315,9 +315,9 @@ def gen_primary_ray_state(
     filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32 = Int32(0),
-) -> Tuple[Ray_C, UInt64, UInt64]:
+) -> Tuple[Ray_C, UInt64, UInt64, UInt64]:
     """Shared Sobol + filter + camera-transform primary ray generator.
-    Returns (ray, pcg_state, pcg_inc).
+    Returns (ray, pcg_state, pcg_inc, sobol_idx).
     """
     var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
     var morton_idx  = morton_base | UInt64(si)
@@ -359,4 +359,4 @@ def gen_primary_ray_state(
 
     var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
-    return (Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc)
+    return (Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx)
