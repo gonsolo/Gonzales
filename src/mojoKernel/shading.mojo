@@ -2421,22 +2421,24 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     inter: Intersection_C,
     ctx: ShadeContext,
 ):
-    if mat.type == Int8(1):
+    if mat.type == MatKind.diffuse:
         MatDiffuse(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(3):
+    elif mat.type == MatKind.conductor:
         MatConductor(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(4):
+    elif mat.type == MatKind.dielectric:
         MatDielectric(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(5):
+    elif mat.type == MatKind.coated_diffuse:
         MatCoatedDiffuse(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(6):
+    elif mat.type == MatKind.diffuse_transmit:
         MatDiffuseTransmission(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(7):
+    elif mat.type == MatKind.coated_conductor:
         MatCoatedConductor(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(8):
+    elif mat.type == MatKind.mix:
         MatMix(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-    elif mat.type == Int8(9):
+    elif mat.type == MatKind.thin_dielectric:
         MatThinDielectric(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+    elif mat.type == MatKind.hair:
+        shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     else:
         path_ptr[].active = 0
 
