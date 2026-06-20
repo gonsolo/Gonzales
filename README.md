@@ -18,24 +18,26 @@ documentation with annotated source code.
 
 ## Architecture
 
-The renderer is written entirely in **Mojo** (~7,800 lines) and organized
+The renderer is written entirely in **Mojo** (~10,500 lines) and organized
 into focused modules:
 
 | Module | Lines | Responsibility |
 |--------|------:|---------------|
-| `parsing.mojo` | 1,959 | PBRT-v4 scene parser — geometry, materials, lights, textures |
-| `gpu.mojo` | 1,294 | GPU kernels: wavefront path tracing, à-trous denoiser, film |
-| `shading.mojo` | 770 | Material shading — diffuse, coated, conductor, dielectric |
-| `bvh.mojo` | 535 | BVH construction (SAH) and traversal |
-| `pipeline.mojo` | 457 | Batch and interactive rendering pipelines |
-| `rendering.mojo` | 407 | CPU tile renderer, film accumulation, bilateral denoiser |
-| `ply.mojo` | 316 | PLY mesh loader |
-| `sampling.mojo` | 173 | Z-Sobol sampler with Owen scrambling |
-| `geometry.mojo` | 191 | Ray, intersection, path state structs |
-| `transform.mojo` | — | 4×4 matrix math |
-| `rng.mojo` | — | PCG32 random number generator |
-| `postprocess.mojo` | — | Joint bilateral denoiser (CPU) |
-| `viewer.mojo` | — | Interactive Vulkan viewer bridge |
+| `parsing.mojo` | 3,254 | PBRT-v4 scene parser — geometry, materials, lights, textures |
+| `shading.mojo` | 2,094 | Material shading — diffuse, coated, conductor, dielectric |
+| `gpu.mojo` | 1,545 | GPU kernels: wavefront path tracing, à-trous denoiser, film |
+| `pipeline.mojo` | 697 | Batch and interactive rendering pipelines |
+| `bvh.mojo` | 569 | BVH construction (SAH) and traversal |
+| `geometry.mojo` | 566 | Ray, intersection, path state structs |
+| `rendering.mojo` | 443 | CPU tile renderer, film accumulation, bilateral denoiser |
+| `sampling.mojo` | 362 | Z-Sobol sampler with Owen scrambling |
+| `ply.mojo` | 346 | PLY mesh loader |
+| `scene.mojo` | 177 | Scene helpers |
+| `transform.mojo` | 140 | 4×4 matrix math |
+| `__init__.mojo` | 124 | CLI entry point |
+| `postprocess.mojo` | 114 | Joint bilateral denoiser (CPU) |
+| `viewer.mojo` | 75 | Interactive Vulkan viewer bridge |
+| `rng.mojo` | 22 | PCG32 random number generator |
 
 External C/C++ libraries (OpenImageIO, Ptex, Vulkan) are called via Mojo's
 C FFI — not reimplemented.
