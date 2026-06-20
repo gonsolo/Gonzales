@@ -32,15 +32,6 @@ struct ShadeContext:
     var light_sampler:    LightSampler_C
     var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
 
-trait ShadeMaterial:
-    """Interface for material shaders: evaluate BSDF and enqueue NEE shadow rays."""
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ): ...
-
 @always_inline
 def _shading_normal(
     mesh: TriangleMesh_C,
@@ -2186,102 +2177,6 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].pcgState = pcg.state
 
 
-@fieldwise_init
-struct MatDiffuse(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, self.mat)
-
-@fieldwise_init
-struct MatConductor(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_conductor(path_ptr, inter, ctx.meshes, self.mat)
-
-@fieldwise_init
-struct MatDielectric(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_dielectric(path_ptr, inter, ctx.meshes, self.mat)
-
-@fieldwise_init
-struct MatThinDielectric(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_thin_dielectric(path_ptr, inter, ctx.meshes, self.mat)
-
-@fieldwise_init
-struct MatCoatedDiffuse(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, self.mat)
-
-@fieldwise_init
-struct MatCoatedConductor(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_coated_conductor(path_ptr, inter, ctx.meshes, self.mat)
-
-@fieldwise_init
-struct MatDiffuseTransmission(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_diffuse_transmission[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
-
-@fieldwise_init
-struct MatMix(ShadeMaterial):
-    var mat: Material_C
-    @always_inline
-    def shade[use_gpu: Bool, enqueue_shadow: Bool](
-        self,
-        path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-        inter: Intersection_C,
-        ctx: ShadeContext,
-    ):
-        shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, self.mat)
-
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
@@ -2290,21 +2185,21 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
 ):
     if mat.type == MatKind.diffuse:
-        MatDiffuse(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.conductor:
-        MatConductor(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_conductor(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.dielectric:
-        MatDielectric(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_dielectric(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.coated_diffuse:
-        MatCoatedDiffuse(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.diffuse_transmit:
-        MatDiffuseTransmission(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_diffuse_transmission[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
     elif mat.type == MatKind.coated_conductor:
-        MatCoatedConductor(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_coated_conductor(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.mix:
-        MatMix(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.thin_dielectric:
-        MatThinDielectric(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
+        shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.hair:
         comptime if not use_gpu:
             shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
