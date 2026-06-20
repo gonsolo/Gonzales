@@ -1817,94 +1817,21 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].pcgState = pcg.state
 
 
-# Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
-# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
-def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
+def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    inter: Intersection_C,
     ctx: ShadeContext,
-    mat: Material_C,
+    normal: SIMD[DType.float32, 3],
+    hit_point: SIMD[DType.float32, 3],
+    alb: RGB,
+    u_light: Float32,
+    u_bary1: Float32,
+    u_bary2: Float32,
+    u_env1: Float32,
+    u_env2: Float32,
+    mut pcg: PCG32,
 ):
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
-    if not ok:
-        path_ptr[].active = 0
-        return
-    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
-    # Geometric normal oriented to the camera side; the shading/bumped normal is
-    # kept on this side below (NOT flipped to the view ray).
-    var ng_ff = normal
-
-    # Texture-space footprint of one pixel at this hit, for the mip LOD.
-    # Analytic primary-ray estimate: pixel_world = tHit * px_scale / |cos(ray,N)|,
-    # then to uv via the triangle's dP/du. (CPU passes px_scale=0 -> 0; OIIO filters.)
-    var pixel_uv = Float32(0.0)
-    if ctx.px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
-        var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
-        var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
-        var det = fu1*fv2 - fu2*fv1
-        if det != Float32(0.0):
-            var inv = Float32(1.0) / det
-            var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
-            var dpdu_len = sqrt(dot(dpdu, dpdu))
-            if dpdu_len > Float32(0.0):
-                var rc = dot(ng_ff, ray_dir)
-                if rc < Float32(0.0): rc = -rc
-                if rc < Float32(0.05): rc = Float32(0.05)
-                pixel_uv = (inter.tHit * ctx.px_scale / rc) / dpdu_len
-
-    # Use interpolated shading normal as the base for smooth diffuse shading
-    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
-
-    # Apply normal map if present
-    normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
-        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
-    # Faceforward the bumped normal to the geometric normal — never to the view
-    # ray. Flipping to the ray inverts bumps that tilt away from the camera at
-    # grazing angles, washing out the relief (pbrt faceforwards to Ng).
-    if dot(normal, ng_ff) < Float32(0.0):
-        normal = -normal
-
-    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-
-    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
-
-    # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
-    # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map
-    # can tilt the shading normal past the viewer at grazing angles; those faces
-    # reflect no direct light (without this, the away side of each bump is wrongly
-    # lit — the top/bottom split across each bead). They still receive ambient
-    # from a uniform environment light (albedo * L), which is pbrt's dim grey
-    # there — so add that rather than going black, then stop.
-    if dot(normal, ray_dir) >= Float32(0.0):
-        for inf_i in range(ctx.infinite_count):
-            var il = ctx.infinite_lights[inf_i]
-            if il.tex_idx < Int32(0):
-                path_ptr[].estimate += path_ptr[].throughput * (alb * il.scale)
-        path_ptr[].active = 0
-        return
-
-    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-
-    # Pre-draw 8 Z-Sobol samples for this bounce's key decisions.
-    # Dims are consecutive starting at path_ptr[].sampler_dim (which begins at 2).
-    # Per-dimension scrambling is derived from pcgInc (unique per path).
-    var _sidx = Int(path_ptr[].sobol_idx)
-    var _sdim = Int(path_ptr[].sampler_dim)
-    var _sinc = path_ptr[].pcgInc
-    var u_light = sobol_sample(_sidx, _sdim + 0, mix_bits_u64(_sinc ^ UInt64(_sdim + 0)), ctx.sobol_matrices)
-    var u_bary1 = sobol_sample(_sidx, _sdim + 1, mix_bits_u64(_sinc ^ UInt64(_sdim + 1)), ctx.sobol_matrices)
-    var u_bary2 = sobol_sample(_sidx, _sdim + 2, mix_bits_u64(_sinc ^ UInt64(_sdim + 2)), ctx.sobol_matrices)
-    var u_env1  = sobol_sample(_sidx, _sdim + 3, mix_bits_u64(_sinc ^ UInt64(_sdim + 3)), ctx.sobol_matrices)
-    var u_env2  = sobol_sample(_sidx, _sdim + 4, mix_bits_u64(_sinc ^ UInt64(_sdim + 4)), ctx.sobol_matrices)
-    var u_scat1 = sobol_sample(_sidx, _sdim + 5, mix_bits_u64(_sinc ^ UInt64(_sdim + 5)), ctx.sobol_matrices)
-    var u_scat2 = sobol_sample(_sidx, _sdim + 6, mix_bits_u64(_sinc ^ UInt64(_sdim + 6)), ctx.sobol_matrices)
-    var u_rr    = sobol_sample(_sidx, _sdim + 7, mix_bits_u64(_sinc ^ UInt64(_sdim + 7)), ctx.sobol_matrices)
-    path_ptr[].sampler_dim += Int32(8)
-
+    # ── Area light NEE ────────────────────────────────────────────────────────
     if ctx.area_light_count > 0:
         var ls_u_nee = u_light
         var ls_result_nee = light_sampler_sample(ctx.light_sampler, ls_u_nee)
@@ -2137,6 +2064,97 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var t_max_env = Float32(100000.0)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib)
 
+
+# Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
+# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
+@always_inline
+def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    ctx: ShadeContext,
+    mat: Material_C,
+):
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
+        path_ptr[].active = 0
+        return
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    # Geometric normal oriented to the camera side; the shading/bumped normal is
+    # kept on this side below (NOT flipped to the view ray).
+    var ng_ff = normal
+
+    # Texture-space footprint of one pixel at this hit, for the mip LOD.
+    # Analytic primary-ray estimate: pixel_world = tHit * px_scale / |cos(ray,N)|,
+    # then to uv via the triangle's dP/du. (CPU passes px_scale=0 -> 0; OIIO filters.)
+    var pixel_uv = Float32(0.0)
+    if ctx.px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
+        var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
+        var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
+        var det = fu1*fv2 - fu2*fv1
+        if det != Float32(0.0):
+            var inv = Float32(1.0) / det
+            var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
+            var dpdu_len = sqrt(dot(dpdu, dpdu))
+            if dpdu_len > Float32(0.0):
+                var rc = dot(ng_ff, ray_dir)
+                if rc < Float32(0.0): rc = -rc
+                if rc < Float32(0.05): rc = Float32(0.05)
+                pixel_uv = (inter.tHit * ctx.px_scale / rc) / dpdu_len
+
+    # Use interpolated shading normal as the base for smooth diffuse shading
+    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
+
+    # Apply normal map if present
+    normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
+        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+    # Faceforward the bumped normal to the geometric normal — never to the view
+    # ray. Flipping to the ray inverts bumps that tilt away from the camera at
+    # grazing angles, washing out the relief (pbrt faceforwards to Ng).
+    if dot(normal, ng_ff) < Float32(0.0):
+        normal = -normal
+
+    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+
+    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+
+    # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
+    # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map
+    # can tilt the shading normal past the viewer at grazing angles; those faces
+    # reflect no direct light (without this, the away side of each bump is wrongly
+    # lit — the top/bottom split across each bead). They still receive ambient
+    # from a uniform environment light (albedo * L), which is pbrt's dim grey
+    # there — so add that rather than going black, then stop.
+    if dot(normal, ray_dir) >= Float32(0.0):
+        for inf_i in range(ctx.infinite_count):
+            var il = ctx.infinite_lights[inf_i]
+            if il.tex_idx < Int32(0):
+                path_ptr[].estimate += path_ptr[].throughput * (alb * il.scale)
+        path_ptr[].active = 0
+        return
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    # Pre-draw 8 Z-Sobol samples for this bounce's key decisions.
+    # Dims are consecutive starting at path_ptr[].sampler_dim (which begins at 2).
+    # Per-dimension scrambling is derived from pcgInc (unique per path).
+    var _sidx = Int(path_ptr[].sobol_idx)
+    var _sdim = Int(path_ptr[].sampler_dim)
+    var _sinc = path_ptr[].pcgInc
+    var u_light = sobol_sample(_sidx, _sdim + 0, mix_bits_u64(_sinc ^ UInt64(_sdim + 0)), ctx.sobol_matrices)
+    var u_bary1 = sobol_sample(_sidx, _sdim + 1, mix_bits_u64(_sinc ^ UInt64(_sdim + 1)), ctx.sobol_matrices)
+    var u_bary2 = sobol_sample(_sidx, _sdim + 2, mix_bits_u64(_sinc ^ UInt64(_sdim + 2)), ctx.sobol_matrices)
+    var u_env1  = sobol_sample(_sidx, _sdim + 3, mix_bits_u64(_sinc ^ UInt64(_sdim + 3)), ctx.sobol_matrices)
+    var u_env2  = sobol_sample(_sidx, _sdim + 4, mix_bits_u64(_sinc ^ UInt64(_sdim + 4)), ctx.sobol_matrices)
+    var u_scat1 = sobol_sample(_sidx, _sdim + 5, mix_bits_u64(_sinc ^ UInt64(_sdim + 5)), ctx.sobol_matrices)
+    var u_scat2 = sobol_sample(_sidx, _sdim + 6, mix_bits_u64(_sinc ^ UInt64(_sdim + 6)), ctx.sobol_matrices)
+    var u_rr    = sobol_sample(_sidx, _sdim + 7, mix_bits_u64(_sinc ^ UInt64(_sdim + 7)), ctx.sobol_matrices)
+    path_ptr[].sampler_dim += Int32(8)
+
+    _shade_diffuse_nee[use_gpu, enqueue_shadow](path_ptr, ctx, normal, hit_point, alb,
+        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg)
 
     var _scatter = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
     var dir = _scatter[0]
