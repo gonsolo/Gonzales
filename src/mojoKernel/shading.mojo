@@ -339,26 +339,14 @@ def shade_core(
 
     if mat.type == MatKind.diffuse:
         # Construct Normal
-        var mesh_idx: Int
-        var base_vidx: Int
-        if inter.primId.type == 0:
-            mesh_idx = Int(inter.primId.id1)
-            base_vidx = Int(inter.primId.id2)
-        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-            mesh_idx = Int(inter.primId.id2 >> 32)
-            base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-        else:
+        var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+        if not ok:
             path_ptr[].active = 0
             return
 
-        var mesh = ctx.meshes[mesh_idx]
-        var v0_idx = Int(mesh.vertexIndices[base_vidx])
-        var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
-        var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
-
-        var p0 = SIMD[DType.float32, 3](mesh.points[v0_idx * 4], mesh.points[v0_idx * 4 + 1], mesh.points[v0_idx * 4 + 2])
-        var p1 = SIMD[DType.float32, 3](mesh.points[v1_idx * 4], mesh.points[v1_idx * 4 + 1], mesh.points[v1_idx * 4 + 2])
-        var p2 = SIMD[DType.float32, 3](mesh.points[v2_idx * 4], mesh.points[v2_idx * 4 + 1], mesh.points[v2_idx * 4 + 2])
+        var p0 = SIMD[DType.float32, 3](mesh.points[v0 * 4], mesh.points[v0 * 4 + 1], mesh.points[v0 * 4 + 2])
+        var p1 = SIMD[DType.float32, 3](mesh.points[v1 * 4], mesh.points[v1 * 4 + 1], mesh.points[v1 * 4 + 2])
+        var p2 = SIMD[DType.float32, 3](mesh.points[v2 * 4], mesh.points[v2 * 4 + 1], mesh.points[v2 * 4 + 2])
 
         var edge1 = p1 - p0
         var edge2 = p2 - p0
@@ -408,6 +396,28 @@ def shade_core(
         path_ptr[].active = 0
 
 
+# ── Triangle primitive helper ─────────────────────────────────────────────────
+# Decodes the primId encoding into (mesh, v0, v1, v2). Returns ok=False for
+# non-triangle hits (caller should deactivate path and return).
+@always_inline
+def _get_tri_verts(
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+) -> Tuple[TriangleMesh_C, Int, Int, Int, Bool]:
+    var mi: Int
+    var bv: Int
+    if inter.primId.type == 0:
+        mi = Int(inter.primId.id1)
+        bv = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mi = Int(inter.primId.id2 >> 32)
+        bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        return (meshes[0], 0, 0, 0, False)
+    var m = meshes[mi]
+    return (m, Int(m.vertexIndices[bv]), Int(m.vertexIndices[bv+1]), Int(m.vertexIndices[bv+2]), True)
+
+
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
@@ -416,22 +426,10 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
 ):
     var mat = ctx.materials[Int(inter.primId.materialIndex)]
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = ctx.meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -558,22 +556,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material_C,
 ):
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = ctx.meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -858,22 +844,10 @@ def shade_dielectric(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
 ):
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -962,22 +936,10 @@ def shade_thin_dielectric(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
 ):
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -1041,22 +1003,10 @@ def shade_conductor(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
 ):
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -1220,22 +1170,10 @@ def shade_coated_conductor(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
 ):
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -1491,22 +1429,10 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
 
 
     # ── Step 1: Get geometry ─────────────────────────────────────────────────
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = ctx.meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var bu = inter.u
     var bv = inter.v
     var w0 = Float32(1.0) - bu - bv
@@ -1933,22 +1859,10 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material_C,
 ):
-    var mesh_idx: Int
-    var base_vidx: Int
-    if inter.primId.type == 0:
-        mesh_idx = Int(inter.primId.id1)
-        base_vidx = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mesh_idx = Int(inter.primId.id2 >> 32)
-        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    else:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
         path_ptr[].active = 0
         return
-
-    var mesh = ctx.meshes[mesh_idx]
-    var v0 = Int(mesh.vertexIndices[base_vidx])
-    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
