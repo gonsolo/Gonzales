@@ -1,7 +1,7 @@
 from std.memory import alloc, OwnedPointer
 from std.collections import List
 from std.math import sqrt, tan
-from .parsing import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
+from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, render_aux_buffers, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot

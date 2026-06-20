@@ -1,0 +1,234 @@
+from std.memory import alloc
+from std.math import exp
+from .lexer import (PbrtScanner, scanner_parse_quoted_string, scanner_parse_param_header,
+                    scanner_scan_char, scanner_scan_float,
+                    _psc_streq, _psc_strncpy, _psc_strncmp,
+                    _psc_type_is_float, _psc_type_is_int, _psc_type_is_str,
+                    _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
+                    _psc_skip_value)
+from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
+from .geometry import RGB
+
+def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                                   s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    var mat_name = alloc[UInt8](PSC_NAME_MAX)
+    _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
+
+    var rgb = alloc[Float32](3)
+    rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    # transmittance for DiffuseTransmission (default 0.25 per PBRT)
+    var trans_rgb = alloc[Float32](3)
+    trans_rgb[0] = Float32(0.25); trans_rgb[1] = Float32(0.25); trans_rgb[2] = Float32(0.25)
+    # named-spectrum conductor optical constants (R/G/B at 630/530/450 nm)
+    var metal_eta = alloc[Float32](3)
+    metal_eta[0] = Float32(0.5); metal_eta[1] = Float32(0.5); metal_eta[2] = Float32(0.5)
+    var metal_k   = alloc[Float32](3)
+    metal_k[0] = Float32(0.5); metal_k[1] = Float32(0.5); metal_k[2] = Float32(0.5)
+    var has_spectral_conductor = False
+    # hair material melanin parameters
+    var eumelanin   = Float32(0.0)
+    var pheomelanin = Float32(0.0)
+    var sigma_a_rgb = alloc[Float32](3)
+    sigma_a_rgb[0] = Float32(-1); sigma_a_rgb[1] = Float32(-1); sigma_a_rgb[2] = Float32(-1)
+    var has_sigma_a = False
+    var mat_type = Int8(1)  # default: diffuse
+    var mat_ior  = Float32(1.5)
+    var mat_roughU = Float32(0.0)
+    var mat_roughV = Float32(0.0)
+    var tex_idx_for_mat = Int32(-1)
+    var normal_tex_idx_for_mat = Int32(-1)
+    var mix_name1 = alloc[UInt8](PSC_NAME_MAX)
+    var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
+    var mix_amount = Float32(0.5)
+    mix_name1[0] = UInt8(0); mix_name2[0] = UInt8(0)
+    var type_buf = alloc[UInt8](64)
+    var name_buf = alloc[UInt8](128)
+    var str_val  = alloc[UInt8](64)
+    var ia = alloc[Int32](1)
+    ia[0] = Int32(0)
+    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    while found != 0:
+        var is_array = ia[0]
+        if _psc_streq(name_buf, "type") and _psc_type_is_str(type_buf):
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            if _psc_streq(str_val, "conductor"):
+                mat_type = Int8(3)
+            elif _psc_streq(str_val, "dielectric"):
+                mat_type = Int8(4)
+            elif _psc_streq(str_val, "coateddiffuse"):
+                mat_type = Int8(5)
+            elif _psc_streq(str_val, "diffusetransmission"):
+                mat_type = Int8(6)
+            elif _psc_streq(str_val, "coatedconductor"):
+                mat_type = Int8(7)
+            elif _psc_streq(str_val, "mix"):
+                mat_type = Int8(8)
+            elif _psc_streq(str_val, "thindielectric"):
+                mat_type = Int8(9)
+            elif _psc_streq(str_val, "hair"):
+                mat_type = Int8(11)
+            else:
+                mat_type = Int8(1)
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
+            if _psc_streq(name_buf, "eta"):
+                _psc_scan_rgb(handle, metal_eta, is_array)
+            else:
+                _psc_scan_rgb(handle, metal_k, is_array)
+            has_spectral_conductor = True
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and type_buf[0] == UInt8(102):  # 'f' float IOR for dielectric
+            var tmp = alloc[Float32](1)
+            _ = scanner_scan_float(handle, tmp)
+            mat_ior = tmp[0]
+            tmp.free()
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+        elif (_psc_streq(name_buf, "uroughness") or _psc_streq(name_buf, "roughness")) and _psc_type_is_float(type_buf):
+            mat_roughU = _psc_scan_one_float(handle, is_array)
+            if _psc_streq(name_buf, "roughness"):
+                mat_roughV = mat_roughU
+        elif _psc_streq(name_buf, "vroughness") and _psc_type_is_float(type_buf):
+            mat_roughV = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, rgb, is_array)
+        elif _psc_streq(name_buf, "transmittance") and _psc_type_is_float(type_buf):
+            # DiffuseTransmission transmittance — stored in trans_rgb, later -> mat.emission
+            _psc_scan_rgb(handle, trans_rgb, is_array)
+        elif _psc_streq(name_buf, "eumelanin") and _psc_type_is_float(type_buf):
+            # Hair material: melanin concentration -> stored in rgb[0] (temp)
+            eumelanin = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "pheomelanin") and _psc_type_is_float(type_buf):
+            pheomelanin = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "sigma_a") and _psc_type_is_float(type_buf):
+            # Hair material: direct absorption coefficients (R,G,B)
+            _psc_scan_rgb(handle, sigma_a_rgb, is_array)
+            has_sigma_a = True
+        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(115):  # 's' = spectrum
+            # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
+            # Read the metal name string, look up precomputed F0 per channel.
+            var mname = alloc[UInt8](64)
+            _ = scanner_parse_quoted_string(handle, mname, 64)
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
+            # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
+            if _psc_streq(name_buf, "eta"):
+                if _psc_strncmp(mname, "metal-Ag", 8) == 0:
+                    metal_eta[0] = Float32(0.136); metal_eta[1] = Float32(0.130); metal_eta[2] = Float32(0.144)
+                elif _psc_strncmp(mname, "metal-Al", 8) == 0:
+                    metal_eta[0] = Float32(1.300); metal_eta[1] = Float32(0.826); metal_eta[2] = Float32(0.644)
+                elif _psc_strncmp(mname, "metal-Au", 8) == 0:
+                    metal_eta[0] = Float32(0.194); metal_eta[1] = Float32(0.608); metal_eta[2] = Float32(1.426)
+                elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
+                    metal_eta[0] = Float32(0.272); metal_eta[1] = Float32(1.120); metal_eta[2] = Float32(1.160)
+                has_spectral_conductor = True
+            else:  # "k"
+                if _psc_strncmp(mname, "metal-Ag", 8) == 0:
+                    metal_k[0] = Float32(3.880); metal_k[1] = Float32(3.070); metal_k[2] = Float32(2.560)
+                elif _psc_strncmp(mname, "metal-Al", 8) == 0:
+                    metal_k[0] = Float32(7.480); metal_k[1] = Float32(6.280); metal_k[2] = Float32(5.580)
+                elif _psc_strncmp(mname, "metal-Au", 8) == 0:
+                    metal_k[0] = Float32(3.060); metal_k[1] = Float32(2.120); metal_k[2] = Float32(1.846)
+                elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
+                    metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
+                has_spectral_conductor = True
+            mname.free()
+        elif _psc_streq(name_buf, "reflectance") and type_buf[0] == UInt8(116):  # 't' = texture
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            # Look up str_val in tex_names (imagemap) first, then constant textures.
+            var str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            for ti in range(len(s[0].tex_names)):
+                if s[0].tex_names[ti] == str_name:
+                    tex_idx_for_mat = Int32(ti)
+                    break
+            for ci in range(len(s[0].const_tex_names)):
+                if s[0].const_tex_names[ci] == str_name:
+                    rgb[0] = s[0].const_tex_rgb[ci*3+0]
+                    rgb[1] = s[0].const_tex_rgb[ci*3+1]
+                    rgb[2] = s[0].const_tex_rgb[ci*3+2]
+                    break
+        elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, rgb, is_array)
+        elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
+            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            # Register the file as an (unnamed) imagemap texture and point the
+            # material's normal_tex_idx at it — same path as a texture reference.
+            var nm_file = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            normal_tex_idx_for_mat = Int32(len(s[0].tex_names))
+            s[0].tex_names.append(String("__normalmap"))
+            s[0].tex_files.append(nm_file)
+        elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
+            mix_amount = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "materials") and _psc_type_is_str(type_buf):
+            # Two quoted material names for mix
+            var tmp1 = alloc[UInt8](PSC_NAME_MAX)
+            var tmp2 = alloc[UInt8](PSC_NAME_MAX)
+            _ = scanner_parse_quoted_string(handle, tmp1, PSC_NAME_MAX)
+            _ = scanner_parse_quoted_string(handle, tmp2, PSC_NAME_MAX)
+            _psc_strncpy(mix_name1, tmp1, PSC_NAME_MAX)
+            _psc_strncpy(mix_name2, tmp2, PSC_NAME_MAX)
+            tmp1.free(); tmp2.free()
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+        else:
+            _psc_skip_value(handle, type_buf, is_array)
+            if is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+        ia[0] = Int32(0)
+        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
+    ia.free()
+
+    # Store into named_materials List
+    var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
+    # For named-spectrum conductors: compute Fresnel F0 per channel
+    if has_spectral_conductor and mat_type == Int8(3):
+        var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
+                  ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
+        var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
+                  ((metal_eta[1]+Float32(1.0))*(metal_eta[1]+Float32(1.0)) + metal_k[1]*metal_k[1])
+        var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
+                  ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
+        nm.albedo = RGB(f0r, f0g, f0b)
+    elif mat_type == Int8(11):
+        var ce = eumelanin; var cp = pheomelanin
+        var scale2 = Float32(2.0)
+        nm.albedo = RGB(
+            exp(-(ce * Float32(0.419) + cp * Float32(0.187)) * scale2),
+            exp(-(ce * Float32(0.697) + cp * Float32(0.400)) * scale2),
+            exp(-(ce * Float32(1.370) + cp * Float32(1.050)) * scale2),
+        )
+    else:
+        nm.albedo = RGB(rgb[0], rgb[1], rgb[2])
+    nm.transmittance  = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
+    nm.kind           = mat_type
+    nm.ior            = mat_ior
+    nm.roughness_u    = mat_roughU
+    nm.roughness_v    = mat_roughV
+    nm.tex_idx        = tex_idx_for_mat
+    nm.normal_tex_idx = normal_tex_idx_for_mat
+    nm.mix_name1      = String(unsafe_from_utf8_ptr=mix_name1.as_immutable())
+    nm.mix_name2      = String(unsafe_from_utf8_ptr=mix_name2.as_immutable())
+    nm.mix_amount     = mix_amount
+    s[0].named_materials.append(nm^)
+
+    mat_name.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free()
+    trans_rgb.free(); metal_eta.free(); metal_k.free()
+    mix_name1.free(); mix_name2.free()
+    sigma_a_rgb.free()
+
+def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                               s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    var mat_name = alloc[UInt8](PSC_NAME_MAX)
+    _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
+    s[0].cur_attr.mat_idx = Int32(-1)
+    var name_str = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+    for i in range(len(s[0].named_materials)):
+        if s[0].named_materials[i].name == name_str:
+            s[0].cur_attr.mat_idx = Int32(i)
+            break
+    mat_name.free()
