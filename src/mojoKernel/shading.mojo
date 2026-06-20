@@ -657,6 +657,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var exit_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
     var did_nee = False
     var did_env_nee = False
+    var did_distant_nee = False
 
     comptime MAX_COAT_DEPTH = 10
     for _ in range(MAX_COAT_DEPTH):
@@ -757,15 +758,19 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var t_max_env = Float32(100000.0)
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
 
-        # Distant light NEE through the coat (delta light: MIS weight = 1).
-        for dl_i in range(ctx.distant_count):
-            var dl = ctx.distant_lights[dl_i]
-            var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
-            var cos_s = dot(normal, to_light)
-            if cos_s > Float32(0.0):
-                var t_coat = Float32(1.0) - fr_dielectric(cos_s, ior)
-                var contrib = path_ptr[].throughput * beta * alb * dl.emission * (cos_s * t_coat / PI)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, Float32(2000.0), contrib)
+        # Distant light NEE through the coat (delta light: MIS weight = 1). Once only,
+        # matching did_nee/did_env_nee — firing each iteration would double-count with
+        # incorrect beta weights and causes ~8x excess shadow rays via warp divergence.
+        if not did_distant_nee and ctx.distant_count > 0:
+            did_distant_nee = True
+            for dl_i in range(ctx.distant_count):
+                var dl = ctx.distant_lights[dl_i]
+                var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
+                var cos_s = dot(normal, to_light)
+                if cos_s > Float32(0.0):
+                    var t_coat = Float32(1.0) - fr_dielectric(cos_s, ior)
+                    var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s * t_coat / PI)
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, Float32(2000.0), contrib)
 
         # Lambertian base: sample a cosine-weighted up-going direction.
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
