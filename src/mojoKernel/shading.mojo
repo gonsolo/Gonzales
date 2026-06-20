@@ -440,6 +440,26 @@ def _geom_normal_and_ray(
     return (gn, rd, ro)
 
 
+@always_inline
+def _shadow_contribute[enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    ctx: ShadeContext,
+    origin: SIMD[DType.float32, 3],
+    dir: SIMD[DType.float32, 3],
+    tmax: Float32,
+    contrib: RGB,
+):
+    comptime if enqueue_shadow:
+        ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(
+            Point3f(origin[0], origin[1], origin[2]),
+            Vec3f(dir[0], dir[1], dir[2]),
+            tmax, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+    else:
+        var shadow_ray = Ray_C(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
+        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, tmax):
+            path_ptr[].estimate += contrib
+
+
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
@@ -519,12 +539,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
                 # f = lobe_alb/π * lobe_w (lobe selection weight already folded in)
                 var weight_dt = lobe_alb * al.emission * (cos_s * w_dt * lobe_w / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight_dt
-                comptime if enqueue_shadow:
-                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                else:
-                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dist * Float32(0.9999)):
-                        path_ptr[].estimate += contrib
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
 
     # ── BSDF scatter ───────────────────────────────────────────────────────────
     var _scatter = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), bounce_normal)
@@ -696,12 +711,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
                     var weight_cd = alb * al.emission * (cos_s * t_light * w_cd / (pdf_light_cd * PI))
                     var contrib = path_ptr[].throughput * weight_cd
-                    comptime if enqueue_shadow:
-                        ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                    else:
-                        var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dist * Float32(0.9999)):
-                            path_ptr[].estimate += contrib
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
 
         # ── Env-map (infinite light) NEE at the base, once. Light enters via
         #    the coat so the contribution is weighted by 1 - F(cos_env). The
@@ -754,12 +764,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
                     var contrib_e = path_ptr[].throughput * alb * env_rgb * (cos_env * t_env / (PI * pdf_light)) * mis_w
                     var t_max_env = Float32(100000.0)
-                    comptime if enqueue_shadow:
-                        ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib_e.r, contrib_e.g, contrib_e.b), Int32(1), Int32(0))
-                    else:
-                        var shadow_ray_e = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
-                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray_e, t_max_env):
-                            path_ptr[].estimate += contrib_e
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
 
         # Distant light NEE through the coat (delta light: MIS weight = 1).
         for dl_i in range(ctx.distant_count):
@@ -769,12 +774,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             if cos_s > Float32(0.0):
                 var t_coat = Float32(1.0) - fr_dielectric(cos_s, ior)
                 var contrib = path_ptr[].throughput * beta * alb * dl.emission * (cos_s * t_coat / PI)
-                comptime if enqueue_shadow:
-                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]), Float32(2000.0), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                else:
-                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]))
-                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, Float32(2000.0)):
-                        path_ptr[].estimate += contrib
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, Float32(2000.0), contrib)
 
         # Lambertian base: sample a cosine-weighted up-going direction.
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
@@ -1669,17 +1669,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
             if not contrib_e.is_black():
                 var esign = Float32(1.0) if dot(wi_e, geo_normal) >= Float32(0.0) else Float32(-1.0)
                 var eorg = hit_base + geo_normal * Float32(0.0001) * esign
-                comptime if enqueue_shadow:
-                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(
-                        Point3f(eorg[0], eorg[1], eorg[2]),
-                        Vec3f(wi_e[0], wi_e[1], wi_e[2]),
-                        Float32(100000.0), RGB(contrib_e.r, contrib_e.g, contrib_e.b), Int32(1), Int32(0))
-                else:
-                    var shadow_e = Ray_C(
-                        Point3f(eorg[0], eorg[1], eorg[2]),
-                        Vec3f(wi_e[0], wi_e[1], wi_e[2]))
-                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_e, Float32(100000.0)):
-                        path_ptr[].estimate += contrib_e
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, eorg, wi_e, Float32(100000.0), contrib_e)
 
     # ── Step 14: NEE for distant lights ──────────────────────────────────────
     for dl_i in range(ctx.distant_count):
@@ -1718,17 +1708,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var t_max = Float32(2000.0)
         var dsign = Float32(1.0) if dot(wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
         var dorg = hit_base + geo_normal * Float32(0.0001) * dsign
-        comptime if enqueue_shadow:
-            ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(
-                Point3f(dorg[0], dorg[1], dorg[2]),
-                Vec3f(wi[0], wi[1], wi[2]),
-                t_max, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-        else:
-            var shadow_ray = Ray_C(
-                Point3f(dorg[0], dorg[1], dorg[2]),
-                Vec3f(wi[0], wi[1], wi[2]))
-            if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, t_max):
-                path_ptr[].estimate += contrib
+        _shadow_contribute[enqueue_shadow](path_ptr, ctx, dorg, wi, t_max, contrib)
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
     # Pick lobe proportional to luminance; carry tilted angles for selected lobe
@@ -1963,12 +1943,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
                 var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight
-                comptime if enqueue_shadow:
-                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                else:
-                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dist * Float32(0.9999)):
-                        path_ptr[].estimate += contrib
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
 
     # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
     for dl_i in range(ctx.distant_count):
@@ -1982,12 +1957,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s / pi)
             # Shadow ray at very long distance (scene diameter ~1000)
             var t_max = Float32(2000.0)
-            comptime if enqueue_shadow:
-                ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]), t_max, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-            else:
-                var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]))
-                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, t_max):
-                    path_ptr[].estimate += contrib
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, t_max, contrib)
 
     # ── Point light NEE (delta light: MIS weight = 1) ────────────────────────
     for pl_i in range(ctx.point_count):
@@ -2004,12 +1974,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 # f = alb/pi, geometry = cos_s, pdf = delta -> weight = 1
                 # radiance = intensity / dist²
                 var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
-                comptime if enqueue_shadow:
-                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ldir[0], ldir[1], ldir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                else:
-                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(ldir[0], ldir[1], ldir[2]))
-                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dist * Float32(0.9999)):
-                        path_ptr[].estimate += contrib
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ldir, dist * Float32(0.9999), contrib)
 
     # ── Sphere light NEE (solid-angle cone sampling) ──────────────────────────
     for sph_i in range(ctx.sphere_count):
@@ -2057,12 +2022,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
             var weight = alb * sph.emission * (cos_s * w_nee / (pdf_light * PI))
             var contrib = path_ptr[].throughput * weight
-            comptime if enqueue_shadow:
-                ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dc * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-            else:
-                var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dc * Float32(0.9999)):
-                    path_ptr[].estimate += contrib
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dc * Float32(0.9999), contrib)
 
     # ── Infinite (env-map) light NEE ──────────────────────────────────────────
     for inf_i in range(ctx.infinite_count):
@@ -2124,12 +2084,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 if not nee_rgb.is_black():
                     var contrib = path_ptr[].throughput * alb * nee_rgb
                     var t_max_env = Float32(100000.0)
-                    comptime if enqueue_shadow:
-                        ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(nee_dir[0], nee_dir[1], nee_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-                    else:
-                        var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(nee_dir[0], nee_dir[1], nee_dir[2]))
-                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, t_max_env):
-                            path_ptr[].estimate += contrib
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, nee_dir, t_max_env, contrib)
 
             # 1. Sample row from marginal CDF
             var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
@@ -2180,12 +2135,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
             var contrib = path_ptr[].throughput * alb * env_rgb * (cos_env / (PI * pdf_light)) * mis_w
             var t_max_env = Float32(100000.0)
-            comptime if enqueue_shadow:
-                ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
-            else:
-                var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
-                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, t_max_env):
-                    path_ptr[].estimate += contrib
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib)
 
 
     var _scatter = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
