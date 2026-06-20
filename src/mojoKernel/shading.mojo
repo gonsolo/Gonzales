@@ -418,6 +418,28 @@ def _get_tri_verts(
     return (m, Int(m.vertexIndices[bv]), Int(m.vertexIndices[bv+1]), Int(m.vertexIndices[bv+2]), True)
 
 
+# ── Shading frame helper ──────────────────────────────────────────────────────
+# Computes geom normal from triangle cross product, normalizes, faceforwards it
+# toward the incoming ray, and extracts ray_dir/ray_org from path state.
+# Returns (geom_normal_ff, ray_dir, ray_org).
+@always_inline
+def _geom_normal_and_ray(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    p0: SIMD[DType.float32, 3],
+    p1: SIMD[DType.float32, 3],
+    p2: SIMD[DType.float32, 3],
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    var gn = cross(p1 - p0, p2 - p0)
+    var nlen = dot(gn, gn)
+    if nlen > Float32(0.0):
+        gn = gn * (Float32(1.0) / sqrt(nlen))
+    var rd = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    if dot(gn, rd) > Float32(0.0):
+        gn = -gn
+    var ro = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    return (gn, rd, ro)
+
+
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
@@ -434,17 +456,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
-    var normal = cross(p1 - p0, p2 - p0)
-    var nlen = dot(normal, normal)
-    if nlen > Float32(0.0):
-        normal = normal * (Float32(1.0) / sqrt(nlen))
-
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    # Orient normal toward incoming ray
-    if dot(normal, ray_dir) > Float32(0.0):
-        normal = -normal
-
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     # Balance heuristic: choose reflect vs transmit proportional to luminance
@@ -566,16 +578,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
-    var normal = cross(p1 - p0, p2 - p0)
-    var nlen = dot(normal, normal)
-    if nlen > Float32(0.0):
-        normal = normal * (Float32(1.0) / sqrt(nlen))
-
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    if dot(normal, ray_dir) > Float32(0.0):
-        normal = -normal
-
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     # Use interpolated shading normal (geometric normal still drives hit-point offset)
     normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
@@ -1011,16 +1014,7 @@ def shade_conductor(
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
-    var normal = cross(p1 - p0, p2 - p0)
-    var nlen = dot(normal, normal)
-    if nlen > Float32(0.0):
-        normal = normal * (Float32(1.0) / sqrt(nlen))
-
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    if dot(normal, ray_dir) > Float32(0.0):
-        normal = -normal
-
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     # Use interpolated shading normal for smooth specular reflections
     normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
@@ -1177,14 +1171,7 @@ def shade_coated_conductor(
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var normal = cross(p1 - p0, p2 - p0)
-    var nlen = dot(normal, normal)
-    if nlen > Float32(0.0):
-        normal = normal * (Float32(1.0) / sqrt(nlen))
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    if dot(normal, ray_dir) > Float32(0.0):
-        normal = -normal
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -1866,14 +1853,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var normal = cross(p1 - p0, p2 - p0)
-    var nlen = dot(normal, normal)
-    if nlen > Float32(0.0):
-        normal = normal * (Float32(1.0) / sqrt(nlen))
-
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    if dot(normal, ray_dir) > Float32(0.0):
-        normal = -normal
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
     # Geometric normal oriented to the camera side; the shading/bumped normal is
     # kept on this side below (NOT flipped to the view ray).
     var ng_ff = normal
@@ -1908,7 +1888,6 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if dot(normal, ng_ff) < Float32(0.0):
         normal = -normal
 
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
