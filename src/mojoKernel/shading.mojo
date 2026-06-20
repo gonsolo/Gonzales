@@ -2438,7 +2438,8 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.thin_dielectric:
         MatThinDielectric(mat).shade[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
     elif mat.type == MatKind.hair:
-        shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
+        comptime if not use_gpu:
+            shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     else:
         path_ptr[].active = 0
 
