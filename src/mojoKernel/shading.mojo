@@ -410,20 +410,10 @@ def shade_core(
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    path_idx: Int,
     inter: Intersection_C,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
-    n_textures: Int,
-    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    ctx: ShadeContext,
 ):
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var mat = ctx.materials[Int(inter.primId.materialIndex)]
     var mesh_idx: Int
     var base_vidx: Int
     if inter.primId.type == 0:
@@ -436,7 +426,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    var mesh = meshes[mesh_idx]
+    var mesh = ctx.meshes[mesh_idx]
     var v0 = Int(mesh.vertexIndices[base_vidx])
     var v1 = Int(mesh.vertexIndices[base_vidx + 1])
     var v2 = Int(mesh.vertexIndices[base_vidx + 2])
@@ -478,10 +468,10 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var hit_point = ray_org + ray_dir * inter.tHit + bounce_normal * Float32(0.0001)
 
     # ── NEE direct light sampling (MIS weighted) ───────────────────────────────
-    if areaLightCount > 0:
-        var light_idx = Int(pcg.next_uint() % UInt32(areaLightCount))
-        var al = areaLights[light_idx]
-        var lmesh = meshes[Int(al.meshIdx)]
+    if ctx.area_light_count > 0:
+        var light_idx = Int(pcg.next_uint() % UInt32(ctx.area_light_count))
+        var al = ctx.area_lights[light_idx]
+        var lmesh = ctx.meshes[Int(al.meshIdx)]
         var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
         var lb = lti * 3
         var lv0 = Int(lmesh.vertexIndices[lb])
@@ -508,17 +498,17 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_s > Float32(0.0) and cos_l > Float32(0.0):
                 var pi = PI
-                var pdf_light = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
+                var pdf_light = dist_sq / (cos_l * al.total_area * Float32(ctx.area_light_count))
                 var pdf_bsdf_dt = cos_s / pi
                 var w_dt = power_heuristic(pdf_light, pdf_bsdf_dt)
                 # f = lobe_alb/π * lobe_w (lobe selection weight already folded in)
                 var weight_dt = lobe_alb * al.emission * (cos_s * w_dt * lobe_w / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight_dt
                 comptime if enqueue_shadow:
-                    shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                 else:
                     var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dist * Float32(0.9999)):
                         path_ptr[].estimate += contrib
 
     # ── BSDF scatter ───────────────────────────────────────────────────────────
@@ -559,20 +549,9 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 @always_inline
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    path_idx: Int,
     inter: Intersection_C,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    ctx: ShadeContext,
     mat: Material_C,
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
-    infiniteLightCount: Int,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
-    n_textures: Int,
-    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
 ):
     var mesh_idx: Int
     var base_vidx: Int
@@ -586,7 +565,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    var mesh = meshes[mesh_idx]
+    var mesh = ctx.meshes[mesh_idx]
     var v0 = Int(mesh.vertexIndices[base_vidx])
     var v1 = Int(mesh.vertexIndices[base_vidx + 1])
     var v2 = Int(mesh.vertexIndices[base_vidx + 2])
@@ -594,7 +573,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
-    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
+    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var normal = cross(p1 - p0, p2 - p0)
     var nlen = dot(normal, normal)
@@ -683,11 +662,11 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     for _ in range(MAX_COAT_DEPTH):
         # ── Diffuse base: NEE (single scatter) once, weighted by the coat's
         #    transmittance for the incoming light direction. ──
-        if not did_nee and areaLightCount > 0:
+        if not did_nee and ctx.area_light_count > 0:
             did_nee = True
-            var light_idx = Int(pcg.next_uint() % UInt32(areaLightCount))
-            var al = areaLights[light_idx]
-            var lmesh = meshes[Int(al.meshIdx)]
+            var light_idx = Int(pcg.next_uint() % UInt32(ctx.area_light_count))
+            var al = ctx.area_lights[light_idx]
+            var lmesh = ctx.meshes[Int(al.meshIdx)]
             var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
             var lb = lti * 3
             var lv0 = Int(lmesh.vertexIndices[lb])
@@ -715,25 +694,25 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 if cos_s > Float32(0.0) and cos_l > Float32(0.0):
                     # Light must transmit through the coat to reach the base.
                     var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
-                    var pdf_light_cd = dist_sq / (cos_l * al.total_area * Float32(areaLightCount))
+                    var pdf_light_cd = dist_sq / (cos_l * al.total_area * Float32(ctx.area_light_count))
                     var pdf_bsdf_cd = cos_s / PI
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
                     var weight_cd = alb * al.emission * (cos_s * t_light * w_cd / (pdf_light_cd * PI))
                     var contrib = path_ptr[].throughput * weight_cd
                     comptime if enqueue_shadow:
-                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+                        ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]), dist * Float32(0.9999), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
                     else:
                         var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, dist * Float32(0.9999)):
+                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, dist * Float32(0.9999)):
                             path_ptr[].estimate += contrib
 
         # ── Env-map (infinite light) NEE at the base, once. Light enters via
         #    the coat so the contribution is weighted by 1 - F(cos_env). The
         #    view-side coat transmittance is implicit in reaching this branch. ──
-        if not did_env_nee and infiniteLightCount > 0:
+        if not did_env_nee and ctx.infinite_count > 0:
             did_env_nee = True
-            for inf_i in range(infiniteLightCount):
-                var ilight = infiniteLights[inf_i]
+            for inf_i in range(ctx.infinite_count):
+                var ilight = ctx.infinite_lights[inf_i]
                 var w2l = ilight.world_to_light
                 var env_dir: SIMD[DType.float32, 3]
                 var env_rgb: RGB
@@ -779,10 +758,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var contrib_e = path_ptr[].throughput * alb * env_rgb * (cos_env * t_env / (PI * pdf_light)) * mis_w
                     var t_max_env = Float32(100000.0)
                     comptime if enqueue_shadow:
-                        shadow_tasks[path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib_e.r, contrib_e.g, contrib_e.b), Int32(1), Int32(0))
+                        ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]), t_max_env, RGB(contrib_e.r, contrib_e.g, contrib_e.b), Int32(1), Int32(0))
                     else:
                         var shadow_ray_e = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
-                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray_e, t_max_env):
+                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray_e, t_max_env):
                             path_ptr[].estimate += contrib_e
 
         # Lambertian base: sample a cosine-weighted up-going direction.
@@ -1342,23 +1321,11 @@ def shade_coated_conductor(
 # Mix material: randomly select one of two sub-materials using amount as probability.
 # Sub-material indices are packed into mat.tex_idx: low 16 bits = idx1, high 16 bits = idx2.
 # mat.roughU = blend amount (probability of picking mat2).
-@always_inline
+# Not @always_inline: shade_mix ↔ _shade_dispatch would form an always_inline recursion.
 def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    path_idx: Int,
     inter: Intersection_C,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
-    infiniteLightCount: Int,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
-    n_textures: Int,
-    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    ctx: ShadeContext,
     mat: Material_C,
 ):
     var packed = mat.tex_idx
@@ -1366,98 +1333,12 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     var idx2 = Int((packed >> 16) & Int32(0xFFFF))
     var amount = mat.roughU  # blend factor: 0 = all mat1, 1 = all mat2
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var chosen_idx: Int
-    if pcg.next_float() < amount:
-        chosen_idx = idx2
-    else:
-        chosen_idx = idx1
+    var chosen_idx = idx2 if pcg.next_float() < amount else idx1
     path_ptr[].pcgState = pcg.state
-    # Recurse: shade with the chosen sub-material
-    # Guard against self-referential mix (cycle) — if sub-mat is also mix,
-    # fall through to diffuse to avoid infinite recursion.
-    var sub_mat = materials[chosen_idx]
+    var sub_mat = ctx.materials[chosen_idx]
     if sub_mat.type == Int8(8):
-        sub_mat.type = Int8(1)  # fallback to diffuse
-    if sub_mat.type == Int8(3):
-        shade_conductor(path_ptr, inter, meshes, sub_mat)
-    elif sub_mat.type == Int8(4):
-        shade_dielectric(path_ptr, inter, meshes, sub_mat)
-    elif sub_mat.type == Int8(7):
-        shade_coated_conductor(path_ptr, inter, meshes, sub_mat)
-    elif sub_mat.type == Int8(5):
-        shade_coated_diffuse[use_gpu, enqueue_shadow](
-            path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, sub_mat,
-            areaLights, areaLightCount, infiniteLights, infiniteLightCount,
-            tex_filenames, textures, n_textures, shadow_tasks)
-    elif sub_mat.type == Int8(6):
-        shade_diffuse_transmission[use_gpu, enqueue_shadow](
-            path_ptr, path_idx, inter, bvh2Nodes, primIds, meshes, materials,
-            areaLights, areaLightCount, tex_filenames, textures, n_textures, shadow_tasks)
-    else:
-        # Diffuse fallback (type 1 or unknown)
-        sub_mat.type = Int8(1)
-        # re-use diffuse path via a minimal stub
-        path_ptr[].active = Int8(0)  # will be reset by diffuse path — set inactive, diffuse handles restart
-        # Actually just let shade_nee_core handle it below; override type in materials array would
-        # corrupt shared data. Instead, manually inline a simple lambertian bounce.
-        var mesh_idx: Int
-        var base_vidx: Int
-        if inter.primId.type == 0:
-            mesh_idx = Int(inter.primId.id1)
-            base_vidx = Int(inter.primId.id2)
-        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-            mesh_idx = Int(inter.primId.id2 >> 32)
-            base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-        else:
-            path_ptr[].active = 0
-            return
-        var mesh = meshes[mesh_idx]
-        var v0 = Int(mesh.vertexIndices[base_vidx])
-        var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-        var v2 = Int(mesh.vertexIndices[base_vidx + 2])
-        var pp0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-        var pp1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-        var pp2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-        var normal = cross(pp1 - pp0, pp2 - pp0)
-        var nlen = dot(normal, normal)
-        if nlen > Float32(0.0):
-            normal = normal * (Float32(1.0) / sqrt(nlen))
-        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-        if dot(normal, ray_dir) > Float32(0.0):
-            normal = -normal
-        var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
-        var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-        var pcg2 = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-        var u1 = pcg2.next_float(); var u2 = pcg2.next_float()
-        var phi = TWO_PI * u2
-        var st = sqrt(u1)
-        var ct = sqrt(Float32(1.0) - u1)
-        var sign_n2 = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-        var an2 = Float32(-1.0) / (sign_n2 + normal[2])
-        var bn2 = normal[0] * normal[1] * an2
-        var t1b = SIMD[DType.float32, 3](Float32(1.0) + sign_n2*normal[0]*normal[0]*an2, sign_n2*bn2, -sign_n2*normal[0])
-        var t2b = SIMD[DType.float32, 3](bn2, sign_n2 + normal[1]*normal[1]*an2, -normal[1])
-        var lx = cos(phi) * st; var ly = sin(phi) * st
-        var scatter_dir = t1b * lx + t2b * ly + normal * ct
-        var sd_len = dot(scatter_dir, scatter_dir)
-        if sd_len > Float32(0.0):
-            scatter_dir = scatter_dir * (Float32(1.0) / sqrt(sd_len))
-        path_ptr[].active = Int8(1)
-        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(scatter_dir[0], scatter_dir[1], scatter_dir[2]))
-        if path_ptr[].bounce == 0:
-            path_ptr[].albedo = sub_mat.albedo
-        path_ptr[].throughput *= sub_mat.albedo
-        path_ptr[].specularBounce = Int8(0)
-        path_ptr[].lastBsdfPdf = INV_PI
-        path_ptr[].bounce += 1
-        if path_ptr[].bounce > 1:
-            var lum = path_ptr[].throughput.luma()
-            var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-            if pcg2.next_float() < q:
-                path_ptr[].active = 0
-            else:
-                path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-        path_ptr[].pcgState = pcg2.state
+        sub_mat.type = Int8(1)  # guard against mix-of-mix cycle
+    _shade_dispatch[use_gpu, enqueue_shadow](sub_mat, path_ptr, inter, ctx)
 
 # Apply tangent-space normal map: samples the texture, decodes [-1,1] normal,
 # rotates it into world space via UV-gradient tangent frame.
@@ -1957,13 +1838,7 @@ struct MatCoatedDiffuse(ShadeMaterial):
         inter: Intersection_C,
         ctx: ShadeContext,
     ):
-        shade_coated_diffuse[use_gpu, enqueue_shadow](
-            path_ptr, ctx.path_idx, inter,
-            ctx.bvh2Nodes, ctx.primIds, ctx.meshes, self.mat,
-            ctx.area_lights, ctx.area_light_count,
-            ctx.infinite_lights, ctx.infinite_count,
-            ctx.tex_filenames, ctx.textures, ctx.n_textures,
-            ctx.shadow_tasks)
+        shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, self.mat)
 
 @fieldwise_init
 struct MatCoatedConductor(ShadeMaterial):
@@ -1987,12 +1862,7 @@ struct MatDiffuseTransmission(ShadeMaterial):
         inter: Intersection_C,
         ctx: ShadeContext,
     ):
-        shade_diffuse_transmission[use_gpu, enqueue_shadow](
-            path_ptr, ctx.path_idx, inter,
-            ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.materials,
-            ctx.area_lights, ctx.area_light_count,
-            ctx.tex_filenames, ctx.textures, ctx.n_textures,
-            ctx.shadow_tasks)
+        shade_diffuse_transmission[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
 
 @fieldwise_init
 struct MatMix(ShadeMaterial):
@@ -2004,13 +1874,7 @@ struct MatMix(ShadeMaterial):
         inter: Intersection_C,
         ctx: ShadeContext,
     ):
-        shade_mix[use_gpu, enqueue_shadow](
-            path_ptr, ctx.path_idx, inter,
-            ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.materials,
-            ctx.area_lights, ctx.area_light_count,
-            ctx.infinite_lights, ctx.infinite_count,
-            ctx.tex_filenames, ctx.textures, ctx.n_textures,
-            ctx.shadow_tasks, self.mat)
+        shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, self.mat)
 
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
