@@ -2135,6 +2135,13 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
+    # Sampler design: diffuse uses Sobol for key visible decisions (light selection,
+    # barycentrics, env direction, scatter, RR) and PCG for auxiliary draws that
+    # don't benefit from low-discrepancy sequences (area-light triangle index,
+    # sphere-light direction, infinite-light fallback, indirect-bounce scatter).
+    # Specular materials (conductor, dielectric, coated_conductor, thin_dielectric)
+    # use PCG only — their scatter decisions are near-deterministic at low roughness,
+    # and they don't do NEE, so stratification yields negligible variance reduction.
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     # Pre-draw 8 Z-Sobol samples for this bounce's key decisions.
