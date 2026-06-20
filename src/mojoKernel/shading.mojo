@@ -1393,6 +1393,21 @@ def _hair_Mp(cos_ti: Float32, cos_to: Float32, sin_ti: Float32, sin_to: Float32,
         return mp_c * exp(a - b) / sqrt(Float32(2.0) * PI * a)
     return mp_c * _hair_I0_poly(a * a * Float32(0.25)) * exp(-b)
 
+@always_inline
+def _atan2f(y: Float32, x: Float32) -> Float32:
+    """atan2 via minimax polynomial — avoids the unresolved libdevice extern on GPU."""
+    var ax = abs(x); var ay = abs(y)
+    var mn = min(ax, ay)
+    var mx = max(ax, ay)
+    var a = mn / (mx if mx > Float32(1e-10) else Float32(1e-10))
+    var s = a * a
+    var r = (Float32(-0.0464964749) * s + Float32(0.15931422)) * s
+    r = (r - Float32(0.327622764)) * s * a + a
+    if ay > ax: r = Float32(1.5707963267948966) - r
+    if x < Float32(0.0): r = Float32(3.14159265358979323846) - r
+    if y < Float32(0.0): r = -r
+    return r
+
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
@@ -1486,7 +1501,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var b_perp = cross(tangent, n_perp)
 
     var wo_perp = wo - sin_theta_o * tangent
-    var phi_o = atan2(dot(wo_perp, b_perp), dot(wo_perp, n_perp))
+    var phi_o = _atan2f(dot(wo_perp, b_perp), dot(wo_perp, n_perp))
 
     # ── Step 8: Optical quantities ────────────────────────────────────────────
     var eta = mat.emission.r           # IOR (1.55 for hair)
@@ -1637,7 +1652,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
             var sin_ti_e = dot(wi_e, tangent)
             var cos_ti_e = max(safe_sqrt(Float32(1.0) - sin_ti_e * sin_ti_e), Float32(1e-5))
             var wi_e_perp = wi_e - sin_ti_e * tangent
-            var phi_i_e = atan2(dot(wi_e_perp, b_perp), dot(wi_e_perp, n_perp))
+            var phi_i_e = _atan2f(dot(wi_e_perp, b_perp), dot(wi_e_perp, n_perp))
             var dphi_ie = phi_i_e - phi_o
             var x0e = _hair_wrap(dphi_ie - dphi0)
             var x1e = _hair_wrap(dphi_ie - dphi1)
@@ -1673,7 +1688,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         cos_ti = max(cos_ti, Float32(1e-5))
 
         var wi_perp = wi - sin_ti * tangent
-        var phi_i = atan2(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
+        var phi_i = _atan2f(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
 
         var dphi_i = phi_i - phi_o
         var x0 = _hair_wrap(dphi_i - dphi0)
