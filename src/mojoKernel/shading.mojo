@@ -1,7 +1,7 @@
-from std.math import sqrt, cos, sin, floor, acos, atan2, log2
+from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
@@ -332,12 +332,12 @@ def shade_core(
     var mat_idx = Int(inter.primId.materialIndex)
     var mat = materials[mat_idx]
 
-    if mat.type == 2:
+    if mat.type == MatKind.area_light:
         path_ptr[].estimate += path_ptr[].throughput * mat.emission
         path_ptr[].active = 0
         return
 
-    if mat.type == 1:
+    if mat.type == MatKind.diffuse:
         # Construct Normal
         var mesh_idx: Int
         var base_vidx: Int
@@ -351,7 +351,7 @@ def shade_core(
             path_ptr[].active = 0
             return
 
-        var mesh = meshes[mesh_idx]
+        var mesh = ctx.meshes[mesh_idx]
         var v0_idx = Int(mesh.vertexIndices[base_vidx])
         var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
         var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
@@ -449,11 +449,8 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
-    # Texture lookup for reflectance (same path as shade_nee_core).
-    var base_albedo = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, tex_filenames, textures, n_textures)
-
     # Balance heuristic: choose reflect vs transmit proportional to luminance
-    var refl = base_albedo
+    var refl = mat.albedo
     var trans = mat.emission
     var pr = refl.luma()
     var pt = trans.luma()
@@ -774,6 +771,21 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                         var shadow_ray_e = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(env_dir[0], env_dir[1], env_dir[2]))
                         if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray_e, t_max_env):
                             path_ptr[].estimate += contrib_e
+
+        # Distant light NEE through the coat (delta light: MIS weight = 1).
+        for dl_i in range(ctx.distant_count):
+            var dl = ctx.distant_lights[dl_i]
+            var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
+            var cos_s = dot(normal, to_light)
+            if cos_s > Float32(0.0):
+                var t_coat = Float32(1.0) - fr_dielectric(cos_s, ior)
+                var contrib = path_ptr[].throughput * beta * alb * dl.emission * (cos_s * t_coat / PI)
+                comptime if enqueue_shadow:
+                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]), Float32(2000.0), RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+                else:
+                    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(to_light[0], to_light[1], to_light[2]))
+                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, Float32(2000.0)):
+                        path_ptr[].estimate += contrib
 
         # Lambertian base: sample a cosine-weighted up-going direction.
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
@@ -1418,6 +1430,461 @@ def _apply_normal_map[use_gpu: Bool](
     return geom_normal
 
 
+# ── Hair BSDF helpers ────────────────────────────────────────────────────────
+
+@always_inline
+def _hair_wrap(x: Float32) -> Float32:
+    """Wrap angle to [-PI, PI] — GPU-safe, no unbounded loops."""
+    return x - TWO_PI * floor((x + PI) / TWO_PI)
+
+@always_inline
+def _hair_asin(x: Float32) -> Float32:
+    """Polynomial asin(x) for x in [-1,1] — avoids std.math asin which may not link on GPU.
+    Uses sqrt-reflection for |x|>0.5 for accuracy; max error ~5e-6."""
+    var ax = abs(x)
+    var result: Float32
+    if ax > Float32(0.5):
+        var t = Float32(1.0) - ax
+        var r = sqrt(Float32(2.0) * t)
+        result = Float32(1.5707963) - r * (Float32(1.0) + t * (Float32(0.16666667) + t * (Float32(0.075) + t * Float32(0.04464286))))
+    else:
+        var x2 = ax * ax
+        result = ax * (Float32(1.0) + x2 * (Float32(0.16666667) + x2 * (Float32(0.075) + x2 * Float32(0.04464286))))
+    return -result if x < Float32(0.0) else result
+
+@always_inline
+def _hair_logistic(x: Float32, s: Float32) -> Float32:
+    """Logistic distribution PDF centered at 0: exp(-|x|/s) / (s*(1+exp(-|x|/s))^2).
+    Numerically stable via |x| form."""
+    var e = exp(-abs(x) / s)
+    return e / (s * (Float32(1.0) + e) * (Float32(1.0) + e))
+
+@always_inline
+def _hair_I0_poly(t: Float32) -> Float32:
+    """9-term Taylor series for I0(x) where t = x*x/4. Accurate to 0.15% for t≤16 (x≤8)."""
+    var t2 = t * t; var t3 = t2 * t; var t4 = t2 * t2; var t5 = t4 * t
+    var t6 = t5 * t; var t7 = t6 * t; var t8 = t7 * t
+    return Float32(1.0) + t + t2*Float32(0.25) + t3*Float32(0.027778) + t4*Float32(0.001736) + t5*Float32(6.944e-5) + t6*Float32(1.929e-6) + t7*Float32(3.930e-8) + t8*Float32(6.151e-10)
+
+@always_inline
+def _hair_Mp(cos_ti: Float32, cos_to: Float32, sin_ti: Float32, sin_to: Float32, inv_v: Float32, mp_c: Float32) -> Float32:
+    """von Mises-Fisher Mp with precomputed constant mp_c = exp(-inv_v)/(2/inv_v) for v≤0.1,
+    or 1/(sinh(inv_v)*2/inv_v) for v>0.1. inv_v = 1/v."""
+    var a = cos_ti * cos_to * inv_v
+    var b = sin_ti * sin_to * inv_v
+    if a > Float32(8.0):
+        # Asymptotic: I0(a) ≈ exp(a)/sqrt(2πa), so Mp ≈ mp_c * exp(a-b)/sqrt(2πa)
+        return mp_c * exp(a - b) / sqrt(Float32(2.0) * PI * a)
+    return mp_c * _hair_I0_poly(a * a * Float32(0.25)) * exp(-b)
+
+# ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
+def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    ctx: ShadeContext,
+    mat: Material_C,
+):
+    """3-lobe hair BSDF (Marschner R/TT/TRT). Material packing:
+       albedo = sigma_a (RGB absorption), emission.r = eta (IOR),
+       roughU = betaM (longitudinal), roughV = betaN (azimuthal)."""
+
+
+
+    # ── Step 1: Get geometry ─────────────────────────────────────────────────
+    var mesh_idx: Int
+    var base_vidx: Int
+    if inter.primId.type == 0:
+        mesh_idx = Int(inter.primId.id1)
+        base_vidx = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mesh_idx = Int(inter.primId.id2 >> 32)
+        base_vidx = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        path_ptr[].active = 0
+        return
+
+    var mesh = ctx.meshes[mesh_idx]
+    var v0 = Int(mesh.vertexIndices[base_vidx])
+    var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+    var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+    var bu = inter.u
+    var bv = inter.v
+    var w0 = Float32(1.0) - bu - bv
+
+    # ── Step 2: Compute geometric normal ─────────────────────────────────────
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var geo_normal = cross(p1 - p0, p2 - p0)
+    var gnlen = dot(geo_normal, geo_normal)
+    if gnlen > Float32(0.0):
+        geo_normal = geo_normal * (Float32(1.0) / sqrt(gnlen))
+    if dot(geo_normal, -ray_dir) < Float32(0.0):
+        geo_normal = -geo_normal
+
+    # ── Step 3: Get fiber tangent from shading normals ───────────────────────
+    var tangent: SIMD[DType.float32, 3]
+    if Int(mesh.normals) > 1:
+        var tn0 = SIMD[DType.float32, 3](mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
+        var tn1 = SIMD[DType.float32, 3](mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
+        var tn2 = SIMD[DType.float32, 3](mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
+        tangent = tn0 * w0 + tn1 * bu + tn2 * bv
+        var tlen = dot(tangent, tangent)
+        if tlen > Float32(1e-12):
+            tangent = tangent * (Float32(1.0) / sqrt(tlen))
+        else:
+            tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
+    else:
+        tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
+
+    # ── Step 4: Get h from UVs and ribbon width direction ────────────────────
+    var h = Float32(0.0)
+    var n_perp: SIMD[DType.float32, 3]
+    if Int(mesh.uvs) > 1:
+        var u0 = mesh.uvs[v0*2]; var u1v = mesh.uvs[v1*2]; var u2v = mesh.uvs[v2*2]
+        var v0_uv = mesh.uvs[v0*2+1]; var v1_uv = mesh.uvs[v1*2+1]; var v2_uv = mesh.uvs[v2*2+1]
+        var u_interp = w0 * u0 + bu * u1v + bv * u2v
+        h = Float32(2.0) * u_interp - Float32(1.0)
+        # Compute ribbon width direction = normalize(dp/du) via UV gradient formula:
+        # dp/du = (dv2*e1 - dv1*e2) / (du1*dv2 - dv1*du2)
+        # This always points toward the h=+1 edge, making phi_o consistent with h.
+        var du1 = u1v - u0; var dv1 = v1_uv - v0_uv
+        var du2 = u2v - u0; var dv2 = v2_uv - v0_uv
+        var det_uv = du1 * dv2 - dv1 * du2
+        var e1 = p1 - p0; var e2 = p2 - p0
+        var dp_du = dv2 * e1 - dv1 * e2
+        if abs(det_uv) > Float32(1e-6):
+            dp_du = dp_du * (Float32(1.0) / det_uv)
+        var dp_du_len = dot(dp_du, dp_du)
+        if dp_du_len > Float32(1e-12):
+            n_perp = dp_du * (Float32(1.0) / sqrt(dp_du_len))
+        else:
+            n_perp = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    else:
+        n_perp = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    h = max(Float32(-0.99), min(Float32(0.99), h))
+    # Remove tangent component to ensure n_perp is truly in the cross-section plane
+    n_perp = n_perp - dot(n_perp, tangent) * tangent
+    var np_len = dot(n_perp, n_perp)
+    if np_len > Float32(1e-12):
+        n_perp = n_perp * (Float32(1.0) / sqrt(np_len))
+
+    # ── Step 5: wo = -ray_direction ──────────────────────────────────────────
+    var wo = -ray_dir
+
+    # ── Step 6: Compute wo angles in fiber frame ──────────────────────────────
+    var sin_theta_o = dot(wo, tangent)
+    var cos_theta_o = safe_sqrt(Float32(1.0) - sin_theta_o * sin_theta_o)
+    cos_theta_o = max(cos_theta_o, Float32(1e-5))
+
+    # ── Step 7: Complete azimuthal frame (n_perp from UV gradient, b_perp from cross product)
+    var b_perp = cross(tangent, n_perp)
+
+    var wo_perp = wo - sin_theta_o * tangent
+    var phi_o = atan2(dot(wo_perp, b_perp), dot(wo_perp, n_perp))
+
+    # ── Step 8: Optical quantities ────────────────────────────────────────────
+    var eta = mat.emission.r           # IOR (1.55 for hair)
+    var sigma_a = mat.albedo           # absorption coefficient per channel
+    var betaM = mat.roughU             # longitudinal roughness
+    var betaN = mat.roughV             # azimuthal roughness
+
+    var h_clamped = max(Float32(-1.0) + Float32(1e-5), min(Float32(1.0) - Float32(1e-5), h))
+    var gamma_o = _hair_asin(h_clamped)
+
+    var eta_sq = eta * eta
+    var sin_to_sq = sin_theta_o * sin_theta_o
+    var eta_perp_num = max(Float32(0.0), eta_sq - sin_to_sq)
+    var eta_perp = safe_sqrt(eta_perp_num) / cos_theta_o
+
+    var sin_gamma_t_raw = sin(gamma_o) / max(eta_perp, Float32(1.0))
+    var sin_gamma_t = max(Float32(-1.0) + Float32(1e-5), min(Float32(1.0) - Float32(1e-5), sin_gamma_t_raw))
+    var gamma_t = _hair_asin(sin_gamma_t)
+    var cos_gamma_t = safe_sqrt(Float32(1.0) - sin_gamma_t * sin_gamma_t)
+
+    # Transmittance through fiber (Beer-Lambert along chord 2*cos_gamma_t)
+    var T = RGB(
+        exp(-sigma_a.r * Float32(2.0) * cos_gamma_t),
+        exp(-sigma_a.g * Float32(2.0) * cos_gamma_t),
+        exp(-sigma_a.b * Float32(2.0) * cos_gamma_t),
+    )
+
+    var fr = fr_dielectric(cos_theta_o, eta)
+    var omfr = Float32(1.0) - fr
+
+    # Per-lobe attenuation
+    var A0 = RGB(fr, fr, fr)               # R: one reflection
+    var A1 = T * (omfr * omfr)            # TT: two refractions
+    var A2 = T * T * (omfr * omfr * fr)   # TRT: two refractions + one internal reflection
+
+    # ── Step 9: Longitudinal variance per lobe ────────────────────────────────
+    # PBRT formula: v[0] = (0.726β + 0.812β² + 3.7β^20)²
+    var bm2 = betaM * betaM
+    var bm4 = bm2 * bm2; var bm8 = bm4 * bm4; var bm16 = bm8 * bm8
+    var bm20 = bm16 * bm4
+    var tmp_v = Float32(0.726) * betaM + Float32(0.812) * bm2 + Float32(3.7) * bm20
+    var vm0 = max(tmp_v * tmp_v, Float32(0.0001))
+    var vm1 = max(vm0 * Float32(0.25), Float32(0.0001))   # TT: v/4
+    var vm2 = max(vm0 * Float32(4.0), Float32(0.0001))    # TRT: 4*v
+    # Precompute per-lobe Mp constants (one exp/sinh per lobe, not per eval)
+    # For v≤0.1: mp_c = exp(-1/v)/(2v); for v>0.1: mp_c = 1/(sinh(1/v)*2v)
+    var inv_vm0 = Float32(1.0) / vm0; var inv_vm1 = Float32(1.0) / vm1; var inv_vm2 = Float32(1.0) / vm2
+    var mp_c0 = exp(-inv_vm0) / (Float32(2.0) * vm0)
+    var mp_c1 = exp(-inv_vm1) / (Float32(2.0) * vm1)
+    var sinh_inv2 = (exp(inv_vm2) - exp(-inv_vm2)) * Float32(0.5)
+    var mp_c2 = Float32(1.0) / (sinh_inv2 * Float32(2.0) * vm2)
+    # Sampling: precompute exp(-2/v) for vMF inverse CDF per lobe
+    var e2vm0 = exp(-Float32(2.0) * inv_vm0)
+    var e2vm1 = exp(-Float32(2.0) * inv_vm1)
+    var e2vm2 = exp(-Float32(2.0) * inv_vm2)
+
+    # ── Step 10: Azimuthal peak angles per lobe ───────────────────────────────
+    # PBRT formula: Phi(p) = 2*p*gammaT - 2*gammaO + p*PI
+    var dphi0 = -Float32(2.0) * gamma_o                          # R (p=0): -2*gammaO
+    var dphi1 = -PI + Float32(2.0) * (gamma_t - gamma_o)        # TT (p=1): same ±2π
+    var dphi2 = Float32(4.0) * gamma_t - Float32(2.0) * gamma_o # TRT (p=2)
+
+    var s = betaN  # azimuthal logistic scale
+
+    # Lobe luminances (needed for NEE MIS and indirect sampling)
+    var lum0 = A0.luma() + Float32(1e-6)
+    var lum1 = A1.luma() + Float32(1e-6)
+    var lum2 = A2.luma() + Float32(1e-6)
+    var total_lum = lum0 + lum1 + lum2
+
+    # ── Hit point for shadow rays (always offset toward incoming side) ────────
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var hit_base = ray_org + ray_dir * inter.tHit
+    var hit_point = hit_base + geo_normal * Float32(0.0001)
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    # ── Step 13b: NEE for infinite (environment) lights ───────────────────────
+    for inf_i in range(ctx.infinite_count):
+        var ilight = ctx.infinite_lights[inf_i]
+        var w2l = ilight.world_to_light
+        var env_dir: SIMD[DType.float32, 3]
+        var env_rgb: RGB
+        var pdf_env: Float32
+        if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+            var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+            var u1_e = pcg.next_float(); var u2_e = pcg.next_float()
+            var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_e)
+            row_idx = min(row_idx, ih - 1)
+            var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+            var cond_base = (ih + 1) + row_idx * (iw + 1)
+            var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_e) - cond_base
+            col_idx = min(col_idx, iw - 1)
+            var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+            var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+            var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+            var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
+            var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
+            var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
+            var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
+            env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
+            var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+            var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+            var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+            var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+            var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+            env_rgb = RGB(pr, pg, pb) * ilight.scale
+            if dp_row > Float32(0) and dp_col > Float32(0):
+                pdf_env = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
+            else:
+                pdf_env = INV_FOUR_PI
+        else:
+            # Uniform sphere sampling (hair scatters in all directions)
+            var u1_e = pcg.next_float(); var u2_e = pcg.next_float()
+            var cos_e = Float32(1.0) - Float32(2.0) * u1_e
+            var sin_e = safe_sqrt(Float32(1.0) - cos_e * cos_e)
+            var phi_e = TWO_PI * u2_e
+            env_dir = SIMD[DType.float32, 3](sin_e * cos(phi_e), sin_e * sin(phi_e), cos_e)
+            env_rgb = ilight.scale
+            pdf_env = INV_FOUR_PI
+        if pdf_env > Float32(0.0) and not env_rgb.is_black():
+            var wi_e = env_dir
+            var sin_ti_e = dot(wi_e, tangent)
+            var cos_ti_e = max(safe_sqrt(Float32(1.0) - sin_ti_e * sin_ti_e), Float32(1e-5))
+            var wi_e_perp = wi_e - sin_ti_e * tangent
+            var phi_i_e = atan2(dot(wi_e_perp, b_perp), dot(wi_e_perp, n_perp))
+            var dphi_ie = phi_i_e - phi_o
+            var x0e = _hair_wrap(dphi_ie - dphi0)
+            var x1e = _hair_wrap(dphi_ie - dphi1)
+            var x2e = _hair_wrap(dphi_ie - dphi2)
+            var M0e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm0, mp_c0) / cos_ti_e
+            var M1e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm1, mp_c1) / cos_ti_e
+            var M2e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm2, mp_c2) / cos_ti_e
+            var N0e = _hair_logistic(x0e, s)
+            var N1e = _hair_logistic(x1e, s)
+            var N2e = _hair_logistic(x2e, s)
+            var fe_r = A0.r*M0e*N0e + A1.r*M1e*N1e + A2.r*M2e*N2e
+            var fe_g = A0.g*M0e*N0e + A1.g*M1e*N1e + A2.g*M2e*N2e
+            var fe_b = A0.b*M0e*N0e + A1.b*M1e*N1e + A2.b*M2e*N2e
+            # MIS: pdf_bsdf in solid angle = cos_ti_e * (lum-weighted M*N sum) / total_lum
+            # M0e already has /cos_ti_e baked in, so multiply back to get raw Mp
+            var pdf_bsdf_nee = max(cos_ti_e * (lum0*M0e*N0e + lum1*M1e*N1e + lum2*M2e*N2e) / total_lum, Float32(1e-6))
+            var mis_w_e = power_heuristic(pdf_env, pdf_bsdf_nee)
+            # Multiply by cos_ti_e: cancels the /cos_ti_e embedded in M0e/M1e/M2e,
+            # matching PBRT's f * AbsCosTheta(wi) formula which gives Σ Ap·Mp·Np (no angle factor).
+            var contrib_e = path_ptr[].throughput * cos_ti_e * RGB(fe_r, fe_g, fe_b) * env_rgb * (mis_w_e / pdf_env)
+            if not contrib_e.is_black():
+                var esign = Float32(1.0) if dot(wi_e, geo_normal) >= Float32(0.0) else Float32(-1.0)
+                var eorg = hit_base + geo_normal * Float32(0.0001) * esign
+                comptime if enqueue_shadow:
+                    ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(
+                        Point3f(eorg[0], eorg[1], eorg[2]),
+                        Vec3f(wi_e[0], wi_e[1], wi_e[2]),
+                        Float32(100000.0), RGB(contrib_e.r, contrib_e.g, contrib_e.b), Int32(1), Int32(0))
+                else:
+                    var shadow_e = Ray_C(
+                        Point3f(eorg[0], eorg[1], eorg[2]),
+                        Vec3f(wi_e[0], wi_e[1], wi_e[2]))
+                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_e, Float32(100000.0)):
+                        path_ptr[].estimate += contrib_e
+
+    # ── Step 14: NEE for distant lights ──────────────────────────────────────
+    for dl_i in range(ctx.distant_count):
+        var dl = ctx.distant_lights[dl_i]
+        var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)
+        var wi = -ldir  # toward light
+
+        var sin_ti = dot(wi, tangent)
+        var cos_ti = safe_sqrt(Float32(1.0) - sin_ti * sin_ti)
+        cos_ti = max(cos_ti, Float32(1e-5))
+
+        var wi_perp = wi - sin_ti * tangent
+        var phi_i = atan2(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
+
+        var dphi_i = phi_i - phi_o
+        var x0 = _hair_wrap(dphi_i - dphi0)
+        var x1 = _hair_wrap(dphi_i - dphi1)
+        var x2 = _hair_wrap(dphi_i - dphi2)
+
+        # Evaluate 3-lobe BSDF (/ cos_ti converts to solid angle measure)
+        var M0 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm0, mp_c0) / cos_ti
+        var M1 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm1, mp_c1) / cos_ti
+        var M2 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
+
+        var N0 = _hair_logistic(x0, s)
+        var N1 = _hair_logistic(x1, s)
+        var N2 = _hair_logistic(x2, s)
+
+        var fr_val = A0.r * M0 * N0 + A1.r * M1 * N1 + A2.r * M2 * N2
+        var fg_val = A0.g * M0 * N0 + A1.g * M1 * N1 + A2.g * M2 * N2
+        var fb_val = A0.b * M0 * N0 + A1.b * M1 * N1 + A2.b * M2 * N2
+
+        # Multiply by cos_ti: cancels the /cos_ti in M0/M1/M2, matching PBRT's f*AbsCosTheta(wi).
+        var contrib = path_ptr[].throughput * cos_ti * RGB(fr_val, fg_val, fb_val) * dl.emission
+
+        var t_max = Float32(2000.0)
+        var dsign = Float32(1.0) if dot(wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
+        var dorg = hit_base + geo_normal * Float32(0.0001) * dsign
+        comptime if enqueue_shadow:
+            ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(
+                Point3f(dorg[0], dorg[1], dorg[2]),
+                Vec3f(wi[0], wi[1], wi[2]),
+                t_max, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
+        else:
+            var shadow_ray = Ray_C(
+                Point3f(dorg[0], dorg[1], dorg[2]),
+                Vec3f(wi[0], wi[1], wi[2]))
+            if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, t_max):
+                path_ptr[].estimate += contrib
+
+    # ── Step 15: Indirect sampling ────────────────────────────────────────────
+    # Pick lobe proportional to luminance (lum0/lum1/lum2/total_lum from above)
+    var r_lobe = pcg.next_float() * total_lum
+    var vm_p: Float32
+    var e2vm_p: Float32
+    var dphi_p: Float32
+    if r_lobe < lum0:
+        vm_p = vm0; e2vm_p = e2vm0; dphi_p = dphi0
+    elif r_lobe < lum0 + lum1:
+        vm_p = vm1; e2vm_p = e2vm1; dphi_p = dphi1
+    else:
+        vm_p = vm2; e2vm_p = e2vm2; dphi_p = dphi2
+
+    # Sample theta from vMF inverse CDF (PBRT formula)
+    var u_th = max(pcg.next_float(), Float32(1e-6))
+    var u_phi_v = pcg.next_float()
+    var cos_th = Float32(1.0) + vm_p * log(u_th + (Float32(1.0) - u_th) * e2vm_p)
+    cos_th = max(Float32(-1.0), min(Float32(1.0), cos_th))
+    var sin_th = safe_sqrt(Float32(1.0) - cos_th * cos_th)
+    var cos_phi_v = cos(TWO_PI * u_phi_v)
+    # PBRT: sinTheta_i = -cosTheta * sinThetap_o + sinTheta * cosPhi * cosThetap_o
+    var sin_ti_s = max(Float32(-1.0), min(Float32(1.0), -cos_th * sin_theta_o + sin_th * cos_phi_v * cos_theta_o))
+    var cos_ti_s = safe_sqrt(Float32(1.0) - sin_ti_s * sin_ti_s)
+    cos_ti_s = max(cos_ti_s, Float32(1e-5))
+
+    # Sample phi from logistic inverse CDF: x = s * log(u / (1-u))
+    var u3 = max(pcg.next_float(), Float32(1e-6))
+    var phi_i_s = phi_o + dphi_p + s * log(u3 / max(Float32(1.0) - u3, Float32(1e-6)))
+
+    # Reconstruct wi from (sin_ti_s, cos_ti_s, phi_i_s)
+    var wi_s = sin_ti_s * tangent + cos(phi_i_s) * cos_ti_s * n_perp + sin(phi_i_s) * cos_ti_s * b_perp
+    var wi_len = dot(wi_s, wi_s)
+    if wi_len > Float32(0.0):
+        wi_s = wi_s * (Float32(1.0) / sqrt(wi_len))
+
+    # Evaluate BSDF for sampled direction
+    var dphi_s = phi_i_s - phi_o
+    var x0s = _hair_wrap(dphi_s - dphi0)
+    var x1s = _hair_wrap(dphi_s - dphi1)
+    var x2s = _hair_wrap(dphi_s - dphi2)
+
+    var M0s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm0, mp_c0) / cos_ti_s
+    var M1s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm1, mp_c1) / cos_ti_s
+    var M2s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm2, mp_c2) / cos_ti_s
+
+    var N0s = _hair_logistic(x0s, s)
+    var N1s = _hair_logistic(x1s, s)
+    var N2s = _hair_logistic(x2s, s)
+
+    var frs = A0.r * M0s * N0s + A1.r * M1s * N1s + A2.r * M2s * N2s
+    var fgs = A0.g * M0s * N0s + A1.g * M1s * N1s + A2.g * M2s * N2s
+    var fbs = A0.b * M0s * N0s + A1.b * M1s * N1s + A2.b * M2s * N2s
+
+    # Compute sampling PDF — same M * N factors as BSDF (including /cos_ti_s) so
+    # f/pdf cancels the divergence at grazing angles.
+    var pdf = (lum0 * M0s * N0s + lum1 * M1s * N1s + lum2 * M2s * N2s) / total_lum
+    pdf = max(pdf, Float32(1e-6))
+    # Solid-angle PDF (remove the embedded /cos_ti_s) — used for MIS when indirect path hits env.
+    # M0s = _hair_Mp / cos_ti_s, so pdf already includes 1/cos_ti_s; multiply back to get solid angle.
+    var pdf_solid_angle = pdf * cos_ti_s
+
+    # Update path state
+    path_ptr[].pcgState = pcg.state
+    # Offset scattered ray origin based on which side wi_s exits (avoids self-intersection
+    # for transmission rays that cross through the ribbon).
+    var scatter_sign = Float32(1.0) if dot(wi_s, geo_normal) >= Float32(0.0) else Float32(-1.0)
+    var scatter_org = hit_base + geo_normal * Float32(0.0001) * scatter_sign
+    path_ptr[].ray = Ray_C(
+        Point3f(scatter_org[0], scatter_org[1], scatter_org[2]),
+        Vec3f(wi_s[0], wi_s[1], wi_s[2]))
+    if path_ptr[].bounce == 0:
+        # Approximate albedo AOV from TT lobe (closest to diffuse color)
+        path_ptr[].albedo = A1
+    path_ptr[].throughput *= RGB(frs, fgs, fbs) * (Float32(1.0) / pdf)
+    path_ptr[].lastBsdfPdf = pdf_solid_angle
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].bounce += 1
+
+    # Russian roulette
+    if path_ptr[].bounce > 1:
+        var lum_t = path_ptr[].throughput.luma()
+        var q = Float32(1.0) - (lum_t if lum_t < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+
+    path_ptr[].pcgState = pcg.state
+
+
+# Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
+# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
 def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
