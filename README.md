@@ -85,7 +85,7 @@ evaluation (geometry traversal only).
 
 | Project | Lines (own code) |
 |---|---|
-| **Gonzales** | **~7,800** |
+| **Gonzales** | **~10,500** |
 | pbrt-v4 | ~84,000 (excluding bundled data tables and third-party libs) |
 | Embree kernel | ~96,000 (BVH/traversal only, no rendering) |
 
