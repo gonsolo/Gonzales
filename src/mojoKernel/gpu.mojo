@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, MatKind, dot, cross
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
@@ -51,6 +51,10 @@ struct GpuSceneHandle(Movable):
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
     var il_w2l_bufs: List[DeviceBuffer[DType.uint8]]    # per-light world_to_light matrix on GPU
     var n_infinite_lights: Int
+    var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium_C)
+    var n_mediums: Int
+    var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
+    var n_medium_ifaces: Int
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × sizeof(PathState_C)=96
@@ -112,6 +116,10 @@ def gpu_upload_scene(
     lightSamplerN: Int64,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediumCount: Int64,
+    medium_ifaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    medium_iface_count: Int64,
     n_pixels: Int64,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
@@ -379,6 +387,26 @@ def gpu_upload_scene(
             il_patched.free()
             print("GPU: " + String(il_count) + " infinite light(s) uploaded")
 
+            # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
+            var med_bytes = max(Int(mediumCount), 1) * size_of[Medium_C]()
+            var med_buf = ctx.enqueue_create_buffer[DType.uint8](med_bytes)
+            if Int(mediumCount) > 0:
+                with med_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = mediums.bitcast[UInt8]()
+                    for j in range(Int(mediumCount) * size_of[Medium_C]()):
+                        dst[j] = src[j]
+
+            # Upload medium interfaces
+            var miface_bytes = max(Int(medium_iface_count), 1) * size_of[MediumInterface_C]()
+            var miface_buf = ctx.enqueue_create_buffer[DType.uint8](miface_bytes)
+            if Int(medium_iface_count) > 0:
+                with miface_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = medium_ifaces.bitcast[UInt8]()
+                    for j in range(Int(medium_iface_count) * size_of[MediumInterface_C]()):
+                        dst[j] = src[j]
+
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState_C]() * WAVEFRONT_BATCH)
@@ -540,6 +568,10 @@ def gpu_upload_scene(
                 il_cdf_bufs=il_cdf_bufs^,
                 il_w2l_bufs=il_w2l_bufs^,
                 n_infinite_lights=Int(infiniteLightCount),
+                mediums_buf=med_buf^,
+                n_mediums=Int(mediumCount),
+                medium_ifaces_buf=miface_buf^,
+                n_medium_ifaces=Int(medium_iface_count),
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
@@ -995,6 +1027,179 @@ def shade_coated_conductor_gpu(
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
     shade_coated_conductor(path_ptr, inter, meshes, mat)
+
+
+def shade_interface_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    medium_ifaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    count: Int,
+):
+    """Passthrough (interface) material: advance ray through the surface and
+    update the current medium index based on the crossing direction."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var path_ptr = paths + tid
+    if path_ptr[].pending_mat != MatKind.interface:
+        return
+    path_ptr[].pending_mat = Int8(0)
+    var inter = intersections[tid]
+    var mat = materials[Int(inter.primId.materialIndex)]
+    # Advance the ray past the surface (same direction)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var hp = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
+    path_ptr[].ray = Ray_C(Point3f(hp[0], hp[1], hp[2]), path_ptr[].ray.direction)
+    path_ptr[].specularBounce = Int8(1)
+    path_ptr[].lastBsdfPdf = Float32(0.0)
+    # Update current medium based on crossing direction
+    if mat.medium_interface_idx >= Int32(0):
+        var iface = medium_ifaces[Int(mat.medium_interface_idx)]
+        # Get triangle vertices to compute geometric normal
+        var mi: Int
+        var bv: Int
+        if inter.primId.type == 0:
+            mi = Int(inter.primId.id1)
+            bv = Int(inter.primId.id2)
+        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+            mi = Int(inter.primId.id2 >> 32)
+            bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+        else:
+            return
+        var m = meshes[mi]
+        var v0 = Int(m.vertexIndices[bv])
+        var v1 = Int(m.vertexIndices[bv + 1])
+        var v2 = Int(m.vertexIndices[bv + 2])
+        var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+        var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+        var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+        var geom_n = cross(p1 - p0, p2 - p0)
+        if dot(ray_dir, geom_n) > Float32(0.0):
+            path_ptr[].current_medium_idx = iface.outside_medium_idx
+        else:
+            path_ptr[].current_medium_idx = iface.inside_medium_idx
+
+
+def sample_medium_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    n_mediums: Int,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    n_area_lights: Int,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    n_light_sampler: Int,
+    count: Int,
+):
+    """Apply homogeneous medium transmittance along the ray segment and
+    possibly scatter or absorb inside the medium. On scatter, performs
+    direct area-light NEE with isotropic phase function."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var path_ptr = paths + tid
+    if path_ptr[].active == 0:
+        return
+    var med_idx = Int(path_ptr[].current_medium_idx)
+    if med_idx < 0 or med_idx >= n_mediums:
+        return
+    var inter = intersections[tid]
+    if inter.hit == 0:
+        return
+    var med = mediums[med_idx]
+    var sigma_t_r = med.sigma_a.r + med.sigma_s.r
+    var sigma_t_g = med.sigma_a.g + med.sigma_s.g
+    var sigma_t_b = med.sigma_a.b + med.sigma_s.b
+    var sigma_maj = max(sigma_t_r, max(sigma_t_g, sigma_t_b))
+    if sigma_maj <= Float32(0.0):
+        return
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var u_free = pcg.next_float()
+    var t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
+    var t_surf = inter.tHit
+    var t_seg = min(t_free, t_surf)
+    # Apply transmittance over the segment
+    path_ptr[].throughput.r *= exp(-sigma_t_r * t_seg)
+    path_ptr[].throughput.g *= exp(-sigma_t_g * t_seg)
+    path_ptr[].throughput.b *= exp(-sigma_t_b * t_seg)
+    if t_free < t_surf:
+        var p_scatter = med.sigma_s.r / sigma_maj
+        var u_mode = pcg.next_float()
+        if u_mode < p_scatter:
+            # Volume scatter: compute scatter point
+            var new_ox = path_ptr[].ray.origin.x + t_free * path_ptr[].ray.direction.x
+            var new_oy = path_ptr[].ray.origin.y + t_free * path_ptr[].ray.direction.y
+            var new_oz = path_ptr[].ray.origin.z + t_free * path_ptr[].ray.direction.z
+            # ── Volume scatter NEE — area light direct lighting ──────────────
+            if n_area_lights > 0 and n_light_sampler > 0:
+                var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+                var u_nee = pcg.next_float()
+                var ls_result = light_sampler_sample(ls, u_nee)
+                var light_idx = ls_result[0]
+                var light_sel_pdf = ls_result[1]
+                var al = areaLights[light_idx]
+                var lmesh = meshes[Int(al.meshIdx)]
+                var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+                var r1 = pcg.next_float()
+                var r2 = pcg.next_float()
+                var lb = lti * 3
+                var lv0 = Int(lmesh.vertexIndices[lb])
+                var lv1 = Int(lmesh.vertexIndices[lb + 1])
+                var lv2 = Int(lmesh.vertexIndices[lb + 2])
+                var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+                var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+                var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+                var sqrt_r1 = sqrt(r1)
+                var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
+                var lcross = cross(lp1 - lp0, lp2 - lp0)
+                var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
+                var light_normal = lcross * (Float32(1) / lcross_len)
+                var scatter_pt = SIMD[DType.float32, 3](new_ox, new_oy, new_oz)
+                var to_light = light_point - scatter_pt
+                var dist_sq = dot(to_light, to_light)
+                var dist = sqrt(dist_sq)
+                if dist > Float32(0.0001) and al.total_area > Float32(0):
+                    var shadow_dir = to_light * (Float32(1) / dist)
+                    var cos_l = -dot(light_normal, shadow_dir)
+                    if cos_l > Float32(0):
+                        var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
+                        var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                        var shad_tmax = dist * Float32(0.9995)
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shad_ray, shad_tmax):
+                            var T_r = exp(-sigma_t_r * dist)
+                            var T_g = exp(-sigma_t_g * dist)
+                            var T_b = exp(-sigma_t_b * dist)
+                            var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
+                            path_ptr[].estimate.r += path_ptr[].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
+                            path_ptr[].estimate.g += path_ptr[].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
+                            path_ptr[].estimate.b += path_ptr[].throughput.b * INV_FOUR_PI * al.emission.b * geom * T_b
+            # Sample isotropic scatter direction
+            var u1 = pcg.next_float()
+            var u2 = pcg.next_float()
+            path_ptr[].pcgState = pcg.state
+            var cos_theta = Float32(2.0) * u1 - Float32(1.0)
+            var sin_theta = sqrt(max(Float32(0.0), Float32(1.0) - cos_theta * cos_theta))
+            var phi = Float32(6.28318530718) * u2
+            path_ptr[].ray = Ray_C(
+                Point3f(new_ox, new_oy, new_oz),
+                Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
+            path_ptr[].specularBounce = Int8(0)
+            path_ptr[].lastBsdfPdf = INV_FOUR_PI
+            path_ptr[].volume_scattered = Int8(1)
+            path_ptr[].bounce += 1
+            intersections[tid].hit = Int8(0)  # no surface hit this bounce
+        else:
+            # Absorbed
+            path_ptr[].pcgState = pcg.state
+            path_ptr[].active = Int8(0)
+    else:
+        path_ptr[].pcgState = pcg.state
 
 
 def shade_hair_gpu(
@@ -1502,6 +1707,21 @@ def gpu_render_sample(
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
+                handle[].ctx.enqueue_function[sample_medium_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C](),
+                    handle[].n_mediums,
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    n_int,
+                    grid_dim=grid_dim, block_dim=block_size,
+                )
                 handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -1656,6 +1876,15 @@ def gpu_render_sample(
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    n_int,
+                    grid_dim=grid_dim, block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_interface_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
                     n_int,
                     grid_dim=grid_dim, block_dim=block_size,
                 )
@@ -1753,6 +1982,21 @@ def gpu_render_wavefront(
                     grid_dim=grid_total,
                     block_dim=block_size,
                 )
+                handle[].ctx.enqueue_function[sample_medium_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C](),
+                    handle[].n_mediums,
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    n_total,
+                    grid_dim=grid_total, block_dim=block_size,
+                )
                 handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -1907,6 +2151,15 @@ def gpu_render_wavefront(
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    n_total,
+                    grid_dim=grid_total, block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_interface_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
                     n_total,
                     grid_dim=grid_total, block_dim=block_size,
                 )

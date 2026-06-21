@@ -8,6 +8,7 @@ from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import denoise, write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
+from .sppm import sppm_render
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
@@ -165,6 +166,8 @@ def _gpu_upload_scene(
         psc[0].point_lights,   Int64(psc[0].point_count),
         psc[0].light_sampler.cdf, Int64(psc[0].light_sampler.n),
         psc[0].infinite_lights, Int64(psc[0].infinite_count),
+        psc[0].mediums,         Int64(psc[0].medium_count),
+        psc[0].medium_ifaces,   Int64(psc[0].medium_iface_count),
         Int64(n_pixels),
         sobol,
         psc[0].raster_to_camera, psc[0].camera_to_world,
@@ -336,6 +339,10 @@ def parse_and_render(
     no_denoise: Bool = False,
     spp_override: Int32 = Int32(0),
     verbose: Bool = False,
+    use_sppm: Bool = False,
+    sppm_passes: Int32 = Int32(64),
+    sppm_photons: Int32 = Int32(200000),
+    sppm_radius: Float32 = Float32(0.05),
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -414,6 +421,16 @@ def parse_and_render(
         print("Warning: scene has no geometry, skipping render")
         mojo_parsed_free(psc)
         return Int32(0)
+    elif use_sppm:
+        var sd = mojo_parsed_scene_descriptor(psc)
+        var ret = sppm_render(
+            psc, sd[0],
+            Int(sppm_passes), Int(sppm_photons), sppm_radius,
+            no_denoise, verbose,
+        )
+        sd.free()
+        mojo_parsed_free(psc)
+        return ret
     else:
         var zero = TileResult_C(
             estimate=RGB(Float32(0), Float32(0), Float32(0)),

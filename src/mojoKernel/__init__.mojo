@@ -46,6 +46,10 @@ def main() raises:
     var no_denoise = False
     var verbose = False
     var spp_override = Int32(0)
+    var use_sppm = False
+    var sppm_passes = Int32(64)
+    var sppm_photons = Int32(200000)
+    var sppm_radius = Float32(0.05)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
@@ -88,6 +92,36 @@ def main() raises:
             pixel_x = Int32(atol(String(args[i])))
             i += 1
             pixel_y = Int32(atol(String(args[i])))
+        elif arg == "--sppm":
+            use_sppm = True
+        elif arg == "--sppm-passes" and i + 1 < len(args):
+            i += 1
+            sppm_passes = _parse_int32(String(args[i]), 0)
+        elif arg == "--sppm-photons" and i + 1 < len(args):
+            i += 1
+            sppm_photons = _parse_int32(String(args[i]), 0)
+        elif arg == "--sppm-radius" and i + 1 < len(args):
+            i += 1
+            # Parse float radius
+            var rs = String(args[i])
+            var rv = Float32(0)
+            var rn = rs.byte_length()
+            var rj = 0
+            var rfrac = Float32(0)
+            var rfrac_div = Float32(1)
+            var after_dot = False
+            while rj < rn:
+                var rc = Int(rs.as_bytes()[rj])
+                if rc == 46:  # '.'
+                    after_dot = True
+                elif rc >= 48 and rc <= 57:
+                    if after_dot:
+                        rfrac_div *= Float32(10)
+                        rfrac += Float32(rc - 48) / rfrac_div
+                    else:
+                        rv = rv * Float32(10) + Float32(rc - 48)
+                rj += 1
+            sppm_radius = rv + rfrac
         else:
             scene_path = arg
         i += 1
@@ -117,7 +151,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override, verbose)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose)
+        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose, use_sppm, sppm_passes, sppm_photons, sppm_radius)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 

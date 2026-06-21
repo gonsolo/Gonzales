@@ -203,6 +203,7 @@ struct MatKind:
     comptime coated_conductor  = Int8(7)
     comptime mix               = Int8(8)
     comptime thin_dielectric   = Int8(9)
+    comptime interface         = Int8(10)
     comptime hair              = Int8(11)
 
 @fieldwise_init
@@ -267,7 +268,7 @@ struct PathState_C(TrivialRegisterPassable):
     var active: Int8
     var specularBounce: Int8   # 1 if previous scatter was a delta BSDF (mirror/glass)
     var pending_mat: Int8      # GPU only: MatKind of material awaiting per-material kernel (0 = none)
-    var _pad3: Int8
+    var volume_scattered: Int8 # 1 if this bounce was a volume scatter; shade_nee_core skips miss handling
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32

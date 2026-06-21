@@ -69,6 +69,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_type = MatKind.thin_dielectric
             elif _psc_streq(str_val, "hair"):
                 mat_type = MatKind.hair
+            elif _psc_streq(str_val, "interface"):
+                mat_type = MatKind.interface
             else:
                 mat_type = MatKind.diffuse
         elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor

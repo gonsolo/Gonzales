@@ -3,7 +3,7 @@ from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .rng import PCG32
-from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
+from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 
 @fieldwise_init
@@ -1829,6 +1829,258 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 @always_inline
+def _mnee_vertex_mats(
+    wi: SIMD[DType.float32, 3], wo: SIMD[DType.float32, 3],
+    H: SIMD[DType.float32, 3], s: SIMD[DType.float32, 3], t: SIMD[DType.float32, 3],
+    dp_du: SIMD[DType.float32, 3], dp_dv: SIMD[DType.float32, 3],
+    ili: Float32, ilo: Float32,
+    dp_du_prev: SIMD[DType.float32, 3], dp_dv_prev: SIMD[DType.float32, 3],
+    dp_du_next: SIMD[DType.float32, 3], dp_dv_next: SIMD[DType.float32, 3],
+    has_prev: Bool, has_next: Bool,
+) -> Tuple[SIMD[DType.float32, 4], SIMD[DType.float32, 4], SIMD[DType.float32, 4], SIMD[DType.float32, 2]]:
+    # Computes (a, b, c, constraint) matrices at a specular vertex.
+    # a=coupling to prev, b=self, c=coupling to next; uses Cycles mnee.h formulas.
+    var b_du = -(dp_du*(ili+ilo)) + wi*(dot(wi,dp_du)*ili) + wo*(dot(wo,dp_du)*ilo)
+    var b_dv = -(dp_dv*(ili+ilo)) + wi*(dot(wi,dp_dv)*ili) + wo*(dot(wo,dp_dv)*ilo)
+    b_du -= H*dot(b_du,H); b_du = -b_du
+    b_dv -= H*dot(b_dv,H); b_dv = -b_dv
+    var b = SIMD[DType.float32, 4](dot(b_du,s), dot(b_dv,s), dot(b_du,t), dot(b_dv,t))
+    var a = SIMD[DType.float32, 4](Float32(0))
+    if has_prev:
+        var a_du = (dp_du_prev - wi*dot(wi,dp_du_prev)) * ili
+        var a_dv = (dp_dv_prev - wi*dot(wi,dp_dv_prev)) * ili
+        a_du -= H*dot(a_du,H); a_du = -a_du
+        a_dv -= H*dot(a_dv,H); a_dv = -a_dv
+        a = SIMD[DType.float32, 4](dot(a_du,s), dot(a_dv,s), dot(a_du,t), dot(a_dv,t))
+    var c = SIMD[DType.float32, 4](Float32(0))
+    if has_next:
+        var c_du = (dp_du_next - wo*dot(wo,dp_du_next)) * ilo
+        var c_dv = (dp_dv_next - wo*dot(wo,dp_dv_next)) * ilo
+        c_du -= H*dot(c_du,H); c_du = -c_du
+        c_dv -= H*dot(c_dv,H); c_dv = -c_dv
+        c = SIMD[DType.float32, 4](dot(c_du,s), dot(c_dv,s), dot(c_du,t), dot(c_dv,t))
+    var constraint = SIMD[DType.float32, 2](dot(H,s), dot(H,t))
+    return (a, b, c, constraint)
+
+@always_inline
+def _mat22_mul(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a[0]*b[0]+a[1]*b[2], a[0]*b[1]+a[1]*b[3], a[2]*b[0]+a[3]*b[2], a[2]*b[1]+a[3]*b[3])
+
+@always_inline
+def _mat22_mul_v(m: SIMD[DType.float32, 4], v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](m[0]*v[0]+m[1]*v[1], m[2]*v[0]+m[3]*v[1])
+
+@always_inline
+def _mat22_inv(m: SIMD[DType.float32, 4]) -> Tuple[SIMD[DType.float32, 4], Float32]:
+    var det = m[0]*m[3] - m[1]*m[2]
+    if abs(det) < Float32(1e-5):
+        return (SIMD[DType.float32, 4](Float32(0)), Float32(0))
+    return (SIMD[DType.float32, 4](m[3], -m[1], -m[2], m[0]) * (Float32(1.0)/det), det)
+
+# 2-vertex MNEE: Newton walk for x0→x1(glass1)→x2(glass2)→x3.
+# etas must be pre-computed: eta = ior if entering glass, 1/ior if exiting.
+# Returns (converged, x1_f, x2_f, bsdf_product, dx1_dxlight).
+@always_inline
+def _mnee_walk2(
+    x0: SIMD[DType.float32, 3], x3: SIMD[DType.float32, 3],
+    x1_init: SIMD[DType.float32, 3], n1: SIMD[DType.float32, 3],
+    dp_du1: SIMD[DType.float32, 3], dp_dv1: SIMD[DType.float32, 3], eta1: Float32,
+    x2_init: SIMD[DType.float32, 3], n2: SIMD[DType.float32, 3],
+    dp_du2: SIMD[DType.float32, 3], dp_dv2: SIMD[DType.float32, 3], eta2: Float32,
+    ldp_du: SIMD[DType.float32, 3], ldp_dv: SIMD[DType.float32, 3],
+) -> Tuple[Bool, SIMD[DType.float32, 3], SIMD[DType.float32, 3], Float32, Float32]:
+    var x1 = x1_init
+    var x2 = x2_init
+    var converged = False
+    for _iter in range(20):
+        # ── Vertex 0 (x1): wi from x0, wo to x2 ────────────────────────────
+        var wi1v = x0 - x1; var wi1l = sqrt(dot(wi1v,wi1v))
+        var wo1v = x2 - x1; var wo1l = sqrt(dot(wo1v,wo1v))
+        if wi1l < Float32(1e-6) or wo1l < Float32(1e-6): break
+        var wi1 = wi1v*(Float32(1)/wi1l); var wo1 = wo1v*(Float32(1)/wo1l)
+        if dot(n1,wi1)*dot(n1,wo1) >= Float32(0): break
+        var H1v = -(wi1 + wo1*eta1); var H1l = sqrt(dot(H1v,H1v))
+        if H1l < Float32(1e-10): break
+        var H1 = H1v*(Float32(1)/H1l)
+        var s1 = dp_du1 - n1*dot(dp_du1,n1); var s1l = sqrt(dot(s1,s1))
+        if s1l < Float32(1e-10): break
+        s1 = s1*(Float32(1)/s1l); var t1 = cross(n1,s1)
+        var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
+        var (a0,b0,c0,cv0) = _mnee_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
+            SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),dp_du2,dp_dv2,False,True)
+        # ── Vertex 1 (x2): wi from x1, wo to x3 ────────────────────────────
+        var wi2v = x1 - x2; var wi2l = sqrt(dot(wi2v,wi2v))
+        var wo2v = x3 - x2; var wo2l = sqrt(dot(wo2v,wo2v))
+        if wi2l < Float32(1e-6) or wo2l < Float32(1e-6): break
+        var wi2 = wi2v*(Float32(1)/wi2l); var wo2 = wo2v*(Float32(1)/wo2l)
+        if dot(n2,wi2)*dot(n2,wo2) >= Float32(0): break
+        var H2v = -(wi2 + wo2*eta2); var H2l = sqrt(dot(H2v,H2v))
+        if H2l < Float32(1e-10): break
+        var H2 = H2v*(Float32(1)/H2l)
+        var s2 = dp_du2 - n2*dot(dp_du2,n2); var s2l = sqrt(dot(s2,s2))
+        if s2l < Float32(1e-10): break
+        s2 = s2*(Float32(1)/s2l); var t2 = cross(n2,s2)
+        var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
+        var (a1,b1,c1,cv1) = _mnee_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
+            dp_du1,dp_dv1,SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),True,False)
+        _ = a0; _ = c1
+        # ── Convergence ──────────────────────────────────────────────────────
+        var err = max(max(abs(cv0[0]),abs(cv0[1])), max(abs(cv1[0]),abs(cv1[1])))
+        if err < Float32(1e-3):
+            converged = True; break
+        # ── Block tridiagonal solve: [b0 c0; a1 b1]*[dx0;dx1]=[cv0;cv1] ────
+        var (Li0, det0) = _mat22_inv(b0)
+        if det0 == Float32(0): break
+        var A1 = _mat22_mul(a1, Li0)
+        var Lk1 = b1 - _mat22_mul(A1, c0)
+        var (Li1, det1) = _mat22_inv(Lk1)
+        if det1 == Float32(0): break
+        var C1_red = cv1 - _mat22_mul_v(A1, cv0)
+        var dx1 = _mat22_mul_v(Li1, C1_red)
+        var dx0 = _mat22_mul_v(Li0, cv0 - _mat22_mul_v(c0, dx1))
+        # ── Step clamp ──────────────────────────────────────────────────────
+        var step0 = sqrt(dx0[0]*dx0[0]+dx0[1]*dx0[1]); var ms0 = wo1l*Float32(0.5)
+        if step0 > ms0: dx0 = dx0*(ms0/step0)
+        var step1 = sqrt(dx1[0]*dx1[0]+dx1[1]*dx1[1]); var ms1 = wo2l*Float32(0.5)
+        if step1 > ms1: dx1 = dx1*(ms1/step1)
+        x1 = x1 - (dp_du1*dx0[0] + dp_dv1*dx0[1])
+        x2 = x2 - (dp_du2*dx1[0] + dp_dv2*dx1[1])
+    if not converged:
+        return (False, x1_init, x2_init, Float32(0), Float32(0))
+    # ── Recompute final vertex quantities for transfer matrix ────────────────
+    var wi1v = x0 - x1; var wi1l = sqrt(dot(wi1v,wi1v))
+    var wo1v = x2 - x1; var wo1l = sqrt(dot(wo1v,wo1v))
+    var wi2v = x1 - x2; var wi2l = sqrt(dot(wi2v,wi2v))
+    var wo2v = x3 - x2; var wo2l = sqrt(dot(wo2v,wo2v))
+    if wi1l < Float32(1e-8) or wo1l < Float32(1e-8) or wi2l < Float32(1e-8) or wo2l < Float32(1e-8):
+        return (False, x1_init, x2_init, Float32(0), Float32(0))
+    var wi1 = wi1v*(Float32(1)/wi1l); var wo1 = wo1v*(Float32(1)/wo1l)
+    var wi2 = wi2v*(Float32(1)/wi2l); var wo2 = wo2v*(Float32(1)/wo2l)
+    var H1v = -(wi1+wo1*eta1); var H1l = sqrt(dot(H1v,H1v))
+    var H2v = -(wi2+wo2*eta2); var H2l = sqrt(dot(H2v,H2v))
+    if H1l < Float32(1e-10) or H2l < Float32(1e-10):
+        return (False, x1_init, x2_init, Float32(0), Float32(0))
+    var H1 = H1v*(Float32(1)/H1l); var H2 = H2v*(Float32(1)/H2l)
+    var s1 = dp_du1-n1*dot(dp_du1,n1); s1 = s1*(Float32(1)/sqrt(dot(s1,s1))); var t1 = cross(n1,s1)
+    var s2 = dp_du2-n2*dot(dp_du2,n2); s2 = s2*(Float32(1)/sqrt(dot(s2,s2))); var t2 = cross(n2,s2)
+    var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
+    var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
+    var (a0f,b0f,c0f,cv0f) = _mnee_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
+        SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),dp_du2,dp_dv2,False,True)
+    var (a1f,b1f,c1f,cv1f) = _mnee_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
+        dp_du1,dp_dv1,SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),True,False)
+    _ = a0f; _ = c1f; _ = cv0f; _ = cv1f
+    # ── Block tridiagonal LU factorization for transfer matrix ───────────────
+    var (Li0f, det0f) = _mat22_inv(b0f)
+    if det0f == Float32(0): return (False, x1_init, x2_init, Float32(0), Float32(0))
+    var U0 = _mat22_mul(Li0f, c0f)
+    var Lk1f = b1f - _mat22_mul(a1f, U0)
+    var (Li1f, det1f) = _mat22_inv(Lk1f)
+    if det1f == Float32(0): return (False, x1_init, x2_init, Float32(0), Float32(0))
+    # ── dc_dlight at x2 (wrt x3 position) ───────────────────────────────────
+    var dc_du = (ldp_du - wo2*dot(wo2,ldp_du)) * ilo2
+    var dc_dv = (ldp_dv - wo2*dot(wo2,ldp_dv)) * ilo2
+    dc_du -= H2*dot(dc_du,H2); dc_du = -dc_du
+    dc_dv -= H2*dot(dc_dv,H2); dc_dv = -dc_dv
+    var dc_dlight = SIMD[DType.float32, 4](dot(dc_du,s2), dot(dc_dv,s2), dot(dc_du,t2), dot(dc_dv,t2))
+    # ── Transfer matrix chain ────────────────────────────────────────────────
+    var Tp = SIMD[DType.float32, 4](Float32(0)-Li1f[0]*dc_dlight[0]-Li1f[1]*dc_dlight[2],
+        Float32(0)-Li1f[0]*dc_dlight[1]-Li1f[1]*dc_dlight[3],
+        Float32(0)-Li1f[2]*dc_dlight[0]-Li1f[3]*dc_dlight[2],
+        Float32(0)-Li1f[2]*dc_dlight[1]-Li1f[3]*dc_dlight[3])
+    Tp = SIMD[DType.float32, 4](Float32(0)-U0[0]*Tp[0]-U0[1]*Tp[2], Float32(0)-U0[0]*Tp[1]-U0[1]*Tp[3],
+        Float32(0)-U0[2]*Tp[0]-U0[3]*Tp[2], Float32(0)-U0[2]*Tp[1]-U0[3]*Tp[3])
+    var dx1_dxlight = abs(Tp[0]*Tp[3]-Tp[1]*Tp[2])
+    # ── BSDF product at x1 and x2 ────────────────────────────────────────────
+    var cosNI1 = abs(dot(n1,wi1)); var cosHI1 = abs(dot(H1,wi1)); var cosTM1 = abs(dot(n1,H1))
+    var F1 = fr_dielectric(cosNI1, eta1); var bsdf1 = (Float32(1)-F1)*cosHI1/max(cosNI1*cosTM1*cosTM1,Float32(1e-6))
+    var cosNI2 = abs(dot(n2,wi2)); var cosHI2 = abs(dot(H2,wi2)); var cosTM2 = abs(dot(n2,H2))
+    var F2 = fr_dielectric(cosNI2, eta2); var bsdf2 = (Float32(1)-F2)*cosHI2/max(cosNI2*cosTM2*cosTM2,Float32(1e-6))
+    return (True, x1, x2, bsdf1*bsdf2, dx1_dxlight)
+
+@always_inline
+# MNEE manifold walk: Newton iteration to find x1 on a glass surface such that
+# Snell's law holds for the path x0 → x1 → x2. Works for flat glass surfaces
+# (no reprojection needed). Returns (converged, x1_final, det_b, eta_final).
+# det_b is the 2x2 constraint Jacobian determinant needed for the transfer matrix.
+@always_inline
+def _mnee_walk(
+    x0: SIMD[DType.float32, 3],
+    x2: SIMD[DType.float32, 3],
+    x1_init: SIMD[DType.float32, 3],
+    n_in: SIMD[DType.float32, 3],
+    dp_du: SIMD[DType.float32, 3],
+    dp_dv: SIMD[DType.float32, 3],
+    eta_in: Float32,
+) -> Tuple[Bool, SIMD[DType.float32, 3], Float32, Float32]:
+    var x1 = x1_init
+    var n = n_in
+    for _iter in range(20):
+        var wi3 = x0 - x1
+        var wi_len2 = dot(wi3, wi3)
+        if wi_len2 < Float32(1e-8):
+            return (False, x1_init, Float32(0), eta_in)
+        var wi_len = sqrt(wi_len2)
+        var wi = wi3 * (Float32(1.0) / wi_len)
+        var wo3 = x2 - x1
+        var wo_len2 = dot(wo3, wo3)
+        if wo_len2 < Float32(1e-8):
+            return (False, x1_init, Float32(0), eta_in)
+        var wo_len = sqrt(wo_len2)
+        var wo = wo3 * (Float32(1.0) / wo_len)
+        # eta: pre-computed by caller from dot(pgeo_n_raw, shadow_dir)
+        var eta = eta_in
+        # Generalized half-vector H = -(wi + eta*wo), Cycles mnee.h convention
+        var H3 = -(wi + wo * eta)
+        var H_len2 = dot(H3, H3)
+        if H_len2 < Float32(1e-10):
+            return (False, x1_init, Float32(0), eta)
+        var H_len = sqrt(H_len2)
+        var H = H3 * (Float32(1.0) / H_len)
+        # Tangent frame: s from dp_du projected off n, t = n × s
+        var dp_du_dot_n = dot(dp_du, n)
+        var s3 = dp_du - n * dp_du_dot_n
+        var s_len2 = dot(s3, s3)
+        if s_len2 < Float32(1e-10):
+            return (False, x1_init, Float32(0), eta)
+        var s = s3 * (Float32(1.0) / sqrt(s_len2))
+        var tv = cross(n, s)
+        # Transmissive check: wi and wo must be on opposite sides of surface
+        if dot(n, wi) * dot(n, wo) >= Float32(0.0):
+            return (False, x1_init, Float32(0), eta)
+        # Constraint: tangential component of H (should be zero at valid refraction)
+        var cs = dot(H, s)
+        var ct = dot(H, tv)
+        # Jacobian b from Cycles mnee_compute_constraint_derivatives (single vertex, flat surface)
+        var ilo = eta / (H_len * wo_len)
+        var ili = Float32(1.0) / (H_len * wi_len)
+        var dH_du = -(dp_du * (ili + ilo)) + wi * (dot(wi, dp_du) * ili) + wo * (dot(wo, dp_du) * ilo)
+        var dH_dv = -(dp_dv * (ili + ilo)) + wi * (dot(wi, dp_dv) * ili) + wo * (dot(wo, dp_dv) * ilo)
+        dH_du -= H * dot(dH_du, H)
+        dH_dv -= H * dot(dH_dv, H)
+        dH_du = -dH_du
+        dH_dv = -dH_dv
+        var b00 = dot(dH_du, s);  var b01 = dot(dH_dv, s)
+        var b10 = dot(dH_du, tv); var b11 = dot(dH_dv, tv)
+        var det_b = b00 * b11 - b01 * b10
+        # Convergence check
+        if max(abs(cs), abs(ct)) < Float32(1e-3):
+            return (True, x1, det_b, eta)
+        # Newton step: solve b * [du, dv] = [cs, ct]
+        if abs(det_b) < Float32(1e-5):
+            return (False, x1_init, Float32(0), eta)
+        var delta_u = (cs * b11 - ct * b01) / det_b
+        var delta_v = (-cs * b10 + ct * b00) / det_b
+        # Clamp step to prevent divergence
+        var step2 = delta_u * delta_u + delta_v * delta_v
+        var max_step = wo_len * Float32(0.5)
+        if step2 > max_step * max_step:
+            var scale = max_step / sqrt(step2)
+            delta_u *= scale
+            delta_v *= scale
+        x1 = x1 - (dp_du * delta_u + dp_dv * delta_v)
+    return (False, x1_init, Float32(0), eta_in)
+
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -1889,7 +2141,161 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                 var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
                 var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
                 var contrib = path_ptr[].throughput * weight
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
+
+                # MNEE: probe for up to 2 glass surfaces between hit_point and light.
+                # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
+                var probe_org = hit_point + shadow_dir * Float32(0.0002)
+                var probe_ray = Ray_C(
+                    Point3f(probe_org[0], probe_org[1], probe_org[2]),
+                    Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                var probe_tmax = dist * Float32(0.9995)
+                var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
+                var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+                var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+                traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe_ray, probe_tmax, probe_store.unsafe_ptr())
+                var probe_inter = probe_store[0]
+                var used_mnee = False
+                if probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
+                    var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
+                    if probe_mat.type == MatKind.dielectric or probe_mat.type == MatKind.thin_dielectric:
+                        # --- Extract x1 geometry ---
+                        used_mnee = True
+                        var pmesh = ctx.meshes[Int(probe_inter.primId.id1)]
+                        var pbase = Int(probe_inter.primId.id2)
+                        var pv0 = Int(pmesh.vertexIndices[pbase])
+                        var pv1 = Int(pmesh.vertexIndices[pbase + 1])
+                        var pv2 = Int(pmesh.vertexIndices[pbase + 2])
+                        var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
+                        var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
+                        var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+                        var pdp_du = pp1 - pp0
+                        var pdp_dv = pp2 - pp0
+                        var pgeo_n3 = cross(pdp_du, pdp_dv)
+                        var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
+                        if pgeo_n_len > Float32(1e-10):
+                            var pgeo_n_raw = pgeo_n3 * (Float32(1.0) / pgeo_n_len)
+                            # eta1: entering if probe goes against raw normal
+                            var ior1 = probe_mat.albedo.r
+                            var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior1)
+                            var pgeo_n = pgeo_n_raw
+                            if dot(pgeo_n, shadow_dir) > Float32(0.0):
+                                pgeo_n = -pgeo_n
+                            var pu = probe_inter.u; var pvb = probe_inter.v
+                            var x1_init = pp0*(Float32(1.0)-pu-pvb) + pp1*pu + pp2*pvb
+                            # --- Probe for second glass surface beyond x1 ---
+                            var probe2_t0 = probe_inter.tHit
+                            var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
+                            var probe2_org = x1_init + shadow_dir * Float32(0.0005)
+                            var probe2_inter = dummy_inter
+                            if probe2_rem > Float32(0.001):
+                                var probe2_ray = Ray_C(
+                                    Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
+                                    Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                                var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+                                traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe2_ray, probe2_rem, probe2_store.unsafe_ptr())
+                                probe2_inter = probe2_store[0]
+                            var ldp_du_v = lp1 - lp0; var ldp_dv_v = lp2 - lp0
+                            if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
+                                var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
+                                if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
+                                    # --- 2-vertex MNEE ---
+                                    var p2mesh = ctx.meshes[Int(probe2_inter.primId.id1)]
+                                    var p2base = Int(probe2_inter.primId.id2)
+                                    var p2v0 = Int(p2mesh.vertexIndices[p2base])
+                                    var p2v1 = Int(p2mesh.vertexIndices[p2base + 1])
+                                    var p2v2 = Int(p2mesh.vertexIndices[p2base + 2])
+                                    var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
+                                    var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
+                                    var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+                                    var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
+                                    var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
+                                    var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
+                                    if pgeo_n_len2 > Float32(1e-10):
+                                        var pgeo_n2_raw = pgeo_n3_2 * (Float32(1.0)/pgeo_n_len2)
+                                        var ior2 = probe2_mat.albedo.r
+                                        var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior2)
+                                        var pgeo_n2 = pgeo_n2_raw
+                                        if dot(pgeo_n2, shadow_dir) > Float32(0.0):
+                                            pgeo_n2 = -pgeo_n2
+                                        var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
+                                        var x2_init = p2p0*(Float32(1.0)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
+                                        var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
+                                            hit_point, light_point,
+                                            x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
+                                            x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
+                                            ldp_du_v, ldp_dv_v)
+                                        if ok2:
+                                            var wi2f = hit_point - x1_f2
+                                            var wi2fl = sqrt(dot(wi2f,wi2f))
+                                            if wi2fl > Float32(1e-8):
+                                                var wi2fn = wi2f*(Float32(1)/wi2fl)
+                                                var cos_s_x0 = dot(normal, -wi2fn)
+                                                if cos_s_x0 > Float32(0):
+                                                    var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
+                                                    var pdf_area2 = light_sel_pdf_nee / al.total_area
+                                                    var wo2f = light_point - x2_f2
+                                                    var wo2fl = sqrt(dot(wo2f,wo2f))
+                                                    if wo2fl > Float32(1e-8):
+                                                        var wo2fn = wo2f*(Float32(1)/wo2fl)
+                                                        var vis2_org = x2_f2 + wo2fn*Float32(0.001)
+                                                        var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
+                                                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis2_ray, wo2fl*Float32(0.999)):
+                                                            var mnee_wt2 = alb * al.emission * (cos_s_x0 * G2 * bsdf_prod / (PI * pdf_area2))
+                                                            path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
+                            else:
+                                # --- 1-vertex MNEE ---
+                                var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
+                                    hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
+                                if mnee_ok:
+                                    var wi_f = hit_point - x1_f
+                                    var wi_len2_f = dot(wi_f, wi_f)
+                                    var wo_f = light_point - x1_f
+                                    var wo_len2_f = dot(wo_f, wo_f)
+                                    if wi_len2_f > Float32(1e-8) and wo_len2_f > Float32(1e-8):
+                                        var wi_len_f = sqrt(wi_len2_f)
+                                        var wo_len_f = sqrt(wo_len2_f)
+                                        var wi_fn = wi_f * (Float32(1.0) / wi_len_f)
+                                        var wo_fn = wo_f * (Float32(1.0) / wo_len_f)
+                                        var cos_s_x0 = dot(normal, -wi_fn)
+                                        if cos_s_x0 > Float32(0.0):
+                                            var H3_f = -(wi_fn + wo_fn * eta_f)
+                                            var H_len2_f = dot(H3_f, H3_f)
+                                            if H_len2_f > Float32(1e-10):
+                                                var H_len_f = sqrt(H_len2_f)
+                                                var H_f = H3_f * (Float32(1.0) / H_len_f)
+                                                var dp_du_dot_n = dot(pdp_du, pgeo_n)
+                                                var s3_f = pdp_du - pgeo_n * dp_du_dot_n
+                                                var s_len2_f = dot(s3_f, s3_f)
+                                                if s_len2_f > Float32(1e-10):
+                                                    var s_f = s3_f * (Float32(1.0) / sqrt(s_len2_f))
+                                                    var t_f = cross(pgeo_n, s_f)
+                                                    var ilo_l = eta_f / (H_len_f * wo_len_f)
+                                                    var dHdu_l = (ldp_du_v - wo_fn * dot(wo_fn, ldp_du_v)) * ilo_l
+                                                    var dHdv_l = (ldp_dv_v - wo_fn * dot(wo_fn, ldp_dv_v)) * ilo_l
+                                                    dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
+                                                    dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
+                                                    var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
+                                                    var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
+                                                    var det_dc = dc00*dc11 - dc01*dc10
+                                                    var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
+                                                    var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / (wi_len2_f)
+                                                    var G = min(dw0_dx1 * dx1_dxl, Float32(2.0))
+                                                    var cosNI = abs(dot(pgeo_n, wi_fn))
+                                                    var cosHI = abs(dot(H_f, wi_fn))
+                                                    var cosTM = abs(dot(pgeo_n, H_f))
+                                                    var F_r = fr_dielectric(cosNI, eta_f)
+                                                    var T_f = Float32(1.0) - F_r
+                                                    var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
+                                                    var pdf_area_x2 = light_sel_pdf_nee / al.total_area
+                                                    var vis_org = x1_f + wo_fn * Float32(0.001)
+                                                    var vis_ray = Ray_C(
+                                                        Point3f(vis_org[0], vis_org[1], vis_org[2]),
+                                                        Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis_ray, wo_len_f * Float32(0.999)):
+                                                        var mnee_wt = alb * al.emission * (cos_s_x0 * G * bsdf_s / (PI * pdf_area_x2))
+                                                        path_ptr[].estimate += path_ptr[].throughput * mnee_wt
+                if not used_mnee:
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
 
     # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
     for dl_i in range(ctx.distant_count):
@@ -2206,6 +2612,24 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 @always_inline
+def shade_interface[use_gpu: Bool, enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    ctx: ShadeContext,
+    mat: Material_C,
+):
+    """Interface (null/passthrough) material: advance the ray through the surface.
+    No scattering, no throughput change. Medium transition is handled externally:
+    on CPU by rendering.mojo's medium-interface loop; on GPU by shade_interface_gpu."""
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var hit_point = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
+    path_ptr[].specularBounce = Int8(1)
+    path_ptr[].lastBsdfPdf = Float32(0.0)
+
+
+@always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
@@ -2228,6 +2652,8 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
         shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.thin_dielectric:
         shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat)
+    elif mat.type == MatKind.interface:
+        shade_interface[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.hair:
         comptime if not use_gpu:
             shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
@@ -2245,6 +2671,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
+        # Volume scatter sets hit=0 to skip surface shading but is not a true miss.
+        if path_ptr[].volume_scattered == Int8(1):
+            path_ptr[].volume_scattered = Int8(0)
+            return
         var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
         for inf_i in range(ctx.infinite_count):
             var ilight = ctx.infinite_lights[inf_i]

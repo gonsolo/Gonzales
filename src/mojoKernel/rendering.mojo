@@ -2,8 +2,8 @@ from std.math import ceildiv, sqrt, log, exp, cos, sin
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PathState_C, TileResult_C, Sphere_C, dot, Medium_C, MediumInterface_C
-from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, INV_FOUR_PI
+from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
@@ -124,6 +124,51 @@ def render_tile(
                             var ox = paths[i].ray.origin.x + t_free * paths[i].ray.direction.x
                             var oy = paths[i].ray.origin.y + t_free * paths[i].ray.direction.y
                             var oz = paths[i].ray.origin.z + t_free * paths[i].ray.direction.z
+                            # ── Volume scatter NEE — area light direct lighting ──────────
+                            if Int(scene.areaLightCount) > 0 and Int(scene.lightSampler.n) > 0:
+                                var pcg_nee = PCG32(paths[i].pcgState, paths[i].pcgInc)
+                                var u_nee = pcg_nee.next_float()
+                                var ls_result = light_sampler_sample(scene.lightSampler, u_nee)
+                                var light_idx = ls_result[0]
+                                var light_sel_pdf = ls_result[1]
+                                var al = scene.areaLights[light_idx]
+                                var lmesh = scene.meshes[Int(al.meshIdx)]
+                                var lti = Int(pcg_nee.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+                                var r1 = pcg_nee.next_float()
+                                var r2 = pcg_nee.next_float()
+                                paths[i].pcgState = pcg_nee.state
+                                var lb = lti * 3
+                                var lv0 = Int(lmesh.vertexIndices[lb])
+                                var lv1 = Int(lmesh.vertexIndices[lb + 1])
+                                var lv2 = Int(lmesh.vertexIndices[lb + 2])
+                                var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+                                var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+                                var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+                                var sqrt_r1 = sqrt(r1)
+                                var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
+                                var lcross = cross(lp1 - lp0, lp2 - lp0)
+                                var lcross_len = sqrt(dot(lcross, lcross))
+                                var light_normal = lcross * (Float32(1) / max(lcross_len, Float32(1e-7)))
+                                var scatter_pt = SIMD[DType.float32, 3](ox, oy, oz)
+                                var to_light = light_point - scatter_pt
+                                var dist_sq = dot(to_light, to_light)
+                                var dist = sqrt(dist_sq)
+                                if dist > Float32(0.0001) and al.total_area > Float32(0):
+                                    var shadow_dir = to_light * (Float32(1) / dist)
+                                    var cos_l = -dot(light_normal, shadow_dir)
+                                    if cos_l > Float32(0):
+                                        var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
+                                        var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                                        var shad_tmax = dist * Float32(0.9995)
+                                        if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, shad_ray, shad_tmax):
+                                            var T_r = exp(-sigma_t_r * dist)
+                                            var T_g = exp(-sigma_t_g * dist)
+                                            var T_b = exp(-sigma_t_b * dist)
+                                            var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
+                                            paths[i].estimate.r += paths[i].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
+                                            paths[i].estimate.g += paths[i].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
+                                            paths[i].estimate.b += paths[i].throughput.b * INV_FOUR_PI * al.emission.b * geom * T_b
+                            paths[i].volume_scattered = Int8(1)
                             paths[i].ray = Ray_C(Point3f(ox, oy, oz), Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
                             paths[i].specularBounce = Int8(0)
                             intersections[i].hit = Int8(0)
