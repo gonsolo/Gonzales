@@ -409,7 +409,12 @@ def store_mesh(
 
 def ensure_hair_buffer(s: UnsafePointer[SceneParseState, MutAnyOrigin]) -> Bool:
     if s[0].hair:
-        return True
+        if s[0].hair.value().mat_idx != s[0].cur_attr.mat_idx:
+            var h = s[0].hair.take()
+            if len(h.face_idxs) > 0:
+                s[0].meshes.append(h^)
+        else:
+            return True
     s[0].hair = MeshAccum(
         s[0].cur_attr.mat_idx,
         s[0].cur_attr.inside_medium,
@@ -724,7 +729,22 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         ply_has_uvs[0] = Int32(0)
         ply_nrm[0] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
         ply_has_nrm[0] = Int32(0)
-        var ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
+        # For .ply.gz, try the decompressed .ply file first (strip ".gz").
+        var fp_len = 0
+        while full_path[fp_len] != UInt8(0): fp_len += 1
+        var ends_gz = (fp_len >= 4 and
+                       full_path[fp_len-3] == UInt8(46) and
+                       full_path[fp_len-2] == UInt8(103) and
+                       full_path[fp_len-1] == UInt8(122))
+        var ok = Int32(0)
+        if ends_gz:
+            var ap = alloc[UInt8](fp_len - 2)
+            for ci in range(fp_len - 3): ap[ci] = full_path[ci]
+            ap[fp_len - 3] = UInt8(0)
+            ok = load_ply(ap, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
+            ap.free()
+        if ok == 0:
+            ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
         if ok == 0:
             print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_immutable()))
             full_path.free()
@@ -1020,7 +1040,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             scanner_free(sub_handle)
             inc_name.free(); inc_path.free()
         elif _psc_streq(kw_buf, "Material"):
-            _psc_handle_make_named_material(handle, s)
+            _psc_handle_make_named_material(handle, s, True)
             s[0].cur_attr.mat_idx = Int32(len(s[0].named_materials)) - Int32(1)
         elif _psc_streq(kw_buf, "MakeNamedMedium"):
             handle_named_medium(handle, s)

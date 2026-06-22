@@ -10,7 +10,8 @@ from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_
 from .geometry import RGB, MatKind
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                                   s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+                                   s: UnsafePointer[SceneParseState, MutAnyOrigin],
+                                   inline_type: Bool = False):
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
 
@@ -32,6 +33,18 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     sigma_a_rgb[0] = Float32(-1); sigma_a_rgb[1] = Float32(-1); sigma_a_rgb[2] = Float32(-1)
     var has_sigma_a = False
     var mat_type = MatKind.diffuse
+    # For inline Material directives, the first quoted string is the TYPE, not the name.
+    # Map it to mat_type; the name buffer keeps the type string as a synthetic key.
+    if inline_type:
+        if _psc_streq(mat_name, "conductor"):       mat_type = MatKind.conductor
+        elif _psc_streq(mat_name, "dielectric"):    mat_type = MatKind.dielectric
+        elif _psc_streq(mat_name, "coateddiffuse"): mat_type = MatKind.coated_diffuse
+        elif _psc_streq(mat_name, "diffusetransmission"): mat_type = MatKind.diffuse_transmit
+        elif _psc_streq(mat_name, "coatedconductor"): mat_type = MatKind.coated_conductor
+        elif _psc_streq(mat_name, "mix"):           mat_type = MatKind.mix
+        elif _psc_streq(mat_name, "thindielectric"): mat_type = MatKind.thin_dielectric
+        elif _psc_streq(mat_name, "hair"):          mat_type = MatKind.hair
+        elif _psc_streq(mat_name, "interface"):     mat_type = MatKind.interface
     var mat_ior  = Float32(1.5)
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
