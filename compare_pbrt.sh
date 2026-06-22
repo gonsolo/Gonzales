@@ -1,10 +1,10 @@
 #!/bin/bash
-# Render all Bitterli scenes at 16spp low-res with gonzales + pbrt, then generate HTML.
+# Render pbrt-v4-scenes at low-res with gonzales + pbrt, generate compare/pbrt.html.
 set -eu
 
 GONZALES=~/work/gonzales/build/gonzales
 PBRT=~/src/pbrt-v4/gonsolo/pbrt
-BITTERLI=~/src/bitterli
+PBRT_DIR=~/work/gonzales/Scenes/pbrt-v4-scenes
 OUT=~/work/gonzales/compare
 export LD_LIBRARY_PATH=~/work/gonzales/build${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
@@ -13,12 +13,43 @@ MAX_WIDTH=320
 
 mkdir -p "$OUT/images"
 
+# scene_name → entry pbrt file (relative to PBRT_DIR/$scene/)
+declare -A SCENE_FILES
+SCENE_FILES=(
+  [barcelona-pavilion]="pavilion-day.pbrt"
+  [bistro]="bistro_cafe.pbrt"
+  [bmw-m6]="bmw-m6.pbrt"
+  [bunny-cloud]="bunny-cloud.pbrt"
+  [bunny-fur]="bunny-fur.pbrt"
+  [contemporary-bathroom]="contemporary-bathroom.pbrt"
+  [crown]="crown.pbrt"
+  [dambreak]="dambreak0.pbrt"
+  [disney-cloud]="disney-cloud.pbrt"
+  [explosion]="explosion.pbrt"
+  [ganesha]="ganesha.pbrt"
+  [hair]="hair-actual-bsdf.pbrt"
+  [head]="head.pbrt"
+  [killeroos]="killeroo-coated-gold.pbrt"
+  [kroken]="camera-1.pbrt"
+  [landscape]="view-0.pbrt"
+  [lte-orb]="lte-orb-rough-glass.pbrt"
+  [pbrt-book]="book.pbrt"
+  [sanmiguel]="sanmiguel-courtyard.pbrt"
+  [smoke-plume]="plume.pbrt"
+  [sportscar]="sportscar-sky.pbrt"
+  [sssdragon]="dragon_10.pbrt"
+  [transparent-machines]="frame1266.pbrt"
+  [villa]="villa-daylight.pbrt"
+  [watercolor]="camera-10.pbrt"
+  [zero-day]="frame120.pbrt"
+)
+
 SCENES=(
-    bathroom bathroom2 bedroom car car2 classroom coffee cornell-box
-    curly-hair dining-room dragon furball glass-of-water hair-curl house
-    kitchen lamp living-room living-room-2 living-room-3 material-testball
-    spaceship staircase staircase2 straight-hair teapot teapot-full
-    veach-ajar veach-bidir veach-mis volumetric-caustic water-caustic
+  barcelona-pavilion bistro bmw-m6 bunny-cloud bunny-fur
+  contemporary-bathroom crown dambreak disney-cloud explosion
+  ganesha hair head killeroos kroken landscape lte-orb
+  pbrt-book sanmiguel smoke-plume sportscar sssdragon
+  transparent-machines villa watercolor zero-day
 )
 
 tonemap() {
@@ -33,10 +64,12 @@ idx=0
 
 for scene in "${SCENES[@]}"; do
     idx=$((idx + 1))
-    scene_file="$BITTERLI/$scene/pbrt/scene-v4.pbrt"
+    scene_pbrt="${SCENE_FILES[$scene]:-}"
+    scene_dir="$PBRT_DIR/$scene"
+    scene_file="$scene_dir/$scene_pbrt"
 
     if [ ! -f "$scene_file" ]; then
-        echo "[$idx/$total] SKIP $scene — not found"
+        echo "[$idx/$total] SKIP $scene — $scene_file not found"
         FAILED+=("$scene")
         continue
     fi
@@ -49,31 +82,46 @@ for scene in "${SCENES[@]}"; do
     scale_h=$(( yres * scale_w / xres ))
     [ "$scale_h" -lt 1 ] && scale_h=1
 
-    exr_name=$(grep -oP '"string filename"\s*\[\s*"\K[^"]+' "$scene_file" | head -1)
-    [ -z "$exr_name" ] && exr_name="${scene}.exr"
+    # Match Film "string filename" (bracket or plain form) from Film block only (first 30 lines)
+    exr_name=$(head -30 "$scene_file" | grep -oP '"string filename"\s*\[?\s*"\K[^"]+\.exr' | head -1)
+    g_exr_name="${exr_name:-gonzales.exr}"   # gonzales default when Film has no filename
+    p_exr_name="${exr_name:-pbrt.exr}"       # pbrt default when Film has no filename
 
-    scene_dir="$BITTERLI/$scene/pbrt"
-    g_png="$OUT/images/${scene}-gonzales.png"
-    p_png="$OUT/images/${scene}-pbrt.png"
-    g_time_file="$OUT/images/${scene}-gonzales.time"
-    p_time_file="$OUT/images/${scene}-pbrt.time"
+    g_png="$OUT/images/pbrt-${scene}-gonzales.png"
+    p_png="$OUT/images/pbrt-${scene}-pbrt.png"
+    g_time_file="$OUT/images/pbrt-${scene}-gonzales.time"
+    p_time_file="$OUT/images/pbrt-${scene}-pbrt.time"
+    g_mode_file="$OUT/images/pbrt-${scene}-gonzales.mode"
 
     ok=true
 
     # ── gonzales ──────────────────────────────────────────────────────────────
     if [ ! -f "$g_png" ]; then
         echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
-        g_exr="$OUT/images/${scene}-gonzales.exr"
-        g_log="$OUT/images/${scene}-gonzales.log"
+        g_exr="$OUT/images/pbrt-${scene}-gonzales.exr"
+        g_log="$OUT/images/pbrt-${scene}-gonzales.log"
+        g_label=""
         if (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
-            [ -f ~/work/gonzales/"$exr_name" ] && \
-            mv ~/work/gonzales/"$exr_name" "$g_exr" && \
+            [ -f ~/work/gonzales/"$g_exr_name" ] && \
+            mv ~/work/gonzales/"$g_exr_name" "$g_exr" && \
             tonemap "$g_exr" "$g_png"; then
-            # Extract rendering time ("Done: X.Xs" from progress line)
+            g_label="GPU"
+        else
+            echo "  ! gonzales GPU failed, trying CPU..."
+            if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
+                --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
+                [ -f ~/work/gonzales/"$g_exr_name" ] && \
+                mv ~/work/gonzales/"$g_exr_name" "$g_exr" && \
+                tonemap "$g_exr" "$g_png"; then
+                g_label="CPU"
+            fi
+        fi
+        if [ -n "$g_label" ]; then
             g_t=$(grep -oP "Done: \K[\d.]+" "$g_log" | tail -1)
             echo "${g_t:-?}" > "$g_time_file"
-            echo "  → gonzales OK (${g_t:-?}s render)"
+            echo "$g_label" > "$g_mode_file"
+            echo "  → gonzales OK ($g_label, ${g_t:-?}s render)"
         else
             echo "  ✗ gonzales FAILED (see $g_log)"; ok=false
         fi
@@ -84,25 +132,25 @@ for scene in "${SCENES[@]}"; do
     # ── pbrt ──────────────────────────────────────────────────────────────────
     if [ ! -f "$p_png" ]; then
         echo "[$idx/$total] pbrt     $scene  ${scale_w}×${scale_h} ${SPP}spp"
-        p_exr="$OUT/images/${scene}-pbrt.exr"
-        p_log="$OUT/images/${scene}-pbrt.log"
-        # Patch resolution in a temp copy (pbrt has no --resolution flag)
-        lowres_pbrt="$scene_dir/scene-v4-lowres.pbrt"
+        p_exr="$OUT/images/pbrt-${scene}-pbrt.exr"
+        p_log="$OUT/images/pbrt-${scene}-pbrt.log"
+        lowres_pbrt="$scene_dir/${scene_pbrt%.pbrt}-lowres.pbrt"
         sed -e "s/\"integer xresolution\" \[ *[0-9]* *\]/\"integer xresolution\" [ $scale_w ]/g" \
             -e "s/\"integer yresolution\" \[ *[0-9]* *\]/\"integer yresolution\" [ $scale_h ]/g" \
             "$scene_file" > "$lowres_pbrt"
         render_ok=false
         p_label=""
-        if (cd "$scene_dir" && "$PBRT" --gpu --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
-               && [ -f "$scene_dir/$exr_name" ]; then
-            mv "$scene_dir/$exr_name" "$p_exr"
+        lowres_base=$(basename "$lowres_pbrt")
+        if (cd "$scene_dir" && "$PBRT" --gpu --spp "$SPP" "$lowres_base") > "$p_log" 2>&1 \
+               && [ -f "$scene_dir/$p_exr_name" ]; then
+            mv "$scene_dir/$p_exr_name" "$p_exr"
             render_ok=true
             p_label="GPU"
         else
             echo "  ! pbrt GPU failed, trying CPU..."
-            if (cd "$scene_dir" && "$PBRT" --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
-                   && [ -f "$scene_dir/$exr_name" ]; then
-                mv "$scene_dir/$exr_name" "$p_exr"
+            if (cd "$scene_dir" && "$PBRT" --spp "$SPP" "$lowres_base") > "$p_log" 2>&1 \
+                   && [ -f "$scene_dir/$p_exr_name" ]; then
+                mv "$scene_dir/$p_exr_name" "$p_exr"
                 render_ok=true
                 p_label="CPU"
             fi
@@ -110,7 +158,6 @@ for scene in "${SCENES[@]}"; do
         rm -f "$lowres_pbrt"
         if $render_ok; then
             if tonemap "$p_exr" "$p_png"; then
-                # Extract final elapsed time from pbrt progress: last "(Xs)" or "(Xs|Ys)"
                 p_t=$(grep -oP '\(\K[\d.]+(?=s[\)|])' "$p_log" | tail -1)
                 echo "${p_t:-?}" > "$p_time_file"
                 echo "  → pbrt OK ($p_label, ${p_t:-?}s render)"
@@ -137,14 +184,14 @@ echo "Done: ${#DONE[@]}  Failed: ${#FAILED[@]}"
 [ ${#FAILED[@]} -gt 0 ] && echo "Failed: ${FAILED[*]}"
 
 # ── Generate HTML ─────────────────────────────────────────────────────────────
-HTML="$OUT/bitterli.html"
+HTML="$OUT/pbrt.html"
 
 cat > "$HTML" << 'HTMLEOF'
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Gonzales vs pbrt — Bitterli scenes</title>
+<title>Gonzales vs pbrt — pbrt-v4 scenes</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #111; color: #ddd; font-family: system-ui, sans-serif; padding: 24px; }
@@ -182,19 +229,20 @@ h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 4px; }
 </style>
 </head>
 <body>
-<h1>Gonzales vs pbrt — Bitterli scenes</h1>
+<h1>Gonzales vs pbrt — pbrt-v4 scenes</h1>
 <p class="subtitle">64 spp · 320px wide · drag slider: left = Gonzales (GPU) · right = pbrt · render times shown below each image</p>
 <div class="grid">
 HTMLEOF
 
 for scene in "${DONE[@]}"; do
-    g_rel="images/${scene}-gonzales.png"
-    p_rel="images/${scene}-pbrt.png"
-    g_time_file="$OUT/images/${scene}-gonzales.time"
-    p_time_file="$OUT/images/${scene}-pbrt.time"
-    g_t="?"; p_t="?"
+    g_rel="images/pbrt-${scene}-gonzales.png"
+    p_rel="images/pbrt-${scene}-pbrt.png"
+    g_time_file="$OUT/images/pbrt-${scene}-gonzales.time"
+    p_time_file="$OUT/images/pbrt-${scene}-pbrt.time"
+    g_t="?"; p_t="?"; g_mode="GPU"
     [ -f "$g_time_file" ] && g_t=$(cat "$g_time_file")
     [ -f "$p_time_file" ] && p_t=$(cat "$p_time_file")
+    [ -f "$g_mode_file" ] && g_mode=$(cat "$g_mode_file")
     cat >> "$HTML" << SCENE
   <div class="card">
     <div class="card-title">${scene}</div>
@@ -207,7 +255,7 @@ for scene in "${DONE[@]}"; do
       <span class="lbl lbl-r">PBRT</span>
     </div>
     <div class="timebar">
-      <span class="tg">Gonzales GPU: ${g_t}s</span>
+      <span class="tg">Gonzales ${g_mode}: ${g_t}s</span>
       <span class="tp">pbrt: ${p_t}s</span>
     </div>
   </div>
