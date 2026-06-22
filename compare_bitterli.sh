@@ -93,25 +93,30 @@ for scene in "${SCENES[@]}"; do
             "$scene_file" > "$lowres_pbrt"
         render_ok=false
         p_label=""
+        # pbrt writes PNG directly for scenes whose Film filename ends in .png;
+        # in that case move directly to $p_png (already sRGB — do NOT tonemap).
+        pbrt_is_png=false
+        [[ "$exr_name" == *.png ]] && pbrt_is_png=true
         if (cd "$scene_dir" && "$PBRT" --gpu --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
                && [ -f "$scene_dir/$exr_name" ]; then
-            mv "$scene_dir/$exr_name" "$p_exr"
+            $pbrt_is_png && mv "$scene_dir/$exr_name" "$p_png" \
+                         || mv "$scene_dir/$exr_name" "$p_exr"
             render_ok=true
             p_label="GPU"
         else
             echo "  ! pbrt GPU failed, trying CPU..."
             if (cd "$scene_dir" && "$PBRT" --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
                    && [ -f "$scene_dir/$exr_name" ]; then
-                mv "$scene_dir/$exr_name" "$p_exr"
+                $pbrt_is_png && mv "$scene_dir/$exr_name" "$p_png" \
+                             || mv "$scene_dir/$exr_name" "$p_exr"
                 render_ok=true
                 p_label="CPU"
             fi
         fi
         rm -f "$lowres_pbrt"
         if $render_ok; then
-            if tonemap "$p_exr" "$p_png"; then
-                # Extract final elapsed time from pbrt progress: last "(Xs)" or "(Xs|Ys)"
-                p_t=$(grep -oP '\(\K[\d.]+(?=s[\)|])' "$p_log" | tail -1)
+            p_t=$(grep -oP '\(\K[\d.]+(?=s[\)|])' "$p_log" | tail -1)
+            if $pbrt_is_png || tonemap "$p_exr" "$p_png"; then
                 echo "${p_t:-?}" > "$p_time_file"
                 echo "  → pbrt OK ($p_label, ${p_t:-?}s render)"
             else

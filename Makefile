@@ -114,17 +114,17 @@ em: editMakefile
 editMakefile:
 	@vim Makefile
 
-OIIO_BRIDGE_SRC = src/openImageIOBridge/openImageIOBridge.cc
-OIIO_BRIDGE_INC = src/openImageIOBridge/include
+OIIO_BRIDGE_SRC = src/oiio/oiio.cc
+OIIO_BRIDGE_INC = src/oiio
 OIIO_BRIDGE_LIB = $(BUILD_DIR)/liboiiobridge.so
 
-$(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/openImageIOBridge.h
+$(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/oiio.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
-VIEWER_SRC = src/vulkanViewer/viewer.cpp
-VIEWER_INC = src/vulkanViewer/include
-VIEWER_GEN = src/vulkanViewer/generated
+VIEWER_SRC = src/viewer/viewer.cpp
+VIEWER_INC = src/viewer
+VIEWER_GEN = src/viewer/generated
 VIEWER_LIB = $(BUILD_DIR)/libvulkanviewer.so
 
 $(VIEWER_LIB): $(VIEWER_SRC) $(VIEWER_INC)/viewer.h
@@ -140,10 +140,10 @@ endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-MOJO_SRCS := $(wildcard src/mojoKernel/*.mojo)
+MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
 $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB)
 	@mkdir -p $(BUILD_DIR)
-	uv run mojo build src/mojoKernel/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
 r: release
 release: $(GONZALES)

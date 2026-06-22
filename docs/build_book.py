@@ -50,7 +50,7 @@ from pathlib import Path
 
 ROOT     = Path(__file__).resolve().parent.parent
 DOCS     = ROOT / "docs"
-SRC      = ROOT / "src" / "mojoKernel"
+SRC      = ROOT / "src/gonzales"
 BOOK_OUT = DOCS / "book"
 
 # ── Snippet extraction ────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ _all_snippets: dict[str, tuple[Path, str]] = {}   # name -> (source_path, code)
 
 
 def _load_all_snippets() -> None:
-    """Walk src/mojoKernel and docs/build_book.py for all tagged snippets."""
+    """Walk src/gonzales and docs/build_book.py for all tagged snippets."""
     _cache.clear()
     _all_snippets.clear()
     for ext in ('*.mojo', '*.py', '*.c', '*.h', '*.cpp', '*.sh'):

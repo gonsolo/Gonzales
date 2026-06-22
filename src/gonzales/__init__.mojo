@@ -2,7 +2,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
-from mojoKernel.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel
+from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel
 
 def _parse_int32(s: String, start: Int) -> Int32:
     var v = Int32(0)
@@ -144,7 +144,7 @@ def main() raises:
         print("Error: expected a .pbrt scene file, got:", scene_path)
         return
 
-    var data_dir = getenv("GONZALES_DATA_DIR", "src/mojoKernel/data")
+    var data_dir = getenv("GONZALES_DATA_DIR", "src/gonzales/data")
     var sobol_opt = _generate_sobol_matrices(data_dir + "/new-joe-kuo-6.21201")
     if not sobol_opt:
         return
