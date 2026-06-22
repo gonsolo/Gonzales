@@ -1038,8 +1038,8 @@ def shade_interface_gpu(
     medium_ifaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
     count: Int,
 ):
-    """Passthrough (interface) material: advance ray through the surface and
-    update the current medium index based on the crossing direction."""
+    """Passthrough (interface) material: advance ray through the surface.
+    Medium update is handled by update_medium_gpu which runs after all shaders."""
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -1048,7 +1048,6 @@ def shade_interface_gpu(
         return
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
     # Advance the ray past the surface (same direction)
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
@@ -1056,32 +1055,55 @@ def shade_interface_gpu(
     path_ptr[].ray = Ray_C(Point3f(hp[0], hp[1], hp[2]), path_ptr[].ray.direction)
     path_ptr[].specularBounce = Int8(1)
     path_ptr[].lastBsdfPdf = Float32(0.0)
-    # Update current medium based on crossing direction
-    if mat.medium_interface_idx >= Int32(0):
-        var iface = medium_ifaces[Int(mat.medium_interface_idx)]
-        # Get triangle vertices to compute geometric normal
-        var mi: Int
-        var bv: Int
-        if inter.primId.type == 0:
-            mi = Int(inter.primId.id1)
-            bv = Int(inter.primId.id2)
-        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-            mi = Int(inter.primId.id2 >> 32)
-            bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-        else:
-            return
-        var m = meshes[mi]
-        var v0 = Int(m.vertexIndices[bv])
-        var v1 = Int(m.vertexIndices[bv + 1])
-        var v2 = Int(m.vertexIndices[bv + 2])
-        var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-        var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-        var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
-        var geom_n = cross(p1 - p0, p2 - p0)
-        if dot(ray_dir, geom_n) > Float32(0.0):
-            path_ptr[].current_medium_idx = iface.outside_medium_idx
-        else:
-            path_ptr[].current_medium_idx = iface.inside_medium_idx
+
+
+def update_medium_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    medium_ifaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    count: Int,
+):
+    """Update current_medium_idx for any surface hit with a MediumInterface bound.
+    Runs after all material shaders; uses the post-scatter ray direction (same
+    convention as CPU rendering.mojo) to determine inside vs outside."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var path_ptr = paths + tid
+    if path_ptr[].active == 0:
+        return
+    var inter = intersections[tid]
+    if inter.hit == 0:
+        return
+    var mat = materials[Int(inter.primId.materialIndex)]
+    if mat.medium_interface_idx < Int32(0):
+        return
+    var iface = medium_ifaces[Int(mat.medium_interface_idx)]
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var mi: Int
+    var bv: Int
+    if inter.primId.type == 0:
+        mi = Int(inter.primId.id1)
+        bv = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mi = Int(inter.primId.id2 >> 32)
+        bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        return
+    var m = meshes[mi]
+    var v0 = Int(m.vertexIndices[bv])
+    var v1 = Int(m.vertexIndices[bv + 1])
+    var v2 = Int(m.vertexIndices[bv + 2])
+    var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+    var geom_n = cross(p1 - p0, p2 - p0)
+    if dot(ray_dir, geom_n) > Float32(0.0):
+        path_ptr[].current_medium_idx = iface.outside_medium_idx
+    else:
+        path_ptr[].current_medium_idx = iface.inside_medium_idx
 
 
 def sample_medium_gpu(
@@ -1117,7 +1139,7 @@ def sample_medium_gpu(
     var sigma_t_r = med.sigma_a.r + med.sigma_s.r
     var sigma_t_g = med.sigma_a.g + med.sigma_s.g
     var sigma_t_b = med.sigma_a.b + med.sigma_s.b
-    var sigma_maj = max(sigma_t_r, max(sigma_t_g, sigma_t_b))
+    var sigma_maj = sigma_t_r  # use red channel as majorant (no null collisions; matches CPU)
     if sigma_maj <= Float32(0.0):
         return
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -1889,6 +1911,15 @@ def gpu_render_sample(
                     n_int,
                     grid_dim=grid_dim, block_dim=block_size,
                 )
+                handle[].ctx.enqueue_function[update_medium_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
+                    n_int,
+                    grid_dim=grid_dim, block_dim=block_size,
+                )
                 handle[].ctx.enqueue_function[shade_hair_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -2156,6 +2187,15 @@ def gpu_render_wavefront(
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_interface_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
+                    n_total,
+                    grid_dim=grid_total, block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[update_medium_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
