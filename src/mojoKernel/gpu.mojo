@@ -10,6 +10,7 @@ from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair
+from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
@@ -754,7 +755,7 @@ def shade_nee_preamble_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices)
+        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
@@ -806,7 +807,7 @@ def shade_diffuse_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices)
+        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
     shade_diffuse[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -854,7 +855,7 @@ def shade_coated_diffuse_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices)
+        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
     shade_coated_diffuse[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -901,7 +902,7 @@ def shade_diffuse_transmit_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices)
+        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
     shade_diffuse_transmission[True, False](path_ptr, inter, ctx)
 
 
@@ -949,7 +950,7 @@ def shade_mix_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices)
+        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
     shade_mix[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -1246,7 +1247,7 @@ def shade_hair_gpu(
         distantLights, n_distant_lights,
         pointLights, n_point_lights,
         infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices)
+        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
     shade_hair[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -1287,7 +1288,7 @@ def shade_enqueue_shadow_gpu(
         UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
         infiniteLights, n_infinite_lights,
         spheres, n_spheres, Float32(0.0), ls_shadow,
-        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling())
+        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), null_guide())
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 

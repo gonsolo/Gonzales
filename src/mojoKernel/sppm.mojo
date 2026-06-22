@@ -1,12 +1,12 @@
 # Stochastic Progressive Photon Mapping (CPU, single-threaded)
 # Reference: Hachisuka et al. 2008 "Progressive Photon Mapping"
 
-from std.math import sqrt, cos, sin, floor
+from std.math import sqrt, cos, sin, floor, log, exp, max
 from std.memory import alloc
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C,
-    TriangleMesh_C, Material_C, MatKind, AreaLight_C,
-    dot, cross, fr_dielectric, PI,
+    TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
+    dot, cross, fr_dielectric, PI, INV_FOUR_PI,
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core
 from .rng import PCG32
@@ -32,14 +32,15 @@ struct SPPMPixel(TrivialRegisterPassable):
     var r2:     Float32   # current search radius²
     var valid:  Int32     # 1 = has VP
     var pidx:   Int32     # flat pixel index
+    var is_volume: Int32  # 1 = volume scatter VP (isotropic phase fn); 0 = surface
 
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
-    """Photon stored at a diffuse surface hit."""
+    """Photon stored at a scatter event (surface diffuse or volume)."""
     var px: Float32; var py: Float32; var pz: Float32
     var fr: Float32; var fg: Float32; var fb: Float32  # flux at stored position
-    var nxt: Int32   # chained-list link in hash grid (-1 = end)
-    var _p:  Int32   # padding
+    var nxt:       Int32  # chained-list link in hash grid (-1 = end)
+    var is_volume: Int32  # 1 = volume scatter photon; 0 = surface diffuse
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -116,6 +117,41 @@ def _dielectric_bounce(
 
 # ── Camera pass ───────────────────────────────────────────────────────────────
 
+@always_inline
+def _sppm_update_medium(
+    ray_dir: SIMD[DType.float32, 3],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mat: Material_C,
+    sd: SceneDescriptor2_C,
+    hx: Float32 = Float32(0), hy: Float32 = Float32(0), hz: Float32 = Float32(0),
+) -> Int32:
+    """Return new current_medium_idx after crossing a surface with MediumInterface."""
+    if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
+        return Int32(-1)  # stays vacuum; caller keeps existing idx if needed
+    var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
+    var nx: Float32; var ny: Float32; var nz: Float32
+    if inter.primId.type == Int8(4):
+        # Analytic sphere: outward normal = normalize(hit - center)
+        var si = Int(inter.primId.id1)
+        var sph = sd.spheres[si]
+        nx = hx - sph.center.x; ny = hy - sph.center.y; nz = hz - sph.center.z
+        var nl = sqrt(nx*nx + ny*ny + nz*nz)
+        if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+    else:
+        var mi: Int; var bv: Int
+        if inter.primId.type == 0:
+            mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
+        else:
+            mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+        var m = meshes[mi]
+        var v0 = Int(m.vertexIndices[bv]); var v1 = Int(m.vertexIndices[bv+1]); var v2 = Int(m.vertexIndices[bv+2])
+        var e1x = m.points[v1*4] - m.points[v0*4]; var e1y = m.points[v1*4+1] - m.points[v0*4+1]; var e1z = m.points[v1*4+2] - m.points[v0*4+2]
+        var e2x = m.points[v2*4] - m.points[v0*4]; var e2y = m.points[v2*4+1] - m.points[v0*4+1]; var e2z = m.points[v2*4+2] - m.points[v0*4+2]
+        nx = e1y*e2z - e1z*e2y; ny = e1z*e2x - e1x*e2z; nz = e1x*e2y - e1y*e2x
+    var md = ray_dir[0]*nx + ray_dir[1]*ny + ray_dir[2]*nz
+    return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
+
 def _sppm_camera_pass(
     vps:      UnsafePointer[SPPMPixel, MutAnyOrigin],
     n_pix:    Int,
@@ -126,15 +162,15 @@ def _sppm_camera_pass(
     init_r2:  Float32,
     seed:     UInt64,
 ):
-    """Trace one primary ray per pixel, record visible points at diffuse hits."""
+    """Trace one primary ray per pixel, record visible points at diffuse/volume hits."""
     var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
     var inter_mem = alloc[Intersection_C](1)
+    var has_media = Int(sd.mediumCount) > 0
 
     for pix in range(n_pix):
         var px = pix % Int(fw)
         var py = pix // Int(fw)
 
-        # Initialize VP as invalid
         var vp = SPPMPixel(
             pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
             nx=Float32(0), ny=Float32(1), nz=Float32(0),
@@ -142,9 +178,9 @@ def _sppm_camera_pass(
             alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
             tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
             N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
+            is_volume=Int32(0),
         )
 
-        # Generate center-sampled primary ray (column-major 4x4 matrix multiply)
         var fX = Float32(px) + Float32(0.5)
         var fY = Float32(py) + Float32(0.5)
         var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
@@ -163,30 +199,56 @@ def _sppm_camera_pass(
         var rox = ox; var roy = oy; var roz = oz
 
         var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1), UInt64(1))
+        var cur_med_idx = Int32(-1)  # camera starts in vacuum
 
         for bounce in range(_MAX_B):
             var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
             inter_mem[0].hit = Int8(0)
             traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, ray, Float32(1.0e38), inter_mem)
             if inter_mem[0].hit == Int8(0):
-                break  # miss → no VP
+                break
 
             var inter = inter_mem[0]
+            var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+            var t_hit = inter.tHit
+
+            # ── Volume free-flight ────────────────────────────────────────────
+            if has_media and Int(cur_med_idx) >= 0:
+                var med = sd.mediums[Int(cur_med_idx)]
+                var sig_t = med.sigma_a.r + med.sigma_s.r
+                if sig_t > Float32(0):
+                    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
+                    if t_free < t_hit:
+                        # Volume scatter — store VP here
+                        var alb_s = med.sigma_s.r / sig_t  # single-scatter albedo
+                        vp.pos_x = rox + rdx * t_free
+                        vp.pos_y = roy + rdy * t_free
+                        vp.pos_z = roz + rdz * t_free
+                        vp.nx = Float32(0); vp.ny = Float32(1); vp.nz = Float32(0)
+                        vp.alb_r = alb_s; vp.alb_g = alb_s; vp.alb_b = alb_s
+                        vp.is_volume = Int32(1)
+                        vp.valid = Int32(1)
+                        break
+                    else:
+                        # Transmittance through full segment to surface
+                        vp.beta_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
+                        vp.beta_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
+                        vp.beta_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
-            var hx = rox + rdx * inter.tHit
-            var hy = roy + rdy * inter.tHit
-            var hz = roz + rdz * inter.tHit
-            var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+            var hx = rox + rdx * t_hit
+            var hy = roy + rdy * t_hit
+            var hz = roz + rdz * t_hit
 
             if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-                # Store visible point
                 var gn = _geom_normal(inter, sd.meshes)
                 if dot(gn, ray_dir) > Float32(0.0):
                     gn = gn * Float32(-1.0)
                 vp.pos_x = hx; vp.pos_y = hy; vp.pos_z = hz
                 vp.nx = gn[0]; vp.ny = gn[1]; vp.nz = gn[2]
                 vp.alb_r = mat.albedo.r; vp.alb_g = mat.albedo.g; vp.alb_b = mat.albedo.b
+                vp.is_volume = Int32(0)
                 vp.valid = Int32(1)
                 break
 
@@ -197,9 +259,23 @@ def _sppm_camera_pass(
                 var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
                 rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+                if has_media:
+                    var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                    if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
+                        cur_med_idx = new_idx
+
+            elif mat.type == MatKind.interface:
+                # Transparent boundary — update medium, continue ray
+                if has_media:
+                    var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                    if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
+                        cur_med_idx = new_idx
+                rox = hx + rdx * Float32(0.0002)
+                roy = hy + rdy * Float32(0.0002)
+                roz = hz + rdz * Float32(0.0002)
 
             else:
-                break  # area_light, conductor, etc.: stop
+                break  # area_light, conductor, etc.
 
         vps[pix] = vp
 
@@ -215,7 +291,7 @@ def _sppm_photon_pass(
     seed:         UInt64,
     pass_idx:     Int,
 ) -> Int:
-    """Emit photons from area lights, trace through glass, store at diffuse hits.
+    """Emit photons from area lights, trace through glass/media, store at diffuse/volume hits.
     Returns actual number of stored photons."""
     var n_lights = Int(sd.areaLightCount)
     if n_lights == 0:
@@ -223,6 +299,18 @@ def _sppm_photon_pass(
 
     var n_stored = 0
     var inter_mem = alloc[Intersection_C](1)
+    var has_media = Int(sd.mediumCount) > 0
+
+    # Determine the "default" starting medium for photons emitted into a medium.
+    # Convention: photon is cosine-sampled from ln, so dot(pdir,ln)>0 always.
+    # We use the first MediumInterface whose outside_medium_idx is valid.
+    var default_emit_med = Int32(-1)
+    if has_media and Int(sd.mediumIfaceCount) > 0:
+        for mi in range(Int(sd.mediumIfaceCount)):
+            var iface = sd.mediumInterfaces[mi]
+            if Int(iface.outside_medium_idx) >= 0:
+                default_emit_med = iface.outside_medium_idx
+                break
 
     for k in range(n_emit):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
@@ -279,11 +367,11 @@ def _sppm_photon_pass(
         var flux_g = al.emission.g * scale
         var flux_b = al.emission.b * scale
 
-        # Trace photon until it hits a diffuse surface (or is absorbed)
         var rox = lp[0] + ln[0] * Float32(0.0001)
         var roy = lp[1] + ln[1] * Float32(0.0001)
         var roz = lp[2] + ln[2] * Float32(0.0001)
         var rdx = pdir[0]; var rdy = pdir[1]; var rdz = pdir[2]
+        var cur_med_idx = default_emit_med  # start in medium if light is above one
 
         for bounce in range(_MAX_B):
             var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
@@ -293,20 +381,59 @@ def _sppm_photon_pass(
                 break  # miss
 
             var inter = inter_mem[0]
+            var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+            var t_hit = inter.tHit
+
+            # ── Volume free-flight ────────────────────────────────────────────
+            if has_media and Int(cur_med_idx) >= 0:
+                var med = sd.mediums[Int(cur_med_idx)]
+                var sig_t = med.sigma_s.r + med.sigma_a.r
+                if sig_t > Float32(0):
+                    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
+                    if t_free < t_hit:
+                        # Volume scatter — store photon and sample new direction
+                        var sx = rox + rdx * t_free
+                        var sy = roy + rdy * t_free
+                        var sz = roz + rdz * t_free
+                        if n_stored < n_emit:
+                            photons[n_stored] = SPPMPhoton(
+                                px=sx, py=sy, pz=sz,
+                                fr=flux_r, fg=flux_g, fb=flux_b,
+                                nxt=Int32(-1), is_volume=Int32(1),
+                            )
+                            n_stored += 1
+                        # Scatter: isotropic phase function, modulate by albedo
+                        var alb_s = med.sigma_s.r / sig_t
+                        flux_r *= alb_s; flux_g *= alb_s; flux_b *= alb_s
+                        # Sample new isotropic direction (uniform sphere)
+                        var usp1 = pcg.next_float()
+                        var usp2 = pcg.next_float()
+                        var cosT = Float32(2.0) * usp1 - Float32(1.0)
+                        var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
+                        var phiS = Float32(2.0) * PI * usp2
+                        rdx = sinT * cos(phiS); rdy = sinT * sin(phiS); rdz = cosT
+                        rox = sx + rdx * Float32(0.0001)
+                        roy = sy + rdy * Float32(0.0001)
+                        roz = sz + rdz * Float32(0.0001)
+                        continue
+                    else:
+                        # Apply Beer-Lambert transmittance through segment
+                        flux_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
+                        flux_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
+                        flux_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
-            var hx = rox + rdx * inter.tHit
-            var hy = roy + rdy * inter.tHit
-            var hz = roz + rdz * inter.tHit
-            var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+            var hx = rox + rdx * t_hit
+            var hy = roy + rdy * t_hit
+            var hz = roz + rdz * t_hit
 
             if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-                # Store photon
                 if n_stored < n_emit:
                     photons[n_stored] = SPPMPhoton(
                         px=hx, py=hy, pz=hz,
                         fr=flux_r, fg=flux_g, fb=flux_b,
-                        nxt=Int32(-1), _p=Int32(0),
+                        nxt=Int32(-1), is_volume=Int32(0),
                     )
                     n_stored += 1
                 break
@@ -318,9 +445,22 @@ def _sppm_photon_pass(
                 var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
                 rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+                if has_media:
+                    var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                    if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
+                        cur_med_idx = new_idx
+
+            elif mat.type == MatKind.interface:
+                if has_media:
+                    var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                    if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
+                        cur_med_idx = new_idx
+                rox = hx + rdx * Float32(0.0002)
+                roy = hy + rdy * Float32(0.0002)
+                roz = hz + rdz * Float32(0.0002)
 
             else:
-                # area_light (self-hit), conductor, etc.: absorb
+                # area_light self-hit, conductor, etc.: absorb
                 break
 
     inter_mem.free()
@@ -381,12 +521,16 @@ def _gather_update(
                         var ph = photons[k]
                         var ex = ph.px - vx; var ey = ph.py - vy; var ez = ph.pz - vz
                         var dist2 = ex*ex + ey*ey + ez*ez
-                        if dist2 <= r2:
-                            # Lambertian BSDF f = alb/π; tau += f * flux
-                            var inv_pi = Float32(1.0) / PI
-                            phi_r += vp.alb_r * inv_pi * ph.fr
-                            phi_g += vp.alb_g * inv_pi * ph.fg
-                            phi_b += vp.alb_b * inv_pi * ph.fb
+                        if dist2 <= r2 and ph.is_volume == vp.is_volume:
+                            # Surface VP: Lambertian f=alb/π; Volume VP: isotropic phase f=alb/(4π)
+                            var f: Float32
+                            if vp.is_volume == Int32(1):
+                                f = INV_FOUR_PI
+                            else:
+                                f = Float32(1.0) / PI
+                            phi_r += vp.alb_r * f * ph.fr
+                            phi_g += vp.alb_g * f * ph.fg
+                            phi_b += vp.alb_b * f * ph.fb
                             M += Float32(1.0)
                         k = Int(ph.nxt)
 

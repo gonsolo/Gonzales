@@ -5,6 +5,7 @@ from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
+from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
 
 @fieldwise_init
 struct ShadeContext:
@@ -31,6 +32,7 @@ struct ShadeContext:
     var px_scale:         Float32
     var light_sampler:    LightSampler_C
     var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
+    var guide:            GuideGrid
 
 @always_inline
 def _shading_normal(
@@ -439,6 +441,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
     dir: SIMD[DType.float32, 3],
     tmax: Float32,
     contrib: RGB,
+    guide_write: GuideGrid = null_guide(),
 ):
     comptime if enqueue_shadow:
         ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(
@@ -449,6 +452,26 @@ def _shadow_contribute[enqueue_shadow: Bool](
         var shadow_ray = Ray_C(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
         if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, tmax):
             path_ptr[].estimate += contrib
+            # Record in the guide at the PARENT surface (one bounce back):
+            # "scatter direction ray.dir from parent_cell leads to illumination W here."
+            # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
+            # the path came from and ray.direction is the scatter direction that arrived here.
+            if Int(guide_write.energy) > 4 and path_ptr[].bounce > 0:
+                var parent_x = path_ptr[].ray.origin.x
+                var parent_y = path_ptr[].ray.origin.y
+                var parent_z = path_ptr[].ray.origin.z
+                var parent_cell = guide_pos_to_cell(guide_write, parent_x, parent_y, parent_z)
+                if parent_cell >= 0:
+                    var w = contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
+                    # Normalize by current throughput to record incoming radiance at
+                    # the parent surface, independent of path history (Li, not T*Li).
+                    var t = path_ptr[].throughput
+                    var t_lum = t.r * Float32(0.2126) + t.g * Float32(0.7152) + t.b * Float32(0.0722)
+                    if t_lum > Float32(1e-7):
+                        w = w / t_lum
+                    if w > Float32(1e-7):
+                        var sd = path_ptr[].ray.direction
+                        guide_record(guide_write, parent_cell, sd.x, sd.y, sd.z, w)
 
 
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
@@ -2093,6 +2116,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     u_env1: Float32,
     u_env2: Float32,
     mut pcg: PCG32,
+    guide_write: GuideGrid = null_guide(),
 ):
     # NEE sampling asymmetry: area lights use CDF-weighted selection (one light per
     # bounce, weight = power), while infinite/env lights are ALL sampled every bounce.
@@ -2295,7 +2319,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                                                         var mnee_wt = alb * al.emission * (cos_s_x0 * G * bsdf_s / (PI * pdf_area_x2))
                                                         path_ptr[].estimate += path_ptr[].throughput * mnee_wt
                 if not used_mnee:
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
     # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
     for dl_i in range(ctx.distant_count):
@@ -2309,7 +2333,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s / pi)
             # Shadow ray at very long distance (scene diameter ~1000)
             var t_max = Float32(2000.0)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, t_max, contrib)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, t_max, contrib, guide_write)
 
     # ── Point light NEE (delta light: MIS weight = 1) ────────────────────────
     for pl_i in range(ctx.point_count):
@@ -2326,7 +2350,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                 # f = alb/pi, geometry = cos_s, pdf = delta -> weight = 1
                 # radiance = intensity / dist²
                 var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ldir, dist * Float32(0.9999), contrib)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ldir, dist * Float32(0.9999), contrib, guide_write)
 
     # ── Sphere light NEE (solid-angle cone sampling) ──────────────────────────
     for sph_i in range(ctx.sphere_count):
@@ -2374,7 +2398,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
             var weight = alb * sph.emission * (cos_s * w_nee / (pdf_light * PI))
             var contrib = path_ptr[].throughput * weight
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dc * Float32(0.9999), contrib)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dc * Float32(0.9999), contrib, guide_write)
 
     # ── Infinite (env-map) light NEE ──────────────────────────────────────────
     for inf_i in range(ctx.infinite_count):
@@ -2436,7 +2460,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                 if not nee_rgb.is_black():
                     var contrib = path_ptr[].throughput * alb * nee_rgb
                     var t_max_env = Float32(100000.0)
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, nee_dir, t_max_env, contrib)
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, nee_dir, t_max_env, contrib, guide_write)
 
             # 1. Sample row from marginal CDF
             var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
@@ -2487,7 +2511,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
             var contrib = path_ptr[].throughput * alb * env_rgb * (cos_env / (PI * pdf_light)) * mis_w
             var t_max_env = Float32(100000.0)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
@@ -2498,6 +2522,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
+    guide_write: GuideGrid = null_guide(),
 ):
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
     if not ok:
@@ -2586,18 +2611,70 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].sampler_dim += Int32(8)
 
     _shade_diffuse_nee[use_gpu, enqueue_shadow](path_ptr, ctx, normal, hit_point, alb,
-        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg)
+        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write)
 
-    var _scatter = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
-    var dir = _scatter[0]
+    # ── Scatter direction: 50/50 mixture of guide and cosine-weighted BSDF ──────
+    # The guide is active when its energy pointer is a real allocation (Int > 1).
+    # MIS balance heuristic: weight = f·cosθ / pdf_mix, where
+    #   pdf_mix = 0.5·pdf_guide + 0.5·pdf_bsdf  and  f = alb/π (Lambertian).
+    var dir: SIMD[DType.float32, 3]
+    var cos_theta: Float32
+    var pdf_mix: Float32
+
+    if Int(ctx.guide.energy) > 4:
+        var cell = guide_pos_to_cell(ctx.guide, hit_point[0], hit_point[1], hit_point[2])
+        var bsdf_s = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
+        var bsdf_dir = bsdf_s[0]
+        var pdf_b = bsdf_s[1]  # cos(theta)/π at bsdf_dir
+        # Only apply 50/50 mixture when this cell has training data.
+        # Empty cells return guide_pdf = 1/4π which is less than typical bsdf pdf,
+        # inflating pdf_mix above pdf_b and increasing variance for no benefit.
+        var has_guide = guide_cell_has_data(ctx.guide, cell)
+        # α=0.25: 25% guide samples, 75% BSDF. MIS weights: α·pg + (1-α)·pb.
+        # Low α limits the variance increase when the guide distribution is wrong.
+        comptime GUIDE_ALPHA = Float32(0.25)
+        comptime GUIDE_BETA  = Float32(0.75)
+        if has_guide and pcg.next_float() < GUIDE_ALPHA:
+            # Guide sample path
+            var (gdx, gdy, gdz, pdf_g, guide_ok) = guide_sample(ctx.guide, cell, pcg.next_float(), pcg.next_float())
+            var cos_g = gdx*normal[0] + gdy*normal[1] + gdz*normal[2]
+            if guide_ok and cos_g > Float32(0.001):
+                dir = SIMD[DType.float32, 3](gdx, gdy, gdz)
+                cos_theta = cos_g
+                pdf_mix = GUIDE_ALPHA*pdf_g + GUIDE_BETA*(cos_g / PI)
+            else:
+                # Guide direction below surface — fall back to BSDF with MIS
+                dir = bsdf_dir
+                cos_theta = pdf_b * PI
+                var pg = guide_pdf(ctx.guide, cell, bsdf_dir[0], bsdf_dir[1], bsdf_dir[2])
+                pdf_mix = GUIDE_ALPHA*pg + GUIDE_BETA*pdf_b
+        elif has_guide:
+            # BSDF sample with guide MIS correction
+            dir = bsdf_dir
+            cos_theta = pdf_b * PI
+            var pg = guide_pdf(ctx.guide, cell, bsdf_dir[0], bsdf_dir[1], bsdf_dir[2])
+            pdf_mix = GUIDE_ALPHA*pg + GUIDE_BETA*pdf_b
+        else:
+            # Cell outside AABB or empty — pure BSDF
+            dir = bsdf_dir
+            cos_theta = pdf_b * PI
+            pdf_mix = pdf_b
+    else:
+        var bsdf_s = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
+        dir = bsdf_s[0]
+        cos_theta = bsdf_s[1] * PI  # cos_theta = pdf * π
+        pdf_mix = bsdf_s[1]
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
     if path_ptr[].bounce == 0:
         path_ptr[].albedo = alb
-    # pdf = _scatter[1] = cos(θ)/π, stored for next-bounce MIS
-    path_ptr[].lastBsdfPdf = _scatter[1]
+    # Store mixture PDF for next-bounce MIS (area light hit, env light miss)
+    path_ptr[].lastBsdfPdf = pdf_mix
     path_ptr[].specularBounce = Int8(0)
-    path_ptr[].throughput *= alb
+    # Weight = f·cosθ / pdf_mix = (alb/π)·cosθ / pdf_mix.
+    # MIS balance heuristic is unbiased — no cap needed here.
+    var _w = cos_theta / (PI * pdf_mix)
+    path_ptr[].throughput *= alb * _w
     path_ptr[].bounce += 1
 
     if path_ptr[].bounce > 1:
@@ -2635,9 +2712,10 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
+    guide_write: GuideGrid = null_guide(),
 ):
     if mat.type == MatKind.diffuse:
-        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
+        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write)
     elif mat.type == MatKind.conductor:
         shade_conductor(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.dielectric:
@@ -2668,6 +2746,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
+    guide_write: GuideGrid = null_guide(),
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
@@ -2817,7 +2896,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type
     else:
-        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx)
+        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx, guide_write)
 
 
 @always_inline
@@ -2842,6 +2921,8 @@ def shade_core_cpu_nee(
     sphereCount: Int,
     light_sampler: LightSampler_C,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    guide: GuideGrid,
+    guide_write: GuideGrid = null_guide(),
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2855,5 +2936,5 @@ def shade_core_cpu_nee(
         distantLights, distantLightCount,
         pointLights, pointLightCount,
         infiniteLights, infiniteLightCount,
-        spheres, sphereCount, Float32(0.0), light_sampler, sobol_matrices)
-    shade_nee_core[False, False](path_ptr, inter, ctx)
+        spheres, sphereCount, Float32(0.0), light_sampler, sobol_matrices, guide)
+    shade_nee_core[False, False](path_ptr, inter, ctx, guide_write)

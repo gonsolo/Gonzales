@@ -134,6 +134,7 @@ struct TileSamplerParams_C(TrivialRegisterPassable):
     var filterNormY: Float32
     var filterWeight: Float32
     var filterType: Int32   # 0=gaussian 1=triangle 2=box
+    var sampleIndexOffset: Int32  # shift into the Sobol sequence (for multi-pass)
 
 @always_inline
 def reverse_bits32(v_in: UInt32) -> UInt32:

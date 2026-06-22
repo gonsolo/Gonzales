@@ -9,6 +9,8 @@ from .postprocess import denoise, write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
 from .sppm import sppm_render
+from .bdpt import bdpt_render
+from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
@@ -343,6 +345,9 @@ def parse_and_render(
     sppm_passes: Int32 = Int32(64),
     sppm_photons: Int32 = Int32(200000),
     sppm_radius: Float32 = Float32(0.05),
+    use_guide: Bool = False,
+    use_bdpt: Bool = False,
+    bdpt_spp: Int32 = Int32(64),
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -421,6 +426,12 @@ def parse_and_render(
         print("Warning: scene has no geometry, skipping render")
         mojo_parsed_free(psc)
         return Int32(0)
+    elif use_bdpt:
+        var sd = mojo_parsed_scene_descriptor(psc)
+        var ret = bdpt_render(psc, sd[0], Int(bdpt_spp), no_denoise, verbose)
+        sd.free()
+        mojo_parsed_free(psc)
+        return ret
     elif use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc)
         var ret = sppm_render(
@@ -439,28 +450,144 @@ def parse_and_render(
         for _ in range(n_pixels):
             results.append(zero)
         var sd = mojo_parsed_scene_descriptor(psc)
-        var sp = TileSamplerParams_C(
-            sobolMatrices=sobol_matrices,
-            rngSeed=psc[0].rng_seed,
-            sobolSeed=Int32(0),
-            log2SamplesPerPixel=psc[0].log2_spp,
-            nBase4Digits=psc[0].n_base4_digits,
-            samplesPerPixel=psc[0].samples_per_pixel,
-            filterSigma=psc[0].filter_sigma,
-            filterSupportX=psc[0].filter_support_x,
-            filterSupportY=psc[0].filter_support_y,
-            filterNormX=psc[0].filter_norm_x,
-            filterNormY=psc[0].filter_norm_y,
-            filterWeight=psc[0].filter_weight,
-            filterType=psc[0].filter_type,
-        )
-        var sp_ptr = OwnedPointer[TileSamplerParams_C](sp)
-        render_all_tiles(
-            psc[0].raster_to_camera, psc[0].camera_to_world,
-            Int32(0), Int32(0), fw, fh,
-            Int32(32), Int32(32),
-            sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth)
-        # sp_ptr freed automatically
+
+        if use_guide and psc[0].bvh_node_count > Int32(0):
+            # ── Two-batch guided rendering ────────────────────────────────────
+            # Build guide from BVH root AABB.
+            # Pilot batch (half the spp) trains the guide via BSDF-only sampling.
+            # Main batch (remaining spp) uses the trained guide for importance
+            # sampling.  Two batches avoid the per-pass tile-spawn overhead of
+            # the spp-separate-pass design (which was ~37× slower).
+            var root = psc[0].bvh_nodes[0]
+            # 16 private guide grids — one per tile-group (tile_idx % 16).
+            # Eliminates cross-core cache ping-pong on the shared energy array.
+            # After the pilot pass render_all_tiles merges them into write_guides[0].
+            comptime N_GUIDE_THREADS: Int = 16
+            var write_guides = alloc[GuideGrid](N_GUIDE_THREADS)
+            for gi in range(N_GUIDE_THREADS):
+                write_guides[gi] = guide_create(
+                    root.min.x, root.min.y, root.min.z,
+                    root.max.x, root.max.y, root.max.z)
+            var spp = psc[0].samples_per_pixel
+            var pilot_spp = max(Int32(1), spp // Int32(2))
+            var main_spp  = spp - pilot_spp
+            print("Path guiding: pilot " + String(pilot_spp) + " + main "
+                + String(main_spp) + " spp, 16^3×64 guide grid, 16 private shards")
+            var t0_g = perf_counter_ns()
+
+            # Pilot pass: each tile writes to its own private guide shard.
+            # guide_read=null → sampling falls back to BSDF (guide is empty anyway).
+            # After this call write_guides[0] contains the merged training data.
+            var sp_pilot = TileSamplerParams_C(
+                sobolMatrices=sobol_matrices,
+                rngSeed=psc[0].rng_seed,
+                sobolSeed=Int32(0),
+                log2SamplesPerPixel=psc[0].log2_spp,
+                nBase4Digits=psc[0].n_base4_digits,
+                samplesPerPixel=pilot_spp,
+                filterSigma=psc[0].filter_sigma,
+                filterSupportX=psc[0].filter_support_x,
+                filterSupportY=psc[0].filter_support_y,
+                filterNormX=psc[0].filter_norm_x,
+                filterNormY=psc[0].filter_norm_y,
+                filterWeight=psc[0].filter_weight,
+                filterType=psc[0].filter_type,
+                sampleIndexOffset=Int32(0),
+            )
+            var sp_pilot_ptr = OwnedPointer[TileSamplerParams_C](sp_pilot)
+            render_all_tiles(
+                psc[0].raster_to_camera, psc[0].camera_to_world,
+                Int32(0), Int32(0), fw, fh,
+                Int32(32), Int32(32),
+                sp_pilot_ptr.unsafe_ptr(), sd, results.unsafe_ptr(),
+                psc[0].max_depth, False,
+                null_guide(),      # guide_read: no sampling during pilot
+                write_guides,      # write to 16 private shards
+                N_GUIDE_THREADS)
+            var pilot_s = Float64(perf_counter_ns() - t0_g) / 1.0e9
+            print("Path guiding: pilot done in " + fmt_time(pilot_s))
+            # Diagnostic: count active cells and total energy in merged guide.
+            var n_active_cells = 0
+            var total_guide_energy = Float32(0)
+            var g0 = write_guides[0]
+            for ci in range(GUIDE_CELLS):
+                if guide_cell_has_data(g0, ci):
+                    n_active_cells += 1
+                    for bi in range(GUIDE_BINS):
+                        total_guide_energy += g0.energy[ci * GUIDE_BINS + bi]
+            print("Guide: " + String(n_active_cells) + "/" + String(GUIDE_CELLS)
+                + " active cells, total energy=" + String(total_guide_energy))
+
+            # Main pass: read from merged guide_read=write_guides[0]; no writes.
+            if main_spp > Int32(0):
+                var main_buf = List[TileResult_C](capacity=n_pixels)
+                for _ in range(n_pixels): main_buf.append(zero)
+                var sp_main = TileSamplerParams_C(
+                    sobolMatrices=sobol_matrices,
+                    rngSeed=psc[0].rng_seed,
+                    sobolSeed=Int32(0),  # same sequence as pilot; offset selects later samples
+                    log2SamplesPerPixel=psc[0].log2_spp,
+                    nBase4Digits=psc[0].n_base4_digits,
+                    samplesPerPixel=main_spp,
+                    filterSigma=psc[0].filter_sigma,
+                    filterSupportX=psc[0].filter_support_x,
+                    filterSupportY=psc[0].filter_support_y,
+                    filterNormX=psc[0].filter_norm_x,
+                    filterNormY=psc[0].filter_norm_y,
+                    filterWeight=psc[0].filter_weight,
+                    filterType=psc[0].filter_type,
+                    sampleIndexOffset=pilot_spp,  # continue the Sobol sequence after pilot
+                )
+                var sp_main_ptr = OwnedPointer[TileSamplerParams_C](sp_main)
+                render_all_tiles(
+                    psc[0].raster_to_camera, psc[0].camera_to_world,
+                    Int32(0), Int32(0), fw, fh,
+                    Int32(32), Int32(32),
+                    sp_main_ptr.unsafe_ptr(), sd, main_buf.unsafe_ptr(),
+                    psc[0].max_depth, False,
+                    write_guides[0],   # guide_read: merged training data
+                    write_guides,      # write_guides: ignored (n_write_guides=0)
+                    Int(0))            # n_write_guides=0 → no recording in main pass
+                for i in range(n_pixels):
+                    var p = results.unsafe_ptr()[i]
+                    var m = main_buf.unsafe_ptr()[i]
+                    results.unsafe_ptr()[i] = TileResult_C(
+                        p.estimate + m.estimate,
+                        p.albedo   + m.albedo,
+                        p.filterWeight + m.filterWeight,
+                        m.pixelX, m.pixelY)
+
+            var total_g = Float64(perf_counter_ns() - t0_g) / 1.0e9
+            print("Path guiding done in " + fmt_time(total_g) + "                ")
+            for gi in range(N_GUIDE_THREADS):
+                guide_free(write_guides[gi])
+            write_guides.free()
+        else:
+            # ── Standard single-call rendering ───────────────────────────────
+            var sp = TileSamplerParams_C(
+                sobolMatrices=sobol_matrices,
+                rngSeed=psc[0].rng_seed,
+                sobolSeed=Int32(0),
+                log2SamplesPerPixel=psc[0].log2_spp,
+                nBase4Digits=psc[0].n_base4_digits,
+                samplesPerPixel=psc[0].samples_per_pixel,
+                filterSigma=psc[0].filter_sigma,
+                filterSupportX=psc[0].filter_support_x,
+                filterSupportY=psc[0].filter_support_y,
+                filterNormX=psc[0].filter_norm_x,
+                filterNormY=psc[0].filter_norm_y,
+                filterWeight=psc[0].filter_weight,
+                filterType=psc[0].filter_type,
+                sampleIndexOffset=Int32(0),
+            )
+            var sp_ptr = OwnedPointer[TileSamplerParams_C](sp)
+            render_all_tiles(
+                psc[0].raster_to_camera, psc[0].camera_to_world,
+                Int32(0), Int32(0), fw, fh,
+                Int32(32), Int32(32),
+                sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth)
+            # sp_ptr freed automatically
+
         # Unjittered normals and depth for edge-preserving denoising.
         var normals  = List[Float32](capacity=n_pixels * 3)
         var dept     = List[Float32](capacity=n_pixels)
@@ -602,6 +729,7 @@ def render_interactive(
         filterNormY=psc[0].filter_norm_y,
         filterWeight=psc[0].filter_weight,
         filterType=psc[0].filter_type,
+        sampleIndexOffset=Int32(0),
     ))
 
     if use_gpu:
@@ -665,6 +793,7 @@ def render_interactive(
                 filterNormY=psc[0].filter_norm_y,
                 filterWeight=psc[0].filter_weight,
                 filterType=psc[0].filter_type,
+                sampleIndexOffset=Int32(0),
             )
             for i in range(n_pixels):
                 results[i] = zero

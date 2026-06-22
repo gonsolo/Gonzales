@@ -50,6 +50,9 @@ def main() raises:
     var sppm_passes = Int32(64)
     var sppm_photons = Int32(200000)
     var sppm_radius = Float32(0.05)
+    var use_guide = False
+    var use_bdpt = False
+    var bdpt_spp = Int32(64)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
@@ -92,6 +95,13 @@ def main() raises:
             pixel_x = Int32(atol(String(args[i])))
             i += 1
             pixel_y = Int32(atol(String(args[i])))
+        elif arg == "--guide":
+            use_guide = True
+        elif arg == "--bdpt":
+            use_bdpt = True
+        elif arg == "--bdpt-spp" and i + 1 < len(args):
+            i += 1
+            bdpt_spp = _parse_int32(String(args[i]), 0)
         elif arg == "--sppm":
             use_sppm = True
         elif arg == "--sppm-passes" and i + 1 < len(args):
@@ -151,7 +161,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override, verbose)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose, use_sppm, sppm_passes, sppm_photons, sppm_radius)
+        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose, use_sppm, sppm_passes, sppm_photons, sppm_radius, use_guide, use_bdpt, bdpt_spp)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
 

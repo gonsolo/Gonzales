@@ -1,4 +1,4 @@
-from std.math import ceildiv, sqrt, log, exp, cos, sin
+from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
@@ -7,6 +7,7 @@ from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_b
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
+from .guide import GuideGrid, guide_merge, null_guide
 
 
 def render_tile(
@@ -17,6 +18,8 @@ def render_tile(
     scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     resultsPtr: UnsafePointer[TileResult_C, MutAnyOrigin],
     maxDepth: Int32,
+    guide_read: GuideGrid,
+    guide_write: GuideGrid,
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -46,7 +49,7 @@ def render_tile(
             var py = Int32(tileMinY) + Int32(iy)
             for si in range(spp):
                 var (ray, pcg_state, pcg_inc, sobol_idx) = gen_primary_ray_state(
-                    px, py, Int32(si),
+                    px, py, Int32(si) + sp.sampleIndexOffset,
                     log2spp, n_base4,
                     seed_dim0, seed_dim1, rng_seed, matrices,
                     rasterToCamera, cameraToWorld,
@@ -183,7 +186,7 @@ def render_tile(
                                scene.pointLights, Int(scene.pointLightCount),
                                scene.infiniteLights, Int(scene.infiniteLightCount),
                                scene.spheres, Int(scene.sphereCount),
-                               scene.lightSampler, sp.sobolMatrices)
+                               scene.lightSampler, sp.sobolMatrices, guide_read, guide_write)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -290,6 +293,9 @@ def render_all_tiles(
     results: UnsafePointer[TileResult_C, MutAnyOrigin],
     max_depth: Int32,
     quiet: Bool = False,
+    guide_read: GuideGrid = null_guide(),
+    write_guides: UnsafePointer[GuideGrid, MutAnyOrigin] = UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
+    n_write_guides: Int = 0,
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -321,10 +327,18 @@ def render_all_tiles(
         var tw_actual = Int(tx_max) - tx
         var th_actual = Int(ty_max) - ty
         var tile_buf = tile_bufs + tile_idx * max_tile_pixels
+        var gw = null_guide()
+        if n_write_guides > 0:
+            # Range-based assignment: tiles [k*stride, (k+1)*stride) → write_guides[k].
+            # This guarantees no two concurrently running tiles (on different cores)
+            # ever write to the same shard, eliminating all cross-core cache ping-pong.
+            var stride = max(n_tiles // n_write_guides, 1)
+            var shard_idx = min(tile_idx // stride, n_write_guides - 1)
+            gw = write_guides[shard_idx]
         render_tile(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
-            sampler_params, scene, tile_buf, max_depth)
+            sampler_params, scene, tile_buf, max_depth, guide_read, gw)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix
@@ -337,6 +351,10 @@ def render_all_tiles(
             print(progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
 
     parallelize[render_one](n_tiles)
+    # Merge per-tile-group write guides into [0] so caller gets unified result.
+    if n_write_guides > 1:
+        for i in range(1, n_write_guides):
+            guide_merge(write_guides[0], write_guides[i])
     if not quiet:
         var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
         print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
