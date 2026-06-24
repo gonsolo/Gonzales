@@ -58,31 +58,20 @@ for scene in "${SCENES[@]}"; do
     g_time_file="$OUT/images/${scene}-gonzales.time"
     p_time_file="$OUT/images/${scene}-pbrt.time"
 
-    # Detect SPPM integrator — path tracer can't render caustics
-    use_sppm=false
-    grep -q 'Integrator "sppm"' "$scene_file" && use_sppm=true
-
     ok=true
 
     # ── gonzales ──────────────────────────────────────────────────────────────
     if [ ! -f "$g_png" ]; then
-        if $use_sppm; then
-            echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} SPPM"
-            g_flags=(--sppm --sppm-passes 32 --sppm-photons 100000)
-        else
-            echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
-            g_flags=(--gpu --spp "$SPP")
-        fi
+        echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
         g_exr="$OUT/images/${scene}-gonzales.exr"
         g_log="$OUT/images/${scene}-gonzales.log"
-        if (cd ~/work/gonzales && "$GONZALES" "${g_flags[@]}" \
+        if (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
             [ -f ~/work/gonzales/"$exr_name" ] && \
             mv ~/work/gonzales/"$exr_name" "$g_exr" && \
             tonemap "$g_exr" "$g_png"; then
-            # Extract rendering time; SPPM has no "Done:" line so fall back to total
+            # Extract rendering time ("Done: X.Xs" from progress line)
             g_t=$(grep -oP "Done: \K[\d.]+" "$g_log" | tail -1)
-            [ -z "$g_t" ] && g_t=$(grep -oP "Total Execution Time: \K[\d.]+" "$g_log" | tail -1)
             echo "${g_t:-?}" > "$g_time_file"
             echo "  → gonzales OK (${g_t:-?}s render)"
         else
