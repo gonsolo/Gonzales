@@ -654,7 +654,7 @@ def _connect(
             return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
         f_lgt = SIMD[DType.float32, 3](lv.alb_r, lv.alb_g, lv.alb_b)
     else:
-        f_lgt = _eval_vertex(lv, dir, SIMD[DType.float32, 3](Float32(0),Float32(0),Float32(0)))
+        f_lgt = _eval_vertex(lv, neg_dir, neg_dir)
 
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)
