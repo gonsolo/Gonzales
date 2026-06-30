@@ -2665,11 +2665,9 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 @always_inline
-def shade_interface[use_gpu: Bool, enqueue_shadow: Bool](
+def shade_interface(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
-    ctx: ShadeContext,
-    mat: Material_C,
 ):
     """Interface (null/passthrough) material: advance the ray through the surface.
     No scattering, no throughput change. Medium transition is handled externally:
@@ -2692,6 +2690,8 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     if mat.type == MatKind.diffuse:
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write)
+    # Delta BSDFs need only triangle geometry — no NEE, textures, or Sobol.
+    # Passing ctx.meshes directly keeps GPU kernel argument counts minimal.
     elif mat.type == MatKind.conductor:
         shade_conductor(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.dielectric:
@@ -2707,7 +2707,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.thin_dielectric:
         shade_thin_dielectric(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.interface:
-        shade_interface[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
+        shade_interface(path_ptr, inter)
     elif mat.type == MatKind.hair:
         comptime if not use_gpu:
             shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
