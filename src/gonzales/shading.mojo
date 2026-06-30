@@ -341,17 +341,7 @@ def shade_core(
         var p1 = SIMD[DType.float32, 3](mesh.points[v1 * 4], mesh.points[v1 * 4 + 1], mesh.points[v1 * 4 + 2])
         var p2 = SIMD[DType.float32, 3](mesh.points[v2 * 4], mesh.points[v2 * 4 + 1], mesh.points[v2 * 4 + 2])
 
-        var edge1 = p1 - p0
-        var edge2 = p2 - p0
-        var normal = cross(edge1, edge2)
-        var nlen = dot(normal, normal)
-        if nlen > 0:
-            normal = normal * (1.0 / sqrt(nlen))
-
-        # Orient normal towards ray
-        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-        if dot(normal, ray_dir) > 0:
-            normal = normal * -1.0
+        var (normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
 
         # Cosine weighted hemisphere sampling
         var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -1462,13 +1452,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var geo_normal = cross(p1 - p0, p2 - p0)
-    var gnlen = dot(geo_normal, geo_normal)
-    if gnlen > Float32(0.0):
-        geo_normal = geo_normal * (Float32(1.0) / sqrt(gnlen))
-    if dot(geo_normal, -ray_dir) < Float32(0.0):
-        geo_normal = -geo_normal
+    var (geo_normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
 
     # ── Step 3: Get fiber tangent from shading normals ───────────────────────
     var tangent: SIMD[DType.float32, 3]
@@ -2183,12 +2167,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                     var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
                     if probe_mat.type == MatKind.dielectric or probe_mat.type == MatKind.thin_dielectric:
                         # --- Extract x1 geometry ---
+                        var (pmesh, pv0, pv1, pv2, _) = _get_tri_verts(probe_inter, ctx.meshes)
                         used_mnee = True
-                        var pmesh = ctx.meshes[Int(probe_inter.primId.id1)]
-                        var pbase = Int(probe_inter.primId.id2)
-                        var pv0 = Int(pmesh.vertexIndices[pbase])
-                        var pv1 = Int(pmesh.vertexIndices[pbase + 1])
-                        var pv2 = Int(pmesh.vertexIndices[pbase + 2])
                         var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
                         var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
                         var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
@@ -2223,11 +2203,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                                 var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
                                 if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
                                     # --- 2-vertex MNEE ---
-                                    var p2mesh = ctx.meshes[Int(probe2_inter.primId.id1)]
-                                    var p2base = Int(probe2_inter.primId.id2)
-                                    var p2v0 = Int(p2mesh.vertexIndices[p2base])
-                                    var p2v1 = Int(p2mesh.vertexIndices[p2base + 1])
-                                    var p2v2 = Int(p2mesh.vertexIndices[p2base + 2])
+                                    var (p2mesh, p2v0, p2v1, p2v2, _) = _get_tri_verts(probe2_inter, ctx.meshes)
                                     var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
                                     var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
                                     var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
@@ -2866,12 +2842,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
-                var lmesh_idx = Int(inter.primId.id2 >> 32)
-                var lbase   = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-                var lmesh   = ctx.meshes[lmesh_idx]
-                var lv0 = Int(lmesh.vertexIndices[lbase])
-                var lv1 = Int(lmesh.vertexIndices[lbase + 1])
-                var lv2 = Int(lmesh.vertexIndices[lbase + 2])
+                var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
                 var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
                 var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
                 var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
