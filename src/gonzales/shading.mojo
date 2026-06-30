@@ -2088,6 +2088,329 @@ def _mnee_walk(
         x1 = x1 - (dp_du * delta_u + dp_dv * delta_v)
     return (False, x1_init, Float32(0), eta_in)
 
+@always_inline
+def _nee_infinite_light[enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    ctx: ShadeContext,
+    ilight: InfiniteLight_C,
+    normal: SIMD[DType.float32, 3],
+    hit_point: SIMD[DType.float32, 3],
+    alb: RGB,
+    u_env1: Float32,
+    u_env2: Float32,
+    mut pcg: PCG32,
+    guide_write: GuideGrid,
+):
+    var w2l = ilight.world_to_light
+    var env_dir: SIMD[DType.float32, 3]
+    var env_rgb: RGB
+    var pdf_light: Float32
+
+    if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+        # ── CDF importance sampling ──────────────────────────────────────
+        var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+        var u1_env = u_env1
+        var u2_env = u_env2
+        var r_env = sqrt(u1_env)
+        var theta_env = TWO_PI * u2_env
+        var x_env = r_env * cos(theta_env)
+        var y_env = r_env * sin(theta_env)
+        var z2_env = Float32(1.0) - u1_env
+        var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
+        var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+        var a_env = Float32(-1.0) / (sign_env + normal[2])
+        var b_env = normal[0] * normal[1] * a_env
+        var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
+        var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
+        var nee_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
+        var nee_dlen = dot(nee_dir, nee_dir)
+        if nee_dlen > Float32(0.0):
+            nee_dir = nee_dir * (Float32(1.0) / sqrt(nee_dlen))
+        var cos_nee = dot(normal, nee_dir)
+        if cos_nee > Float32(0.0):
+            # Transform direction to light space for env-map lookup
+            var w2l_nee = ilight.world_to_light
+            var ld_x = w2l_nee[0]*nee_dir[0] + w2l_nee[4]*nee_dir[1] + w2l_nee[8]*nee_dir[2]
+            var ld_y = w2l_nee[1]*nee_dir[0] + w2l_nee[5]*nee_dir[1] + w2l_nee[9]*nee_dir[2]
+            var ld_z = w2l_nee[2]*nee_dir[0] + w2l_nee[6]*nee_dir[1] + w2l_nee[10]*nee_dir[2]
+            var nee_rgb: RGB
+            if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 4 and ilight.cdf_w > Int32(0):
+                var iw2 = Int(ilight.cdf_w); var ih2 = Int(ilight.cdf_h)
+                var ea_uv_nee = _equal_area_sphere_to_square(ld_x, ld_y, ld_z)
+                var u_env = ea_uv_nee[0]; var v_env = ea_uv_nee[1]
+                var fx = u_env * Float32(iw2) - Float32(0.5)
+                var fy = v_env * Float32(ih2) - Float32(0.5)
+                var x0 = Int(max(Float32(0), min(Float32(iw2 - 1), floor(fx))))
+                var y0 = Int(max(Float32(0), min(Float32(ih2 - 1), floor(fy))))
+                var x1 = min(x0 + 1, iw2 - 1)
+                var y1 = min(y0 + 1, ih2 - 1)
+                var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+                var r00 = ilight.pixels_ptr[(y0*iw2+x0)*3+0]; var g00 = ilight.pixels_ptr[(y0*iw2+x0)*3+1]; var b00 = ilight.pixels_ptr[(y0*iw2+x0)*3+2]
+                var r10 = ilight.pixels_ptr[(y0*iw2+x1)*3+0]; var g10 = ilight.pixels_ptr[(y0*iw2+x1)*3+1]; var b10 = ilight.pixels_ptr[(y0*iw2+x1)*3+2]
+                var r01 = ilight.pixels_ptr[(y1*iw2+x0)*3+0]; var g01 = ilight.pixels_ptr[(y1*iw2+x0)*3+1]; var b01 = ilight.pixels_ptr[(y1*iw2+x0)*3+2]
+                var r11 = ilight.pixels_ptr[(y1*iw2+x1)*3+0]; var g11 = ilight.pixels_ptr[(y1*iw2+x1)*3+1]; var b11 = ilight.pixels_ptr[(y1*iw2+x1)*3+2]
+                var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
+                var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
+                var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
+                nee_rgb = RGB(tr, tg, tb) * ilight.scale
+            else:
+                nee_rgb = ilight.scale
+            if not nee_rgb.is_black():
+                var contrib = path_ptr[].throughput * alb * nee_rgb
+                var t_max_env = Float32(100000.0)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, nee_dir, t_max_env, contrib, guide_write)
+
+        # 1. Sample row from marginal CDF
+        var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
+        row_idx = min(row_idx, ih - 1)
+        var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+
+        # 2. Sample column from conditional CDF for this row
+        var cond_base = (ih + 1) + row_idx * (iw + 1)
+        var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
+        col_idx = min(col_idx, iw - 1)
+        var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+
+        # 3. Texel center UV → light-space direction
+        var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+        var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+        var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
+
+        # 4. Rotate to world space: L2W = transpose(W2L) for pure rotation
+        var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
+        var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
+        var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
+        env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
+
+        # 5. Lookup env-map value at sampled pixel
+        var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+        var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+        var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+        var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+        var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+        env_rgb = RGB(pr, pg, pb) * ilight.scale
+
+        # 6. PDF in solid angle: dp_row * dp_col * (iw * ih) / (4π)
+        if dp_row > Float32(0) and dp_col > Float32(0):
+            pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
+        else:
+            pdf_light = INV_FOUR_PI
+    else:
+        # ── Fallback: cosine-weighted hemisphere (no CDF) ─────────────────
+        var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+        env_dir = _env_s[0]
+        pdf_light = _env_s[1]
+        env_rgb = ilight.scale
+
+    # ── MIS + shadow ray ──────────────────────────────────────────────────
+    var cos_env = dot(normal, env_dir)
+    if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
+        var pdf_bsdf_nee = cos_env / PI
+        var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
+        var contrib = path_ptr[].throughput * alb * env_rgb * (cos_env / (PI * pdf_light)) * mis_w
+        var t_max_env = Float32(100000.0)
+        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
+
+@always_inline
+def _nee_area_lights[enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    ctx: ShadeContext,
+    normal: SIMD[DType.float32, 3],
+    hit_point: SIMD[DType.float32, 3],
+    alb: RGB,
+    u_light: Float32,
+    u_bary1: Float32,
+    u_bary2: Float32,
+    mut pcg: PCG32,
+    guide_write: GuideGrid,
+):
+    if ctx.area_light_count == 0:
+        return
+    var ls_u_nee = u_light
+    var ls_result_nee = light_sampler_sample(ctx.light_sampler, ls_u_nee)
+    var light_idx = ls_result_nee[0]
+    var light_sel_pdf_nee = ls_result_nee[1]
+    var al = ctx.area_lights[light_idx]
+    var lmesh = ctx.meshes[Int(al.meshIdx)]
+    var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+    var lb = lti * 3
+    var lv0 = Int(lmesh.vertexIndices[lb])
+    var lv1 = Int(lmesh.vertexIndices[lb + 1])
+    var lv2 = Int(lmesh.vertexIndices[lb + 2])
+    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var r1 = u_bary1
+    var r2 = u_bary2
+    var sqrt_r1 = sqrt(r1)
+    var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
+    var lcross = cross(lp1 - lp0, lp2 - lp0)
+    var light_normal = lcross
+    var lcross_len = dot(lcross, lcross)
+    if lcross_len > Float32(0.0):
+        light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+    var to_light = light_point - hit_point
+    var dist_sq = dot(to_light, to_light)
+    var dist = sqrt(dist_sq)
+    if dist > Float32(0.0001) and al.total_area > Float32(0.0):
+        var shadow_dir = to_light * (Float32(1.0) / dist)
+        var cos_s = dot(normal, shadow_dir)
+        var cos_l = -dot(light_normal, shadow_dir)
+        if cos_s > Float32(0.0) and cos_l > Float32(0.0):
+            var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
+            var pi = PI
+            var pdf_bsdf_nee = cos_s / pi
+            var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
+            var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
+            var contrib = path_ptr[].throughput * weight
+
+            # MNEE: probe for up to 2 glass surfaces between hit_point and light.
+            # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
+            var probe_org = hit_point + shadow_dir * Float32(0.0002)
+            var probe_ray = Ray_C(
+                Point3f(probe_org[0], probe_org[1], probe_org[2]),
+                Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+            var probe_tmax = dist * Float32(0.9995)
+            var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
+            var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+            var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe_ray, probe_tmax, probe_store.unsafe_ptr())
+            var probe_inter = probe_store[0]
+            var used_mnee = False
+            if probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
+                var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
+                if probe_mat.type == MatKind.dielectric or probe_mat.type == MatKind.thin_dielectric:
+                    # --- Extract x1 geometry ---
+                    var (pmesh, pv0, pv1, pv2, _) = _get_tri_verts(probe_inter, ctx.meshes)
+                    used_mnee = True
+                    var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
+                    var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
+                    var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+                    var pdp_du = pp1 - pp0
+                    var pdp_dv = pp2 - pp0
+                    var pgeo_n3 = cross(pdp_du, pdp_dv)
+                    var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
+                    if pgeo_n_len > Float32(1e-10):
+                        var pgeo_n_raw = pgeo_n3 * (Float32(1.0) / pgeo_n_len)
+                        # eta1: entering if probe goes against raw normal
+                        var ior1 = probe_mat.albedo.r
+                        var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior1)
+                        var pgeo_n = pgeo_n_raw
+                        if dot(pgeo_n, shadow_dir) > Float32(0.0):
+                            pgeo_n = -pgeo_n
+                        var pu = probe_inter.u; var pvb = probe_inter.v
+                        var x1_init = pp0*(Float32(1.0)-pu-pvb) + pp1*pu + pp2*pvb
+                        # --- Probe for second glass surface beyond x1 ---
+                        var probe2_t0 = probe_inter.tHit
+                        var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
+                        var probe2_org = x1_init + shadow_dir * Float32(0.0005)
+                        var probe2_inter = dummy_inter
+                        if probe2_rem > Float32(0.001):
+                            var probe2_ray = Ray_C(
+                                Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
+                                Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                            var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+                            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe2_ray, probe2_rem, probe2_store.unsafe_ptr())
+                            probe2_inter = probe2_store[0]
+                        var ldp_du_v = lp1 - lp0; var ldp_dv_v = lp2 - lp0
+                        if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
+                            var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
+                            if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
+                                # --- 2-vertex MNEE ---
+                                var (p2mesh, p2v0, p2v1, p2v2, _) = _get_tri_verts(probe2_inter, ctx.meshes)
+                                var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
+                                var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
+                                var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+                                var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
+                                var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
+                                var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
+                                if pgeo_n_len2 > Float32(1e-10):
+                                    var pgeo_n2_raw = pgeo_n3_2 * (Float32(1.0)/pgeo_n_len2)
+                                    var ior2 = probe2_mat.albedo.r
+                                    var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior2)
+                                    var pgeo_n2 = pgeo_n2_raw
+                                    if dot(pgeo_n2, shadow_dir) > Float32(0.0):
+                                        pgeo_n2 = -pgeo_n2
+                                    var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
+                                    var x2_init = p2p0*(Float32(1.0)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
+                                    var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
+                                        hit_point, light_point,
+                                        x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
+                                        x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
+                                        ldp_du_v, ldp_dv_v)
+                                    if ok2:
+                                        var wi2f = hit_point - x1_f2
+                                        var wi2fl = sqrt(dot(wi2f,wi2f))
+                                        if wi2fl > Float32(1e-8):
+                                            var wi2fn = wi2f*(Float32(1)/wi2fl)
+                                            var cos_s_x0 = dot(normal, -wi2fn)
+                                            if cos_s_x0 > Float32(0):
+                                                var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
+                                                var pdf_area2 = light_sel_pdf_nee / al.total_area
+                                                var wo2f = light_point - x2_f2
+                                                var wo2fl = sqrt(dot(wo2f,wo2f))
+                                                if wo2fl > Float32(1e-8):
+                                                    var wo2fn = wo2f*(Float32(1)/wo2fl)
+                                                    var vis2_org = x2_f2 + wo2fn*Float32(0.001)
+                                                    var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
+                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis2_ray, wo2fl*Float32(0.999)):
+                                                        var mnee_wt2 = alb * al.emission * (cos_s_x0 * G2 * bsdf_prod / (PI * pdf_area2))
+                                                        path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
+                        else:
+                            # --- 1-vertex MNEE ---
+                            var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
+                                hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
+                            if mnee_ok:
+                                var wi_f = hit_point - x1_f
+                                var wi_len2_f = dot(wi_f, wi_f)
+                                var wo_f = light_point - x1_f
+                                var wo_len2_f = dot(wo_f, wo_f)
+                                if wi_len2_f > Float32(1e-8) and wo_len2_f > Float32(1e-8):
+                                    var wi_len_f = sqrt(wi_len2_f)
+                                    var wo_len_f = sqrt(wo_len2_f)
+                                    var wi_fn = wi_f * (Float32(1.0) / wi_len_f)
+                                    var wo_fn = wo_f * (Float32(1.0) / wo_len_f)
+                                    var cos_s_x0 = dot(normal, -wi_fn)
+                                    if cos_s_x0 > Float32(0.0):
+                                        var H3_f = -(wi_fn + wo_fn * eta_f)
+                                        var H_len2_f = dot(H3_f, H3_f)
+                                        if H_len2_f > Float32(1e-10):
+                                            var H_len_f = sqrt(H_len2_f)
+                                            var H_f = H3_f * (Float32(1.0) / H_len_f)
+                                            var dp_du_dot_n = dot(pdp_du, pgeo_n)
+                                            var s3_f = pdp_du - pgeo_n * dp_du_dot_n
+                                            var s_len2_f = dot(s3_f, s3_f)
+                                            if s_len2_f > Float32(1e-10):
+                                                var s_f = s3_f * (Float32(1.0) / sqrt(s_len2_f))
+                                                var t_f = cross(pgeo_n, s_f)
+                                                var ilo_l = eta_f / (H_len_f * wo_len_f)
+                                                var dHdu_l = (ldp_du_v - wo_fn * dot(wo_fn, ldp_du_v)) * ilo_l
+                                                var dHdv_l = (ldp_dv_v - wo_fn * dot(wo_fn, ldp_dv_v)) * ilo_l
+                                                dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
+                                                dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
+                                                var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
+                                                var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
+                                                var det_dc = dc00*dc11 - dc01*dc10
+                                                var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
+                                                var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / (wi_len2_f)
+                                                var G = min(dw0_dx1 * dx1_dxl, Float32(2.0))
+                                                var cosNI = abs(dot(pgeo_n, wi_fn))
+                                                var cosHI = abs(dot(H_f, wi_fn))
+                                                var cosTM = abs(dot(pgeo_n, H_f))
+                                                var F_r = fr_dielectric(cosNI, eta_f)
+                                                var T_f = Float32(1.0) - F_r
+                                                var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
+                                                var pdf_area_x2 = light_sel_pdf_nee / al.total_area
+                                                var vis_org = x1_f + wo_fn * Float32(0.001)
+                                                var vis_ray = Ray_C(
+                                                    Point3f(vis_org[0], vis_org[1], vis_org[2]),
+                                                    Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+                                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis_ray, wo_len_f * Float32(0.999)):
+                                                    var mnee_wt = alb * al.emission * (cos_s_x0 * G * bsdf_s / (PI * pdf_area_x2))
+                                                    path_ptr[].estimate += path_ptr[].throughput * mnee_wt
+            if not used_mnee:
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
+
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -2111,191 +2434,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # env lights this asymmetry would need revisiting.
 
     # ── Area light NEE ────────────────────────────────────────────────────────
-    if ctx.area_light_count > 0:
-        var ls_u_nee = u_light
-        var ls_result_nee = light_sampler_sample(ctx.light_sampler, ls_u_nee)
-        var light_idx = ls_result_nee[0]
-        var light_sel_pdf_nee = ls_result_nee[1]
-        var al = ctx.area_lights[light_idx]
-        var lmesh = ctx.meshes[Int(al.meshIdx)]
-        var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-        var lb = lti * 3
-        var lv0 = Int(lmesh.vertexIndices[lb])
-        var lv1 = Int(lmesh.vertexIndices[lb + 1])
-        var lv2 = Int(lmesh.vertexIndices[lb + 2])
-        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-        var r1 = u_bary1
-        var r2 = u_bary2
-        var sqrt_r1 = sqrt(r1)
-        var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
-        var lcross = cross(lp1 - lp0, lp2 - lp0)
-        var light_normal = lcross
-        var lcross_len = dot(lcross, lcross)
-        if lcross_len > Float32(0.0):
-            light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
-        var to_light = light_point - hit_point
-        var dist_sq = dot(to_light, to_light)
-        var dist = sqrt(dist_sq)
-        if dist > Float32(0.0001) and al.total_area > Float32(0.0):
-            var shadow_dir = to_light * (Float32(1.0) / dist)
-            var cos_s = dot(normal, shadow_dir)
-            var cos_l = -dot(light_normal, shadow_dir)
-            if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
-                var pi = PI
-                var pdf_bsdf_nee = cos_s / pi
-                var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
-                var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
-                var contrib = path_ptr[].throughput * weight
-
-                # MNEE: probe for up to 2 glass surfaces between hit_point and light.
-                # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
-                var probe_org = hit_point + shadow_dir * Float32(0.0002)
-                var probe_ray = Ray_C(
-                    Point3f(probe_org[0], probe_org[1], probe_org[2]),
-                    Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                var probe_tmax = dist * Float32(0.9995)
-                var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
-                var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-                var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-                traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe_ray, probe_tmax, probe_store.unsafe_ptr())
-                var probe_inter = probe_store[0]
-                var used_mnee = False
-                if probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
-                    var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
-                    if probe_mat.type == MatKind.dielectric or probe_mat.type == MatKind.thin_dielectric:
-                        # --- Extract x1 geometry ---
-                        var (pmesh, pv0, pv1, pv2, _) = _get_tri_verts(probe_inter, ctx.meshes)
-                        used_mnee = True
-                        var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
-                        var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
-                        var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
-                        var pdp_du = pp1 - pp0
-                        var pdp_dv = pp2 - pp0
-                        var pgeo_n3 = cross(pdp_du, pdp_dv)
-                        var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
-                        if pgeo_n_len > Float32(1e-10):
-                            var pgeo_n_raw = pgeo_n3 * (Float32(1.0) / pgeo_n_len)
-                            # eta1: entering if probe goes against raw normal
-                            var ior1 = probe_mat.albedo.r
-                            var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior1)
-                            var pgeo_n = pgeo_n_raw
-                            if dot(pgeo_n, shadow_dir) > Float32(0.0):
-                                pgeo_n = -pgeo_n
-                            var pu = probe_inter.u; var pvb = probe_inter.v
-                            var x1_init = pp0*(Float32(1.0)-pu-pvb) + pp1*pu + pp2*pvb
-                            # --- Probe for second glass surface beyond x1 ---
-                            var probe2_t0 = probe_inter.tHit
-                            var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
-                            var probe2_org = x1_init + shadow_dir * Float32(0.0005)
-                            var probe2_inter = dummy_inter
-                            if probe2_rem > Float32(0.001):
-                                var probe2_ray = Ray_C(
-                                    Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
-                                    Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                                var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-                                traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe2_ray, probe2_rem, probe2_store.unsafe_ptr())
-                                probe2_inter = probe2_store[0]
-                            var ldp_du_v = lp1 - lp0; var ldp_dv_v = lp2 - lp0
-                            if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
-                                var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
-                                if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
-                                    # --- 2-vertex MNEE ---
-                                    var (p2mesh, p2v0, p2v1, p2v2, _) = _get_tri_verts(probe2_inter, ctx.meshes)
-                                    var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
-                                    var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
-                                    var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
-                                    var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
-                                    var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
-                                    var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
-                                    if pgeo_n_len2 > Float32(1e-10):
-                                        var pgeo_n2_raw = pgeo_n3_2 * (Float32(1.0)/pgeo_n_len2)
-                                        var ior2 = probe2_mat.albedo.r
-                                        var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior2)
-                                        var pgeo_n2 = pgeo_n2_raw
-                                        if dot(pgeo_n2, shadow_dir) > Float32(0.0):
-                                            pgeo_n2 = -pgeo_n2
-                                        var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
-                                        var x2_init = p2p0*(Float32(1.0)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
-                                        var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
-                                            hit_point, light_point,
-                                            x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
-                                            x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
-                                            ldp_du_v, ldp_dv_v)
-                                        if ok2:
-                                            var wi2f = hit_point - x1_f2
-                                            var wi2fl = sqrt(dot(wi2f,wi2f))
-                                            if wi2fl > Float32(1e-8):
-                                                var wi2fn = wi2f*(Float32(1)/wi2fl)
-                                                var cos_s_x0 = dot(normal, -wi2fn)
-                                                if cos_s_x0 > Float32(0):
-                                                    var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
-                                                    var pdf_area2 = light_sel_pdf_nee / al.total_area
-                                                    var wo2f = light_point - x2_f2
-                                                    var wo2fl = sqrt(dot(wo2f,wo2f))
-                                                    if wo2fl > Float32(1e-8):
-                                                        var wo2fn = wo2f*(Float32(1)/wo2fl)
-                                                        var vis2_org = x2_f2 + wo2fn*Float32(0.001)
-                                                        var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
-                                                        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis2_ray, wo2fl*Float32(0.999)):
-                                                            var mnee_wt2 = alb * al.emission * (cos_s_x0 * G2 * bsdf_prod / (PI * pdf_area2))
-                                                            path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
-                            else:
-                                # --- 1-vertex MNEE ---
-                                var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
-                                    hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
-                                if mnee_ok:
-                                    var wi_f = hit_point - x1_f
-                                    var wi_len2_f = dot(wi_f, wi_f)
-                                    var wo_f = light_point - x1_f
-                                    var wo_len2_f = dot(wo_f, wo_f)
-                                    if wi_len2_f > Float32(1e-8) and wo_len2_f > Float32(1e-8):
-                                        var wi_len_f = sqrt(wi_len2_f)
-                                        var wo_len_f = sqrt(wo_len2_f)
-                                        var wi_fn = wi_f * (Float32(1.0) / wi_len_f)
-                                        var wo_fn = wo_f * (Float32(1.0) / wo_len_f)
-                                        var cos_s_x0 = dot(normal, -wi_fn)
-                                        if cos_s_x0 > Float32(0.0):
-                                            var H3_f = -(wi_fn + wo_fn * eta_f)
-                                            var H_len2_f = dot(H3_f, H3_f)
-                                            if H_len2_f > Float32(1e-10):
-                                                var H_len_f = sqrt(H_len2_f)
-                                                var H_f = H3_f * (Float32(1.0) / H_len_f)
-                                                var dp_du_dot_n = dot(pdp_du, pgeo_n)
-                                                var s3_f = pdp_du - pgeo_n * dp_du_dot_n
-                                                var s_len2_f = dot(s3_f, s3_f)
-                                                if s_len2_f > Float32(1e-10):
-                                                    var s_f = s3_f * (Float32(1.0) / sqrt(s_len2_f))
-                                                    var t_f = cross(pgeo_n, s_f)
-                                                    var ilo_l = eta_f / (H_len_f * wo_len_f)
-                                                    var dHdu_l = (ldp_du_v - wo_fn * dot(wo_fn, ldp_du_v)) * ilo_l
-                                                    var dHdv_l = (ldp_dv_v - wo_fn * dot(wo_fn, ldp_dv_v)) * ilo_l
-                                                    dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
-                                                    dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
-                                                    var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
-                                                    var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
-                                                    var det_dc = dc00*dc11 - dc01*dc10
-                                                    var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
-                                                    var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / (wi_len2_f)
-                                                    var G = min(dw0_dx1 * dx1_dxl, Float32(2.0))
-                                                    var cosNI = abs(dot(pgeo_n, wi_fn))
-                                                    var cosHI = abs(dot(H_f, wi_fn))
-                                                    var cosTM = abs(dot(pgeo_n, H_f))
-                                                    var F_r = fr_dielectric(cosNI, eta_f)
-                                                    var T_f = Float32(1.0) - F_r
-                                                    var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
-                                                    var pdf_area_x2 = light_sel_pdf_nee / al.total_area
-                                                    var vis_org = x1_f + wo_fn * Float32(0.001)
-                                                    var vis_ray = Ray_C(
-                                                        Point3f(vis_org[0], vis_org[1], vis_org[2]),
-                                                        Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis_ray, wo_len_f * Float32(0.999)):
-                                                        var mnee_wt = alb * al.emission * (cos_s_x0 * G * bsdf_s / (PI * pdf_area_x2))
-                                                        path_ptr[].estimate += path_ptr[].throughput * mnee_wt
-                if not used_mnee:
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
+    _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
 
     # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
     for dl_i in range(ctx.distant_count):
@@ -2378,116 +2517,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
 
     # ── Infinite (env-map) light NEE ──────────────────────────────────────────
     for inf_i in range(ctx.infinite_count):
-        var ilight = ctx.infinite_lights[inf_i]
-        var w2l = ilight.world_to_light
-        var env_dir: SIMD[DType.float32, 3]
-        var env_rgb: RGB
-        var pdf_light: Float32
-
-        if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
-            # ── CDF importance sampling ──────────────────────────────────────
-            var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-            var u1_env = u_env1
-            var u2_env = u_env2
-            var r_env = sqrt(u1_env)
-            var theta_env = TWO_PI * u2_env
-            var x_env = r_env * cos(theta_env)
-            var y_env = r_env * sin(theta_env)
-            var z2_env = Float32(1.0) - u1_env
-            var z_env = sqrt(z2_env if z2_env > Float32(0.0) else Float32(0.0))
-            var sign_env = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-            var a_env = Float32(-1.0) / (sign_env + normal[2])
-            var b_env = normal[0] * normal[1] * a_env
-            var tangent_env = SIMD[DType.float32, 3](Float32(1.0) + sign_env * normal[0] * normal[0] * a_env, sign_env * b_env, -sign_env * normal[0])
-            var bitangent_env = SIMD[DType.float32, 3](b_env, sign_env + normal[1] * normal[1] * a_env, -normal[1])
-            var nee_dir = tangent_env * x_env + bitangent_env * y_env + normal * z_env
-            var nee_dlen = dot(nee_dir, nee_dir)
-            if nee_dlen > Float32(0.0):
-                nee_dir = nee_dir * (Float32(1.0) / sqrt(nee_dlen))
-            var cos_nee = dot(normal, nee_dir)
-            if cos_nee > Float32(0.0):
-                # Transform direction to light space for env-map lookup
-                var w2l_nee = ilight.world_to_light
-                var ld_x = w2l_nee[0]*nee_dir[0] + w2l_nee[4]*nee_dir[1] + w2l_nee[8]*nee_dir[2]
-                var ld_y = w2l_nee[1]*nee_dir[0] + w2l_nee[5]*nee_dir[1] + w2l_nee[9]*nee_dir[2]
-                var ld_z = w2l_nee[2]*nee_dir[0] + w2l_nee[6]*nee_dir[1] + w2l_nee[10]*nee_dir[2]
-                var nee_rgb: RGB
-                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 4 and ilight.cdf_w > Int32(0):
-                    var iw2 = Int(ilight.cdf_w); var ih2 = Int(ilight.cdf_h)
-                    var ea_uv_nee = _equal_area_sphere_to_square(ld_x, ld_y, ld_z)
-                    var u_env = ea_uv_nee[0]; var v_env = ea_uv_nee[1]
-                    var fx = u_env * Float32(iw2) - Float32(0.5)
-                    var fy = v_env * Float32(ih2) - Float32(0.5)
-                    var x0 = Int(max(Float32(0), min(Float32(iw2 - 1), floor(fx))))
-                    var y0 = Int(max(Float32(0), min(Float32(ih2 - 1), floor(fy))))
-                    var x1 = min(x0 + 1, iw2 - 1)
-                    var y1 = min(y0 + 1, ih2 - 1)
-                    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
-                    var r00 = ilight.pixels_ptr[(y0*iw2+x0)*3+0]; var g00 = ilight.pixels_ptr[(y0*iw2+x0)*3+1]; var b00 = ilight.pixels_ptr[(y0*iw2+x0)*3+2]
-                    var r10 = ilight.pixels_ptr[(y0*iw2+x1)*3+0]; var g10 = ilight.pixels_ptr[(y0*iw2+x1)*3+1]; var b10 = ilight.pixels_ptr[(y0*iw2+x1)*3+2]
-                    var r01 = ilight.pixels_ptr[(y1*iw2+x0)*3+0]; var g01 = ilight.pixels_ptr[(y1*iw2+x0)*3+1]; var b01 = ilight.pixels_ptr[(y1*iw2+x0)*3+2]
-                    var r11 = ilight.pixels_ptr[(y1*iw2+x1)*3+0]; var g11 = ilight.pixels_ptr[(y1*iw2+x1)*3+1]; var b11 = ilight.pixels_ptr[(y1*iw2+x1)*3+2]
-                    var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
-                    var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
-                    var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
-                    nee_rgb = RGB(tr, tg, tb) * ilight.scale
-                else:
-                    nee_rgb = ilight.scale
-                if not nee_rgb.is_black():
-                    var contrib = path_ptr[].throughput * alb * nee_rgb
-                    var t_max_env = Float32(100000.0)
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, nee_dir, t_max_env, contrib, guide_write)
-
-            # 1. Sample row from marginal CDF
-            var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
-            row_idx = min(row_idx, ih - 1)
-            var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
-
-            # 2. Sample column from conditional CDF for this row
-            var cond_base = (ih + 1) + row_idx * (iw + 1)
-            var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
-            col_idx = min(col_idx, iw - 1)
-            var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
-
-            # 3. Texel center UV → light-space direction
-            var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
-            var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
-            var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
-
-            # 4. Rotate to world space: L2W = transpose(W2L) for pure rotation
-            var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
-            var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
-            var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
-            env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
-
-            # 5. Lookup env-map value at sampled pixel
-            var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
-            var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
-            var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
-            var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
-            var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
-            env_rgb = RGB(pr, pg, pb) * ilight.scale
-
-            # 6. PDF in solid angle: dp_row * dp_col * (iw * ih) / (4π)
-            if dp_row > Float32(0) and dp_col > Float32(0):
-                pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
-            else:
-                pdf_light = INV_FOUR_PI
-        else:
-            # ── Fallback: cosine-weighted hemisphere (no CDF) ─────────────────
-            var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
-            env_dir = _env_s[0]
-            pdf_light = _env_s[1]
-            env_rgb = ilight.scale
-
-        # ── MIS + shadow ray ──────────────────────────────────────────────────
-        var cos_env = dot(normal, env_dir)
-        if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
-            var pdf_bsdf_nee = cos_env / PI
-            var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
-            var contrib = path_ptr[].throughput * alb * env_rgb * (cos_env / (PI * pdf_light)) * mis_w
-            var t_max_env = Float32(100000.0)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
+        _nee_infinite_light[enqueue_shadow](path_ptr, ctx, ctx.infinite_lights[inf_i], normal, hit_point, alb, u_env1, u_env2, pcg, guide_write)
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
