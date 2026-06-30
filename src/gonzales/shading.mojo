@@ -2,6 +2,7 @@ from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
@@ -1363,6 +1364,109 @@ def _apply_normal_map[use_gpu: Bool](
             return world_n * (Float32(1.0) / sqrt(wn_len))
     return geom_normal
 
+
+# ── Geometry context builders ─────────────────────────────────────────────────
+
+# Minimal context for delta BSDFs (conductor, coated_conductor, thin_dielectric
+# handled separately).  No texture lookup, no normal map, no pixel_uv.
+# hit_point offset uses geo_normal (matches shade_conductor convention).
+@always_inline
+def _build_geom_context_minimal(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+) -> Tuple[GeomContext, Bool]:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
+        var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0)), False)
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
+    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+    var fa = Float32(-1.0) / (sign + normal[2])
+    var fb = normal[0] * normal[1] * fa
+    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * fa, sign * fb, -sign * normal[0])
+    var bitangent = SIMD[DType.float32, 3](fb, sign + normal[1] * normal[1] * fa, -normal[1])
+    return (GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
+                        RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0)), True)
+
+# Full context for NEE materials (diffuse, diffuse_transmit, coated_diffuse).
+# Computes pixel_uv, applies normal map, looks up albedo texture.
+# hit_point offset uses the bumped shading normal (matches shade_diffuse convention).
+# Does NOT perform the backface check — caller must check dot(gc.normal, gc.wo) > 0.
+@always_inline
+def _build_geom_context_full[use_gpu: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    mat: Material_C,
+    ctx: ShadeContext,
+) -> Tuple[GeomContext, Bool]:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
+        var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0)), False)
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    var ng_ff = geo_normal
+
+    var pixel_uv = Float32(0.0)
+    if ctx.px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
+        var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
+        var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
+        var det = fu1*fv2 - fu2*fv1
+        if det != Float32(0.0):
+            var inv = Float32(1.0) / det
+            var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
+            var dpdu_len = sqrt(dot(dpdu, dpdu))
+            if dpdu_len > Float32(0.0):
+                var rc = dot(ng_ff, ray_dir)
+                if rc < Float32(0.0): rc = -rc
+                if rc < Float32(0.05): rc = Float32(0.05)
+                pixel_uv = (inter.tHit * ctx.px_scale / rc) / dpdu_len
+
+    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+    normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
+        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+    if dot(normal, ng_ff) < Float32(0.0):
+        normal = -normal
+
+    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
+    var fa = Float32(-1.0) / (sign + normal[2])
+    var fb = normal[0] * normal[1] * fa
+    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * fa, sign * fb, -sign * normal[0])
+    var bitangent = SIMD[DType.float32, 3](fb, sign + normal[1] * normal[1] * fa, -normal[1])
+    return (GeomContext(normal, ng_ff, hit_point, wo, tangent, bitangent, alb, pixel_uv), True)
+
+# Extract 8 consecutive Sobol dimensions for one non-delta bounce and advance
+# the path's sampler_dim counter.
+@always_inline
+def _draw_sobol_8(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+) -> SobolSamples8:
+    var _sidx = Int(path_ptr[].sobol_idx)
+    var _sdim = Int(path_ptr[].sampler_dim)
+    var _sinc = path_ptr[].pcgInc
+    var u_light = sobol_sample(_sidx, _sdim + 0, mix_bits_u64(_sinc ^ UInt64(_sdim + 0)), sobol_matrices)
+    var u_bary1 = sobol_sample(_sidx, _sdim + 1, mix_bits_u64(_sinc ^ UInt64(_sdim + 1)), sobol_matrices)
+    var u_bary2 = sobol_sample(_sidx, _sdim + 2, mix_bits_u64(_sinc ^ UInt64(_sdim + 2)), sobol_matrices)
+    var u_env1  = sobol_sample(_sidx, _sdim + 3, mix_bits_u64(_sinc ^ UInt64(_sdim + 3)), sobol_matrices)
+    var u_env2  = sobol_sample(_sidx, _sdim + 4, mix_bits_u64(_sinc ^ UInt64(_sdim + 4)), sobol_matrices)
+    var u_scat1 = sobol_sample(_sidx, _sdim + 5, mix_bits_u64(_sinc ^ UInt64(_sdim + 5)), sobol_matrices)
+    var u_scat2 = sobol_sample(_sidx, _sdim + 6, mix_bits_u64(_sinc ^ UInt64(_sdim + 6)), sobol_matrices)
+    var u_rr    = sobol_sample(_sidx, _sdim + 7, mix_bits_u64(_sinc ^ UInt64(_sdim + 7)), sobol_matrices)
+    path_ptr[].sampler_dim += Int32(8)
+    return SobolSamples8(u_light, u_bary1, u_bary2, u_env1, u_env2, u_scat1, u_scat2, u_rr)
 
 # ── Hair BSDF helpers ────────────────────────────────────────────────────────
 
