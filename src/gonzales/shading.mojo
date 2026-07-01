@@ -838,6 +838,44 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].pcgState = pcg.state
 
 
+# ── Shared epilogue for all delta/glossy-delta BSDFs (conductor, coated_conductor,
+# dielectric, thin_dielectric): apply the sample, update throughput/bounce
+# bookkeeping, run Russian roulette, and save PCG state. Each material's shade_*
+# wrapper only differs in how it builds (bs, hit_point) — this is everything that
+# happens once those are known. bs.is_valid is always 1 for the two dielectric
+# variants, so the early-return there is a harmless no-op for them.
+@always_inline
+def _finish_delta_bounce(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    mut pcg: PCG32,
+    bs: BxDFSample,
+    hit_point: SIMD[DType.float32, 3],
+    default_albedo: RGB,
+):
+    if bs.is_valid == Int8(0):
+        path_ptr[].active = 0
+        path_ptr[].pcgState = pcg.state
+        return
+
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+    if path_ptr[].bounce == 0:
+        path_ptr[].albedo = default_albedo
+    path_ptr[].throughput *= bs.f
+    path_ptr[].specularBounce = Int8(1)
+    path_ptr[].lastBsdfPdf = Float32(0.0)
+    path_ptr[].bounce += 1
+
+    # Russian roulette after first bounce
+    if path_ptr[].bounce > 1:
+        var lum = path_ptr[].throughput.luma()
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+    path_ptr[].pcgState = pcg.state
+
+
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
 @always_inline
 def shade_dielectric(
@@ -882,25 +920,7 @@ def shade_dielectric(
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-    path_ptr[].throughput *= bs.f
-
-    if path_ptr[].bounce == 0:
-        path_ptr[].albedo = RGB(Float32(1), Float32(1), Float32(1))
-    path_ptr[].bounce += 1
-
-    # Russian roulette after first bounce (throughput unchanged for ideal glass)
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-
-    path_ptr[].pcgState = pcg.state
-    path_ptr[].specularBounce = Int8(1)   # dielectric is a delta BSDF
-    path_ptr[].lastBsdfPdf = Float32(0.0) # delta — pdf undefined for cosine hemisphere
+    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, RGB(Float32(1), Float32(1), Float32(1)))
 
 # Thin dielectric (type 9): one-sided glass — Fresnel selects reflect or transmit,
 # but transmitted ray is NOT refracted (direction unchanged). Models window glass,
@@ -935,22 +955,7 @@ def shade_thin_dielectric(
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-    path_ptr[].throughput *= bs.f
-
-    if path_ptr[].bounce == 0:
-        path_ptr[].albedo = RGB(Float32(1), Float32(1), Float32(1))
-    path_ptr[].bounce += 1
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-    path_ptr[].pcgState = pcg.state
-    path_ptr[].specularBounce = Int8(1)
-    path_ptr[].lastBsdfPdf = Float32(0.0)
+    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, RGB(Float32(1), Float32(1), Float32(1)))
 
 
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
@@ -1017,29 +1022,7 @@ def shade_conductor(
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_conductor(gc, mat, pcg.next_float(), pcg.next_float())
-
-    if bs.is_valid == Int8(0):
-        path_ptr[].active = 0
-        path_ptr[].pcgState = pcg.state
-        return
-
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-    if path_ptr[].bounce == 0:
-        path_ptr[].albedo = mat.albedo
-    path_ptr[].throughput *= bs.f
-    path_ptr[].specularBounce = Int8(1)
-    path_ptr[].lastBsdfPdf = Float32(0.0)
-    path_ptr[].bounce += 1
-
-    # Russian roulette after first bounce
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-    path_ptr[].pcgState = pcg.state
+    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.
@@ -1078,27 +1061,7 @@ def shade_coated_conductor(
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_coated_conductor(gc, mat, ior, pcg.next_float(), pcg.next_float(), pcg.next_float())
-
-    if bs.is_valid == Int8(0):
-        path_ptr[].active = 0
-        path_ptr[].pcgState = pcg.state
-        return
-
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-    if path_ptr[].bounce == 0:
-        path_ptr[].albedo = mat.albedo
-    path_ptr[].throughput *= bs.f
-    path_ptr[].specularBounce = Int8(1)
-    path_ptr[].lastBsdfPdf = Float32(0.0)
-    path_ptr[].bounce += 1
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-    path_ptr[].pcgState = pcg.state
+    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
 
 
 # Mix material: randomly select one of two sub-materials using amount as probability.
