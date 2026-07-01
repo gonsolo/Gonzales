@@ -9,7 +9,7 @@ from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, Tria
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
-from .shading import shade_core, shade_nee_core, ShadeContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair
+from .shading import shade_core, shade_nee_core, ShadeContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
 from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 
@@ -1048,13 +1048,7 @@ def shade_interface_gpu(
         return
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
-    # Advance the ray past the surface (same direction)
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
-    var hp = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
-    path_ptr[].ray = Ray_C(Point3f(hp[0], hp[1], hp[2]), path_ptr[].ray.direction)
-    path_ptr[].specularBounce = Int8(1)
-    path_ptr[].lastBsdfPdf = Float32(0.0)
+    shade_interface(path_ptr, inter)
 
 
 def update_medium_gpu(
