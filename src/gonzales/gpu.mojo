@@ -9,7 +9,7 @@ from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, Tria
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
-from .shading import shade_core, shade_nee_core, ShadeContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair
+from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
 from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 
@@ -747,15 +747,17 @@ def shade_nee_preamble_gpu(
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ctx_no_shadow = ShadeContext(
-        0, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, n_distant_lights,
-        pointLights, n_point_lights,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
@@ -799,15 +801,17 @@ def shade_diffuse_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        0, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, n_distant_lights,
-        pointLights, n_point_lights,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_diffuse[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -847,15 +851,17 @@ def shade_coated_diffuse_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        0, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, n_distant_lights,
-        pointLights, n_point_lights,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_coated_diffuse[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -894,15 +900,17 @@ def shade_diffuse_transmit_gpu(
     var inter = intersections[tid]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        0, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, n_distant_lights,
-        pointLights, n_point_lights,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_diffuse_transmission[True, False](path_ptr, inter, ctx)
 
 
@@ -942,15 +950,17 @@ def shade_mix_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        0, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, n_distant_lights,
-        pointLights, n_point_lights,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_mix[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -1048,13 +1058,7 @@ def shade_interface_gpu(
         return
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
-    # Advance the ray past the surface (same direction)
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
-    var hp = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
-    path_ptr[].ray = Ray_C(Point3f(hp[0], hp[1], hp[2]), path_ptr[].ray.direction)
-    path_ptr[].specularBounce = Int8(1)
-    path_ptr[].lastBsdfPdf = Float32(0.0)
+    shade_interface(path_ptr, inter)
 
 
 def update_medium_gpu(
@@ -1261,15 +1265,17 @@ def shade_hair_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        0, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textures, n_textures,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, n_distant_lights,
-        pointLights, n_point_lights,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, px_scale, ls, sobol_matrices, null_guide())
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_hair[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -1302,15 +1308,16 @@ def shade_enqueue_shadow_gpu(
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ls_shadow = LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
-        tid, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](),
-        textures, n_textures, shadow_tasks,
-        UnsafePointer[DistantLight_C, MutAnyOrigin](), 0,
-        UnsafePointer[PointLight_C, MutAnyOrigin](), 0,
-        infiniteLights, n_infinite_lights,
-        spheres, n_spheres, Float32(0.0), ls_shadow,
-        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), null_guide())
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](),
+        textures=textures, n_textures=n_textures, shadow_tasks=shadow_tasks,
+        px_scale=Float32(0.0), sobol_matrices=UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), guide=null_guide(),
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=UnsafePointer[DistantLight_C, MutAnyOrigin](), distant_count=0,
+            point_lights=UnsafePointer[PointLight_C, MutAnyOrigin](), point_count=0,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow))
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
 
 
