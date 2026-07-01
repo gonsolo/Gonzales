@@ -2134,9 +2134,9 @@ def _nee_infinite_light[enqueue_shadow: Bool](
     # ── MIS + shadow ray ──────────────────────────────────────────────────
     var cos_env = dot(normal, env_dir)
     if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
-        var pdf_bsdf_nee = cos_env / PI
+        var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_env)
         var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
-        var contrib = path_ptr[].throughput * alb * env_rgb * (cos_env / (PI * pdf_light)) * mis_w
+        var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * env_rgb * (cos_env / pdf_light) * mis_w
         var t_max_env = Float32(100000.0)
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
 
@@ -2187,10 +2187,9 @@ def _nee_area_lights[enqueue_shadow: Bool](
         var cos_l = -dot(light_normal, shadow_dir)
         if cos_s > Float32(0.0) and cos_l > Float32(0.0):
             var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
-            var pi = PI
-            var pdf_bsdf_nee = cos_s / pi
+            var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
-            var weight = alb * al.emission * (cos_s * w_nee / (pdf_light * pi))
+            var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee / pdf_light)
             var contrib = path_ptr[].throughput * weight
 
             # MNEE: probe for up to 2 glass surfaces between hit_point and light.
@@ -2283,7 +2282,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                     var vis2_org = x2_f2 + wo2fn*Float32(0.001)
                                                     var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
                                                     if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis2_ray, wo2fl*Float32(0.999)):
-                                                        var mnee_wt2 = alb * al.emission * (cos_s_x0 * G2 * bsdf_prod / (PI * pdf_area2))
+                                                        var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
                                                         path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
                         else:
                             # --- 1-vertex MNEE ---
@@ -2335,7 +2334,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                     Point3f(vis_org[0], vis_org[1], vis_org[2]),
                                                     Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
                                                 if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis_ray, wo_len_f * Float32(0.999)):
-                                                    var mnee_wt = alb * al.emission * (cos_s_x0 * G * bsdf_s / (PI * pdf_area_x2))
+                                                    var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
                                                     path_ptr[].estimate += path_ptr[].throughput * mnee_wt
             if not used_mnee:
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
@@ -2372,9 +2371,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
         var to_light = -ldir  # direction from hit point toward the light
         var cos_s = dot(normal, to_light)
         if cos_s > Float32(0.0):
-            # f = alb/pi, no geometry term (parallel rays), pdf = delta -> weight = 1
-            var pi = PI
-            var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s / pi)
+            # f = bxdf_eval_diffuse(alb), no geometry term (parallel rays), pdf = delta -> weight = 1
+            var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * dl.emission * cos_s
             # Shadow ray at very long distance (scene diameter ~1000)
             var t_max = Float32(2000.0)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, t_max, contrib, guide_write)
@@ -2390,10 +2388,9 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             var ldir = to_light * (Float32(1.0) / dist)
             var cos_s = dot(normal, ldir)
             if cos_s > Float32(0.0):
-                var pi = PI
-                # f = alb/pi, geometry = cos_s, pdf = delta -> weight = 1
+                # f = bxdf_eval_diffuse(alb), geometry = cos_s, pdf = delta -> weight = 1
                 # radiance = intensity / dist²
-                var contrib = path_ptr[].throughput * alb * pl.intensity * (cos_s / (pi * dist_sq))
+                var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * pl.intensity * (cos_s / dist_sq)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ldir, dist * Float32(0.9999), contrib, guide_write)
 
     # ── Sphere light NEE (solid-angle cone sampling) ──────────────────────────
@@ -2438,9 +2435,9 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
             var n_sphere_lights = Float32(max(ctx.sphere_count, 1))
             var pdf_light = Float32(1.0) / (solid_angle * n_sphere_lights)
-            var pdf_bsdf_nee = cos_s / PI
+            var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
-            var weight = alb * sph.emission * (cos_s * w_nee / (pdf_light * PI))
+            var weight = bxdf_eval_diffuse(alb) * sph.emission * (cos_s * w_nee / pdf_light)
             var contrib = path_ptr[].throughput * weight
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dc * Float32(0.9999), contrib, guide_write)
 
