@@ -9,19 +9,15 @@ from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_h
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
 
 @fieldwise_init
-struct ShadeContext:
-    """Bundles all scene data pointers passed to shade_nee_core and material shaders."""
-    var path_idx:         Int
-    var bvh2Nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
-    var primIds:          UnsafePointer[PrimId_C, MutAnyOrigin]
-    var meshes:           UnsafePointer[TriangleMesh_C, MutAnyOrigin]
-    var materials:        UnsafePointer[Material_C, MutAnyOrigin]
+struct LightContext(Copyable, Movable):
+    """Light source arrays + counts + sampler, used by NEE. Split out of
+    ShadeContext (step 7) so the grouping of "which lights exist in the scene"
+    is self-contained instead of interleaved with scene/texture/sampling
+    fields — construction call sites build this with keyword args precisely
+    because several fields share the same Int/pointer type and a positional
+    transposition wouldn't be caught by the type checker."""
     var area_lights:      UnsafePointer[AreaLight_C, MutAnyOrigin]
     var area_light_count: Int
-    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
-    var textures:         UnsafePointer[GpuTexture_C, MutAnyOrigin]
-    var n_textures:       Int
-    var shadow_tasks:     UnsafePointer[ShadowTask_C, MutAnyOrigin]
     var distant_lights:   UnsafePointer[DistantLight_C, MutAnyOrigin]
     var distant_count:    Int
     var point_lights:     UnsafePointer[PointLight_C, MutAnyOrigin]
@@ -30,10 +26,26 @@ struct ShadeContext:
     var infinite_count:   Int
     var spheres:          UnsafePointer[Sphere_C, MutAnyOrigin]
     var sphere_count:     Int
-    var px_scale:         Float32
     var light_sampler:    LightSampler_C
+
+@fieldwise_init
+struct ShadeContext:
+    """Bundles scene/texture/sampling data pointers passed to shade_nee_core
+    and material shaders. Light-source data lives in the nested `lights`
+    LightContext (step 7)."""
+    var path_idx:         Int
+    var bvh2Nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
+    var primIds:          UnsafePointer[PrimId_C, MutAnyOrigin]
+    var meshes:           UnsafePointer[TriangleMesh_C, MutAnyOrigin]
+    var materials:        UnsafePointer[Material_C, MutAnyOrigin]
+    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
+    var textures:         UnsafePointer[GpuTexture_C, MutAnyOrigin]
+    var n_textures:       Int
+    var shadow_tasks:     UnsafePointer[ShadowTask_C, MutAnyOrigin]
+    var px_scale:         Float32
     var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
     var guide:            GuideGrid
+    var lights:           LightContext
 
 @always_inline
 def _shading_normal(
@@ -631,13 +643,13 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     for _ in range(MAX_COAT_DEPTH):
         # ── Diffuse base: NEE (single scatter) once, weighted by the coat's
         #    transmittance for the incoming light direction. ──
-        if not did_nee and ctx.area_light_count > 0:
+        if not did_nee and ctx.lights.area_light_count > 0:
             did_nee = True
             var ls_u_cd = pcg.next_float()
-            var ls_result_cd = light_sampler_sample(ctx.light_sampler, ls_u_cd)
+            var ls_result_cd = light_sampler_sample(ctx.lights.light_sampler, ls_u_cd)
             var light_idx = ls_result_cd[0]
             var light_sel_pdf_cd = ls_result_cd[1]
-            var al = ctx.area_lights[light_idx]
+            var al = ctx.lights.area_lights[light_idx]
             var lmesh = ctx.meshes[Int(al.meshIdx)]
             var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
             var lb = lti * 3
@@ -676,10 +688,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # ── Env-map (infinite light) NEE at the base, once. Light enters via
         #    the coat so the contribution is weighted by 1 - F(cos_env). The
         #    view-side coat transmittance is implicit in reaching this branch. ──
-        if not did_env_nee and ctx.infinite_count > 0:
+        if not did_env_nee and ctx.lights.infinite_count > 0:
             did_env_nee = True
-            for inf_i in range(ctx.infinite_count):
-                var ilight = ctx.infinite_lights[inf_i]
+            for inf_i in range(ctx.lights.infinite_count):
+                var ilight = ctx.lights.infinite_lights[inf_i]
                 var w2l = ilight.world_to_light
                 var env_dir: SIMD[DType.float32, 3]
                 var env_rgb: RGB
@@ -729,10 +741,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # Distant light NEE through the coat (delta light: MIS weight = 1). Once only,
         # matching did_nee/did_env_nee — firing each iteration would double-count with
         # incorrect beta weights and causes ~8x excess shadow rays via warp divergence.
-        if not did_distant_nee and ctx.distant_count > 0:
+        if not did_distant_nee and ctx.lights.distant_count > 0:
             did_distant_nee = True
-            for dl_i in range(ctx.distant_count):
-                var dl = ctx.distant_lights[dl_i]
+            for dl_i in range(ctx.lights.distant_count):
+                var dl = ctx.lights.distant_lights[dl_i]
                 var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
                 var cos_s = dot(normal, to_light)
                 if cos_s > Float32(0.0):
@@ -1452,8 +1464,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     # ── Step 13b: NEE for infinite (environment) lights ───────────────────────
-    for inf_i in range(ctx.infinite_count):
-        var ilight = ctx.infinite_lights[inf_i]
+    for inf_i in range(ctx.lights.infinite_count):
+        var ilight = ctx.lights.infinite_lights[inf_i]
         var w2l = ilight.world_to_light
         var env_dir: SIMD[DType.float32, 3]
         var env_rgb: RGB
@@ -1525,8 +1537,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, eorg, wi_e, Float32(100000.0), contrib_e)
 
     # ── Step 14: NEE for distant lights ──────────────────────────────────────
-    for dl_i in range(ctx.distant_count):
-        var dl = ctx.distant_lights[dl_i]
+    for dl_i in range(ctx.lights.distant_count):
+        var dl = ctx.lights.distant_lights[dl_i]
         var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)
         var wi = -ldir  # toward light
 
@@ -2063,13 +2075,13 @@ def _nee_area_lights[enqueue_shadow: Bool](
     # diffuse_transmit. 1.0 for a plain single-lobe Lambertian surface.
     lobe_w: Float32 = Float32(1.0),
 ):
-    if ctx.area_light_count == 0:
+    if ctx.lights.area_light_count == 0:
         return
     var ls_u_nee = u_light
-    var ls_result_nee = light_sampler_sample(ctx.light_sampler, ls_u_nee)
+    var ls_result_nee = light_sampler_sample(ctx.lights.light_sampler, ls_u_nee)
     var light_idx = ls_result_nee[0]
     var light_sel_pdf_nee = ls_result_nee[1]
-    var al = ctx.area_lights[light_idx]
+    var al = ctx.lights.area_lights[light_idx]
     var lmesh = ctx.meshes[Int(al.meshIdx)]
     var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
     var lb = lti * 3
@@ -2275,8 +2287,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
 
     # ── Distant light NEE (delta light: MIS weight = 1) ──────────────────────
-    for dl_i in range(ctx.distant_count):
-        var dl = ctx.distant_lights[dl_i]
+    for dl_i in range(ctx.lights.distant_count):
+        var dl = ctx.lights.distant_lights[dl_i]
         var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)  # direction toward scene (away from light)
         var to_light = -ldir  # direction from hit point toward the light
         var cos_s = dot(normal, to_light)
@@ -2288,8 +2300,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, t_max, contrib, guide_write)
 
     # ── Point light NEE (delta light: MIS weight = 1) ────────────────────────
-    for pl_i in range(ctx.point_count):
-        var pl = ctx.point_lights[pl_i]
+    for pl_i in range(ctx.lights.point_count):
+        var pl = ctx.lights.point_lights[pl_i]
         var lpos = SIMD[DType.float32, 3](pl.position.x, pl.position.y, pl.position.z)
         var to_light = lpos - hit_point
         var dist_sq = dot(to_light, to_light)
@@ -2304,8 +2316,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ldir, dist * Float32(0.9999), contrib, guide_write)
 
     # ── Sphere light NEE (solid-angle cone sampling) ──────────────────────────
-    for sph_i in range(ctx.sphere_count):
-        var sph = ctx.spheres[sph_i]
+    for sph_i in range(ctx.lights.sphere_count):
+        var sph = ctx.lights.spheres[sph_i]
         if sph.isAreaLight == Int8(0):
             continue
         var to_cx = sph.center.x - hit_point[0]
@@ -2343,7 +2355,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
         var cos_s = dot(normal, shadow_dir)
         if cos_s > Float32(0.0):
             var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
-            var n_sphere_lights = Float32(max(ctx.sphere_count, 1))
+            var n_sphere_lights = Float32(max(ctx.lights.sphere_count, 1))
             var pdf_light = Float32(1.0) / (solid_angle * n_sphere_lights)
             var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
@@ -2352,8 +2364,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dc * Float32(0.9999), contrib, guide_write)
 
     # ── Infinite (env-map) light NEE ──────────────────────────────────────────
-    for inf_i in range(ctx.infinite_count):
-        _nee_infinite_light[enqueue_shadow](path_ptr, ctx, ctx.infinite_lights[inf_i], normal, hit_point, alb, u_env1, u_env2, pcg, guide_write)
+    for inf_i in range(ctx.lights.infinite_count):
+        _nee_infinite_light[enqueue_shadow](path_ptr, ctx, ctx.lights.infinite_lights[inf_i], normal, hit_point, alb, u_env1, u_env2, pcg, guide_write)
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
@@ -2382,8 +2394,8 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # from a uniform environment light (albedo * L), which is pbrt's dim grey
     # there — so add that rather than going black, then stop.
     if dot(normal, gc.wo) <= Float32(0.0):
-        for inf_i in range(ctx.infinite_count):
-            var il = ctx.infinite_lights[inf_i]
+        for inf_i in range(ctx.lights.infinite_count):
+            var il = ctx.lights.infinite_lights[inf_i]
             if il.tex_idx < Int32(0):
                 path_ptr[].estimate += path_ptr[].throughput * (alb * il.scale)
         path_ptr[].active = 0
@@ -2556,8 +2568,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].volume_scattered = Int8(0)
             return
         var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-        for inf_i in range(ctx.infinite_count):
-            var ilight = ctx.infinite_lights[inf_i]
+        for inf_i in range(ctx.lights.infinite_count):
+            var ilight = ctx.lights.infinite_lights[inf_i]
             # Transform world-space ray direction into light's local frame
             var w2l = ilight.world_to_light
             var ld_x = w2l[0]*ray_dir[0] + w2l[4]*ray_dir[1] + w2l[8]*ray_dir[2]
@@ -2632,9 +2644,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     var mat = ctx.materials[Int(inter.primId.materialIndex)]
 
     # ── Analytical sphere hit: collect emission and terminate (Null material) ──
-    if inter.primId.type == Int8(4) and ctx.sphere_count > 0:
+    if inter.primId.type == Int8(4) and ctx.lights.sphere_count > 0:
         var sph_idx = Int(inter.primId.id1)
-        var sph = ctx.spheres[sph_idx]
+        var sph = ctx.lights.spheres[sph_idx]
         if sph.isAreaLight == Int8(1):
             if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
                 path_ptr[].estimate += path_ptr[].throughput * sph.emission
@@ -2650,7 +2662,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if sin2_max < Float32(1.0) and pdf_bsdf > Float32(0.0):
                     var cos_max = sqrt(Float32(1.0) - sin2_max)
                     var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
-                    var pdf_light = Float32(1.0) / (solid_angle * Float32(max(ctx.sphere_count, 1)))
+                    var pdf_light = Float32(1.0) / (solid_angle * Float32(max(ctx.lights.sphere_count, 1)))
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += path_ptr[].throughput * sph.emission * w
         path_ptr[].active = 0
@@ -2660,7 +2672,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # Area light triangle hit — use emission from AreaLight_C directly so
         # NamedMaterial area lights (mat.type == 1) also emit correctly.
         var al_idx = Int(inter.primId.id1)
-        var al = ctx.area_lights[al_idx]
+        var al = ctx.lights.area_lights[al_idx]
         var emission = al.emission
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].estimate += path_ptr[].throughput * emission
@@ -2680,7 +2692,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var dist  = inter.tHit
                 var dist2 = dist * dist
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
-                    var ls = ctx.light_sampler
+                    var ls = ctx.lights.light_sampler
                     var al_sel_pdf = ls.cdf[al_idx + 1] - ls.cdf[al_idx]
                     var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                     var w = power_heuristic(pdf_bsdf, pdf_light)
@@ -2725,12 +2737,15 @@ def shade_core_cpu_nee(
         return
     var inter = intersections[tid]
     var ctx = ShadeContext(
-        tid, bvh2Nodes, primIds, meshes, materials,
-        areaLights, areaLightCount, tex_filenames,
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        distantLights, distantLightCount,
-        pointLights, pointLightCount,
-        infiniteLights, infiniteLightCount,
-        spheres, sphereCount, Float32(0.0), light_sampler, sobol_matrices, guide)
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        tex_filenames=tex_filenames,
+        textures=UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), n_textures=0,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide,
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=distantLightCount,
+            point_lights=pointLights, point_count=pointLightCount,
+            infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler))
     shade_nee_core[False, False](path_ptr, inter, ctx, guide_write)
