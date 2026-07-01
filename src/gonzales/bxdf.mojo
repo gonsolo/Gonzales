@@ -31,9 +31,11 @@ struct BxDFSample(TrivialRegisterPassable):
     var _pad1:    Int8
 
 # ── Local geometry at a surface hit ──────────────────────────────────────────
-# Populated once per bounce by _build_geom_context_minimal / _build_geom_context_full.
-# Passed by value to all BxDF and NEE functions — LLVM/NVPTX eliminates the
-# struct when all fields are inlined at @always_inline call sites.
+# Populated once per bounce — _build_geom_context_full[use_gpu] for NEE materials
+# (shading.mojo), or built inline where the delta BSDFs' geometry needs diverge
+# from that shared builder (see the comment above shade_conductor's GeomContext
+# construction). Passed by value to all BxDF and NEE functions — LLVM/NVPTX
+# eliminates the struct when all fields are inlined at @always_inline call sites.
 @fieldwise_init
 struct GeomContext(TrivialRegisterPassable):
     var normal:     SIMD[DType.float32, 3]  # shading normal, faceforward to geo_normal

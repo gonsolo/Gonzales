@@ -1191,34 +1191,12 @@ def _apply_normal_map[use_gpu: Bool](
 
 
 # ── Geometry context builders ─────────────────────────────────────────────────
-
-# Minimal context for delta BSDFs (conductor, coated_conductor, thin_dielectric
-# handled separately).  No texture lookup, no normal map, no pixel_uv.
-# hit_point offset uses geo_normal (matches shade_conductor convention).
-@always_inline
-def _build_geom_context_minimal(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-) -> Tuple[GeomContext, Bool]:
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
-    if not ok:
-        var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-        return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0)), False)
-    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
-    var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
-    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
-    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-    var fa = Float32(-1.0) / (sign + normal[2])
-    var fb = normal[0] * normal[1] * fa
-    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * fa, sign * fb, -sign * normal[0])
-    var bitangent = SIMD[DType.float32, 3](fb, sign + normal[1] * normal[1] * fa, -normal[1])
-    return (GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
-                        RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0)), True)
+# There's no _build_geom_context_minimal: each delta BSDF's geometry needs turned
+# out to be materially different (conductor needs a UV-gradient anisotropy tangent
+# unavailable here; coated_conductor skips shading-normal interpolation; dielectric/
+# thin_dielectric need the raw pre-faceforward normal for entering/exiting), so
+# shade_conductor/shade_coated_conductor build their GeomContext inline instead of
+# sharing one minimal builder.
 
 # Full context for NEE materials (diffuse, diffuse_transmit, coated_diffuse).
 # Computes pixel_uv, applies normal map, looks up albedo texture.
@@ -2456,51 +2434,13 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
     guide_write: GuideGrid = null_guide(),
 ):
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    var (gc, ok) = _build_geom_context_full[use_gpu](path_ptr, inter, mat, ctx)
     if not ok:
         path_ptr[].active = 0
         return
-    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
-    # Geometric normal oriented to the camera side; the shading/bumped normal is
-    # kept on this side below (NOT flipped to the view ray).
-    var ng_ff = normal
-
-    # Texture-space footprint of one pixel at this hit, for the mip LOD.
-    # Analytic primary-ray estimate: pixel_world = tHit * px_scale / |cos(ray,N)|,
-    # then to uv via the triangle's dP/du. (CPU passes px_scale=0 -> 0; OIIO filters.)
-    var pixel_uv = Float32(0.0)
-    if ctx.px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
-        var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
-        var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
-        var det = fu1*fv2 - fu2*fv1
-        if det != Float32(0.0):
-            var inv = Float32(1.0) / det
-            var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
-            var dpdu_len = sqrt(dot(dpdu, dpdu))
-            if dpdu_len > Float32(0.0):
-                var rc = dot(ng_ff, ray_dir)
-                if rc < Float32(0.0): rc = -rc
-                if rc < Float32(0.05): rc = Float32(0.05)
-                pixel_uv = (inter.tHit * ctx.px_scale / rc) / dpdu_len
-
-    # Use interpolated shading normal as the base for smooth diffuse shading
-    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
-
-    # Apply normal map if present
-    normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
-        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
-    # Faceforward the bumped normal to the geometric normal — never to the view
-    # ray. Flipping to the ray inverts bumps that tilt away from the camera at
-    # grazing angles, washing out the relief (pbrt faceforwards to Ng).
-    if dot(normal, ng_ff) < Float32(0.0):
-        normal = -normal
-
-    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-
-    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+    var normal = gc.normal
+    var hit_point = gc.hit_point
+    var alb = gc.alb
 
     # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
     # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map
@@ -2509,7 +2449,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # lit — the top/bottom split across each bead). They still receive ambient
     # from a uniform environment light (albedo * L), which is pbrt's dim grey
     # there — so add that rather than going black, then stop.
-    if dot(normal, ray_dir) >= Float32(0.0):
+    if dot(normal, gc.wo) <= Float32(0.0):
         for inf_i in range(ctx.infinite_count):
             var il = ctx.infinite_lights[inf_i]
             if il.tex_idx < Int32(0):
@@ -2529,18 +2469,15 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # Pre-draw 8 Z-Sobol samples for this bounce's key decisions.
     # Dims are consecutive starting at path_ptr[].sampler_dim (which begins at 2).
     # Per-dimension scrambling is derived from pcgInc (unique per path).
-    var _sidx = Int(path_ptr[].sobol_idx)
-    var _sdim = Int(path_ptr[].sampler_dim)
-    var _sinc = path_ptr[].pcgInc
-    var u_light = sobol_sample(_sidx, _sdim + 0, mix_bits_u64(_sinc ^ UInt64(_sdim + 0)), ctx.sobol_matrices)
-    var u_bary1 = sobol_sample(_sidx, _sdim + 1, mix_bits_u64(_sinc ^ UInt64(_sdim + 1)), ctx.sobol_matrices)
-    var u_bary2 = sobol_sample(_sidx, _sdim + 2, mix_bits_u64(_sinc ^ UInt64(_sdim + 2)), ctx.sobol_matrices)
-    var u_env1  = sobol_sample(_sidx, _sdim + 3, mix_bits_u64(_sinc ^ UInt64(_sdim + 3)), ctx.sobol_matrices)
-    var u_env2  = sobol_sample(_sidx, _sdim + 4, mix_bits_u64(_sinc ^ UInt64(_sdim + 4)), ctx.sobol_matrices)
-    var u_scat1 = sobol_sample(_sidx, _sdim + 5, mix_bits_u64(_sinc ^ UInt64(_sdim + 5)), ctx.sobol_matrices)
-    var u_scat2 = sobol_sample(_sidx, _sdim + 6, mix_bits_u64(_sinc ^ UInt64(_sdim + 6)), ctx.sobol_matrices)
-    var u_rr    = sobol_sample(_sidx, _sdim + 7, mix_bits_u64(_sinc ^ UInt64(_sdim + 7)), ctx.sobol_matrices)
-    path_ptr[].sampler_dim += Int32(8)
+    var ss = _draw_sobol_8(path_ptr, ctx.sobol_matrices)
+    var u_light = ss.light
+    var u_bary1 = ss.bary1
+    var u_bary2 = ss.bary2
+    var u_env1  = ss.env1
+    var u_env2  = ss.env2
+    var u_scat1 = ss.scat1
+    var u_scat2 = ss.scat2
+    var u_rr    = ss.rr
 
     _shade_diffuse_nee[use_gpu, enqueue_shadow](path_ptr, ctx, normal, hit_point, alb,
         u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write)
