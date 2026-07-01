@@ -497,47 +497,12 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 
     var hit_point = ray_org + ray_dir * inter.tHit + bounce_normal * Float32(0.0001)
 
-    # ── NEE direct light sampling (MIS weighted) ───────────────────────────────
-    if ctx.area_light_count > 0:
-        var ls_u = pcg.next_float()
-        var ls_result = light_sampler_sample(ctx.light_sampler, ls_u)
-        var light_idx = ls_result[0]
-        var light_sel_pdf = ls_result[1]
-        var al = ctx.area_lights[light_idx]
-        var lmesh = ctx.meshes[Int(al.meshIdx)]
-        var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-        var lb = lti * 3
-        var lv0 = Int(lmesh.vertexIndices[lb])
-        var lv1 = Int(lmesh.vertexIndices[lb + 1])
-        var lv2 = Int(lmesh.vertexIndices[lb + 2])
-        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-        var r1 = pcg.next_float()
-        var r2 = pcg.next_float()
-        var sqrt_r1 = sqrt(r1)
-        var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
-        var lcross = cross(lp1 - lp0, lp2 - lp0)
-        var light_normal = lcross
-        var lcross_len = dot(lcross, lcross)
-        if lcross_len > Float32(0.0):
-            light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
-        var to_light = light_point - hit_point
-        var dist_sq = dot(to_light, to_light)
-        var dist = sqrt(dist_sq)
-        if dist > Float32(0.0001) and al.total_area > Float32(0.0):
-            var shadow_dir = to_light * (Float32(1.0) / dist)
-            var cos_s = dot(bounce_normal, shadow_dir)
-            var cos_l = -dot(light_normal, shadow_dir)
-            if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                var pi = PI
-                var pdf_light = dist_sq * light_sel_pdf / (cos_l * al.total_area)
-                var pdf_bsdf_dt = cos_s / pi
-                var w_dt = power_heuristic(pdf_light, pdf_bsdf_dt)
-                # f = lobe_alb/π * lobe_w (lobe selection weight already folded in)
-                var weight_dt = lobe_alb * al.emission * (cos_s * w_dt * lobe_w / (pdf_light * pi))
-                var contrib = path_ptr[].throughput * weight_dt
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
+    # ── NEE direct light sampling (MIS weighted, with MNEE glass caustics) ─────
+    # Shares _nee_area_lights with plain diffuse — including its MNEE probe for
+    # up to 2 glass surfaces between hit_point and the light — parameterized by
+    # the chosen lobe's normal/albedo and its selection-weight compensation.
+    _nee_area_lights[enqueue_shadow](path_ptr, ctx, bounce_normal, hit_point, lobe_alb,
+        pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg, null_guide(), lobe_w)
 
     # ── BSDF scatter ───────────────────────────────────────────────────────────
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
@@ -2093,6 +2058,10 @@ def _nee_area_lights[enqueue_shadow: Bool](
     u_bary2: Float32,
     mut pcg: PCG32,
     guide_write: GuideGrid,
+    # Selection-probability compensation for compound BxDFs with more than one
+    # lobe (e.g. diffuse_transmit's reflect/transmit split) — see bxdf_sample_
+    # diffuse_transmit. 1.0 for a plain single-lobe Lambertian surface.
+    lobe_w: Float32 = Float32(1.0),
 ):
     if ctx.area_light_count == 0:
         return
@@ -2130,7 +2099,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
             var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
             var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
-            var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee / pdf_light)
+            var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee * lobe_w / pdf_light)
             var contrib = path_ptr[].throughput * weight
 
             # MNEE: probe for up to 2 glass surfaces between hit_point and light.
@@ -2223,7 +2192,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                     var vis2_org = x2_f2 + wo2fn*Float32(0.001)
                                                     var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
                                                     if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis2_ray, wo2fl*Float32(0.999)):
-                                                        var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
+                                                        var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w / pdf_area2)
                                                         path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
                         else:
                             # --- 1-vertex MNEE ---
@@ -2275,7 +2244,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                     Point3f(vis_org[0], vis_org[1], vis_org[2]),
                                                     Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
                                                 if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis_ray, wo_len_f * Float32(0.999)):
-                                                    var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
+                                                    var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s * lobe_w / pdf_area_x2)
                                                     path_ptr[].estimate += path_ptr[].throughput * mnee_wt
             if not used_mnee:
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
