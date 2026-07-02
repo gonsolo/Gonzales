@@ -2626,7 +2626,14 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
     var mat = ctx.materials[Int(inter.primId.materialIndex)]
 
-    # ── Analytical sphere hit: collect emission and terminate (Null material) ──
+    # ── Analytical sphere hit: collect emission and terminate, but ONLY for
+    # actual area-light spheres. A non-emissive sphere (e.g. a medium-bounding
+    # volume with Material "interface", or a regular conductor/diffuse
+    # sphere) falls through to the normal material dispatch below, same as
+    # any other primitive type — it used to unconditionally terminate here
+    # regardless of isAreaLight, silently killing every ray that hit any
+    # non-light sphere (e.g. smoke-plume's medium-bounding sphere never got
+    # to run its "interface" material's pass-through logic).
     if inter.primId.type == Int8(4) and ctx.lights.sphere_count > 0:
         var sph_idx = Int(inter.primId.id1)
         var sph = ctx.lights.spheres[sph_idx]
@@ -2648,8 +2655,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     var pdf_light = Float32(1.0) / (solid_angle * Float32(max(ctx.lights.sphere_count, 1)))
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += path_ptr[].throughput * sph.emission * w
-        path_ptr[].active = 0
-        return
+            path_ptr[].active = 0
+            return
 
     if inter.primId.type == Int8(3):
         # Area light triangle hit — use emission from AreaLight_C directly so

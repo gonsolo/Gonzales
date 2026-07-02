@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, dot, cross, INV_PI, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from std.atomic import Atomic
@@ -76,6 +76,9 @@ struct GpuSceneHandle(Movable):
     var n_mediums: Int
     var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
     var n_medium_ifaces: Int
+    var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
+    var n_grids: Int
+    var grid_density_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's density array
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × sizeof(PathState_C)=96
@@ -143,6 +146,8 @@ def gpu_upload_scene(
     mediumCount: Int64,
     medium_ifaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
     medium_iface_count: Int64,
+    grids: UnsafePointer[Grid_C, MutAnyOrigin],
+    gridCount: Int64,
     n_pixels: Int64,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
@@ -440,6 +445,40 @@ def gpu_upload_scene(
                     for j in range(Int(medium_iface_count) * size_of[MediumInterface_C]()):
                         dst[j] = src[j]
 
+            # Upload heterogeneous density grids ("uniformgrid" media). Each
+            # grid's (potentially large) density array gets its own device
+            # buffer, mirroring the per-mesh points_bufs pattern; the Grid_C
+            # struct array embeds device-resident pointers into those buffers.
+            var grid_density_bufs = List[DeviceBuffer[DType.uint8]]()
+            var n_grids_int = Int(gridCount)
+            var grid_structs_host = alloc[Grid_C](max(n_grids_int, 1))
+            for gi in range(n_grids_int):
+                var host_grid = grids[gi]
+                var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
+                var density_bytes = max(n_voxels, 1) * 4
+                var density_buf = ctx.enqueue_create_buffer[DType.uint8](density_bytes)
+                with density_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = host_grid.density.bitcast[UInt8]()
+                    for j in range(n_voxels * 4):
+                        dst[j] = src[j]
+                grid_structs_host[gi] = Grid_C(
+                    density_buf.unsafe_ptr().bitcast[Float32](),
+                    host_grid.nx, host_grid.ny, host_grid.nz,
+                    host_grid.p0, host_grid.p1,
+                    host_grid.world_to_medium, host_grid.max_density)
+                grid_density_bufs.append(density_buf^)
+            var grid_struct_bytes = max(n_grids_int, 1) * size_of[Grid_C]()
+            var grids_buf = ctx.enqueue_create_buffer[DType.uint8](grid_struct_bytes)
+            with grids_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = grid_structs_host.bitcast[UInt8]()
+                for j in range(grid_struct_bytes):
+                    dst[j] = src[j]
+            grid_structs_host.free()
+            if n_grids_int > 0:
+                print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
+
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState_C]() * WAVEFRONT_BATCH)
@@ -456,13 +495,26 @@ def gpu_upload_scene(
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
 
-            # Curve-divergence-mitigation scratch — only sized for real when the
-            # scene actually has curves, to avoid wasting memory on the other ~57
-            # scenes in the comparison suite.
-            var n_curve_paths = n_pix * WAVEFRONT_BATCH if Int(curveCount) > 0 else 1
+            # Curve-divergence-mitigation scratch. curve_cand_prim/curve_cand_count
+            # are indexed by every path's tid unconditionally inside
+            # traverse_paths_gpu (curve_cand_count[tid] = 0 runs for every active
+            # path regardless of whether the scene has curves — it's the reset
+            # before that ray's BVH walk), so they must always be sized for the
+            # full n_pix×WAVEFRONT_BATCH path range. Sizing them to a 1-element
+            # dummy for non-curve scenes (as a memory-saving measure) was an
+            # out-of-bounds GPU write for every tid > 0 on every one of the ~57
+            # non-curve scenes in the comparison suite — corrupting whatever
+            # else the allocator happened to place nearby, hence the scene-
+            # dependent dark/wrong-color regression this fixes.
+            # curve_compact_path_buf/curve_compact_counter_buf are only ever
+            # touched by compact_curve_paths_gpu/resolve_curve_candidates_gpu,
+            # both gated behind `if handle[].n_curves > 0` at the dispatch site,
+            # so those two are still safe to leave dummy-sized.
+            var n_curve_paths = n_pix * WAVEFRONT_BATCH
             var r_curve_cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
             var r_curve_cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
-            var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+            var n_curve_compact_paths = n_curve_paths if Int(curveCount) > 0 else 1
+            var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
             var r_curve_compact_counter_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             with r_film_buf.map_to_host() as h:
                 var p = h.unsafe_ptr()
@@ -642,6 +694,9 @@ def gpu_upload_scene(
                 n_mediums=Int(mediumCount),
                 medium_ifaces_buf=miface_buf^,
                 n_medium_ifaces=Int(medium_iface_count),
+                grids_buf=grids_buf^,
+                n_grids=n_grids_int,
+                grid_density_bufs=grid_density_bufs^,
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
@@ -1141,6 +1196,7 @@ def update_medium_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     medium_ifaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
     count: Int,
@@ -1162,35 +1218,50 @@ def update_medium_gpu(
         return
     var iface = medium_ifaces[Int(mat.medium_interface_idx)]
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var mi: Int
-    var bv: Int
-    if inter.primId.type == 0:
-        mi = Int(inter.primId.id1)
-        bv = Int(inter.primId.id2)
-    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
-        mi = Int(inter.primId.id2 >> 32)
-        bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    var geom_n: SIMD[DType.float32, 3]
+    if inter.primId.type == 4:
+        # Sphere: outward normal = hit point - center. Medium-bounding
+        # volumes (e.g. smoke-plume's "MediumInterface .. Shape sphere")
+        # are commonly a big invisible sphere, so this case matters even
+        # though spheres otherwise rarely carry materials with real shading.
+        var sph = spheres[Int(inter.primId.id1)]
+        var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+        var hit_pt = ray_org + inter.tHit * ray_dir
+        var center = SIMD[DType.float32, 3](sph.center.x, sph.center.y, sph.center.z)
+        geom_n = hit_pt - center
     else:
-        return
-    var m = meshes[mi]
-    var v0 = Int(m.vertexIndices[bv])
-    var v1 = Int(m.vertexIndices[bv + 1])
-    var v2 = Int(m.vertexIndices[bv + 2])
-    var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
-    var geom_n = cross(p1 - p0, p2 - p0)
+        var mi: Int
+        var bv: Int
+        if inter.primId.type == 0:
+            mi = Int(inter.primId.id1)
+            bv = Int(inter.primId.id2)
+        elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+            mi = Int(inter.primId.id2 >> 32)
+            bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+        else:
+            return
+        var m = meshes[mi]
+        var v0 = Int(m.vertexIndices[bv])
+        var v1 = Int(m.vertexIndices[bv + 1])
+        var v2 = Int(m.vertexIndices[bv + 2])
+        var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+        var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+        var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+        geom_n = cross(p1 - p0, p2 - p0)
     if dot(ray_dir, geom_n) > Float32(0.0):
         path_ptr[].current_medium_idx = iface.outside_medium_idx
     else:
         path_ptr[].current_medium_idx = iface.inside_medium_idx
 
 
+comptime MEDIUM_TRACK_MAX_ITERS: Int = 10000  # delta/ratio-tracking loop safety bound
+
 def sample_medium_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     mediums: UnsafePointer[Medium_C, MutAnyOrigin],
     n_mediums: Int,
+    grids: UnsafePointer[Grid_C, MutAnyOrigin],
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -1201,9 +1272,33 @@ def sample_medium_gpu(
     n_light_sampler: Int,
     count: Int,
 ):
-    """Apply homogeneous medium transmittance along the ray segment and
-    possibly scatter or absorb inside the medium. On scatter, performs
-    direct area-light NEE with isotropic phase function."""
+    """Apply medium transmittance along the ray segment and possibly scatter
+    or absorb inside the medium. On scatter, performs direct area-light NEE
+    with isotropic phase function.
+
+    Homogeneous media (grid_idx < 0): closed-form analytic transmittance,
+    single free-flight sample (unchanged from before heterogeneous support).
+
+    Heterogeneous media (grid_idx >= 0, "uniformgrid"): real delta tracking
+    (Woodcock tracking) against the grid's majorant — repeatedly sample
+    candidate collision distances at the majorant rate, accept/reject against
+    the true local density at each candidate. Null collisions leave
+    throughput unchanged (that's the point of the null-collision trick —
+    transmittance emerges from the accept/reject statistics, not an explicit
+    exp() multiply). NEE shadow rays through the grid use the matching
+    ratio-tracking transmittance estimator (grid_sample_density naturally
+    returns 0 outside the grid's bounds, so this correctly stops attenuating
+    once the shadow ray exits the grid's AABB — no separate bookkeeping
+    needed for "did the shadow ray leave the medium").
+
+    Both paths use the RED channel exclusively for majorant/accept-reject
+    decisions (matching the pre-existing homogeneous code's own simplification):
+    exact for gray/achromatic media (uniformgrid's only supported density
+    representation today has no per-channel color), would need spectral MIS
+    (hero-wavelength weighting) to be unbiased for a colored heterogeneous
+    medium — not needed for uniformgrid, would matter for a future colored
+    nanovdb medium.
+    """
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -1220,90 +1315,158 @@ def sample_medium_gpu(
     var sigma_t_r = med.sigma_a.r + med.sigma_s.r
     var sigma_t_g = med.sigma_a.g + med.sigma_s.g
     var sigma_t_b = med.sigma_a.b + med.sigma_s.b
-    var sigma_maj = sigma_t_r  # use red channel as majorant (no null collisions; matches CPU)
-    if sigma_maj <= Float32(0.0):
-        return
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var u_free = pcg.next_float()
-    var t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
     var t_surf = inter.tHit
-    var t_seg = min(t_free, t_surf)
-    # Apply transmittance over the segment
-    path_ptr[].throughput.r *= exp(-sigma_t_r * t_seg)
-    path_ptr[].throughput.g *= exp(-sigma_t_g * t_seg)
-    path_ptr[].throughput.b *= exp(-sigma_t_b * t_seg)
-    if t_free < t_surf:
-        var p_scatter = med.sigma_s.r / sigma_maj
-        var u_mode = pcg.next_float()
-        if u_mode < p_scatter:
-            # Volume scatter: compute scatter point
-            var new_ox = path_ptr[].ray.origin.x + t_free * path_ptr[].ray.direction.x
-            var new_oy = path_ptr[].ray.origin.y + t_free * path_ptr[].ray.direction.y
-            var new_oz = path_ptr[].ray.origin.z + t_free * path_ptr[].ray.direction.z
-            # ── Volume scatter NEE — area light direct lighting ──────────────
-            if n_area_lights > 0 and n_light_sampler > 0:
-                var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
-                var u_nee = pcg.next_float()
-                var ls_result = light_sampler_sample(ls, u_nee)
-                var light_idx = ls_result[0]
-                var light_sel_pdf = ls_result[1]
-                var al = areaLights[light_idx]
-                var lmesh = meshes[Int(al.meshIdx)]
-                var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-                var r1 = pcg.next_float()
-                var r2 = pcg.next_float()
-                var lb = lti * 3
-                var lv0 = Int(lmesh.vertexIndices[lb])
-                var lv1 = Int(lmesh.vertexIndices[lb + 1])
-                var lv2 = Int(lmesh.vertexIndices[lb + 2])
-                var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-                var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-                var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-                var sqrt_r1 = sqrt(r1)
-                var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
-                var lcross = cross(lp1 - lp0, lp2 - lp0)
-                var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
-                var light_normal = lcross * (Float32(1) / lcross_len)
-                var scatter_pt = SIMD[DType.float32, 3](new_ox, new_oy, new_oz)
-                var to_light = light_point - scatter_pt
-                var dist_sq = dot(to_light, to_light)
-                var dist = sqrt(dist_sq)
-                if dist > Float32(0.0001) and al.total_area > Float32(0):
-                    var shadow_dir = to_light * (Float32(1) / dist)
-                    var cos_l = -dot(light_normal, shadow_dir)
-                    if cos_l > Float32(0):
-                        var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
-                        var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                        var shad_tmax = dist * Float32(0.9995)
-                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax):
-                            var T_r = exp(-sigma_t_r * dist)
-                            var T_g = exp(-sigma_t_g * dist)
-                            var T_b = exp(-sigma_t_b * dist)
-                            var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
-                            path_ptr[].estimate.r += path_ptr[].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
-                            path_ptr[].estimate.g += path_ptr[].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
-                            path_ptr[].estimate.b += path_ptr[].throughput.b * INV_FOUR_PI * al.emission.b * geom * T_b
-            # Sample isotropic scatter direction
-            var u1 = pcg.next_float()
+    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+
+    var t_free: Float32
+    var albedo_r: Float32
+    if med.grid_idx >= Int32(0):
+        # ── Heterogeneous: delta tracking ────────────────────────────────
+        var grid = grids[Int(med.grid_idx)]
+        var sigma_maj = grid.max_density * sigma_t_r
+        if sigma_maj <= Float32(0.0):
+            path_ptr[].pcgState = pcg.state
+            return
+        var t = Float32(0.0)
+        var collided = False
+        var iters = 0
+        while iters < MEDIUM_TRACK_MAX_ITERS:
+            iters += 1
+            var u = pcg.next_float()
+            t += -log(max(u, Float32(1e-7))) / sigma_maj
+            if t >= t_surf:
+                break
+            var p_world = ray_org + t * ray_dir
+            var density = grid_sample_density(grid, p_world)
+            var sigma_t_real = density * sigma_t_r
             var u2 = pcg.next_float()
+            if u2 < sigma_t_real / sigma_maj:
+                collided = True
+                break
+        if not collided:
             path_ptr[].pcgState = pcg.state
-            var cos_theta = Float32(2.0) * u1 - Float32(1.0)
-            var sin_theta = sqrt(max(Float32(0.0), Float32(1.0) - cos_theta * cos_theta))
-            var phi = Float32(6.28318530718) * u2
-            path_ptr[].ray = Ray_C(
-                Point3f(new_ox, new_oy, new_oz),
-                Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
-            path_ptr[].specularBounce = Int8(0)
-            path_ptr[].lastBsdfPdf = INV_FOUR_PI
-            path_ptr[].volume_scattered = Int8(1)
-            path_ptr[].bounce += 1
-            intersections[tid].hit = Int8(0)  # no surface hit this bounce
-        else:
-            # Absorbed
-            path_ptr[].pcgState = pcg.state
-            path_ptr[].active = Int8(0)
+            return
+        t_free = t
+        albedo_r = med.sigma_s.r / max(sigma_t_r, Float32(1e-7))  # density cancels — see docstring
     else:
+        # ── Homogeneous: closed-form analytic transmittance ──────────────
+        var sigma_maj = sigma_t_r
+        if sigma_maj <= Float32(0.0):
+            path_ptr[].pcgState = pcg.state
+            return
+        var u_free = pcg.next_float()
+        t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
+        var t_seg = min(t_free, t_surf)
+        path_ptr[].throughput.r *= exp(-sigma_t_r * t_seg)
+        path_ptr[].throughput.g *= exp(-sigma_t_g * t_seg)
+        path_ptr[].throughput.b *= exp(-sigma_t_b * t_seg)
+        if t_free >= t_surf:
+            path_ptr[].pcgState = pcg.state
+            return
+        albedo_r = med.sigma_s.r / sigma_maj
+
+    # Both branches above already `return` early for the "no real collision"
+    # case (homogeneous: t_free >= t_surf; heterogeneous: not collided) — so
+    # reaching here always means a real scatter/absorb event at t_free.
+    var p_scatter = albedo_r
+    var u_mode = pcg.next_float()
+    if u_mode < p_scatter:
+        # Volume scatter: compute scatter point
+        var new_ox = path_ptr[].ray.origin.x + t_free * path_ptr[].ray.direction.x
+        var new_oy = path_ptr[].ray.origin.y + t_free * path_ptr[].ray.direction.y
+        var new_oz = path_ptr[].ray.origin.z + t_free * path_ptr[].ray.direction.z
+        # ── Volume scatter NEE — area light direct lighting ──────────────
+        if n_area_lights > 0 and n_light_sampler > 0:
+            var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+            var u_nee = pcg.next_float()
+            var ls_result = light_sampler_sample(ls, u_nee)
+            var light_idx = ls_result[0]
+            var light_sel_pdf = ls_result[1]
+            var al = areaLights[light_idx]
+            var lmesh = meshes[Int(al.meshIdx)]
+            var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+            var r1 = pcg.next_float()
+            var r2 = pcg.next_float()
+            var lb = lti * 3
+            var lv0 = Int(lmesh.vertexIndices[lb])
+            var lv1 = Int(lmesh.vertexIndices[lb + 1])
+            var lv2 = Int(lmesh.vertexIndices[lb + 2])
+            var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+            var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+            var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+            var sqrt_r1 = sqrt(r1)
+            var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
+            var lcross = cross(lp1 - lp0, lp2 - lp0)
+            var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
+            var light_normal = lcross * (Float32(1) / lcross_len)
+            var scatter_pt = SIMD[DType.float32, 3](new_ox, new_oy, new_oz)
+            var to_light = light_point - scatter_pt
+            var dist_sq = dot(to_light, to_light)
+            var dist = sqrt(dist_sq)
+            if dist > Float32(0.0001) and al.total_area > Float32(0):
+                var shadow_dir = to_light * (Float32(1) / dist)
+                var cos_l = -dot(light_normal, shadow_dir)
+                if cos_l > Float32(0):
+                    var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
+                    var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                    var shad_tmax = dist * Float32(0.9995)
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax):
+                        var T_r: Float32
+                        var T_g: Float32
+                        var T_b: Float32
+                        if med.grid_idx >= Int32(0):
+                            # Ratio-tracking transmittance through the grid (see
+                            # sample_medium_gpu's docstring). grid_sample_density
+                            # returns 0 past the grid's AABB, so this naturally
+                            # stops attenuating once the shadow ray exits it.
+                            var grid = grids[Int(med.grid_idx)]
+                            var sigma_maj_s = grid.max_density * sigma_t_r
+                            var T = Float32(1.0)
+                            if sigma_maj_s > Float32(0.0):
+                                var ts = Float32(0.0)
+                                var siters = 0
+                                while siters < MEDIUM_TRACK_MAX_ITERS:
+                                    siters += 1
+                                    var us = pcg.next_float()
+                                    ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
+                                    if ts >= dist:
+                                        break
+                                    var ps = scatter_pt + shadow_dir * ts
+                                    var density_s = grid_sample_density(grid, ps)
+                                    T *= Float32(1.0) - (density_s * sigma_t_r) / sigma_maj_s
+                                    if T < Float32(1e-4):
+                                        T = Float32(0.0)
+                                        break
+                            T_r = T; T_g = T; T_b = T
+                        else:
+                            T_r = exp(-sigma_t_r * dist)
+                            T_g = exp(-sigma_t_g * dist)
+                            T_b = exp(-sigma_t_b * dist)
+                        var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
+                        path_ptr[].estimate.r += path_ptr[].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
+                        path_ptr[].estimate.g += path_ptr[].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
+                        path_ptr[].estimate.b += path_ptr[].throughput.b * INV_FOUR_PI * al.emission.b * geom * T_b
+        # Sample isotropic scatter direction
+        var u1 = pcg.next_float()
+        var u2 = pcg.next_float()
         path_ptr[].pcgState = pcg.state
+        var cos_theta = Float32(2.0) * u1 - Float32(1.0)
+        var sin_theta = sqrt(max(Float32(0.0), Float32(1.0) - cos_theta * cos_theta))
+        var phi = Float32(6.28318530718) * u2
+        path_ptr[].ray = Ray_C(
+            Point3f(new_ox, new_oy, new_oz),
+            Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
+        path_ptr[].specularBounce = Int8(0)
+        path_ptr[].lastBsdfPdf = INV_FOUR_PI
+        path_ptr[].volume_scattered = Int8(1)
+        path_ptr[].bounce += 1
+        intersections[tid].hit = Int8(0)  # no surface hit this bounce
+    else:
+        # Absorbed
+        path_ptr[].pcgState = pcg.state
+        path_ptr[].active = Int8(0)
 
 
 def shade_hair_gpu(
@@ -1953,6 +2116,7 @@ def gpu_render_sample(
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C](),
                     handle[].n_mediums,
+                    handle[].grids_buf.unsafe_ptr().bitcast[Grid_C](),
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
@@ -2139,6 +2303,7 @@ def gpu_render_sample(
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
                     n_int,
@@ -2271,6 +2436,7 @@ def gpu_render_wavefront(
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C](),
                     handle[].n_mediums,
+                    handle[].grids_buf.unsafe_ptr().bitcast[Grid_C](),
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
@@ -2457,6 +2623,7 @@ def gpu_render_wavefront(
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
                     n_total,

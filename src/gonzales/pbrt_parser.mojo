@@ -13,7 +13,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
-                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, PI,
+                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
                         LightSampler_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
@@ -78,6 +78,8 @@ struct ParsedScene_Mojo:
     var medium_count:     Int32
     var medium_ifaces:    UnsafePointer[MediumInterface_C, MutAnyOrigin]
     var medium_iface_count: Int32
+    var grids:            UnsafePointer[Grid_C, MutAnyOrigin]
+    var grid_count:       Int32
     var light_sampler:    LightSampler_C
 
 # ── Matrix utilities ──────────────────────────────────────────────────────────
@@ -474,6 +476,56 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
 # ── Medium handlers ───────────────────────────────────────────────────────────
 
+comptime GRID_DENSITY_SCRATCH_MAX: Int = 16 * 1024 * 1024  # 64MB scratch; covers up to ~256^3 grids
+comptime SIGMA_SPECTRUM_SCRATCH_MAX: Int = 256  # generous bound for wavelength/value pairs
+
+def _psc_scan_sigma(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                    type_buf: UnsafePointer[UInt8, MutAnyOrigin],
+                    dst: UnsafePointer[Float32, MutAnyOrigin],
+                    is_arr: Int32):
+    """Parse a medium's sigma_a/sigma_s value into dst[0..2] (RGB). Handles
+    both the plain "rgb sigma_a" [r g b] form (_psc_scan_rgb, unchanged) and
+    "spectrum sigma_a" [wavelen0 val0 wavelen1 val1 ...] (inline piecewise
+    spectrum, e.g. pbrt-v4-scenes' explosion/smoke-plume — 2-4 samples of a
+    near-constant absorption/scattering value across the visible range).
+    _psc_scan_rgb always reads exactly 3 floats; calling it on a
+    differently-sized spectrum array desyncs the scanner cursor (it consumes
+    the wrong number of values, then fails to find the expected closing ']'),
+    corrupting everything parsed after this point in the file — this is what
+    that mismatch was silently doing before, on any medium using the
+    "spectrum" form.
+    Not a real spectral-to-RGB conversion — just the mean of the value
+    samples (odd indices), applied to all 3 channels. Good enough for the
+    near-constant spectra these scenes actually use; a named-spectrum
+    reference (a quoted string, not numbers) is safely skipped instead of
+    misread, since no medium in these scenes uses one for sigma_a/sigma_s."""
+    if type_buf[0] == UInt8(115) and type_buf[1] == UInt8(112):  # "sp" spectrum
+        var vals = alloc[Float32](SIGMA_SPECTRUM_SCRATCH_MAX)
+        var n = scanner_scan_floats(handle, vals, Int32(SIGMA_SPECTRUM_SCRATCH_MAX))
+        if n > Int32(0):
+            var sum = Float32(0.0)
+            var count = 0
+            var vi = 1
+            while vi < Int(n):
+                sum += vals[vi]
+                count += 1
+                vi += 2
+            var mean = sum / Float32(max(count, 1))
+            dst[0] = mean; dst[1] = mean; dst[2] = mean
+            if is_arr:
+                _ = scanner_scan_char(handle, UInt8(93))
+        else:
+            # Not numeric — a named-spectrum string reference. Not supported
+            # for sigma_a/sigma_s today; skip it rather than misread it.
+            var tmp = alloc[UInt8](64)
+            _ = scanner_parse_quoted_string(handle, tmp, 64)
+            tmp.free()
+            if is_arr:
+                _ = scanner_scan_char(handle, UInt8(93))
+        vals.free()
+    else:
+        _psc_scan_rgb(handle, dst, is_arr)
+
 def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                   s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var name_buf = alloc[UInt8](64)
@@ -482,10 +534,19 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     var val_buf   = alloc[UInt8](64)
     var sa = alloc[Float32](3); sa[0] = Float32(0); sa[1] = Float32(0); sa[2] = Float32(0)
     var ss = alloc[Float32](3); ss[0] = Float32(0); ss[1] = Float32(0); ss[2] = Float32(0)
+    var sa_set = False
+    var ss_set = False
     var g_val = Float32(0)
     var scale = Float32(1)
     var is_hom = False
+    var is_grid = False
     var ia = alloc[Int32](1)
+    # uniformgrid-specific params
+    var g_nx = Int32(0); var g_ny = Int32(0); var g_nz = Int32(0)
+    var g_p0 = alloc[Float32](3); g_p0[0] = Float32(0); g_p0[1] = Float32(0); g_p0[2] = Float32(0)
+    var g_p1 = alloc[Float32](3); g_p1[0] = Float32(1); g_p1[1] = Float32(1); g_p1[2] = Float32(1)
+    var g_density = alloc[Float32](GRID_DENSITY_SCRATCH_MAX)
+    var g_density_n = Int32(0)
     while True:
         ia[0] = Int32(0)
         var ok = scanner_parse_param_header(handle, type_buf, Int32(64), val_buf, Int32(64), ia)
@@ -497,15 +558,43 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             _ = scanner_parse_quoted_string(handle, tmp, 64)
             if _psc_streq(tmp, "homogeneous"):
                 is_hom = True
+            elif _psc_streq(tmp, "uniformgrid"):
+                is_grid = True
             tmp.free()
+            # "string type" is sometimes bracket-wrapped (["uniformgrid"]) —
+            # every other branch below already consumes its closing ']' when
+            # is_arr; this one didn't, which desynced the scanner right after
+            # the first param and silently truncated the rest of the
+            # MakeNamedMedium block (density/nx/ny/nz/sigma_a/sigma_s all
+            # skipped). Pre-existing bug, not just a uniformgrid thing — it
+            # just never triggered before because other scenes' media happen
+            # not to bracket-wrap "type".
+            if is_arr:
+                _ = scanner_scan_char(handle, UInt8(93))
         elif _psc_streq(val_buf, "sigma_a") and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, sa, is_arr)
+            _psc_scan_sigma(handle, type_buf, sa, is_arr)
+            sa_set = True
         elif _psc_streq(val_buf, "sigma_s") and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, ss, is_arr)
+            _psc_scan_sigma(handle, type_buf, ss, is_arr)
+            ss_set = True
         elif _psc_streq(val_buf, "g") and _psc_type_is_float(type_buf):
             g_val = _psc_scan_one_float(handle, is_arr)
         elif _psc_streq(val_buf, "scale") and _psc_type_is_float(type_buf):
             scale = _psc_scan_one_float(handle, is_arr)
+        elif _psc_streq(val_buf, "nx") and _psc_type_is_int(type_buf):
+            g_nx = _psc_scan_one_int(handle, is_arr)
+        elif _psc_streq(val_buf, "ny") and _psc_type_is_int(type_buf):
+            g_ny = _psc_scan_one_int(handle, is_arr)
+        elif _psc_streq(val_buf, "nz") and _psc_type_is_int(type_buf):
+            g_nz = _psc_scan_one_int(handle, is_arr)
+        elif _psc_streq(val_buf, "p0") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, g_p0, is_arr)
+        elif _psc_streq(val_buf, "p1") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, g_p1, is_arr)
+        elif _psc_streq(val_buf, "density") and _psc_type_is_float(type_buf):
+            g_density_n = scanner_scan_floats(handle, g_density, Int32(GRID_DENSITY_SCRATCH_MAX))
+            if is_arr:
+                _ = scanner_scan_char(handle, UInt8(93))
         else:
             _psc_skip_value(handle, type_buf, is_arr)
             if is_arr:
@@ -520,7 +609,37 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         s[0].med_ss.append(ss[1] * scale)
         s[0].med_ss.append(ss[2] * scale)
         s[0].med_g.append(g_val)
+        s[0].med_grid_idx.append(Int32(-1))
+    elif is_grid:
+        # PBRT-v4 default for GridMedium sigma_a/sigma_s when unspecified is
+        # ConstantSpectrum(1) (see media.cpp) — unlike gonzales's existing
+        # HomogeneousMedium path above, which happens to default to 0 (a
+        # pre-existing, separate behavior not touched here).
+        var sa0 = sa[0] if sa_set else Float32(1); var sa1 = sa[1] if sa_set else Float32(1); var sa2 = sa[2] if sa_set else Float32(1)
+        var ss0 = ss[0] if ss_set else Float32(1); var ss1 = ss[1] if ss_set else Float32(1); var ss2 = ss[2] if ss_set else Float32(1)
+        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        s[0].med_names.append(name_str)
+        s[0].med_sa.append(sa0 * scale); s[0].med_sa.append(sa1 * scale); s[0].med_sa.append(sa2 * scale)
+        s[0].med_ss.append(ss0 * scale); s[0].med_ss.append(ss1 * scale); s[0].med_ss.append(ss2 * scale)
+        s[0].med_g.append(g_val)
+        s[0].med_grid_idx.append(Int32(len(s[0].grid_nx)))
+
+        s[0].grid_nx.append(g_nx); s[0].grid_ny.append(g_ny); s[0].grid_nz.append(g_nz)
+        s[0].grid_p0.append(g_p0[0]); s[0].grid_p0.append(g_p0[1]); s[0].grid_p0.append(g_p0[2])
+        s[0].grid_p1.append(g_p1[0]); s[0].grid_p1.append(g_p1[1]); s[0].grid_p1.append(g_p1[2])
+        for ci in range(16):
+            s[0].grid_ctm.append(s[0].ctm[ci])
+        s[0].grid_density_base.append(Int32(len(s[0].grid_density)))
+        var expected_n = Int(g_nx) * Int(g_ny) * Int(g_nz)
+        var copy_n = min(Int(g_density_n), expected_n) if expected_n > 0 else Int(g_density_n)
+        for di in range(copy_n):
+            s[0].grid_density.append(g_density[di])
+        # Pad with zeros if the file had fewer values than nx*ny*nz declared
+        # (shouldn't happen for well-formed scenes, but keeps indexing safe).
+        for _ in range(copy_n, expected_n):
+            s[0].grid_density.append(Float32(0))
     name_buf.free(); sa.free(); ss.free(); type_buf.free(); val_buf.free(); ia.free()
+    g_p0.free(); g_p1.free(); g_density.free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                   name: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
@@ -951,7 +1070,27 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             inc_path[dlen + fi] = UInt8(0)
             var sub_handle = scanner_open(inc_path)
             if scanner_is_at_end(sub_handle) == 0:
-                parse_scene_file(sub_handle, s)
+                # Splice the included file's bytes in front of this scanner's
+                # remaining bytes so both halves form one continuous token
+                # stream, matching pbrt's own tokenizer semantics. This lets a
+                # directive's parameter list (e.g. MakeNamedMedium) continue
+                # across the Include boundary instead of being cut short.
+                var inc_len = Int(sub_handle[0].total_bytes)
+                var rest_start = Int(handle[0].cursor)
+                var rest_len = Int(handle[0].total_bytes) - rest_start
+                var merged_len = inc_len + rest_len
+                var merged = alloc[UInt8](merged_len + 1)
+                for mi in range(inc_len):
+                    merged[mi] = sub_handle[0].buffer[mi]
+                for mi in range(rest_len):
+                    merged[inc_len + mi] = handle[0].buffer[rest_start + mi]
+                merged[merged_len] = UInt8(0)
+                if Int(handle[0].buffer) > 1:
+                    handle[0].buffer.free()
+                handle[0].buffer = merged
+                handle[0].total_bytes = Int32(merged_len)
+                handle[0].cursor = Int32(0)
+                handle[0].is_at_end = Int32(0)
             else:
                 var inc_str = String(unsafe_from_utf8_ptr=inc_name.as_immutable())
                 if inc_str.endswith(".xz"):
@@ -1742,6 +1881,39 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].curve_count = Int32(nc)
     curve_n_pieces.free()
 
+    # ---- Heterogeneous density grids ("uniformgrid" media) ----
+    var ng = len(s[0].grid_nx)
+    if ng > 0:
+        var grid_buf = alloc[Grid_C](ng)
+        for i in range(ng):
+            var nx = s[0].grid_nx[i]; var ny = s[0].grid_ny[i]; var nz = s[0].grid_nz[i]
+            var n_voxels = Int(nx) * Int(ny) * Int(nz)
+            var density_buf = alloc[Float32](max(n_voxels, 1))
+            var base = Int(s[0].grid_density_base[i])
+            var max_d = Float32(0.0)
+            for vi in range(n_voxels):
+                var dv = s[0].grid_density[base + vi]
+                density_buf[vi] = dv
+                if dv > max_d: max_d = dv
+            var ctm_tmp = alloc[Float32](16)
+            var w2m = alloc[Float32](16)
+            for ci in range(16):
+                ctm_tmp[ci] = s[0].grid_ctm[i*16 + ci]
+            _ = matrix_invert(ctm_tmp, w2m)
+            var w2m_simd = SIMD[DType.float32, 16](
+                w2m[0], w2m[1], w2m[2], w2m[3], w2m[4], w2m[5], w2m[6], w2m[7],
+                w2m[8], w2m[9], w2m[10], w2m[11], w2m[12], w2m[13], w2m[14], w2m[15])
+            grid_buf[i] = Grid_C(
+                density_buf, nx, ny, nz,
+                Point3f(s[0].grid_p0[i*3], s[0].grid_p0[i*3+1], s[0].grid_p0[i*3+2]),
+                Point3f(s[0].grid_p1[i*3], s[0].grid_p1[i*3+1], s[0].grid_p1[i*3+2]),
+                w2m_simd, max_d)
+            ctm_tmp.free(); w2m.free()
+        psc[0].grids = grid_buf
+    else:
+        psc[0].grids = UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling()
+    psc[0].grid_count = Int32(ng)
+
     # ---- Media ----
     var nm = len(s[0].med_g)
     if nm > 0:
@@ -1750,7 +1922,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             var sa = SampledSpectrum(s[0].med_sa[i*3], s[0].med_sa[i*3+1], s[0].med_sa[i*3+2])
             var ss = SampledSpectrum(s[0].med_ss[i*3], s[0].med_ss[i*3+1], s[0].med_ss[i*3+2])
             med_buf[i] = Medium_C(sa, ss, s[0].med_g[i],
-                                  Float32(0), Float32(0), Float32(0))
+                                  s[0].med_grid_idx[i], Float32(0), Float32(0))
         psc[0].mediums = med_buf
     else:
         psc[0].mediums = UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling()
@@ -1900,6 +2072,10 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].spheres.free()
     if psc[0].curve_count > 0:
         psc[0].curves.free()
+    if psc[0].grid_count > 0:
+        for gi in range(Int(psc[0].grid_count)):
+            psc[0].grids[gi].density.free()
+        psc[0].grids.free()
     if Int(psc[0].light_sampler.cdf) > 4:
         psc[0].light_sampler.cdf.free()
     psc.free()
@@ -1989,5 +2165,7 @@ def mojo_parsed_scene_descriptor(
     sd[0].mediumCount      = Int64(psc[0].medium_count)
     sd[0].mediumInterfaces = psc[0].medium_ifaces
     sd[0].mediumIfaceCount = Int64(psc[0].medium_iface_count)
+    sd[0].grids            = psc[0].grids
+    sd[0].gridCount        = Int64(psc[0].grid_count)
     sd[0].lightSampler    = psc[0].light_sampler
     return sd

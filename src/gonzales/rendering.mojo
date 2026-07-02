@@ -2,7 +2,7 @@ from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
@@ -90,26 +90,65 @@ def render_tile(
             if paths[i].active == 0:
                 continue
             # ── Volume transmittance sampling ──────────────────────────
+            # Homogeneous (grid_idx < 0): closed-form analytic transmittance.
+            # Heterogeneous (grid_idx >= 0, "uniformgrid"): delta tracking
+            # against the grid's majorant — see sample_medium_gpu's docstring
+            # in gpu.mojo for the full rationale (same algorithm, mirrored
+            # here for the CPU path).
             var med_idx = Int(paths[i].current_medium_idx)
             if med_idx >= 0 and Int(scene.mediumCount) > 0 and intersections[i].hit != Int8(0):
                 var med = scene.mediums[med_idx]
                 var sigma_t_r = med.sigma_a.r + med.sigma_s.r
                 var sigma_t_g = med.sigma_a.g + med.sigma_s.g
                 var sigma_t_b = med.sigma_a.b + med.sigma_s.b
-                var sigma_maj = sigma_t_r
-                if sigma_maj > Float32(0.0):
-                    var pcg_vol = PCG32(paths[i].pcgState, paths[i].pcgInc)
-                    var u_free  = pcg_vol.next_float()
-                    paths[i].pcgState = pcg_vol.state
-                    var t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
-                    var t_surf = intersections[i].tHit
-                    var t_seg  = min(t_free, t_surf)
-                    paths[i].throughput.r *= exp(-sigma_t_r * t_seg)
-                    paths[i].throughput.g *= exp(-sigma_t_g * t_seg)
-                    paths[i].throughput.b *= exp(-sigma_t_b * t_seg)
-                    if t_free < t_surf:
-                        var p_absorb  = (med.sigma_a.r) / sigma_maj
-                        var p_scatter = (med.sigma_s.r) / sigma_maj
+                var t_surf = intersections[i].tHit
+                var pcg_vol = PCG32(paths[i].pcgState, paths[i].pcgInc)
+
+                var have_collision = False
+                var t_free = Float32(0.0)
+                var p_absorb = Float32(0.0)
+                var p_scatter = Float32(0.0)
+
+                if med.grid_idx >= Int32(0):
+                    var grid = scene.grids[Int(med.grid_idx)]
+                    var sigma_maj = grid.max_density * sigma_t_r
+                    if sigma_maj > Float32(0.0):
+                        var ray_org = SIMD[DType.float32, 3](paths[i].ray.origin.x, paths[i].ray.origin.y, paths[i].ray.origin.z)
+                        var ray_dir = SIMD[DType.float32, 3](paths[i].ray.direction.x, paths[i].ray.direction.y, paths[i].ray.direction.z)
+                        var t = Float32(0.0)
+                        var iters = 0
+                        while iters < 10000:
+                            iters += 1
+                            var u = pcg_vol.next_float()
+                            t += -log(max(u, Float32(1e-7))) / sigma_maj
+                            if t >= t_surf:
+                                break
+                            var density = grid_sample_density(grid, ray_org + t * ray_dir)
+                            var sigma_t_real = density * sigma_t_r
+                            var u2 = pcg_vol.next_float()
+                            if u2 < sigma_t_real / sigma_maj:
+                                have_collision = True
+                                t_free = t
+                                break
+                        # Density cancels out of the scatter/absorb ratio given a
+                        # real collision already happened — see gpu.mojo.
+                        p_absorb  = med.sigma_a.r / max(sigma_t_r, Float32(1e-7))
+                        p_scatter = med.sigma_s.r / max(sigma_t_r, Float32(1e-7))
+                else:
+                    var sigma_maj = sigma_t_r
+                    if sigma_maj > Float32(0.0):
+                        var u_free = pcg_vol.next_float()
+                        t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
+                        var t_seg = min(t_free, t_surf)
+                        paths[i].throughput.r *= exp(-sigma_t_r * t_seg)
+                        paths[i].throughput.g *= exp(-sigma_t_g * t_seg)
+                        paths[i].throughput.b *= exp(-sigma_t_b * t_seg)
+                        have_collision = t_free < t_surf
+                        p_absorb  = med.sigma_a.r / sigma_maj
+                        p_scatter = med.sigma_s.r / sigma_maj
+                paths[i].pcgState = pcg_vol.state
+
+                if have_collision:
                         var pcg2 = PCG32(paths[i].pcgState, paths[i].pcgInc)
                         var u_mode = pcg2.next_float()
                         paths[i].pcgState = pcg2.state
@@ -164,9 +203,34 @@ def render_tile(
                                         var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                                         var shad_tmax = dist * Float32(0.9995)
                                         if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax):
-                                            var T_r = exp(-sigma_t_r * dist)
-                                            var T_g = exp(-sigma_t_g * dist)
-                                            var T_b = exp(-sigma_t_b * dist)
+                                            var T_r: Float32
+                                            var T_g: Float32
+                                            var T_b: Float32
+                                            if med.grid_idx >= Int32(0):
+                                                var grid_s = scene.grids[Int(med.grid_idx)]
+                                                var sigma_maj_s = grid_s.max_density * sigma_t_r
+                                                var T = Float32(1.0)
+                                                if sigma_maj_s > Float32(0.0):
+                                                    var ts = Float32(0.0)
+                                                    var siters = 0
+                                                    while siters < 10000:
+                                                        siters += 1
+                                                        var us = pcg_nee.next_float()
+                                                        ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
+                                                        if ts >= dist:
+                                                            break
+                                                        var ps = scatter_pt + shadow_dir * ts
+                                                        var density_s = grid_sample_density(grid_s, ps)
+                                                        T *= Float32(1.0) - (density_s * sigma_t_r) / sigma_maj_s
+                                                        if T < Float32(1e-4):
+                                                            T = Float32(0.0)
+                                                            break
+                                                    paths[i].pcgState = pcg_nee.state
+                                                T_r = T; T_g = T; T_b = T
+                                            else:
+                                                T_r = exp(-sigma_t_r * dist)
+                                                T_g = exp(-sigma_t_g * dist)
+                                                T_b = exp(-sigma_t_b * dist)
                                             var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
                                             paths[i].estimate.r += paths[i].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
                                             paths[i].estimate.g += paths[i].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
@@ -200,27 +264,39 @@ def render_tile(
             if mi_mat.medium_interface_idx < Int32(0):
                 continue
             var iface = scene.mediumInterfaces[Int(mi_mat.medium_interface_idx)]
-            var mi_mesh_idx: Int
-            var mi_base_vidx: Int
-            if intersections[i].primId.type == 0:
-                mi_mesh_idx = Int(intersections[i].primId.id1)
-                mi_base_vidx = Int(intersections[i].primId.id2)
+            var mi_nx: Float32; var mi_ny: Float32; var mi_nz: Float32
+            if intersections[i].primId.type == 4:
+                # Sphere: outward normal = hit point - center. Medium-bounding
+                # volumes are commonly a big invisible sphere (e.g.
+                # smoke-plume's MediumInterface .. Shape sphere), so this
+                # case matters even though spheres rarely carry real shading.
+                var mi_sph = scene.spheres[Int(intersections[i].primId.id1)]
+                var mi_hx = paths[i].ray.origin.x + intersections[i].tHit * paths[i].ray.direction.x - mi_sph.center.x
+                var mi_hy = paths[i].ray.origin.y + intersections[i].tHit * paths[i].ray.direction.y - mi_sph.center.y
+                var mi_hz = paths[i].ray.origin.z + intersections[i].tHit * paths[i].ray.direction.z - mi_sph.center.z
+                mi_nx = mi_hx; mi_ny = mi_hy; mi_nz = mi_hz
             else:
-                mi_mesh_idx = Int(intersections[i].primId.id2 >> 32)
-                mi_base_vidx = Int(intersections[i].primId.id2 & 0xFFFFFFFF) * 3
-            var mi_m = scene.meshes[mi_mesh_idx]
-            var mi_vi0 = Int(mi_m.vertexIndices[mi_base_vidx])
-            var mi_vi1 = Int(mi_m.vertexIndices[mi_base_vidx + 1])
-            var mi_vi2 = Int(mi_m.vertexIndices[mi_base_vidx + 2])
-            var mi_e1x = mi_m.points[mi_vi1*4]   - mi_m.points[mi_vi0*4]
-            var mi_e1y = mi_m.points[mi_vi1*4+1] - mi_m.points[mi_vi0*4+1]
-            var mi_e1z = mi_m.points[mi_vi1*4+2] - mi_m.points[mi_vi0*4+2]
-            var mi_e2x = mi_m.points[mi_vi2*4]   - mi_m.points[mi_vi0*4]
-            var mi_e2y = mi_m.points[mi_vi2*4+1] - mi_m.points[mi_vi0*4+1]
-            var mi_e2z = mi_m.points[mi_vi2*4+2] - mi_m.points[mi_vi0*4+2]
-            var mi_nx = mi_e1y * mi_e2z - mi_e1z * mi_e2y
-            var mi_ny = mi_e1z * mi_e2x - mi_e1x * mi_e2z
-            var mi_nz = mi_e1x * mi_e2y - mi_e1y * mi_e2x
+                var mi_mesh_idx: Int
+                var mi_base_vidx: Int
+                if intersections[i].primId.type == 0:
+                    mi_mesh_idx = Int(intersections[i].primId.id1)
+                    mi_base_vidx = Int(intersections[i].primId.id2)
+                else:
+                    mi_mesh_idx = Int(intersections[i].primId.id2 >> 32)
+                    mi_base_vidx = Int(intersections[i].primId.id2 & 0xFFFFFFFF) * 3
+                var mi_m = scene.meshes[mi_mesh_idx]
+                var mi_vi0 = Int(mi_m.vertexIndices[mi_base_vidx])
+                var mi_vi1 = Int(mi_m.vertexIndices[mi_base_vidx + 1])
+                var mi_vi2 = Int(mi_m.vertexIndices[mi_base_vidx + 2])
+                var mi_e1x = mi_m.points[mi_vi1*4]   - mi_m.points[mi_vi0*4]
+                var mi_e1y = mi_m.points[mi_vi1*4+1] - mi_m.points[mi_vi0*4+1]
+                var mi_e1z = mi_m.points[mi_vi1*4+2] - mi_m.points[mi_vi0*4+2]
+                var mi_e2x = mi_m.points[mi_vi2*4]   - mi_m.points[mi_vi0*4]
+                var mi_e2y = mi_m.points[mi_vi2*4+1] - mi_m.points[mi_vi0*4+1]
+                var mi_e2z = mi_m.points[mi_vi2*4+2] - mi_m.points[mi_vi0*4+2]
+                mi_nx = mi_e1y * mi_e2z - mi_e1z * mi_e2y
+                mi_ny = mi_e1z * mi_e2x - mi_e1x * mi_e2z
+                mi_nz = mi_e1x * mi_e2y - mi_e1y * mi_e2x
             var mi_dot = paths[i].ray.direction.x * mi_nx + paths[i].ray.direction.y * mi_ny + paths[i].ray.direction.z * mi_nz
             if mi_dot > Float32(0):
                 paths[i].current_medium_idx = iface.outside_medium_idx

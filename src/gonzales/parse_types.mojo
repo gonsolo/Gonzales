@@ -118,11 +118,23 @@ struct SceneParseState(Movable):
     var spheres_inside_med:  List[Int32]
     var spheres_outside_med: List[Int32]
 
-    # Homogeneous media
-    var med_names: List[String]
-    var med_sa:    List[Float32]   # 3 floats per medium
-    var med_ss:    List[Float32]   # 3 floats per medium
-    var med_g:     List[Float32]   # 1 per medium
+    # Homogeneous / heterogeneous media
+    var med_names:   List[String]
+    var med_sa:      List[Float32]   # 3 floats per medium
+    var med_ss:      List[Float32]   # 3 floats per medium
+    var med_g:       List[Float32]   # 1 per medium
+    var med_grid_idx: List[Int32]    # 1 per medium; -1 = homogeneous, else index into grid_* below
+
+    # Heterogeneous density grids ("uniformgrid" media). One record per grid;
+    # med_grid_idx above points into these by index.
+    var grid_nx: List[Int32]
+    var grid_ny: List[Int32]
+    var grid_nz: List[Int32]
+    var grid_p0: List[Float32]       # 3 floats per grid
+    var grid_p1: List[Float32]       # 3 floats per grid
+    var grid_ctm: List[Float32]      # 16 floats per grid (world_to_medium built from this at finalize)
+    var grid_density: List[Float32]  # flattened, grid_density_base[i]..+nx*ny*nz per grid
+    var grid_density_base: List[Int32]
 
     # Medium interfaces
     var miface_inside:  List[Int32]
@@ -190,10 +202,20 @@ struct SceneParseState(Movable):
         self.spheres_inside_med  = List[Int32]()
         self.spheres_outside_med = List[Int32]()
 
-        self.med_names = List[String]()
-        self.med_sa    = List[Float32]()
-        self.med_ss    = List[Float32]()
-        self.med_g     = List[Float32]()
+        self.med_names    = List[String]()
+        self.med_sa       = List[Float32]()
+        self.med_ss       = List[Float32]()
+        self.med_g        = List[Float32]()
+        self.med_grid_idx = List[Int32]()
+
+        self.grid_nx = List[Int32]()
+        self.grid_ny = List[Int32]()
+        self.grid_nz = List[Int32]()
+        self.grid_p0 = List[Float32]()
+        self.grid_p1 = List[Float32]()
+        self.grid_ctm = List[Float32]()
+        self.grid_density = List[Float32]()
+        self.grid_density_base = List[Int32]()
 
         self.miface_inside  = List[Int32]()
         self.miface_outside = List[Int32]()

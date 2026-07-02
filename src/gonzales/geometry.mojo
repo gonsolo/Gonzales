@@ -478,20 +478,89 @@ def curve_piece_bounds(curve: Curve_C, piece: Int) -> Tuple[Float32, Float32, Fl
     return (xmin, ymin, zmin, xmax, ymax, zmax)
 
 
-# ── Homogeneous media ──────────────────────────────────────────────────────────
+# ── Homogeneous / heterogeneous media ─────────────────────────────────────────
 
 @fieldwise_init
 struct Medium_C(TrivialRegisterPassable):
-    """Homogeneous participating medium (PBRT-v4 HomogeneousMedium).
-    sigma_a + sigma_s are pre-scaled by 'scale'.
+    """Participating medium (PBRT-v4 HomogeneousMedium / GridMedium "uniformgrid").
+    sigma_a + sigma_s are pre-scaled by 'scale'. For a heterogeneous medium
+    (grid_idx >= 0), sigma_a/sigma_s are the PER-UNIT-DENSITY coefficients —
+    actual extinction at a point is density(point) * (sigma_a + sigma_s), see
+    Grid_C/grid_sample_density below.
     g = Henyey-Greenstein anisotropy in [-1, 1]; 0 = isotropic.
     """
-    var sigma_a: SampledSpectrum   # absorption coefficient (1/m)
-    var sigma_s: SampledSpectrum   # scattering coefficient (1/m)
+    var sigma_a: SampledSpectrum   # absorption coefficient (1/m), per unit density if grid_idx >= 0
+    var sigma_s: SampledSpectrum   # scattering coefficient (1/m), per unit density if grid_idx >= 0
     var g:       Float32           # HG anisotropy
-    var _pad0:   Float32
+    var grid_idx: Int32            # -1 = homogeneous; >=0 = index into scene.grids
     var _pad1:   Float32
     var _pad2:   Float32
+
+@fieldwise_init
+struct Grid_C(TrivialRegisterPassable):
+    """Dense heterogeneous density grid backing a Medium_C (PBRT-v4
+    "uniformgrid" — a flat array of nx*ny*nz density samples spanning the
+    axis-aligned box [p0,p1] in the medium's own local space). density(x) is
+    a unitless multiplier: real sigma_t at a world point = grid_sample_density(x)
+    * (medium.sigma_a + medium.sigma_s). world_to_medium maps a world-space
+    point into that local [p0,p1]-space box (same 4x4 column-major convention
+    as transform.mojo's transform_points: m[0],m[4],m[8],m[12] combine for x).
+    max_density is the majorant used for delta-tracking free-flight sampling.
+    """
+    var density: UnsafePointer[Float32, MutAnyOrigin]  # flat, nz-major: idx = (z*ny + y)*nx + x
+    var nx: Int32
+    var ny: Int32
+    var nz: Int32
+    var p0: Point3f
+    var p1: Point3f
+    var world_to_medium: SIMD[DType.float32, 16]
+    var max_density: Float32
+
+@always_inline
+def _grid_density_at(grid: Grid_C, xi: Int, yi: Int, zi: Int) -> Float32:
+    var cx = max(0, min(Int(grid.nx) - 1, xi))
+    var cy = max(0, min(Int(grid.ny) - 1, yi))
+    var cz = max(0, min(Int(grid.nz) - 1, zi))
+    return grid.density[(cz * Int(grid.ny) + cy) * Int(grid.nx) + cx]
+
+@always_inline
+def grid_sample_density(grid: Grid_C, p_world: SIMD[DType.float32, 3]) -> Float32:
+    """Trilinearly-interpolated density at a world-space point; 0 outside
+    the grid's local bounds [p0,p1]."""
+    var m = grid.world_to_medium
+    var px = m[0]*p_world[0] + m[4]*p_world[1] + m[8]*p_world[2] + m[12]
+    var py = m[1]*p_world[0] + m[5]*p_world[1] + m[9]*p_world[2] + m[13]
+    var pz = m[2]*p_world[0] + m[6]*p_world[1] + m[10]*p_world[2] + m[14]
+
+    var ext_x = grid.p1.x - grid.p0.x
+    var ext_y = grid.p1.y - grid.p0.y
+    var ext_z = grid.p1.z - grid.p0.z
+    if ext_x <= Float32(0.0) or ext_y <= Float32(0.0) or ext_z <= Float32(0.0):
+        return Float32(0.0)
+    var u = (px - grid.p0.x) / ext_x
+    var v = (py - grid.p0.y) / ext_y
+    var w = (pz - grid.p0.z) / ext_z
+    if u < Float32(0.0) or u > Float32(1.0) or v < Float32(0.0) or v > Float32(1.0) or w < Float32(0.0) or w > Float32(1.0):
+        return Float32(0.0)
+
+    # Continuous voxel coords (PBRT convention: sample centers at half-integer
+    # offsets, so u=0..1 maps to [-0.5, nx-0.5]).
+    var gx = u * Float32(grid.nx) - Float32(0.5)
+    var gy = v * Float32(grid.ny) - Float32(0.5)
+    var gz = w * Float32(grid.nz) - Float32(0.5)
+    var x0 = Int(gx); var y0 = Int(gy); var z0 = Int(gz)
+    var fx = gx - Float32(x0); var fy = gy - Float32(y0); var fz = gz - Float32(z0)
+    if gx < Float32(0.0): x0 -= 1; fx = gx - Float32(x0)
+    if gy < Float32(0.0): y0 -= 1; fy = gy - Float32(y0)
+    if gz < Float32(0.0): z0 -= 1; fz = gz - Float32(z0)
+
+    var d00 = _grid_density_at(grid, x0, y0, z0)     * (Float32(1.0) - fx) + _grid_density_at(grid, x0+1, y0, z0)     * fx
+    var d10 = _grid_density_at(grid, x0, y0+1, z0)   * (Float32(1.0) - fx) + _grid_density_at(grid, x0+1, y0+1, z0)   * fx
+    var d01 = _grid_density_at(grid, x0, y0, z0+1)   * (Float32(1.0) - fx) + _grid_density_at(grid, x0+1, y0, z0+1)   * fx
+    var d11 = _grid_density_at(grid, x0, y0+1, z0+1) * (Float32(1.0) - fx) + _grid_density_at(grid, x0+1, y0+1, z0+1) * fx
+    var d0 = d00 * (Float32(1.0) - fy) + d10 * fy
+    var d1 = d01 * (Float32(1.0) - fy) + d11 * fy
+    return d0 * (Float32(1.0) - fz) + d1 * fz
 
 @fieldwise_init
 struct MediumInterface_C(TrivialRegisterPassable):
