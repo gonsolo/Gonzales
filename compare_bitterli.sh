@@ -49,7 +49,12 @@ for scene in "${SCENES[@]}"; do
     scale_h=$(( yres * scale_w / xres ))
     [ "$scale_h" -lt 1 ] && scale_h=1
 
-    exr_name=$(grep -oP '"string filename"\s*\[\s*"\K[^"]+' "$scene_file" | head -1)
+    # Scoped to the Film directive's own (indented) parameter lines — stops at the
+    # next top-level directive — so a LightSource/Texture "string filename" (e.g.
+    # an environment map) elsewhere in the file can't be mistaken for the Film's
+    # output filename when Film itself has none.
+    exr_name=$(awk '/^Film/{infilm=1; print; next} infilm && /^[A-Za-z]/{infilm=0} infilm' "$scene_file" \
+        | grep -oP '"string filename"\s*\[?\s*"\K[^"]+\.exr' | head -1)
     [ -z "$exr_name" ] && exr_name="${scene}.exr"
 
     scene_dir="$BITTERLI/$scene/pbrt"

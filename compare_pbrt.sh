@@ -82,8 +82,13 @@ for scene in "${SCENES[@]}"; do
     scale_h=$(( yres * scale_w / xres ))
     [ "$scale_h" -lt 1 ] && scale_h=1
 
-    # Match Film "string filename" (bracket or plain form) from Film block only (first 30 lines)
-    exr_name=$(head -30 "$scene_file" | grep -oP '"string filename"\s*\[?\s*"\K[^"]+\.exr' | head -1)
+    # Match Film "string filename" (bracket or plain form) from the Film block only.
+    # Scoped to the Film directive's own (indented) parameter lines — stops at the
+    # next top-level directive — so a LightSource/Texture "string filename" (e.g.
+    # an environment map like textures/sky.exr) elsewhere in the file can't be
+    # mistaken for the Film's output filename when Film itself has none.
+    exr_name=$(awk '/^Film/{infilm=1; print; next} infilm && /^[A-Za-z]/{infilm=0} infilm' "$scene_file" \
+        | grep -oP '"string filename"\s*\[?\s*"\K[^"]+\.exr' | head -1)
     g_exr_name="${exr_name:-gonzales.exr}"   # gonzales default when Film has no filename
     p_exr_name="${exr_name:-pbrt.exr}"       # pbrt default when Film has no filename
 
