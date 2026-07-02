@@ -54,8 +54,13 @@ for scene in "${SCENES[@]}"; do
     # an environment map) elsewhere in the file can't be mistaken for the Film's
     # output filename when Film itself has none.
     exr_name=$(awk '/^Film/{infilm=1; print; next} infilm && /^[A-Za-z]/{infilm=0} infilm' "$scene_file" \
-        | grep -oP '"string filename"\s*\[?\s*"\K[^"]+\.exr' | head -1)
+        | grep -oP '"string filename"\s*\[?\s*"\K[^"]+\.(exr|png)' | head -1)
     [ -z "$exr_name" ] && exr_name="${scene}.exr"
+    # Some scenes' Film filename ends in .png — gonzales/pbrt write it directly
+    # (already sRGB); move straight to the -gonzales.png/-pbrt.png output
+    # instead of treating it as an .exr that needs tonemapping.
+    is_png=false
+    [[ "$exr_name" == *.png ]] && is_png=true
 
     scene_dir="$BITTERLI/$scene/pbrt"
     g_png="$OUT/images/${scene}-gonzales.png"
@@ -75,16 +80,16 @@ for scene in "${SCENES[@]}"; do
         if (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
             [ -f ~/work/gonzales/"$exr_name" ] && \
-            mv ~/work/gonzales/"$exr_name" "$g_exr" && \
-            tonemap "$g_exr" "$g_png"; then
+            { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
+                       || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
             g_label="GPU"
         else
             echo "  ! gonzales GPU failed, trying CPU..."
             if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
                 [ -f ~/work/gonzales/"$exr_name" ] && \
-                mv ~/work/gonzales/"$exr_name" "$g_exr" && \
-                tonemap "$g_exr" "$g_png"; then
+                { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
+                           || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
                 g_label="CPU"
             fi
         fi
