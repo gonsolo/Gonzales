@@ -1,4 +1,4 @@
-from std.sys import argv
+from std.sys import argv, exit
 from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
@@ -161,9 +161,13 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override, verbose)
     else:
-        _ = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose, use_sppm, sppm_passes, sppm_photons, sppm_radius, use_guide, use_bdpt, bdpt_spp)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose, use_sppm, sppm_passes, sppm_photons, sppm_radius, use_guide, use_bdpt, bdpt_spp)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
+        if rc != Int32(0):
+            path_cstr.free()
+            sobol.free()
+            exit(Int(rc))
 
     path_cstr.free()
     sobol.free()

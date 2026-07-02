@@ -10,10 +10,9 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
                     _psc_skip_value, _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
-                           ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX,
-                           HAIR_EVAL_N)
+                           ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
-                        Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C,
+                        Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, PI,
                         LightSampler_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
@@ -73,6 +72,8 @@ struct ParsedScene_Mojo:
     var infinite_count:   Int32
     var spheres:          UnsafePointer[Sphere_C, MutAnyOrigin]
     var sphere_count:     Int32
+    var curves:           UnsafePointer[Curve_C, MutAnyOrigin]
+    var curve_count:      Int32
     var mediums:          UnsafePointer[Medium_C, MutAnyOrigin]
     var medium_count:     Int32
     var medium_ifaces:    UnsafePointer[MediumInterface_C, MutAnyOrigin]
@@ -407,82 +408,16 @@ def store_mesh(
 
 # ── Hair curve helpers ────────────────────────────────────────────────────────
 
-def ensure_hair_buffer(s: UnsafePointer[SceneParseState, MutAnyOrigin]) -> Bool:
-    if s[0].hair:
-        if s[0].hair.value().mat_idx != s[0].cur_attr.mat_idx:
-            var h = s[0].hair.take()
-            if len(h.face_idxs) > 0:
-                s[0].meshes.append(h^)
-        else:
-            return True
-    s[0].hair = MeshAccum(
-        s[0].cur_attr.mat_idx,
-        s[0].cur_attr.inside_medium,
-        s[0].cur_attr.outside_medium,
-    )
-    return True
-
-def bspline3_eval(cp: UnsafePointer[Float32, MutAnyOrigin], n_cp: Int,
-                  u: Float32, pt_out: UnsafePointer[Float32, MutAnyOrigin]):
-    var n_seg = n_cp - 3
-    if n_seg <= 0:
-        pt_out[0] = cp[0]; pt_out[1] = cp[1]; pt_out[2] = cp[2]; return
-    var s_f = u * Float32(n_seg)
-    var seg = Int(s_f)
-    if seg >= n_seg: seg = n_seg - 1
-    var t = s_f - Float32(seg)
-    var t2 = t * t
-    var t3 = t2 * t
-    var b0 = (Float32(1) - Float32(3)*t + Float32(3)*t2 - t3) / Float32(6)
-    var b1 = (Float32(4) - Float32(6)*t2 + Float32(3)*t3) / Float32(6)
-    var b2 = (Float32(1) + Float32(3)*t + Float32(3)*t2 - Float32(3)*t3) / Float32(6)
-    var b3 = t3 / Float32(6)
-    for k in range(3):
-        pt_out[k] = b0*cp[seg*3+k] + b1*cp[(seg+1)*3+k] + b2*cp[(seg+2)*3+k] + b3*cp[(seg+3)*3+k]
-
-def hair_add_quad(s: UnsafePointer[SceneParseState, MutAnyOrigin],
-        p0x: Float32, p0y: Float32, p0z: Float32,
-        p1x: Float32, p1y: Float32, p1z: Float32,
-        ux: Float32, uy: Float32, uz: Float32, hw: Float32,
-        tx: Float32, ty: Float32, tz: Float32):
-    """Append one rectangular quad (2 triangles) to the hair accumulator.
-    tx,ty,tz is the fiber tangent direction (normalized), stored as shading normals
-    so the hair BSDF can recover it. UVs encode the ribbon position (u=0/1 across fiber)."""
-    ref h = s[0].hair.value()
-    var bv = len(h.points) // 4
-    # 4 vertices (xyz + pad): p0+, p0-, p1+, p1-
-    h.points.append(p0x+ux*hw); h.points.append(p0y+uy*hw)
-    h.points.append(p0z+uz*hw); h.points.append(Float32(1))
-    h.points.append(p0x-ux*hw); h.points.append(p0y-uy*hw)
-    h.points.append(p0z-uz*hw); h.points.append(Float32(1))
-    h.points.append(p1x+ux*hw); h.points.append(p1y+uy*hw)
-    h.points.append(p1z+uz*hw); h.points.append(Float32(1))
-    h.points.append(p1x-ux*hw); h.points.append(p1y-uy*hw)
-    h.points.append(p1z-uz*hw); h.points.append(Float32(1))
-    h.vert_idxs.append(Int64(bv));   h.vert_idxs.append(Int64(bv+1)); h.vert_idxs.append(Int64(bv+2))
-    h.face_idxs.append(Int64(3))
-    h.vert_idxs.append(Int64(bv+1)); h.vert_idxs.append(Int64(bv+3)); h.vert_idxs.append(Int64(bv+2))
-    h.face_idxs.append(Int64(3))
-    # Per-vertex shading normals = fiber tangent (used by hair BSDF to recover fiber direction)
-    # All 4 vertices get the same tangent direction
-    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
-    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
-    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
-    h.normals.append(tx); h.normals.append(ty); h.normals.append(tz)
-    # Per-vertex UVs: u encodes +hw (u=1) vs -hw (u=0) edge; v=0 at p0, v=1 at p1
-    # vertex 0 (p0+): (1, 0), vertex 1 (p0-): (0, 0)
-    # vertex 2 (p1+): (1, 1), vertex 3 (p1-): (0, 1)
-    h.uvs.append(Float32(1)); h.uvs.append(Float32(0))
-    h.uvs.append(Float32(0)); h.uvs.append(Float32(0))
-    h.uvs.append(Float32(1)); h.uvs.append(Float32(1))
-    h.uvs.append(Float32(0)); h.uvs.append(Float32(1))
-
 def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                             s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    """PBRT `Shape "curve"`: stored natively (no tessellation) as one Curve_C
+    per local cubic B-spline segment, CTM-transformed at parse time. See
+    Curve_C / intersect_curve in geometry.mojo for the BVH-time intersection."""
     var MAX_CP = 512
     var cp_buf = alloc[Float32](MAX_CP * 3)
     var n_cp = Int32(0)
-    var width = Float32(0.002)
+    var width0 = Float32(0.002)
+    var width1 = Float32(-1.0)   # sentinel: not given -> falls back to width0
     var type_buf = alloc[UInt8](64)
     var name_buf = alloc[UInt8](128)
     var ia = alloc[Int32](1)
@@ -495,7 +430,9 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             n_cp = n_f / Int32(3)
             if is_array: _ = scanner_scan_char(handle, UInt8(93))
         elif _psc_type_is_float(type_buf) and (_psc_streq(name_buf, "width") or _psc_streq(name_buf, "width0")):
-            width = _psc_scan_one_float(handle, is_array)
+            width0 = _psc_scan_one_float(handle, is_array)
+        elif _psc_type_is_float(type_buf) and _psc_streq(name_buf, "width1"):
+            width1 = _psc_scan_one_float(handle, is_array)
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array: _ = scanner_scan_char(handle, UInt8(93))
@@ -504,52 +441,36 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     type_buf.free(); name_buf.free(); ia.free()
     if n_cp < Int32(4):
         cp_buf.free(); return
-    if not ensure_hair_buffer(s):
-        cp_buf.free(); return
-    # Sample one point per control point so curl geometry is fully captured.
-    var eval_n = max(8, Int(n_cp))
-    var eval_pts = alloc[Float32](eval_n * 3)
-    for step in range(eval_n):
-        var u = Float32(step) / Float32(eval_n - 1)
-        bspline3_eval(cp_buf, Int(n_cp), u, eval_pts + step * 3)
-    cp_buf.free()
-    # Apply current CTM to evaluation points
-    var raw4 = alloc[Float32](eval_n * 4)
-    var xfm4 = alloc[Float32](eval_n * 4)
-    for step in range(eval_n):
-        raw4[step*4+0] = eval_pts[step*3+0]
-        raw4[step*4+1] = eval_pts[step*3+1]
-        raw4[step*4+2] = eval_pts[step*3+2]
-        raw4[step*4+3] = Float32(1)
-    transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(eval_n), xfm4)
-    raw4.free()
-    var hw = width / Float32(2)
-    for seg in range(eval_n - 1):
-        var p0x = xfm4[seg*4+0]; var p0y = xfm4[seg*4+1]; var p0z = xfm4[seg*4+2]
-        var p1x = xfm4[(seg+1)*4+0]; var p1y = xfm4[(seg+1)*4+1]; var p1z = xfm4[(seg+1)*4+2]
-        var tx = p1x-p0x; var ty = p1y-p0y; var tz = p1z-p0z
-        var tlen = sqrt(tx*tx + ty*ty + tz*tz)
-        if tlen < Float32(1e-10): continue
-        tx /= tlen; ty /= tlen; tz /= tlen
-        var ux: Float32; var uy: Float32; var uz: Float32
-        if abs(ty) < Float32(0.9):
-            ux = -tz; uy = Float32(0); uz = tx
-        else:
-            ux = Float32(0); uy = tz; uz = -ty
-        var ulen = sqrt(ux*ux + uy*uy + uz*uz)
-        ux /= ulen; uy /= ulen; uz /= ulen
-        var vx = ty*uz - tz*uy; var vy = tz*ux - tx*uz; var vz = tx*uy - ty*ux
-        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, ux,uy,uz, hw, tx,ty,tz)
-        hair_add_quad(s, p0x,p0y,p0z, p1x,p1y,p1z, vx,vy,vz, hw, tx,ty,tz)
-    xfm4.free(); eval_pts.free()
+    if width1 < Float32(0.0):
+        width1 = width0
 
-def flush_hair(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    if not s[0].hair:
-        return
-    var h = s[0].hair.take()
-    if len(h.face_idxs) == 0:
-        return
-    s[0].meshes.append(h^)
+    var n_raw = Int(n_cp)
+    var raw4 = alloc[Float32](n_raw * 4)
+    var xfm4 = alloc[Float32](n_raw * 4)
+    for i in range(n_raw):
+        raw4[i*4+0] = cp_buf[i*3+0]; raw4[i*4+1] = cp_buf[i*3+1]
+        raw4[i*4+2] = cp_buf[i*3+2]; raw4[i*4+3] = Float32(1)
+    cp_buf.free()
+    transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(n_raw), xfm4)
+    raw4.free()
+
+    # Split into (n_cp - 3) local B-spline segments: window i uses raw
+    # control points [i, i+1, i+2, i+3] — matches the standard uniform
+    # cubic B-spline curve-chain convention (same windowing PBRT itself uses).
+    var n_seg = n_raw - 3
+    var mat_idx = s[0].cur_attr.mat_idx
+    for seg in range(n_seg):
+        var t0 = Float32(seg) / Float32(n_seg)
+        var t1 = Float32(seg + 1) / Float32(n_seg)
+        for k in range(4):
+            var vi = seg + k
+            s[0].curves_cp.append(xfm4[vi*4+0])
+            s[0].curves_cp.append(xfm4[vi*4+1])
+            s[0].curves_cp.append(xfm4[vi*4+2])
+        s[0].curves_w0.append(width0 + (width1 - width0) * t0)
+        s[0].curves_w1.append(width0 + (width1 - width0) * t1)
+        s[0].curves_mat.append(mat_idx)
+    xfm4.free()
 
 # ── Medium handlers ───────────────────────────────────────────────────────────
 
@@ -1098,6 +1019,75 @@ def make_screen_to_raster(fw: Int32, fh: Int32,
     dst[12] = tx
     dst[13] = ty
 
+comptime CURVE_GROUP_MAX: Int = 2   # hard cap on pieces merged per BVH leaf — see _curve_greedy_groups
+
+# ── Curve BVH-leaf grouping ─────────────────────────────────────────────────
+# Curly curves are chopped into up to CURVE_N_PIECES locally-linear pieces
+# (see the flatness test in finalize_scene). Giving every piece its own BVH
+# leaf fixed a severe GPU divergence/false-positive-candidate problem from
+# one loose whole-segment leaf, but made BVH construction ~7x slower on
+# curly-heavy scenes (more leaves to build). Curl is usually gradual rather
+# than zigzag, so adjacent pieces of the same curly curve are very often
+# still collinear with each other even when the whole 4-control-point
+# segment isn't — this greedily merges such runs into one leaf, so a curl
+# typically costs 2-4 leaves instead of always exactly CURVE_N_PIECES.
+
+def _curve_greedy_groups(
+    curve: Curve_C,
+    n_pieces: Int,
+    out_first: UnsafePointer[Int32, MutAnyOrigin],
+    out_count: UnsafePointer[Int32, MutAnyOrigin],
+    write: Bool,
+) -> Int:
+    """Greedy-merge adjacent pieces of one curve into flat runs. Returns the
+    number of groups. If write=True, fills out_first/out_count (each must
+    have capacity >= n_pieces) with (first_piece, piece_count) per group; if
+    write=False the out pointers are ignored — used for a cheap first pass
+    to size the final arrays before allocating them."""
+    var pts = InlineArray[SIMD[DType.float32, 3], CURVE_N_PIECES + 1](fill=SIMD[DType.float32, 3](0, 0, 0))
+    for k in range(n_pieces + 1):
+        pts[k] = curve_bspline_point(curve, Float32(k) / Float32(n_pieces))
+    var maxw = max(curve.width0, curve.width1)
+    var thresh = maxw * Float32(0.5)
+
+    var n_groups = 0
+    var start = 0
+    while start < n_pieces:
+        var end = start + 1
+        while end < n_pieces and end - start < CURVE_GROUP_MAX:
+            # Would including piece `end` (run becomes [start, end+1)) still
+            # look flat? Same chord-deviation test as the whole-segment
+            # flatness check, just applied to this candidate sub-run.
+            # Capped at CURVE_GROUP_MAX regardless of flatness: the
+            # flatness-only version measured avg ~4 pieces/group, which
+            # brought back most of the divergent-internal-loop cost that
+            # per-piece leaves were meant to remove (render time regressed
+            # 2.2s -> 14.9s on furball even though BVH build got faster) —
+            # the cap bounds the worst case while still merging the common,
+            # genuinely-flat 2-piece case.
+            var chord = pts[end + 1] - pts[start]
+            var chord_len_sq = dot(chord, chord)
+            var ok = True
+            if chord_len_sq > Float32(1e-16):
+                var inv_len = Float32(1.0) / sqrt(chord_len_sq)
+                var dir = chord * inv_len
+                for k in range(start + 1, end + 1):
+                    var v = pts[k] - pts[start]
+                    var proj = dot(v, dir)
+                    var perp = v - proj * dir
+                    if sqrt(dot(perp, perp)) > thresh:
+                        ok = False
+                        break
+            if not ok:
+                break
+            end += 1
+        if write:
+            out_first[n_groups] = Int32(start)
+            out_count[n_groups] = Int32(end - start)
+        n_groups += 1
+        start = end
+    return n_groups
+
 # ── Scene finalization ────────────────────────────────────────────────────────
 
 def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
@@ -1351,7 +1341,53 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     for i in range(n_meshes):
         total_tris += Int32(len(s[0].meshes[i].face_idxs))
 
-    var prim_bounds = alloc[Float32](Int(total_tris) * 6)
+    # Native curves: precompute per-curve piece count via the same flatness
+    # test used for the Curve_C upload below, then greedily merge adjacent
+    # flat-enough pieces of each curly curve into single BVH leaves (see
+    # _curve_greedy_groups) so the leaf count stays close to the number of
+    # visually-distinct bends, not always CURVE_N_PIECES.
+    var n_curves = Int32(len(s[0].curves_mat))
+    var curve_n_pieces = alloc[Int32](max(Int(n_curves), 1))
+    var curve_group_base = alloc[Int32](max(Int(n_curves), 1))
+    var total_curve_groups = Int32(0)
+    # Never dereferenced (the counting pass below only counts groups; the
+    # write=False branch of _curve_greedy_groups skips all writes) — just
+    # needs to be a valid, non-dangling pointer to satisfy the signature.
+    var count_pass_scratch = alloc[Int32](1)
+    for i in range(Int(n_curves)):
+        var cb = i * 12
+        var cx0 = s[0].curves_cp[cb+0]; var cy0 = s[0].curves_cp[cb+1]; var cz0 = s[0].curves_cp[cb+2]
+        var cx3 = s[0].curves_cp[cb+9]; var cy3 = s[0].curves_cp[cb+10]; var cz3 = s[0].curves_cp[cb+11]
+        var chord_x = cx3 - cx0; var chord_y = cy3 - cy0; var chord_z = cz3 - cz0
+        var chord_len = sqrt(chord_x*chord_x + chord_y*chord_y + chord_z*chord_z)
+        var max_dev = Float32(0.0)
+        if chord_len > Float32(1e-8):
+            var dcx = chord_x / chord_len; var dcy = chord_y / chord_len; var dcz = chord_z / chord_len
+            for k in range(1, 3):
+                var vx = s[0].curves_cp[cb+k*3+0] - cx0
+                var vy = s[0].curves_cp[cb+k*3+1] - cy0
+                var vz = s[0].curves_cp[cb+k*3+2] - cz0
+                var ccx = vy*dcz - vz*dcy
+                var ccy = vz*dcx - vx*dcz
+                var ccz = vx*dcy - vy*dcx
+                var dist = sqrt(ccx*ccx + ccy*ccy + ccz*ccz)
+                if dist > max_dev: max_dev = dist
+        var maxw = max(s[0].curves_w0[i], s[0].curves_w1[i])
+        curve_n_pieces[i] = Int32(1) if max_dev < maxw * Float32(0.5) else Int32(CURVE_N_PIECES)
+
+        var curve_i = Curve_C(
+            Point3f(s[0].curves_cp[cb+0], s[0].curves_cp[cb+1], s[0].curves_cp[cb+2]),
+            Point3f(s[0].curves_cp[cb+3], s[0].curves_cp[cb+4], s[0].curves_cp[cb+5]),
+            Point3f(s[0].curves_cp[cb+6], s[0].curves_cp[cb+7], s[0].curves_cp[cb+8]),
+            Point3f(s[0].curves_cp[cb+9], s[0].curves_cp[cb+10], s[0].curves_cp[cb+11]),
+            s[0].curves_w0[i], s[0].curves_w1[i], s[0].curves_mat[i], curve_n_pieces[i])
+        var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[i]), count_pass_scratch, count_pass_scratch, False)
+        curve_group_base[i] = total_curve_groups
+        total_curve_groups += Int32(ngroups)
+
+    var total_prims = total_tris + total_curve_groups
+
+    var prim_bounds = alloc[Float32](Int(total_prims) * 6)
     var tri_mesh    = alloc[Int32](Int(total_tris))
     var tri_local   = alloc[Int32](Int(total_tris))
 
@@ -1378,14 +1414,47 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             tri_local[Int(flat_idx)] = Int32(ti)
             flat_idx += 1
 
-    var max_bvh_nodes = Int(total_tris) * 2 + 4
+    # Native curve groups: one BVH leaf per greedily-merged run of pieces
+    # (see _curve_greedy_groups), each with a tight AABB — the union of that
+    # run's individual piece bounds, still far tighter than the old
+    # whole-segment hull since a run rarely spans the entire curly curve.
+    var group_curve_idx = alloc[Int32](max(Int(total_curve_groups), 1))
+    var group_id2 = alloc[Int32](max(Int(total_curve_groups), 1))  # packed first_piece*8 + piece_count
+    var group_first_scratch = alloc[Int32](CURVE_N_PIECES)
+    var group_count_scratch = alloc[Int32](CURVE_N_PIECES)
+    for ci in range(Int(n_curves)):
+        var base = ci * 12
+        var curve_i = Curve_C(
+            Point3f(s[0].curves_cp[base+0], s[0].curves_cp[base+1], s[0].curves_cp[base+2]),
+            Point3f(s[0].curves_cp[base+3], s[0].curves_cp[base+4], s[0].curves_cp[base+5]),
+            Point3f(s[0].curves_cp[base+6], s[0].curves_cp[base+7], s[0].curves_cp[base+8]),
+            Point3f(s[0].curves_cp[base+9], s[0].curves_cp[base+10], s[0].curves_cp[base+11]),
+            s[0].curves_w0[ci], s[0].curves_w1[ci], s[0].curves_mat[ci], curve_n_pieces[ci])
+        var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[ci]), group_first_scratch, group_count_scratch, True)
+        for g in range(ngroups):
+            var global_group = Int(curve_group_base[ci]) + g
+            var first_piece = Int(group_first_scratch[g])
+            var piece_count = Int(group_count_scratch[g])
+            group_curve_idx[global_group] = Int32(ci)
+            group_id2[global_group] = Int32(first_piece * 8 + piece_count)
+            var (xmin, ymin, zmin, xmax, ymax, zmax) = curve_piece_bounds(curve_i, first_piece)
+            for p in range(first_piece + 1, first_piece + piece_count):
+                var (pxmin, pymin, pzmin, pxmax, pymax, pzmax) = curve_piece_bounds(curve_i, p)
+                xmin = min(xmin, pxmin); ymin = min(ymin, pymin); zmin = min(zmin, pzmin)
+                xmax = max(xmax, pxmax); ymax = max(ymax, pymax); zmax = max(zmax, pzmax)
+            var b = (Int(total_tris) + global_group) * 6
+            prim_bounds[b+0] = xmin; prim_bounds[b+1] = ymin; prim_bounds[b+2] = zmin
+            prim_bounds[b+3] = xmax; prim_bounds[b+4] = ymax; prim_bounds[b+5] = zmax
+    group_first_scratch.free(); group_count_scratch.free(); count_pass_scratch.free()
+
+    var max_bvh_nodes = Int(total_prims) * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_bvh_nodes)
-    var bvh_order = alloc[Int32](Int(total_tris))
-    var node_count = build_bvh2(prim_bounds, total_tris, bvh_nodes, bvh_order)
+    var bvh_order = alloc[Int32](Int(total_prims))
+    var node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
 
     prim_bounds.free()
 
-    var prim_ids = alloc[PrimId_C](Int(total_tris))
+    var prim_ids = alloc[PrimId_C](Int(total_prims))
 
     var mesh_al_idx = alloc[Int32](max(n_meshes, 1))
     var running_al = Int32(0)
@@ -1396,28 +1465,37 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         else:
             mesh_al_idx[mi] = Int32(-1)
 
-    for k in range(Int(total_tris)):
+    for k in range(Int(total_prims)):
         var orig = Int(bvh_order[k])
-        var mi   = Int(tri_mesh[orig])
-        var ti   = Int(tri_local[orig])
-        if s[0].meshes[mi].is_area_light:
-            var al_idx = Int(mesh_al_idx[mi])
-            prim_ids[k].type          = Int8(3)
-            prim_ids[k].id1           = Int64(al_idx)
-            prim_ids[k].id2           = (Int64(mi) << 32) | Int64(ti)
-            prim_ids[k].materialIndex = Int64(al_mat_base + al_idx)
+        if orig < Int(total_tris):
+            var mi   = Int(tri_mesh[orig])
+            var ti   = Int(tri_local[orig])
+            if s[0].meshes[mi].is_area_light:
+                var al_idx = Int(mesh_al_idx[mi])
+                prim_ids[k].type          = Int8(3)
+                prim_ids[k].id1           = Int64(al_idx)
+                prim_ids[k].id2           = (Int64(mi) << 32) | Int64(ti)
+                prim_ids[k].materialIndex = Int64(al_mat_base + al_idx)
+            else:
+                var mat_idx = Int(s[0].meshes[mi].mat_idx)
+                prim_ids[k].type          = Int8(0)
+                prim_ids[k].id1           = Int64(mi)
+                prim_ids[k].id2           = Int64(ti * 3)
+                prim_ids[k].materialIndex = Int64(max(mat_idx, 0))
         else:
-            var mat_idx = Int(s[0].meshes[mi].mat_idx)
-            prim_ids[k].type          = Int8(0)
-            prim_ids[k].id1           = Int64(mi)
-            prim_ids[k].id2           = Int64(ti * 3)
-            prim_ids[k].materialIndex = Int64(max(mat_idx, 0))
+            var gidx = orig - Int(total_tris)
+            var ci = Int(group_curve_idx[gidx])
+            prim_ids[k].type          = Int8(5)
+            prim_ids[k].id1           = Int64(ci)
+            prim_ids[k].id2           = Int64(group_id2[gidx])
+            prim_ids[k].materialIndex = Int64(max(Int(s[0].curves_mat[ci]), 0))
         prim_ids[k]._pad0 = Int8(0); prim_ids[k]._pad1 = Int8(0)
         prim_ids[k]._pad2 = Int8(0); prim_ids[k]._pad3 = Int8(0)
         prim_ids[k]._pad4 = Int8(0); prim_ids[k]._pad5 = Int8(0)
         prim_ids[k]._pad6 = Int8(0)
 
     tri_mesh.free(); tri_local.free(); bvh_order.free(); mesh_al_idx.free()
+    curve_group_base.free(); group_curve_idx.free(); group_id2.free()
 
     # ---- Sampler params ----
     var spp = s[0].samples_per_pixel
@@ -1478,7 +1556,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].bvh_nodes        = bvh_nodes
     psc[0].prim_ids         = prim_ids
     psc[0].bvh_node_count   = node_count
-    psc[0].prim_count       = total_tris
+    psc[0].prim_count       = total_prims
     psc[0].film_w           = s[0].film_w
     psc[0].film_h           = s[0].film_h
     psc[0].camera_fov       = s[0].camera_fov
@@ -1643,6 +1721,27 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         psc[0].spheres = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling()
     psc[0].sphere_count = Int32(ns)
 
+    # ---- Native curves (hair/fur) ----
+    # n_pieces per curve (flatness-adaptive) was already computed above for
+    # the per-piece BVH leaf construction — reuse it here instead of
+    # recomputing.
+    var nc = len(s[0].curves_mat)
+    if nc > 0:
+        var curve_buf = alloc[Curve_C](nc)
+        for i in range(nc):
+            var cb = i * 12
+            curve_buf[i] = Curve_C(
+                Point3f(s[0].curves_cp[cb+0], s[0].curves_cp[cb+1], s[0].curves_cp[cb+2]),
+                Point3f(s[0].curves_cp[cb+3], s[0].curves_cp[cb+4], s[0].curves_cp[cb+5]),
+                Point3f(s[0].curves_cp[cb+6], s[0].curves_cp[cb+7], s[0].curves_cp[cb+8]),
+                Point3f(s[0].curves_cp[cb+9], s[0].curves_cp[cb+10], s[0].curves_cp[cb+11]),
+                s[0].curves_w0[i], s[0].curves_w1[i], s[0].curves_mat[i], curve_n_pieces[i])
+        psc[0].curves = curve_buf
+    else:
+        psc[0].curves = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling()
+    psc[0].curve_count = Int32(nc)
+    curve_n_pieces.free()
+
     # ---- Media ----
     var nm = len(s[0].med_g)
     if nm > 0:
@@ -1735,7 +1834,6 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutAnyOrigin],
         dir_tmp.free()
     parse_scene_file(handle, s_ptr)
     scanner_free(handle)
-    flush_hair(s_ptr)
 
     var psc = alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
@@ -1800,6 +1898,8 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].infinite_lights.free()
     if psc[0].sphere_count > 0:
         psc[0].spheres.free()
+    if psc[0].curve_count > 0:
+        psc[0].curves.free()
     if Int(psc[0].light_sampler.cdf) > 4:
         psc[0].light_sampler.cdf.free()
     psc.free()
@@ -1883,6 +1983,8 @@ def mojo_parsed_scene_descriptor(
     sd[0].infiniteLightCount = Int64(psc[0].infinite_count)
     sd[0].spheres          = psc[0].spheres
     sd[0].sphereCount      = Int64(psc[0].sphere_count)
+    sd[0].curves           = psc[0].curves
+    sd[0].curveCount       = Int64(psc[0].curve_count)
     sd[0].mediums          = psc[0].mediums
     sd[0].mediumCount      = Int64(psc[0].medium_count)
     sd[0].mediumInterfaces = psc[0].medium_ifaces

@@ -10,14 +10,6 @@ comptime PSC_NAME_MAX   = 64
 comptime PSC_FILE_MAX   = 256
 comptime PSC_MAX_TEX    = 64
 
-# ── Hair curve tessellation constants ─────────────────────────────────────────
-# B-spline curves (Shape "curve") are tessellated into cross-ribbon triangles.
-# HAIR_EVAL_N points are sampled uniformly along each strand (B-spline),
-# giving HAIR_EVAL_N-1 ribbon segments. Each segment becomes 2 perpendicular
-# quads (4 triangles) forming a cross-shaped profile visible from any angle.
-comptime HAIR_EVAL_N    = 8          # sample points along each strand
-comptime HAIR_MAX_VTX   = 30_000_000 # lazy buffer: max accumulated hair vertices
-comptime HAIR_MAX_TRI   = 15_000_000 # lazy buffer: max accumulated hair triangles
 
 # ── Internal parse state ──────────────────────────────────────────────────────
 # These types are private to the parsing subsystem.
@@ -98,8 +90,13 @@ struct SceneParseState(Movable):
     # Mesh accumulation
     var meshes: List[MeshAccum]
 
-    # Hair curve accumulator (lazily populated on first Shape "curve")
-    var hair:         Optional[MeshAccum]
+    # Native curve primitives (Shape "curve" — one entry per local B-spline
+    # segment, no tessellation). 3 floats per control point, 4 control points
+    # per curve: cp[i] = (curves_cp[12*i+3*k+0..2] for k in 0..3).
+    var curves_cp:  List[Float32]
+    var curves_w0:  List[Float32]
+    var curves_w1:  List[Float32]
+    var curves_mat: List[Int32]
 
     # Non-area lights
     var distant_dirs: List[Float32]   # 3 floats per light
@@ -170,7 +167,10 @@ struct SceneParseState(Movable):
 
         self.named_materials = List[NamedMaterial]()
         self.meshes          = List[MeshAccum]()
-        self.hair            = None
+        self.curves_cp  = List[Float32]()
+        self.curves_w0  = List[Float32]()
+        self.curves_w1  = List[Float32]()
+        self.curves_mat = List[Int32]()
 
         self.distant_dirs = List[Float32]()
         self.distant_rgbs = List[Float32]()

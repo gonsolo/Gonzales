@@ -204,7 +204,7 @@ def _sppm_camera_pass(
         for bounce in range(_MAX_B):
             var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
             inter_mem[0].hit = Int8(0)
-            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, ray, Float32(1.0e38), inter_mem)
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem)
             if inter_mem[0].hit == Int8(0):
                 break
 
@@ -376,7 +376,7 @@ def _sppm_photon_pass(
         for bounce in range(_MAX_B):
             var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
             inter_mem[0].hit = Int8(0)
-            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, ray, Float32(1.0e38), inter_mem)
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem)
             if inter_mem[0].hit == Int8(0):
                 break  # miss
 

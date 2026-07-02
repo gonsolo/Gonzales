@@ -5,9 +5,10 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, dot, cross, INV_PI, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
+from std.atomic import Atomic
 from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
 from .guide import null_guide
@@ -16,6 +17,17 @@ from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaus
 # Number of samples per pixel processed together in one wavefront bounce loop.
 # path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
 comptime WAVEFRONT_BATCH: Int = 8
+
+def _cstr_eq(a: UnsafePointer[UInt8, MutAnyOrigin], b: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
+    var i = 0
+    while True:
+        var ca = a[i]
+        var cb = b[i]
+        if ca != cb:
+            return False
+        if ca == UInt8(0):
+            return True
+        i += 1
 
 # GPU scene handle — holds DeviceContext and device-resident scene buffers.
 # Allocated on the heap, returned as an opaque pointer.
@@ -41,6 +53,14 @@ struct GpuSceneHandle(Movable):
     var n_area_lights: Int
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
     var n_spheres: Int
+    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves × sizeof(Curve_C)
+    var n_curves: Int
+    # Curve-divergence-mitigation scratch (see traverse_bvh2_core_defer_curves).
+    # Only meaningfully sized when n_curves > 0; otherwise 1-byte dummies.
+    var curve_cand_prim_buf: DeviceBuffer[DType.uint8]      # n_pixels×WAVEFRONT_BATCH×CURVE_DEFER_K × Int32
+    var curve_cand_count_buf: DeviceBuffer[DType.uint8]     # n_pixels×WAVEFRONT_BATCH × Int32
+    var curve_compact_path_buf: DeviceBuffer[DType.uint8]   # n_pixels×WAVEFRONT_BATCH × Int32
+    var curve_compact_counter_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var distant_lights_buf: DeviceBuffer[DType.uint8]  # n_distant × sizeof(DistantLight_C) = 32
     var n_distant_lights: Int
     var point_lights_buf: DeviceBuffer[DType.uint8]    # n_point × sizeof(PointLight_C) = 16
@@ -109,6 +129,8 @@ def gpu_upload_scene(
     areaLightCount: Int64,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
     distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
     distantLightCount: Int64,
     pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
@@ -310,6 +332,16 @@ def gpu_upload_scene(
                     for j in range(Int(sphereCount) * size_of[Sphere_C]()):
                         dst[j] = src[j]
 
+            # Upload curves (native hair/fur primitives — control points only, no tessellation)
+            var curve_bytes = max(Int(curveCount), 1) * size_of[Curve_C]()
+            var curve_buf = ctx.enqueue_create_buffer[DType.uint8](curve_bytes)
+            if Int(curveCount) > 0:
+                with curve_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = curves.bitcast[UInt8]()
+                    for j in range(Int(curveCount) * size_of[Curve_C]()):
+                        dst[j] = src[j]
+
             # Upload distant (directional) lights
             var dl_bytes = max(Int(distantLightCount), 1) * size_of[DistantLight_C]()
             var dl_buf = ctx.enqueue_create_buffer[DType.uint8](dl_bytes)
@@ -423,6 +455,15 @@ def gpu_upload_scene(
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]())
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+
+            # Curve-divergence-mitigation scratch — only sized for real when the
+            # scene actually has curves, to avoid wasting memory on the other ~57
+            # scenes in the comparison suite.
+            var n_curve_paths = n_pix * WAVEFRONT_BATCH if Int(curveCount) > 0 else 1
+            var r_curve_cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
+            var r_curve_cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+            var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+            var r_curve_compact_counter_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             with r_film_buf.map_to_host() as h:
                 var p = h.unsafe_ptr()
                 for i in range(n_pix * 12):
@@ -443,9 +484,25 @@ def gpu_upload_scene(
                 var nidx = Int(materials[mi].normal_tex_idx)
                 if nidx >= 0 and nidx < n_textures_int:
                     tex_is_raw[nidx] = True
+            # Many scenes (e.g. landscape) declare a separate named Texture per
+            # instance even when several instances share the same underlying
+            # image file (batch-exported "-renamed-N" duplicates). Dedup by
+            # (filename, raw-ness) so each unique file is only loaded from disk
+            # and uploaded to the GPU once, instead of once per declaration.
+            var dup_of = alloc[Int32](max(n_textures_int, 1))
+            for ti in range(n_textures_int):
+                dup_of[ti] = Int32(-1)
+                for tj in range(ti):
+                    if dup_of[tj] == Int32(-1) and tex_is_raw[tj] == tex_is_raw[ti] and \
+                       _cstr_eq(tex_filenames[ti], tex_filenames[tj]):
+                        dup_of[ti] = Int32(tj)
+                        break
             var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
             var gpu_textures_host = alloc[GpuTexture_C](max(n_textures_int, 1))
             for ti in range(n_textures_int):
+                if dup_of[ti] != Int32(-1):
+                    gpu_textures_host[ti] = gpu_textures_host[Int(dup_of[ti])]
+                    continue
                 var filename = tex_filenames[ti]
                 var data_out = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
                 var w_out = alloc[Int32](1)
@@ -508,9 +565,15 @@ def gpu_upload_scene(
                 var src = gpu_textures_host.bitcast[UInt8]()
                 for j in range(tex_struct_bytes):
                     dst[j] = src[j]
+            var n_unique_tex = 0
+            for ti in range(n_textures_int):
+                if dup_of[ti] == Int32(-1):
+                    n_unique_tex += 1
             gpu_textures_host.free()
             tex_is_raw.free()
-            print("GPU: " + String(n_textures_int) + " texture(s) uploaded")
+            dup_of.free()
+            print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
+                  + String(n_unique_tex) + " unique file(s) loaded)")
 
             # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
             comptime N_SOBOL_GPU_DIMS = 1024
@@ -558,6 +621,12 @@ def gpu_upload_scene(
                 n_area_lights=Int(areaLightCount),
                 spheres_buf=sphere_buf^,
                 n_spheres=Int(sphereCount),
+                curves_buf=curve_buf^,
+                n_curves=Int(curveCount),
+                curve_cand_prim_buf=r_curve_cand_prim_buf^,
+                curve_cand_count_buf=r_curve_cand_count_buf^,
+                curve_compact_path_buf=r_curve_compact_path_buf^,
+                curve_compact_counter_buf=r_curve_compact_counter_buf^,
                 distant_lights_buf=dl_buf^,
                 n_distant_lights=Int(distantLightCount),
                 point_lights_buf=pl_buf^,
@@ -618,6 +687,7 @@ def traverse_bvh2_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     rays: UnsafePointer[Ray_C, MutAnyOrigin],
     tMaxValues: UnsafePointer[Float32, MutAnyOrigin],
     results: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -629,7 +699,7 @@ def traverse_bvh2_gpu(
     var ray = rays[tid]
     var tMax = tMaxValues[tid]
     var result_ptr = results + tid
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, tMax, result_ptr)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, tMax, result_ptr)
 
 def gpu_traverse_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
@@ -678,6 +748,7 @@ def gpu_traverse_batch(
                 handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                 handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                 handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                 ray_buf.unsafe_ptr().bitcast[Ray_C](),
                 tmax_buf.unsafe_ptr().bitcast[Float32](),
                 result_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -718,6 +789,7 @@ def shade_nee_preamble_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -747,7 +819,7 @@ def shade_nee_preamble_gpu(
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ctx_no_shadow = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
@@ -771,6 +843,7 @@ def shade_diffuse_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -801,7 +874,7 @@ def shade_diffuse_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
@@ -821,6 +894,7 @@ def shade_coated_diffuse_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -851,7 +925,7 @@ def shade_coated_diffuse_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
@@ -871,6 +945,7 @@ def shade_diffuse_transmit_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -900,7 +975,7 @@ def shade_diffuse_transmit_gpu(
     var inter = intersections[tid]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
@@ -920,6 +995,7 @@ def shade_mix_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -950,7 +1026,7 @@ def shade_mix_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
@@ -1118,6 +1194,7 @@ def sample_medium_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     n_area_lights: Int,
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
@@ -1198,7 +1275,7 @@ def sample_medium_gpu(
                         var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
                         var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                         var shad_tmax = dist * Float32(0.9995)
-                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shad_ray, shad_tmax):
+                        if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax):
                             var T_r = exp(-sigma_t_r * dist)
                             var T_g = exp(-sigma_t_g * dist)
                             var T_b = exp(-sigma_t_b * dist)
@@ -1235,6 +1312,7 @@ def shade_hair_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -1265,7 +1343,7 @@ def shade_hair_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
@@ -1285,6 +1363,7 @@ def shade_enqueue_shadow_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -1308,7 +1387,7 @@ def shade_enqueue_shadow_gpu(
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ls_shadow = LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
-        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](),
         textures=textures, n_textures=n_textures, shadow_tasks=shadow_tasks,
         px_scale=Float32(0.0), sobol_matrices=UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), guide=null_guide(),
@@ -1325,6 +1404,7 @@ def traverse_shadow_rays_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     count: Int,
@@ -1336,7 +1416,7 @@ def traverse_shadow_rays_gpu(
     if task.active == 0:
         return
     var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, shadow_ray, task.tmax):
+    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax):
         paths[tid].estimate += RGB(task.contrib.r, task.contrib.g, task.contrib.b)
 
 
@@ -1437,10 +1517,13 @@ def traverse_paths_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     results: UnsafePointer[Intersection_C, MutAnyOrigin],
+    curve_cand_prim: UnsafePointer[Int32, MutAnyOrigin],
+    curve_cand_count: UnsafePointer[Int32, MutAnyOrigin],
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1448,8 +1531,89 @@ def traverse_paths_gpu(
         return
     if paths[tid].active == 0:
         return
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, paths[tid].ray, Float32(1.0e38), results + tid)
+    curve_cand_count[tid] = Int32(0)
+    traverse_bvh2_core_defer_curves(
+        bvh2Nodes, primIds, meshes, curves, paths[tid].ray, Float32(1.0e38), results + tid,
+        curve_cand_prim + tid * CURVE_DEFER_K, curve_cand_count + tid,
+    )
     test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
+
+
+# ── Curve-divergence-mitigation kernels (companions to traverse_paths_gpu) ────
+# See traverse_bvh2_core_defer_curves for the rationale. This is a 3-kernel
+# pipeline run once per bounce, only when the scene has curves:
+#   1. traverse_paths_gpu records up to CURVE_DEFER_K candidate curve prims per
+#      ray instead of testing them inline (above).
+#   2. compact_curve_paths_gpu streams the (typically sparse) subset of rays
+#      that recorded >=1 candidate into a dense array via a single atomic append
+#      per curve-touching ray — cheap even though divergent, since there's no
+#      expensive math in this kernel, just a compare-and-maybe-atomic.
+#   3. resolve_curve_candidates_gpu processes that dense array: each thread owns
+#      exactly one ray (compaction guarantees no ray appears twice), so there is
+#      no race updating `results`, and warps are densely packed with real work
+#      instead of ~92% idle lanes.
+
+def reset_curve_counter_gpu(counter: UnsafePointer[Int32, MutAnyOrigin]):
+    if block_idx.x == 0 and thread_idx.x == 0:
+        counter[0] = Int32(0)
+
+def compact_curve_paths_gpu(
+    curve_cand_count: UnsafePointer[Int32, MutAnyOrigin],
+    n: Int,
+    compact_pathIds: UnsafePointer[Int32, MutAnyOrigin],
+    compact_counter: UnsafePointer[Int32, MutAnyOrigin],
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= n:
+        return
+    if curve_cand_count[tid] > Int32(0):
+        var pos = Atomic.fetch_add(compact_counter, Int32(1))
+        compact_pathIds[Int(pos)] = Int32(tid)
+
+def resolve_curve_candidates_gpu(
+    compact_pathIds: UnsafePointer[Int32, MutAnyOrigin],
+    compact_counter: UnsafePointer[Int32, MutAnyOrigin],
+    curve_cand_prim: UnsafePointer[Int32, MutAnyOrigin],
+    curve_cand_count: UnsafePointer[Int32, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    results: UnsafePointer[Intersection_C, MutAnyOrigin],
+    n: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= n:
+        return
+    if tid >= Int(compact_counter[0]):
+        return
+    var pathId = Int(compact_pathIds[tid])
+    var n_cand = Int(curve_cand_count[pathId])
+    if n_cand == 0:
+        return
+    var ray = paths[pathId].ray
+    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
+    var res = results[pathId]
+    var best_t = res.tHit
+    var best_u = res.u
+    var best_v = res.v
+    var best_prim = res.primId
+    var best_hit = res.hit
+    var changed = False
+    for i in range(n_cand):
+        var primIdx = Int(curve_cand_prim[pathId * CURVE_DEFER_K + i])
+        var prim = primIds[primIdx]
+        var curve = curves[Int(prim.id1)]
+        var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, best_t)
+        if curve_hit[0]:
+            best_t = curve_hit[1]
+            best_u = curve_hit[2]
+            best_v = curve_hit[3]
+            best_prim = prim
+            best_hit = Int8(1)
+            changed = True
+    if changed:
+        results[pathId] = Intersection_C(best_prim, best_t, best_u, best_v, best_hit, 0, 0, 0)
 
 def gpu_shade_batch(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
@@ -1559,6 +1723,7 @@ def gen_aux_buffers_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     isects_tmp: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -1595,7 +1760,7 @@ def gen_aux_buffers_gpu(
     var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
     var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
     isects_tmp[tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, ray, Float32(1e38), isects_tmp + tid)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp + tid)
     test_spheres(spheres, n_spheres, ray, isects_tmp + tid)
 
     var nx = Float32(0); var ny = Float32(0); var nz = Float32(1)
@@ -1612,6 +1777,24 @@ def gen_aux_buffers_gpu(
             var hz = oz + dz*d - sc.z
             var hl = sqrt(hx*hx + hy*hy + hz*hz)
             if hl > Float32(0): nx = hx/hl; ny = hy/hl; nz = hz/hl
+        elif typ == 5:
+            # Approximate outward normal for the denoiser G-buffer: h alone
+            # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,
+            # so this picks one consistent side — fine for denoising, not used
+            # for shading (shade_hair derives its own frame independently).
+            var curve = curves[Int(isects_tmp[tid].primId.id1)]
+            var piece = min(Int(curve.n_pieces) - 1, Int(isects_tmp[tid].v * Float32(curve.n_pieces)))
+            var (cq0, cq1, _, _) = curve_piece_endpoints(curve, piece)
+            var caxis = cq1 - cq0
+            var calen = sqrt(dot(caxis, caxis))
+            if calen > Float32(1e-8):
+                var ctangent = caxis * (Float32(1.0) / calen)
+                var cu = _curve_perp_axis(ctangent)
+                var cb = cross(ctangent, cu)
+                var ch = isects_tmp[tid].u
+                var cs = sqrt(max(Float32(0.0), Float32(1.0) - ch*ch))
+                var cn = cu*ch + cb*cs
+                nx = cn[0]; ny = cn[1]; nz = cn[2]
         else:
             var mesh_idx: Int
             var base_vidx: Int
@@ -1669,6 +1852,7 @@ def gpu_gen_aux_buffers(
                 handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                 handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                 handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                 handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                 handle[].n_spheres,
                 handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -1729,14 +1913,41 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
+                    handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
                     n_int,
                     grid_dim=grid_dim,
                     block_dim=block_size,
                 )
+                if handle[].n_curves > 0:
+                    handle[].ctx.enqueue_function[reset_curve_counter_gpu](
+                        handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+                        grid_dim=1, block_dim=1,
+                    )
+                    handle[].ctx.enqueue_function[compact_curve_paths_gpu](
+                        handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+                        n_int,
+                        handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+                        grid_dim=grid_dim, block_dim=block_size,
+                    )
+                    handle[].ctx.enqueue_function[resolve_curve_candidates_gpu](
+                        handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                        handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                        n_int,
+                        grid_dim=grid_dim, block_dim=block_size,
+                    )
                 handle[].ctx.enqueue_function[sample_medium_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -1745,6 +1956,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
                     handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
@@ -1758,6 +1970,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -1783,6 +1996,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -1808,6 +2022,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -1833,6 +2048,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -1858,6 +2074,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -1933,6 +2150,7 @@ def gpu_render_sample(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2013,14 +2231,41 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
+                    handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
                     n_total,
                     grid_dim=grid_total,
                     block_dim=block_size,
                 )
+                if handle[].n_curves > 0:
+                    handle[].ctx.enqueue_function[reset_curve_counter_gpu](
+                        handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+                        grid_dim=1, block_dim=1,
+                    )
+                    handle[].ctx.enqueue_function[compact_curve_paths_gpu](
+                        handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+                        n_total,
+                        handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+                        grid_dim=grid_total, block_dim=block_size,
+                    )
+                    handle[].ctx.enqueue_function[resolve_curve_candidates_gpu](
+                        handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+                        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                        handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                        n_total,
+                        grid_dim=grid_total, block_dim=block_size,
+                    )
                 handle[].ctx.enqueue_function[sample_medium_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -2029,6 +2274,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
                     handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
@@ -2042,6 +2288,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2067,6 +2314,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2092,6 +2340,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2117,6 +2366,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2142,6 +2392,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2217,6 +2468,7 @@ def gpu_render_wavefront(
                     handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,

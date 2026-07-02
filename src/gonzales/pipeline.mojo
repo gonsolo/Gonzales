@@ -164,6 +164,7 @@ def _gpu_upload_scene(
         psc[0].materials,      Int64(psc[0].material_count),
         psc[0].area_lights,    Int64(psc[0].area_light_count),
         psc[0].spheres,        Int64(psc[0].sphere_count),
+        psc[0].curves,         Int64(psc[0].curve_count),
         psc[0].distant_lights, Int64(psc[0].distant_count),
         psc[0].point_lights,   Int64(psc[0].point_count),
         psc[0].light_sampler.cdf, Int64(psc[0].light_sampler.n),
@@ -225,7 +226,7 @@ def debug_trace_pixel(
     for bounce in range(8):
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[0].hit = Int8(0)
-        traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, ray, Float32(1.0e38), inter)
+        traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, ray, Float32(1.0e38), inter)
         if psc[0].sphere_count > 0:
             test_spheres(psc[0].spheres, Int(psc[0].sphere_count), ray, inter)
         if inter[0].hit == Int8(0):
@@ -295,7 +296,7 @@ def debug_trace_pixel(
             if rfl > Float32(0.0): rfx /= rfl; rfy /= rfl; rfz /= rfl
             var rray = Ray_C(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
             var rint = alloc[Intersection_C](1); rint[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, rray, Float32(1.0e38), rint)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray, Float32(1.0e38), rint)
             if rint[0].hit == Int8(0) and psc[0].infinite_count > 0:
                 var il2 = psc[0].infinite_lights[0]
                 var w2 = il2.world_to_light

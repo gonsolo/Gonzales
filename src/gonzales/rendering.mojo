@@ -82,7 +82,7 @@ def render_tile(
         for i in range(n):
             if paths[i].active == 0:
                 continue
-            traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes,
+            traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
                                paths[i].ray, Float32(1.0e38), intersections + i)
             if scene.sphereCount > 0:
                 test_spheres(scene.spheres, Int(scene.sphereCount), paths[i].ray, intersections + i)
@@ -163,7 +163,7 @@ def render_tile(
                                         var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
                                         var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                                         var shad_tmax = dist * Float32(0.9995)
-                                        if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, shad_ray, shad_tmax):
+                                        if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax):
                                             var T_r = exp(-sigma_t_r * dist)
                                             var T_g = exp(-sigma_t_g * dist)
                                             var T_b = exp(-sigma_t_b * dist)
@@ -179,7 +179,7 @@ def render_tile(
             if paths[i].active == 0:
                 continue
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
-                               scene.meshes, scene.materials,
+                               scene.meshes, scene.curves, scene.materials,
                                scene.areaLights, Int(scene.areaLightCount),
                                scene.textures, i,
                                scene.distantLights, Int(scene.distantLightCount),
@@ -408,7 +408,7 @@ def render_aux_buffers(
         if dl > Float32(0): dx /= dl; dy /= dl; dz /= dl
 
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, ray, Float32(1e38), isects + i)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i)
         if Int(sd.sphereCount) > 0:
             test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects + i)
 

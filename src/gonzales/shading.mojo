@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
@@ -37,6 +37,7 @@ struct ShadeContext:
     var bvh2Nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
     var primIds:          UnsafePointer[PrimId_C, MutAnyOrigin]
     var meshes:           UnsafePointer[TriangleMesh_C, MutAnyOrigin]
+    var curves:           UnsafePointer[Curve_C, MutAnyOrigin]
     var materials:        UnsafePointer[Material_C, MutAnyOrigin]
     var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
     var textures:         UnsafePointer[GpuTexture_C, MutAnyOrigin]
@@ -453,7 +454,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
             tmax, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
     else:
         var shadow_ray = Ray_C(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
-        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, shadow_ray, tmax):
+        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax):
             path_ptr[].estimate += contrib
             # Record in the guide at the PARENT surface (one bounce back):
             # "scatter direction ray.dir from parent_cell leads to illumination W here."
@@ -1273,6 +1274,62 @@ def _atan2f(y: Float32, x: Float32) -> Float32:
     if y < Float32(0.0): r = -r
     return r
 
+@always_inline
+def _hair_eval_lobes(
+    wi: SIMD[DType.float32, 3],
+    tangent: SIMD[DType.float32, 3],
+    b_perp: SIMD[DType.float32, 3],
+    n_perp: SIMD[DType.float32, 3],
+    phi_o: Float32,
+    dphi0: Float32, dphi1: Float32, dphi2: Float32,
+    cos_tp0_o: Float32, sin_tp0_o: Float32,
+    cos_tp1_o: Float32, sin_tp1_o: Float32,
+    cos_tp2_o: Float32, sin_tp2_o: Float32,
+    cos_theta_o: Float32, sin_theta_o: Float32,
+    inv_vm0: Float32, inv_vm1: Float32, inv_vm2: Float32,
+    mp_c0: Float32, mp_c1: Float32, mp_c2: Float32,
+    s: Float32,
+    A0: RGB, A1: RGB, A2: RGB, A3: RGB,
+    lum0: Float32, lum1: Float32, lum2: Float32, lum3: Float32, total_lum: Float32,
+) -> Tuple[Float32, RGB, Float32]:
+    """Shared Marschner 3-lobe (R/TT/TRT) evaluation at an arbitrary direction
+    wi — factored out of shade_hair's three near-identical call sites (env-light
+    NEE, distant-light NEE, indirect-sample eval) for readability/dedup.
+    shade_hair profiled at 143 registers/thread (occupancy hard-capped to 1
+    block/SM). Measured @no_inline here: registers went UP (143→148), not down
+    — the ~35 precomputed per-lobe constants (vm/mp_c/inv_vm ×3, dphi ×3,
+    cos_tp/sin_tp ×3, A0-3, lum0-3) have to stay live across shade_hair's whole
+    body regardless of how this eval logic is organized, since all 3 call sites
+    need them; extraction doesn't shrink the caller's peak liveness, it only adds
+    call/argument-marshaling overhead for ~30 params on top. Stays @always_inline
+    — same negative-result pattern as intersect_curve's failed @no_inline
+    experiment. A real fix needs fewer simultaneously-live precomputed values,
+    not a different inlining choice.
+    Returns (cos_ti, f, pdf_over_cos); pdf_over_cos is the lum-weighted M*N sum
+    (already has the /cos_ti baked into M — multiply by cos_ti for the
+    solid-angle PDF, as both NEE call sites and the indirect sampler do)."""
+    var sin_ti = dot(wi, tangent)
+    var cos_ti = max(safe_sqrt(Float32(1.0) - sin_ti * sin_ti), Float32(1e-5))
+    var wi_perp = wi - sin_ti * tangent
+    var phi_i = _atan2f(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
+    var dphi_i = phi_i - phi_o
+    var x0 = _hair_wrap(dphi_i - dphi0)
+    var x1 = _hair_wrap(dphi_i - dphi1)
+    var x2 = _hair_wrap(dphi_i - dphi2)
+    var M0 = _hair_Mp(cos_ti, cos_tp0_o, sin_ti, sin_tp0_o, inv_vm0, mp_c0) / cos_ti
+    var M1 = _hair_Mp(cos_ti, cos_tp1_o, sin_ti, sin_tp1_o, inv_vm1, mp_c1) / cos_ti
+    var M2 = _hair_Mp(cos_ti, cos_tp2_o, sin_ti, sin_tp2_o, inv_vm2, mp_c2) / cos_ti
+    var M3 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
+    var N0 = _hair_logistic(x0, s)
+    var N1 = _hair_logistic(x1, s)
+    var N2 = _hair_logistic(x2, s)
+    var N3 = Float32(0.5) * INV_PI
+    var f_r = A0.r*M0*N0 + A1.r*M1*N1 + A2.r*M2*N2 + A3.r*M3*N3
+    var f_g = A0.g*M0*N0 + A1.g*M1*N1 + A2.g*M2*N2 + A3.g*M3*N3
+    var f_b = A0.b*M0*N0 + A1.b*M1*N1 + A2.b*M2*N2 + A3.b*M3*N3
+    var pdf_over_cos = (lum0*M0*N0 + lum1*M1*N1 + lum2*M2*N2 + lum3*M3*N3) / total_lum
+    return (cos_ti, RGB(f_r, f_g, f_b), pdf_over_cos)
+
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
@@ -1286,67 +1343,34 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 
-    # ── Step 1: Get geometry ─────────────────────────────────────────────────
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
-    if not ok:
+    # ── Steps 1-4: Get geometry from the native curve hit ────────────────────
+    # h and v_global come straight from intersect_curve (geometry.mojo) via
+    # Intersection_C.u/.v — no tessellated mesh, no barycentric interpolation.
+    if inter.primId.type != 5:
         path_ptr[].active = 0
         return
-    var bu = inter.u
-    var bv = inter.v
-    var w0 = Float32(1.0) - bu - bv
-
-    # ── Step 2: Compute geometric normal ─────────────────────────────────────
-    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var (geo_normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
-
-    # ── Step 3: Get fiber tangent from shading normals ───────────────────────
+    var curve = ctx.curves[Int(inter.primId.id1)]
+    var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
+    var v_global = inter.v
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
     var tangent: SIMD[DType.float32, 3]
-    if Int(mesh.normals) > 1:
-        var tn0 = SIMD[DType.float32, 3](mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
-        var tn1 = SIMD[DType.float32, 3](mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
-        var tn2 = SIMD[DType.float32, 3](mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
-        tangent = tn0 * w0 + tn1 * bu + tn2 * bv
-        var tlen = dot(tangent, tangent)
-        if tlen > Float32(1e-12):
-            tangent = tangent * (Float32(1.0) / sqrt(tlen))
-        else:
-            tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
+    if seg_len > Float32(1e-8):
+        tangent = seg_axis * (Float32(1.0) / seg_len)
     else:
         tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
-
-    # ── Step 4: Get h from UVs and ribbon width direction ────────────────────
-    var h = Float32(0.0)
-    var n_perp: SIMD[DType.float32, 3]
-    if Int(mesh.uvs) > 1:
-        var u0 = mesh.uvs[v0*2]; var u1v = mesh.uvs[v1*2]; var u2v = mesh.uvs[v2*2]
-        var v0_uv = mesh.uvs[v0*2+1]; var v1_uv = mesh.uvs[v1*2+1]; var v2_uv = mesh.uvs[v2*2+1]
-        var u_interp = w0 * u0 + bu * u1v + bv * u2v
-        h = Float32(2.0) * u_interp - Float32(1.0)
-        # Compute ribbon width direction = normalize(dp/du) via UV gradient formula:
-        # dp/du = (dv2*e1 - dv1*e2) / (du1*dv2 - dv1*du2)
-        # This always points toward the h=+1 edge, making phi_o consistent with h.
-        var du1 = u1v - u0; var dv1 = v1_uv - v0_uv
-        var du2 = u2v - u0; var dv2 = v2_uv - v0_uv
-        var det_uv = du1 * dv2 - dv1 * du2
-        var e1 = p1 - p0; var e2 = p2 - p0
-        var dp_du = dv2 * e1 - dv1 * e2
-        if abs(det_uv) > Float32(1e-6):
-            dp_du = dp_du * (Float32(1.0) / det_uv)
-        var dp_du_len = dot(dp_du, dp_du)
-        if dp_du_len > Float32(1e-12):
-            n_perp = dp_du * (Float32(1.0) / sqrt(dp_du_len))
-        else:
-            n_perp = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
-    else:
-        n_perp = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
-    h = max(Float32(-0.99), min(Float32(0.99), h))
-    # Remove tangent component to ensure n_perp is truly in the cross-section plane
-    n_perp = n_perp - dot(n_perp, tangent) * tangent
-    var np_len = dot(n_perp, n_perp)
-    if np_len > Float32(1e-12):
-        n_perp = n_perp * (Float32(1.0) / sqrt(np_len))
+    # n_perp is the same deterministic (tangent-only) construction used by
+    # intersect_curve to define h — reproduced here so shading agrees exactly
+    # with the intersection that produced it.
+    var n_perp = _curve_perp_axis(tangent)
+    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    # Approximate outward radial direction at the hit point (reconstructed
+    # from h; the azimuthal sign beyond h is not stored, so this picks one
+    # consistent side — used only to offset shadow-ray origins off the fiber).
+    var b_perp0 = cross(tangent, n_perp)
+    var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
 
     # ── Step 5: wo = -ray_direction ──────────────────────────────────────────
     var wo = -ray_dir
@@ -1508,29 +1532,17 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
             pdf_env = INV_FOUR_PI
         if pdf_env > Float32(0.0) and not env_rgb.is_black():
             var wi_e = env_dir
-            var sin_ti_e = dot(wi_e, tangent)
-            var cos_ti_e = max(safe_sqrt(Float32(1.0) - sin_ti_e * sin_ti_e), Float32(1e-5))
-            var wi_e_perp = wi_e - sin_ti_e * tangent
-            var phi_i_e = _atan2f(dot(wi_e_perp, b_perp), dot(wi_e_perp, n_perp))
-            var dphi_ie = phi_i_e - phi_o
-            var x0e = _hair_wrap(dphi_ie - dphi0)
-            var x1e = _hair_wrap(dphi_ie - dphi1)
-            var x2e = _hair_wrap(dphi_ie - dphi2)
-            var M0e = _hair_Mp(cos_ti_e, cos_tp0_o, sin_ti_e, sin_tp0_o, inv_vm0, mp_c0) / cos_ti_e
-            var M1e = _hair_Mp(cos_ti_e, cos_tp1_o, sin_ti_e, sin_tp1_o, inv_vm1, mp_c1) / cos_ti_e
-            var M2e = _hair_Mp(cos_ti_e, cos_tp2_o, sin_ti_e, sin_tp2_o, inv_vm2, mp_c2) / cos_ti_e
-            var M3e = _hair_Mp(cos_ti_e, cos_theta_o, sin_ti_e, sin_theta_o, inv_vm2, mp_c2) / cos_ti_e
-            var N0e = _hair_logistic(x0e, s)
-            var N1e = _hair_logistic(x1e, s)
-            var N2e = _hair_logistic(x2e, s)
-            var N3e = Float32(0.5) * INV_PI  # uniform azimuthal for remainder lobe
-            var fe_r = A0.r*M0e*N0e + A1.r*M1e*N1e + A2.r*M2e*N2e + A3.r*M3e*N3e
-            var fe_g = A0.g*M0e*N0e + A1.g*M1e*N1e + A2.g*M2e*N2e + A3.g*M3e*N3e
-            var fe_b = A0.b*M0e*N0e + A1.b*M1e*N1e + A2.b*M2e*N2e + A3.b*M3e*N3e
+            var (cos_ti_e, f_e, pdf_over_cos_e) = _hair_eval_lobes(
+                wi_e, tangent, b_perp, n_perp, phi_o,
+                dphi0, dphi1, dphi2,
+                cos_tp0_o, sin_tp0_o, cos_tp1_o, sin_tp1_o, cos_tp2_o, sin_tp2_o,
+                cos_theta_o, sin_theta_o, inv_vm0, inv_vm1, inv_vm2, mp_c0, mp_c1, mp_c2, s,
+                A0, A1, A2, A3, lum0, lum1, lum2, lum3, total_lum,
+            )
             # MIS: pdf_bsdf in solid angle = cos_ti_e * (lum-weighted M*N sum) / total_lum
-            var pdf_bsdf_nee = max(cos_ti_e * (lum0*M0e*N0e + lum1*M1e*N1e + lum2*M2e*N2e + lum3*M3e*N3e) / total_lum, Float32(1e-6))
+            var pdf_bsdf_nee = max(cos_ti_e * pdf_over_cos_e, Float32(1e-6))
             var mis_w_e = power_heuristic(pdf_env, pdf_bsdf_nee)
-            var contrib_e = path_ptr[].throughput * cos_ti_e * RGB(fe_r, fe_g, fe_b) * env_rgb * (mis_w_e / pdf_env)
+            var contrib_e = path_ptr[].throughput * cos_ti_e * f_e * env_rgb * (mis_w_e / pdf_env)
             if not contrib_e.is_black():
                 var esign = Float32(1.0) if dot(wi_e, geo_normal) >= Float32(0.0) else Float32(-1.0)
                 var eorg = hit_base + geo_normal * Float32(0.0001) * esign
@@ -1542,33 +1554,15 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)
         var wi = -ldir  # toward light
 
-        var sin_ti = dot(wi, tangent)
-        var cos_ti = safe_sqrt(Float32(1.0) - sin_ti * sin_ti)
-        cos_ti = max(cos_ti, Float32(1e-5))
+        var (cos_ti, f_val, _) = _hair_eval_lobes(
+            wi, tangent, b_perp, n_perp, phi_o,
+            dphi0, dphi1, dphi2,
+            cos_tp0_o, sin_tp0_o, cos_tp1_o, sin_tp1_o, cos_tp2_o, sin_tp2_o,
+            cos_theta_o, sin_theta_o, inv_vm0, inv_vm1, inv_vm2, mp_c0, mp_c1, mp_c2, s,
+            A0, A1, A2, A3, lum0, lum1, lum2, lum3, total_lum,
+        )
 
-        var wi_perp = wi - sin_ti * tangent
-        var phi_i = _atan2f(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
-
-        var dphi_i = phi_i - phi_o
-        var x0 = _hair_wrap(dphi_i - dphi0)
-        var x1 = _hair_wrap(dphi_i - dphi1)
-        var x2 = _hair_wrap(dphi_i - dphi2)
-
-        var M0 = _hair_Mp(cos_ti, cos_tp0_o, sin_ti, sin_tp0_o, inv_vm0, mp_c0) / cos_ti
-        var M1 = _hair_Mp(cos_ti, cos_tp1_o, sin_ti, sin_tp1_o, inv_vm1, mp_c1) / cos_ti
-        var M2 = _hair_Mp(cos_ti, cos_tp2_o, sin_ti, sin_tp2_o, inv_vm2, mp_c2) / cos_ti
-        var M3 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
-
-        var N0 = _hair_logistic(x0, s)
-        var N1 = _hair_logistic(x1, s)
-        var N2 = _hair_logistic(x2, s)
-        var N3 = Float32(0.5) * INV_PI
-
-        var fr_val = A0.r * M0 * N0 + A1.r * M1 * N1 + A2.r * M2 * N2 + A3.r * M3 * N3
-        var fg_val = A0.g * M0 * N0 + A1.g * M1 * N1 + A2.g * M2 * N2 + A3.g * M3 * N3
-        var fb_val = A0.b * M0 * N0 + A1.b * M1 * N1 + A2.b * M2 * N2 + A3.b * M3 * N3
-
-        var contrib = path_ptr[].throughput * cos_ti * RGB(fr_val, fg_val, fb_val) * dl.emission
+        var contrib = path_ptr[].throughput * cos_ti * f_val * dl.emission
 
         var t_max = Float32(2000.0)
         var dsign = Float32(1.0) if dot(wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
@@ -1626,32 +1620,21 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         wi_s = wi_s * (Float32(1.0) / sqrt(wi_len))
 
     # Evaluate BSDF for sampled direction
-    var dphi_s = phi_i_s - phi_o
-    var x0s = _hair_wrap(dphi_s - dphi0)
-    var x1s = _hair_wrap(dphi_s - dphi1)
-    var x2s = _hair_wrap(dphi_s - dphi2)
-
-    var M0s = _hair_Mp(cos_ti_s, cos_tp0_o, sin_ti_s, sin_tp0_o, inv_vm0, mp_c0) / cos_ti_s
-    var M1s = _hair_Mp(cos_ti_s, cos_tp1_o, sin_ti_s, sin_tp1_o, inv_vm1, mp_c1) / cos_ti_s
-    var M2s = _hair_Mp(cos_ti_s, cos_tp2_o, sin_ti_s, sin_tp2_o, inv_vm2, mp_c2) / cos_ti_s
-    var M3s = _hair_Mp(cos_ti_s, cos_theta_o, sin_ti_s, sin_theta_o, inv_vm2, mp_c2) / cos_ti_s
-
-    var N0s = _hair_logistic(x0s, s)
-    var N1s = _hair_logistic(x1s, s)
-    var N2s = _hair_logistic(x2s, s)
-    var N3s = Float32(0.5) * INV_PI
-
-    var frs = A0.r * M0s * N0s + A1.r * M1s * N1s + A2.r * M2s * N2s + A3.r * M3s * N3s
-    var fgs = A0.g * M0s * N0s + A1.g * M1s * N1s + A2.g * M2s * N2s + A3.g * M3s * N3s
-    var fbs = A0.b * M0s * N0s + A1.b * M1s * N1s + A2.b * M2s * N2s + A3.b * M3s * N3s
+    var (cos_ti_s2, f_s, pdf_over_cos_s) = _hair_eval_lobes(
+        wi_s, tangent, b_perp, n_perp, phi_o,
+        dphi0, dphi1, dphi2,
+        cos_tp0_o, sin_tp0_o, cos_tp1_o, sin_tp1_o, cos_tp2_o, sin_tp2_o,
+        cos_theta_o, sin_theta_o, inv_vm0, inv_vm1, inv_vm2, mp_c0, mp_c1, mp_c2, s,
+        A0, A1, A2, A3, lum0, lum1, lum2, lum3, total_lum,
+    )
+    var frs = f_s.r; var fgs = f_s.g; var fbs = f_s.b
 
     # Compute sampling PDF — same M * N factors as BSDF (including /cos_ti_s) so
     # f/pdf cancels the divergence at grazing angles.
-    var pdf = (lum0 * M0s * N0s + lum1 * M1s * N1s + lum2 * M2s * N2s + lum3 * M3s * N3s) / total_lum
-    pdf = max(pdf, Float32(1e-6))
+    var pdf = max(pdf_over_cos_s, Float32(1e-6))
     # Solid-angle PDF (remove the embedded /cos_ti_s) — used for MIS when indirect path hits env.
     # M0s = _hair_Mp / cos_ti_s, so pdf already includes 1/cos_ti_s; multiply back to get solid angle.
-    var pdf_solid_angle = pdf * cos_ti_s
+    var pdf_solid_angle = pdf * cos_ti_s2
 
     # Update path state
     path_ptr[].pcgState = pcg.state
@@ -2124,7 +2107,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
             var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
             var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
             var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe_ray, probe_tmax, probe_store.unsafe_ptr())
+            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr())
             var probe_inter = probe_store[0]
             var used_mnee = False
             if probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
@@ -2160,7 +2143,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                 Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
                                 Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                             var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-                            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, probe2_ray, probe2_rem, probe2_store.unsafe_ptr())
+                            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr())
                             probe2_inter = probe2_store[0]
                         var ldp_du_v = lp1 - lp0; var ldp_dv_v = lp2 - lp0
                         if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
@@ -2203,7 +2186,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                     var wo2fn = wo2f*(Float32(1)/wo2fl)
                                                     var vis2_org = x2_f2 + wo2fn*Float32(0.001)
                                                     var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
-                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis2_ray, wo2fl*Float32(0.999)):
+                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999)):
                                                         var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w / pdf_area2)
                                                         path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
                         else:
@@ -2255,7 +2238,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                 var vis_ray = Ray_C(
                                                     Point3f(vis_org[0], vis_org[1], vis_org[2]),
                                                     Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-                                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, vis_ray, wo_len_f * Float32(0.999)):
+                                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len_f * Float32(0.999)):
                                                     var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s * lobe_w / pdf_area_x2)
                                                     path_ptr[].estimate += path_ptr[].throughput * mnee_wt
             if not used_mnee:
@@ -2714,6 +2697,7 @@ def shade_core_cpu_nee(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -2737,7 +2721,7 @@ def shade_core_cpu_nee(
         return
     var inter = intersections[tid]
     var ctx = ShadeContext(
-        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
         textures=UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), n_textures=0,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),

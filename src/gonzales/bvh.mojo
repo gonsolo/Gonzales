@@ -1,6 +1,6 @@
 from std.memory import alloc
 from std.math import sqrt
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Vec3f, Medium_C, MediumInterface_C, LightSampler_C
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Vec3f, Medium_C, MediumInterface_C, LightSampler_C
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -68,6 +68,8 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var infiniteLightCount: Int64
     var spheres: UnsafePointer[Sphere_C, MutAnyOrigin]
     var sphereCount: Int64
+    var curves: UnsafePointer[Curve_C, MutAnyOrigin]
+    var curveCount: Int64
     var mediums: UnsafePointer[Medium_C, MutAnyOrigin]
     var mediumCount: Int64
     var mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin]
@@ -129,6 +131,7 @@ def traverse_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     ray: Ray_C,
     tMax: Float32,
     resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -179,6 +182,187 @@ def traverse_bvh2_core(
                         continue # GPU cannot intersect non-triangle shapes directly yet
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                elif prim.type == 5:
+                    var curve = curves[Int(prim.id1)]
+                    var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
+                    if curve_hit[0]:
+                        localTHit = curve_hit[1]
+                        bestU = curve_hit[2]
+                        bestV = curve_hit[3]
+                        hitIndex = offset + j
+                    continue
+                else:
+                    continue
+
+                var mesh = meshes[mesh_idx]
+                var v0_idx = Int(mesh.vertexIndices[base_vidx])
+                var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
+                var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
+
+                var p0 = SIMD[DType.float32, 3](
+                    mesh.points[v0_idx * 4],
+                    mesh.points[v0_idx * 4 + 1],
+                    mesh.points[v0_idx * 4 + 2]
+                )
+                var p1 = SIMD[DType.float32, 3](
+                    mesh.points[v1_idx * 4],
+                    mesh.points[v1_idx * 4 + 1],
+                    mesh.points[v1_idx * 4 + 2]
+                )
+                var p2 = SIMD[DType.float32, 3](
+                    mesh.points[v2_idx * 4],
+                    mesh.points[v2_idx * 4 + 1],
+                    mesh.points[v2_idx * 4 + 2]
+                )
+
+                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                if hit_res[0]:
+                    localTHit = hit_res[1]
+                    bestU = hit_res[2]
+                    bestV = hit_res[3]
+                    hitIndex = offset + j
+
+            # Pop next node from stack
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[toVisit])
+        else:
+            # Interior node — test both children, visit nearer first
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+
+            var leftNode = bvh2Nodes[leftIdx]
+            var rightNode = bvh2Nodes[rightIdx]
+
+            var leftHit = intersect_aabb(
+                leftNode.min, leftNode.max,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+            var rightHit = intersect_aabb(
+                rightNode.min, rightNode.max,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+
+            if leftIsHit and rightIsHit:
+                # Both hit — visit nearer first, push farther
+                var leftTNear = leftHit[1]
+                var rightTNear = rightHit[1]
+                if leftTNear <= rightTNear:
+                    current = leftIdx
+                    stack_ptr[toVisit] = Int32(rightIdx)
+                else:
+                    current = rightIdx
+                    stack_ptr[toVisit] = Int32(leftIdx)
+                toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+            elif rightIsHit:
+                current = rightIdx
+            else:
+                # Neither child hit — pop from stack
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[toVisit])
+
+    if hitIndex != -1:
+        resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    else:
+        var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+
+
+# Divergence-mitigation experiment for traverse_paths_gpu: identical traversal to
+# traverse_bvh2_core, except curve leaves are not intersected inline. Instead, up
+# to CURVE_DEFER_K candidate prim indices are recorded per ray (curve_cand_prim/
+# curve_cand_count, both already offset to this ray's slot by the caller) so the
+# expensive ray-vs-cylinder math can run later in a compacted kernel over just the
+# rays that actually touched curve geometry, instead of scattered across every
+# warp in the main traversal kernel. ncu profiling showed traverse_paths_gpu on
+# fur scenes averaging 2.63/32 active threads per warp and 73% uncoalesced global
+# sectors — both are classic per-ray-scalar-divergent-leaf-work symptoms, not
+# register pressure (three register/inlining fixes measured no improvement).
+# On overflow (>CURVE_DEFER_K candidates for one ray) this falls back to the
+# immediate intersect_curve call, so correctness never depends on K being large
+# enough — it only affects how many rays get the compaction benefit.
+@always_inline
+def traverse_bvh2_core_defer_curves(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    ray: Ray_C,
+    tMax: Float32,
+    resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
+    curve_cand_prim: UnsafePointer[Int32, MutAnyOrigin],
+    curve_cand_count: UnsafePointer[Int32, MutAnyOrigin],
+):
+
+    var rdirX = Float32(1.0) / ray.direction.x
+    var rdirY = Float32(1.0) / ray.direction.y
+    var rdirZ = Float32(1.0) / ray.direction.z
+
+    var orgRdirX = ray.origin.x * rdirX
+    var orgRdirY = ray.origin.y * rdirY
+    var orgRdirZ = ray.origin.z * rdirZ
+
+    var nearXIsMin = rdirX >= Float32(0.0)
+    var nearYIsMin = rdirY >= Float32(0.0)
+    var nearZIsMin = rdirZ >= Float32(0.0)
+
+    var hitIndex: Int = -1
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+
+    var stack = InlineArray[Int32, 64](fill=Int32(0))
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+
+    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
+
+    while True:
+        var node = bvh2Nodes[current]
+
+        if node.count > 0:
+            # Leaf node — intersect primitives
+            var offset = Int(node.offset)
+            var count = Int(node.count)
+            for j in range(count):
+                var prim = primIds[offset + j]
+                var mesh_idx: Int
+                var base_vidx: Int
+
+                if prim.type == 0:
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
+                elif prim.type == 1 or prim.type == 2 or prim.type == 3:
+                    if prim.id2 == -1:
+                        continue # GPU cannot intersect non-triangle shapes directly yet
+                    mesh_idx = Int(prim.id2 >> 32)
+                    base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                elif prim.type == 5:
+                    var slot = curve_cand_count[0]
+                    if slot < Int32(CURVE_DEFER_K):
+                        curve_cand_prim[Int(slot)] = Int32(offset + j)
+                        curve_cand_count[0] = slot + Int32(1)
+                    else:
+                        var curve = curves[Int(prim.id1)]
+                        var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
+                        if curve_hit[0]:
+                            localTHit = curve_hit[1]
+                            bestU = curve_hit[2]
+                            bestV = curve_hit[3]
+                            hitIndex = offset + j
+                    continue
                 else:
                     continue
 
@@ -272,6 +456,7 @@ def any_hit_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
     ray: Ray_C,
     tMax: Float32,
 ) -> Bool:
@@ -307,6 +492,11 @@ def any_hit_bvh2_core(
                         continue
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
+                elif prim.type == 5:
+                    var curve = curves[Int(prim.id1)]
+                    if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
+                        return True
+                    continue
                 else:
                     continue
                 var mesh = meshes[mesh_idx]
@@ -362,7 +552,7 @@ def any_hit_bvh2_core(
 def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
-    traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, ray, tMax, resultPtr)
+    traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, ray, tMax, resultPtr)
 
 
 # ── BVH2 Construction (SAH) ───────────────────────────────────────────
