@@ -57,6 +57,7 @@ for scene in "${SCENES[@]}"; do
     p_png="$OUT/images/${scene}-pbrt.png"
     g_time_file="$OUT/images/${scene}-gonzales.time"
     p_time_file="$OUT/images/${scene}-pbrt.time"
+    g_mode_file="$OUT/images/${scene}-gonzales.mode"
 
     ok=true
 
@@ -65,15 +66,29 @@ for scene in "${SCENES[@]}"; do
         echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
         g_exr="$OUT/images/${scene}-gonzales.exr"
         g_log="$OUT/images/${scene}-gonzales.log"
+        g_label=""
         if (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
             [ -f ~/work/gonzales/"$exr_name" ] && \
             mv ~/work/gonzales/"$exr_name" "$g_exr" && \
             tonemap "$g_exr" "$g_png"; then
+            g_label="GPU"
+        else
+            echo "  ! gonzales GPU failed, trying CPU..."
+            if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
+                --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
+                [ -f ~/work/gonzales/"$exr_name" ] && \
+                mv ~/work/gonzales/"$exr_name" "$g_exr" && \
+                tonemap "$g_exr" "$g_png"; then
+                g_label="CPU"
+            fi
+        fi
+        if [ -n "$g_label" ]; then
             # Extract rendering time ("Done: X.Xs" from progress line)
             g_t=$(grep -oP "Done: \K[\d.]+" "$g_log" | tail -1)
             echo "${g_t:-?}" > "$g_time_file"
-            echo "  → gonzales OK (${g_t:-?}s render)"
+            echo "$g_label" > "$g_mode_file"
+            echo "  → gonzales OK ($g_label, ${g_t:-?}s render)"
         else
             echo "  ✗ gonzales FAILED (see $g_log)"; ok=false
         fi
@@ -197,9 +212,11 @@ for scene in "${DONE[@]}"; do
     p_rel="images/${scene}-pbrt.png"
     g_time_file="$OUT/images/${scene}-gonzales.time"
     p_time_file="$OUT/images/${scene}-pbrt.time"
-    g_t="?"; p_t="?"
+    g_mode_file="$OUT/images/${scene}-gonzales.mode"
+    g_t="?"; p_t="?"; g_mode="GPU"
     [ -f "$g_time_file" ] && g_t=$(cat "$g_time_file")
     [ -f "$p_time_file" ] && p_t=$(cat "$p_time_file")
+    [ -f "$g_mode_file" ] && g_mode=$(cat "$g_mode_file")
     cat >> "$HTML" << SCENE
   <div class="card">
     <div class="card-title">${scene}</div>
@@ -212,7 +229,7 @@ for scene in "${DONE[@]}"; do
       <span class="lbl lbl-r">PBRT</span>
     </div>
     <div class="timebar">
-      <span class="tg">Gonzales GPU: ${g_t}s</span>
+      <span class="tg">Gonzales ${g_mode}: ${g_t}s</span>
       <span class="tp">pbrt: ${p_t}s</span>
     </div>
   </div>
