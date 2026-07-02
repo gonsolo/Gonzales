@@ -531,7 +531,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].lastBsdfPdf = bs.pdf
     path_ptr[].specularBounce = Int8(0)
 
-    if path_ptr[].bounce == 0:
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = mat.albedo
     path_ptr[].bounce += 1
 
@@ -572,7 +572,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
-    if path_ptr[].bounce == 0:
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = alb
 
     # ── Layered BSDF: smooth dielectric coat over a Lambertian base ──────────
@@ -836,7 +836,7 @@ def _finish_delta_bounce(
         return
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
-    if path_ptr[].bounce == 0:
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = default_albedo
     path_ptr[].throughput *= bs.f
     path_ptr[].specularBounce = Int8(1)
@@ -1645,7 +1645,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].ray = Ray_C(
         Point3f(scatter_org[0], scatter_org[1], scatter_org[2]),
         Vec3f(wi_s[0], wi_s[1], wi_s[2]))
-    if path_ptr[].bounce == 0:
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         # Approximate albedo AOV from TT lobe (closest to diffuse color)
         path_ptr[].albedo = A1
     path_ptr[].throughput *= RGB(frs, fgs, fbs) * (Float32(1.0) / pdf)
@@ -2462,7 +2462,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         pdf_mix = bsdf_s[1]
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
-    if path_ptr[].bounce == 0:
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = alb
     # Store mixture PDF for next-bounce MIS (area light hit, env light miss)
     path_ptr[].lastBsdfPdf = pdf_mix
