@@ -10,7 +10,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     dot, cross, fr_dielectric, PI, INV_FOUR_PI, INV_PI,
 )
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
@@ -139,6 +139,19 @@ def _visible_transmittance(
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem)
+        # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
+        # the BVH — traverse_bvh2_core only tests triangles/curves — so they need
+        # a separate pass. Seed a sentinel tHit=remaining*0.9995 when the BVH found
+        # nothing, so test_spheres's own internal tMax (it only bounds itself by
+        # result[0].tHit when result[0].hit is already set) respects the shadow
+        # ray's segment length instead of defaulting to unbounded (1e38).
+        var had_bvh_hit = inter_mem[0].hit != Int8(0)
+        if not had_bvh_hit:
+            inter_mem[0].hit = Int8(1)
+            inter_mem[0].tHit = remaining * Float32(0.9995)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
+        if not had_bvh_hit and inter_mem[0].primId.type != Int8(4):
+            inter_mem[0].hit = Int8(0)
         if inter_mem[0].hit == Int8(0):
             # Nothing between here and destination: apply remaining Beer-Lambert
             if Int(cur_med) >= 0:
@@ -261,6 +274,7 @@ def _build_camera_path(
         var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
         inter_mem[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if inter_mem[0].hit == Int8(0): break
 
         var inter = inter_mem[0]
@@ -510,6 +524,7 @@ def _build_light_path(
         var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
         inter_mem[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem)
+        test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if inter_mem[0].hit == Int8(0): break
 
         var inter = inter_mem[0]
