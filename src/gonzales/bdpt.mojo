@@ -694,14 +694,6 @@ def bdpt_render(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    print("BDPT DEBUG: has_med=" + String(has_med) + " mediumCount=" + String(sd.mediumCount)
-          + " default_emit_med=" + String(default_emit_med))
-    # Print camera origin from c2w
-    var c2w_dbg = psc[0].camera_to_world
-    print("BDPT DEBUG: cam_origin=(" + String(c2w_dbg[12]) + "," + String(c2w_dbg[13]) + "," + String(c2w_dbg[14]) + ")")
-    # Count sphere hits: sphere at (-0.228, 1.2, 0.153) radius 0.3
-    var sphere_hits = 0; var total_light_verts = 0
-
     # Output buffer: R, G, B per pixel
     var buf_r = alloc[Float32](n_pix)
     var buf_g = alloc[Float32](n_pix)
@@ -724,8 +716,6 @@ def bdpt_render(
             var pcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                             UInt64(si * 2654435761 + 1))
 
-            var dbg = (px == fw//2 and py == fh//2 and si < 3)
-
             # ── Camera subpath ──────────────────────────────────────────────
             var n_cam = _build_camera_path(
                 cam_verts, r2c, c2w, px, py, sd, pcg, has_med)
@@ -733,35 +723,6 @@ def bdpt_render(
             # ── Light subpath ───────────────────────────────────────────────
             var n_light = _build_light_path(
                 light_verts, sd, pcg, has_med, default_emit_med)
-
-            # Count light verts near sphere
-            total_light_verts += n_light
-            for _li in range(n_light):
-                var lv = light_verts[_li]
-                var dx = lv.px + Float32(0.228); var dy = lv.py - Float32(1.2); var dz = lv.pz - Float32(0.153)
-                if dx*dx + dy*dy + dz*dz < Float32(0.25):  # within sphere region
-                    sphere_hits += 1
-
-            if dbg:
-                print("DBG px=" + String(px) + " py=" + String(py) + " si=" + String(si)
-                      + " n_cam=" + String(n_cam) + " n_light=" + String(n_light))
-                for ci in range(n_cam):
-                    var v = cam_verts[ci]
-                    print("  cam[" + String(ci) + "] p=(" + String(v.px) + "," + String(v.py) + "," + String(v.pz)
-                          + ") is_surf=" + String(v.is_surface) + " med=" + String(v.med_idx)
-                          + " beta_r=" + String(v.beta_r))
-                for li in range(n_light):
-                    var v = light_verts[li]
-                    print("  lgt[" + String(li) + "] p=(" + String(v.px) + "," + String(v.py) + "," + String(v.pz)
-                          + ") is_surf=" + String(v.is_surface) + " med=" + String(v.med_idx)
-                          + " beta_r=" + String(v.beta_r) + " is_lgt=" + String(v.is_light))
-                # Print first connection contribution
-                if n_cam > 0 and n_light > 0:
-                    var c0 = _connect(cam_verts[0], light_verts[0], sd, has_med)
-                    print("  connect(cam[0],lgt[0]) = " + String(c0[0]) + "," + String(c0[1]) + "," + String(c0[2]))
-                    if n_light > 1:
-                        var c1 = _connect(cam_verts[0], light_verts[1], sd, has_med)
-                        print("  connect(cam[0],lgt[1]) = " + String(c1[0]) + "," + String(c1[1]) + "," + String(c1[2]))
 
             if n_cam == 0 or n_light == 0:
                 continue
@@ -802,8 +763,6 @@ def bdpt_render(
         if verbose and pix % (n_pix // 10 + 1) == 0:
             print("BDPT: " + String(pix * 100 // n_pix) + "%")
 
-    print("BDPT DEBUG: sphere_hits=" + String(sphere_hits) + " total_light_verts=" + String(total_light_verts)
-          + " (sphere fraction=" + String(Float32(sphere_hits)/Float32(max(total_light_verts,1))) + ")")
     cam_verts.free(); light_verts.free()
 
     # Clamp and write image

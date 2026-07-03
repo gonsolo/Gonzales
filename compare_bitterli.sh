@@ -71,19 +71,39 @@ for scene in "${SCENES[@]}"; do
 
     ok=true
 
+    # volumetric-caustic's glass-sphere caustic is an SDS path that plain
+    # unidirectional NEE path tracing cannot resolve at any sample count —
+    # route it through gonzales's --bdpt renderer instead of --gpu. Not
+    # applied to every "Integrator bdpt" scene: glass-of-water needs ~33
+    # bounces through its nested dielectric surfaces, well past BDPT's
+    # hardcoded 10-vertex-per-subpath cap (_BDPT_MAX_VERTS in bdpt.mojo),
+    # so it renders black under --bdpt and stays on --gpu, which already
+    # handles it correctly.
+    use_bdpt=false
+    [ "$scene" = "volumetric-caustic" ] && use_bdpt=true
+
     # ── gonzales ──────────────────────────────────────────────────────────────
     if [ ! -f "$g_png" ]; then
         echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
         g_exr="$OUT/images/${scene}-gonzales.exr"
         g_log="$OUT/images/${scene}-gonzales.log"
         g_label=""
-        if (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
+        if $use_bdpt; then
+            if (cd ~/work/gonzales && "$GONZALES" --bdpt --bdpt-spp "$SPP" \
+                --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
+                [ -f ~/work/gonzales/"$exr_name" ] && \
+                { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
+                           || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
+                g_label="BDPT"
+            fi
+        elif (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
             [ -f ~/work/gonzales/"$exr_name" ] && \
             { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
                        || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
             g_label="GPU"
-        else
+        fi
+        if [ -z "$g_label" ] && ! $use_bdpt; then
             echo "  ! gonzales GPU failed, trying CPU..."
             if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
