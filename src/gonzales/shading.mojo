@@ -499,8 +499,19 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 
     # Balance heuristic: choose reflect vs transmit proportional to luminance,
     # then a cosine-hemisphere scatter direction around the chosen lobe's normal.
+    # "texture reflectance"/"texture transmittance" (e.g. a leaf.tga imagemap)
+    # both resolve to the same mat.tex_idx (Material_C has one texture slot,
+    # shared across kinds) — sample it once and use it for both lobes. Leaving
+    # this at the flat mat.albedo/mat.emission default (as before) rendered
+    # textured diffusetransmission foliage as a dull, wall-coloured grey blob
+    # instead of the actual leaf texture, effectively invisible against a
+    # similarly-toned wall.
     var refl = mat.albedo
     var trans = mat.emission
+    if Int(mat.tex_idx) >= 0:
+        var tex_rgb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        refl = tex_rgb
+        trans = tex_rgb
     var (bs, bounce_normal, lobe_alb, lobe_w, choose_reflect) = bxdf_sample_diffuse_transmit(
         normal, refl, trans, pcg.next_float(), pcg.next_float(), pcg.next_float())
     if bs.is_valid == Int8(0):
@@ -532,7 +543,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].specularBounce = Int8(0)
 
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-        path_ptr[].albedo = mat.albedo
+        path_ptr[].albedo = refl
     path_ptr[].bounce += 1
 
     # Russian roulette after first bounce
