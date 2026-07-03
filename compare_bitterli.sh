@@ -82,6 +82,18 @@ for scene in "${SCENES[@]}"; do
         volumetric-caustic|glass-of-water) use_bdpt=true ;;
     esac
 
+    # water-caustic declares "Integrator sppm" — same underlying reason as the
+    # bdpt scenes above (its caustic is an SDS path plain NEE can't resolve),
+    # but pbrt's own --gpu path *silently ignores* the sppm directive and
+    # substitutes "volpath" (logged: 'the wavefront integrator always uses a
+    # "volpath" integrator') — so the existing --gpu-vs-GPU comparison for this
+    # scene was unknowingly fair (same limitation on both sides) but not a real
+    # test of either renderer's actual caustic quality. pbrt only respects sppm
+    # on CPU. Route gonzales through --sppm and force pbrt to CPU for this one
+    # scene so both sides render with their real, intended integrator.
+    use_sppm=false
+    [ "$scene" = "water-caustic" ] && use_sppm=true
+
     # ── gonzales ──────────────────────────────────────────────────────────────
     if [ ! -f "$g_png" ]; then
         echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
@@ -96,6 +108,14 @@ for scene in "${SCENES[@]}"; do
                            || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
                 g_label="BDPT"
             fi
+        elif $use_sppm; then
+            if (cd ~/work/gonzales && "$GONZALES" --sppm --sppm-passes 200 --sppm-photons 100000 \
+                --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
+                [ -f ~/work/gonzales/"$exr_name" ] && \
+                { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
+                           || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
+                g_label="SPPM"
+            fi
         elif (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
             [ -f ~/work/gonzales/"$exr_name" ] && \
@@ -103,7 +123,7 @@ for scene in "${SCENES[@]}"; do
                        || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
             g_label="GPU"
         fi
-        if [ -z "$g_label" ] && ! $use_bdpt; then
+        if [ -z "$g_label" ] && ! $use_bdpt && ! $use_sppm; then
             echo "  ! gonzales GPU failed, trying CPU..."
             if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
@@ -142,7 +162,18 @@ for scene in "${SCENES[@]}"; do
         # in that case move directly to $p_png (already sRGB — do NOT tonemap).
         pbrt_is_png=false
         [[ "$exr_name" == *.png ]] && pbrt_is_png=true
-        if (cd "$scene_dir" && "$PBRT" --gpu --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
+        if $use_sppm; then
+            # pbrt's --gpu path silently substitutes "volpath" for a declared
+            # sppm integrator (with a warning, not a failure) — skip straight
+            # to CPU, the only mode that actually honors it.
+            if (cd "$scene_dir" && "$PBRT" --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
+                   && [ -f "$scene_dir/$exr_name" ]; then
+                $pbrt_is_png && mv "$scene_dir/$exr_name" "$p_png" \
+                             || mv "$scene_dir/$exr_name" "$p_exr"
+                render_ok=true
+                p_label="CPU"
+            fi
+        elif (cd "$scene_dir" && "$PBRT" --gpu --spp "$SPP" scene-v4-lowres.pbrt) > "$p_log" 2>&1 \
                && [ -f "$scene_dir/$exr_name" ]; then
             $pbrt_is_png && mv "$scene_dir/$exr_name" "$p_png" \
                          || mv "$scene_dir/$exr_name" "$p_exr"
