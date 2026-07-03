@@ -613,31 +613,27 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             wm = wm * (Float32(1.0) / sqrt(wmlen))
     var cos_wm = dot(wo, wm)
     var f_entry = fr_dielectric(cos_wm, ior)
+    var cos_o = dot(wo, normal)
 
-    if pcg.next_float() < f_entry:
-        # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
-        var refl = wm * (Float32(2.0) * cos_wm) - wo
-        var rlen = dot(refl, refl)
-        if rlen > Float32(0.0):
-            refl = refl * (Float32(1.0) / sqrt(rlen))
-        if dot(refl, normal) <= Float32(0.0):
-            path_ptr[].active = 0          # reflected below the surface — discard
-            path_ptr[].pcgState = pcg.state
-            return
-
-        var cos_o = dot(wo, normal)
-        var d_sampled = ggx_D(dot(normal, wm), coat_alpha)
-
-        # Rough coat: NEE against area lights, MIS-combined with the reflected
-        # ray below. A glossy lobe's reflection cone is too narrow for naive
-        # BSDF sampling to reliably find compact/distant lights (confirmed by
-        # a real missing highlight — lamp's shade never picked up its bulb's
-        # reflection even at 512spp without this). Smooth coat (is_rough_coat
-        # false, e.g. car paint) skips NEE entirely: a delta reflection can
-        # never land on a stochastically-sampled light direction, so any
-        # shadow ray fired there would just be wasted work — that path keeps
-        # its original full-credit-on-hit / specularBounce=1 behaviour below.
-        if is_rough_coat and ctx.lights.area_light_count > 0 and cos_o > Float32(0.0):
+    # Rough coat: NEE against area lights and distant lights, MIS-combined
+    # with the reflected ray below. Fired unconditionally (NOT gated on the
+    # reflect-vs-transmit coin flip a few lines down) because it evaluates
+    # the coat's own BRDF response — a surface property, independent of
+    # which lobe this particular sample's *continuation* ray happens to
+    # follow. Gating it on that coin flip would double-count the interface
+    # Fresnel term (once implicitly via the gate's own probability, once via
+    # the NEE half-vector's own Fresnel term computed below) and silently
+    # bias the result low by roughly that probability — this was tried
+    # first and measurably under-shot pbrt's reference brightness.
+    # A glossy lobe's reflection cone is too narrow for naive BSDF sampling
+    # to reliably find compact/distant lights (confirmed by a real missing
+    # highlight — lamp's shade never picked up its bulb's reflection even at
+    # 512spp without this). Smooth coat (is_rough_coat false, e.g. car
+    # paint) skips NEE entirely: a delta reflection can never land on a
+    # stochastically-sampled light direction, so any shadow ray fired there
+    # would just be wasted work.
+    if is_rough_coat and cos_o > Float32(0.0):
+        if ctx.lights.area_light_count > 0:
             var ls_u_coat = pcg.next_float()
             var ls_result_coat = light_sampler_sample(ctx.lights.light_sampler, ls_u_coat)
             var light_idx_coat = ls_result_coat[0]
@@ -685,12 +681,26 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                             if pdf_light_coat > Float32(0.0):
                                 var w_coat = power_heuristic(pdf_light_coat, pdf_bsdf_coat)
                                 var contrib_coat = path_ptr[].throughput * al_coat.emission * (f_cos_nee * w_coat / pdf_light_coat)
+                                # Nudge the albedo AOV toward white in proportion to this
+                                # sample's own highlight strength (saturating at 1). NEE
+                                # shadow rays never otherwise touch albedo, so a sharp
+                                # specular highlight — bright in only a few of the spp
+                                # samples per pixel — looks identical to its dark
+                                # neighbours in the denoiser's guide buffer and gets
+                                # smoothed away. Averaged over samples like beauty itself,
+                                # this converges to a signal that's actually elevated where
+                                # the highlight is, unlike a per-pixel-constant heuristic
+                                # (view-angle Fresnel was tried first here and didn't
+                                # discriminate at all — it barely varies across a curved
+                                # surface's highlight vs. its immediate neighbours).
+                                var boost_coat = min(Float32(1.0), contrib_coat.r * Float32(0.2126) + contrib_coat.g * Float32(0.7152) + contrib_coat.b * Float32(0.0722))
+                                path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0), Float32(1.0), Float32(1.0)) - path_ptr[].albedo) * boost_coat
                                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_c, dist_c * Float32(0.9999), contrib_coat)
 
         # Distant (delta) lights through the coat's glossy lobe. No MIS weight —
         # a delta light direction has zero probability under any stochastic
         # BSDF sample, so NEE is the only strategy that can ever see it.
-        if is_rough_coat and ctx.lights.distant_count > 0 and cos_o > Float32(0.0):
+        if ctx.lights.distant_count > 0:
             for dl_i_coat in range(ctx.lights.distant_count):
                 var dl_coat = ctx.lights.distant_lights[dl_i_coat]
                 var wi_dl = SIMD[DType.float32, 3](-dl_coat.direction.x, -dl_coat.direction.y, -dl_coat.direction.z)
@@ -707,12 +717,26 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                             var f_dl = fr_dielectric(cos_wm_dl, ior)
                             var f_cos_dl = d_dl * g2_dl * f_dl / (Float32(4.0) * cos_o)
                             var contrib_dl = path_ptr[].throughput * dl_coat.emission * f_cos_dl
+                            var boost_dl = min(Float32(1.0), contrib_dl.r * Float32(0.2126) + contrib_dl.g * Float32(0.7152) + contrib_dl.b * Float32(0.0722))
+                            path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0), Float32(1.0), Float32(1.0)) - path_ptr[].albedo) * boost_dl
                             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_dl, Float32(2000.0), contrib_dl)
+
+    if pcg.next_float() < f_entry:
+        # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
+        var refl = wm * (Float32(2.0) * cos_wm) - wo
+        var rlen = dot(refl, refl)
+        if rlen > Float32(0.0):
+            refl = refl * (Float32(1.0) / sqrt(rlen))
+        if dot(refl, normal) <= Float32(0.0):
+            path_ptr[].active = 0          # reflected below the surface — discard
+            path_ptr[].pcgState = pcg.state
+            return
 
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
         if is_rough_coat:
             # MIS-gate the reflected ray against the NEE above (real pdf_bsdf,
             # specularBounce=0) instead of the delta-lobe full-credit path.
+            var d_sampled = ggx_D(dot(normal, wm), coat_alpha)
             path_ptr[].specularBounce = Int8(0)
             path_ptr[].lastBsdfPdf = ggx_vndf_pdf(cos_o, cos_wm, d_sampled, coat_alpha)
         else:
