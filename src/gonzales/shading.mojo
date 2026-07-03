@@ -2371,18 +2371,14 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
     # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map
-    # can tilt the shading normal past the viewer at grazing angles; those faces
-    # reflect no direct light (without this, the away side of each bump is wrongly
-    # lit — the top/bottom split across each bead). They still receive ambient
-    # from a uniform environment light (albedo * L), which is pbrt's dim grey
-    # there — so add that rather than going black, then stop.
+    # (or, on low-poly meshes, plain vertex-normal interpolation) can tilt the
+    # shading normal past the viewer at grazing angles. Falling back to the
+    # geometric normal (always front-facing to wo, see GeomContext.geo_normal)
+    # keeps these points lit instead of going black — this matters for any
+    # textured infinite light (env map), not just the uniform-color case a
+    # closed-form ambient add could shortcut.
     if dot(normal, gc.wo) <= Float32(0.0):
-        for inf_i in range(ctx.lights.infinite_count):
-            var il = ctx.lights.infinite_lights[inf_i]
-            if il.tex_idx < Int32(0):
-                path_ptr[].estimate += path_ptr[].throughput * (alb * il.scale)
-        path_ptr[].active = 0
-        return
+        normal = gc.geo_normal
 
     # Sampler design: diffuse uses Sobol for key visible decisions (light selection,
     # barycentrics, env direction, scatter, RR) and PCG for auxiliary draws that
