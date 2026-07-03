@@ -214,11 +214,16 @@ struct Material_C(TrivialRegisterPassable):
     var _pad2: Int8
     var albedo: RGB
     var emission: RGB
-    var tex_idx: Int32      # -1 = no texture; >= 0 = index into texture table
+    var tex_idx: Int32      # -1 = no texture; -2 = procedural checkerboard (see checker_* below); >= 0 = index into texture table
     var roughU: Float32     # GGX uroughness (conductor); 0 = perfect mirror
     var roughV: Float32     # GGX vroughness (conductor); 0 = perfect mirror
     var normal_tex_idx: Int32  # -1 = no normal map; >= 0 = index into texture table
     var medium_interface_idx: Int32  # -1 = no medium interface bound
+    # Procedural checkerboard params, valid only when tex_idx == -2.
+    var checker_tex1: RGB
+    var checker_tex2: RGB
+    var checker_uscale: Float32
+    var checker_vscale: Float32
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):

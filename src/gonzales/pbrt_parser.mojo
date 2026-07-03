@@ -938,6 +938,58 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         crgb.free(); ctype.free(); cname.free(); cia.free()
         tex_name.free(); tex_type.free(); tex_class.free()
         return
+    if _psc_streq(tex_class, "checkerboard"):
+        # pbrt defaults: tex1=1 (white), tex2=0 (black), uscale=vscale=1.
+        var kctype = alloc[UInt8](64)
+        var kcname = alloc[UInt8](128)
+        var kcia   = alloc[Int32](1); kcia[0] = Int32(0)
+        var ktex1  = alloc[Float32](3)
+        ktex1[0] = Float32(1.0); ktex1[1] = Float32(1.0); ktex1[2] = Float32(1.0)
+        var ktex2  = alloc[Float32](3)
+        ktex2[0] = Float32(0.0); ktex2[1] = Float32(0.0); ktex2[2] = Float32(0.0)
+        var kuscale = Float32(1.0)
+        var kvscale = Float32(1.0)
+        var kfound = scanner_parse_param_header(handle, kctype, 64, kcname, 128, kcia)
+        while kfound != 0:
+            var k_is_array = kcia[0]
+            if _psc_streq(kcname, "tex1") and _psc_type_is_float(kctype):
+                if kctype[0] == UInt8(102):  # 'f' float -> replicate to all channels
+                    var tmp = alloc[Float32](1)
+                    _ = scanner_scan_float(handle, tmp)
+                    ktex1[0] = tmp[0]; ktex1[1] = tmp[0]; ktex1[2] = tmp[0]
+                    tmp.free()
+                    if k_is_array:
+                        _ = scanner_scan_char(handle, UInt8(93))
+                else:
+                    _psc_scan_rgb(handle, ktex1, k_is_array)
+            elif _psc_streq(kcname, "tex2") and _psc_type_is_float(kctype):
+                if kctype[0] == UInt8(102):
+                    var tmp = alloc[Float32](1)
+                    _ = scanner_scan_float(handle, tmp)
+                    ktex2[0] = tmp[0]; ktex2[1] = tmp[0]; ktex2[2] = tmp[0]
+                    tmp.free()
+                    if k_is_array:
+                        _ = scanner_scan_char(handle, UInt8(93))
+                else:
+                    _psc_scan_rgb(handle, ktex2, k_is_array)
+            elif _psc_streq(kcname, "uscale") and _psc_type_is_float(kctype):
+                kuscale = _psc_scan_one_float(handle, k_is_array)
+            elif _psc_streq(kcname, "vscale") and _psc_type_is_float(kctype):
+                kvscale = _psc_scan_one_float(handle, k_is_array)
+            else:
+                _psc_skip_value(handle, kctype, k_is_array)
+                if k_is_array:
+                    _ = scanner_scan_char(handle, UInt8(93))
+            kcia[0] = Int32(0)
+            kfound = scanner_parse_param_header(handle, kctype, 64, kcname, 128, kcia)
+        s[0].checker_tex_names.append(String(unsafe_from_utf8_ptr=tex_name.as_immutable()))
+        s[0].checker_tex1.append(ktex1[0]); s[0].checker_tex1.append(ktex1[1]); s[0].checker_tex1.append(ktex1[2])
+        s[0].checker_tex2.append(ktex2[0]); s[0].checker_tex2.append(ktex2[1]); s[0].checker_tex2.append(ktex2[2])
+        s[0].checker_uscale.append(kuscale)
+        s[0].checker_vscale.append(kvscale)
+        ktex1.free(); ktex2.free(); kctype.free(); kcname.free(); kcia.free()
+        tex_name.free(); tex_type.free(); tex_class.free()
+        return
     if not _psc_streq(tex_class, "imagemap"):
         tex_name.free(); tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
@@ -1299,6 +1351,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         mats[i].roughV  = nm3.roughness_v
         mats[i].normal_tex_idx = nm3.normal_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
+        mats[i].checker_tex1   = nm3.checker_tex1
+        mats[i].checker_tex2   = nm3.checker_tex2
+        mats[i].checker_uscale = nm3.checker_uscale
+        mats[i].checker_vscale = nm3.checker_vscale
         if material_kind == MatKind.dielectric:
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
             mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))

@@ -36,6 +36,11 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var mix_name2:      String
     var mix_amount:     Float32
     var transmittance:  RGB
+    # Procedural checkerboard params, valid only when tex_idx == -2.
+    var checker_tex1:   RGB
+    var checker_tex2:   RGB
+    var checker_uscale: Float32
+    var checker_vscale: Float32
 
     def __init__(out self, name: String):
         self.name           = name
@@ -50,6 +55,10 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.mix_name2      = String("")
         self.mix_amount     = Float32(0.5)
         self.transmittance  = RGB(Float32(1), Float32(1), Float32(1))
+        self.checker_tex1   = RGB(Float32(1), Float32(1), Float32(1))
+        self.checker_tex2   = RGB(Float32(0), Float32(0), Float32(0))
+        self.checker_uscale = Float32(1)
+        self.checker_vscale = Float32(1)
 
 struct MeshAccum(Copyable, Movable):
     var points:         List[Float32]  # 4 floats per vertex (xyz + pad)
@@ -147,6 +156,14 @@ struct SceneParseState(Movable):
     # Constant textures: name -> RGB value (3 floats per entry, parallel to names)
     var const_tex_names: List[String]
     var const_tex_rgb: List[Float32]
+    # Procedural checkerboard textures: name -> (tex1 RGB, tex2 RGB, uscale, vscale),
+    # parallel to names. Evaluated analytically per-shading-point (not baked to an
+    # image) since the checker frequency is resolution-independent.
+    var checker_tex_names:  List[String]
+    var checker_tex1:       List[Float32]  # 3 floats per entry
+    var checker_tex2:       List[Float32]  # 3 floats per entry
+    var checker_uscale:     List[Float32]  # 1 float per entry
+    var checker_vscale:     List[Float32]  # 1 float per entry
 
     # Film / camera / sampler settings
     var film_w:           Int32
@@ -225,6 +242,11 @@ struct SceneParseState(Movable):
         self.tex_files = List[String]()
         self.const_tex_names = List[String]()
         self.const_tex_rgb = List[Float32]()
+        self.checker_tex_names = List[String]()
+        self.checker_tex1 = List[Float32]()
+        self.checker_tex2 = List[Float32]()
+        self.checker_uscale = List[Float32]()
+        self.checker_vscale = List[Float32]()
 
         self.film_w           = Int32(512)
         self.film_h           = Int32(512)

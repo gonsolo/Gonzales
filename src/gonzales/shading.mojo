@@ -287,6 +287,25 @@ def _tex_lookup[use_gpu: Bool](
     pixel_uv: Float32 = Float32(0.0),
 ) -> RGB:
     var ti = Int(mat.tex_idx)
+    if ti == -2:
+        # Procedural checkerboard (pbrt "checkerboard" texture class): evaluated
+        # analytically per-shading-point from Material_C's embedded checker_*
+        # fields, identically on CPU and GPU — no image data or texture-table
+        # index involved. See material_builder.mojo's "reflectance" handler.
+        if Int(mesh.uvs) > 1:
+            var w0 = Float32(1.0) - inter.u - inter.v
+            var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
+            var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+            # No V-flip here (unlike the image-texture path): pbrt evaluates its
+            # checkerboard directly on the raw surface (u, v), with no notion of
+            # image row order. Flipping v would toggle the sum-parity and swap
+            # tex1/tex2 across the whole grid.
+            var iu = Int(floor(su * mat.checker_uscale))
+            var iv = Int(floor(tv * mat.checker_vscale))
+            if (iu + iv) % 2 == 0:
+                return mat.checker_tex1
+            return mat.checker_tex2
+        return mat.checker_tex1
     comptime if use_gpu:
         if ti >= 0 and ti < n_textures:
             var tex = textures[ti]
@@ -508,7 +527,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # similarly-toned wall.
     var refl = mat.albedo
     var trans = mat.emission
-    if Int(mat.tex_idx) >= 0:
+    if Int(mat.tex_idx) != -1:
         var tex_rgb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         refl = tex_rgb
         trans = tex_rgb

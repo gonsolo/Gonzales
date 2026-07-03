@@ -55,6 +55,11 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var mat_remap_roughness = True
     var tex_idx_for_mat = Int32(-1)
     var normal_tex_idx_for_mat = Int32(-1)
+    # Procedural checkerboard params, only meaningful when tex_idx_for_mat == -2.
+    var checker_tex1 = RGB(Float32(1), Float32(1), Float32(1))
+    var checker_tex2 = RGB(Float32(0), Float32(0), Float32(0))
+    var checker_uscale = Float32(1)
+    var checker_vscale = Float32(1)
     var mix_name1 = alloc[UInt8](PSC_NAME_MAX)
     var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
     var mix_amount = Float32(0.5)
@@ -160,18 +165,35 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             _ = scanner_parse_quoted_string(handle, str_val, 64)
             if is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-            # Look up str_val in tex_names (imagemap) first, then constant textures.
+            # Look up str_val in tex_names (imagemap) first, then constant
+            # textures, then procedural checkerboard textures.
             var str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            var matched_tex = False
             for ti in range(len(s[0].tex_names)):
                 if s[0].tex_names[ti] == str_name:
                     tex_idx_for_mat = Int32(ti)
+                    matched_tex = True
                     break
-            for ci in range(len(s[0].const_tex_names)):
-                if s[0].const_tex_names[ci] == str_name:
-                    rgb[0] = s[0].const_tex_rgb[ci*3+0]
-                    rgb[1] = s[0].const_tex_rgb[ci*3+1]
-                    rgb[2] = s[0].const_tex_rgb[ci*3+2]
-                    break
+            if not matched_tex:
+                for ci in range(len(s[0].const_tex_names)):
+                    if s[0].const_tex_names[ci] == str_name:
+                        rgb[0] = s[0].const_tex_rgb[ci*3+0]
+                        rgb[1] = s[0].const_tex_rgb[ci*3+1]
+                        rgb[2] = s[0].const_tex_rgb[ci*3+2]
+                        matched_tex = True
+                        break
+            if not matched_tex:
+                for ki in range(len(s[0].checker_tex_names)):
+                    if s[0].checker_tex_names[ki] == str_name:
+                        # -2 marks the material as using the embedded procedural
+                        # checkerboard fields below (see shading.mojo's _tex_lookup)
+                        # rather than the imagemap texture table.
+                        tex_idx_for_mat = Int32(-2)
+                        checker_tex1 = RGB(s[0].checker_tex1[ki*3+0], s[0].checker_tex1[ki*3+1], s[0].checker_tex1[ki*3+2])
+                        checker_tex2 = RGB(s[0].checker_tex2[ki*3+0], s[0].checker_tex2[ki*3+1], s[0].checker_tex2[ki*3+2])
+                        checker_uscale = s[0].checker_uscale[ki]
+                        checker_vscale = s[0].checker_vscale[ki]
+                        break
         elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
@@ -246,6 +268,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
+    nm.checker_tex1   = checker_tex1
+    nm.checker_tex2   = checker_tex2
+    nm.checker_uscale = checker_uscale
+    nm.checker_vscale = checker_vscale
     nm.mix_name1      = String(unsafe_from_utf8_ptr=mix_name1.as_immutable())
     nm.mix_name2      = String(unsafe_from_utf8_ptr=mix_name2.as_immutable())
     nm.mix_amount     = mix_amount
