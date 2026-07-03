@@ -92,6 +92,7 @@ struct GpuSceneHandle(Movable):
     var atrous_variance_buf: DeviceBuffer[DType.uint8] # n_pixels × 4  — spatial luminance variance
     var atrous_normals_buf: DeviceBuffer[DType.uint8]  # n_pixels × 12 — unjittered geometric normals
     var atrous_depth_buf: DeviceBuffer[DType.uint8]    # n_pixels × 4  — unjittered first-hit depth
+    var atrous_curve_mask_buf: DeviceBuffer[DType.uint8] # n_pixels × 4 — 1.0 if first hit was a curve (hair), else 0.0
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -491,6 +492,7 @@ def gpu_upload_scene(
             var r_atrous_variance_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]())
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -707,6 +709,7 @@ def gpu_upload_scene(
                 atrous_variance_buf=r_atrous_variance_buf^,
                 atrous_normals_buf=r_atrous_normals_buf^,
                 atrous_depth_buf=r_atrous_depth_buf^,
+                atrous_curve_mask_buf=r_atrous_curve_mask_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -1892,6 +1895,7 @@ def gen_aux_buffers_gpu(
     isects_tmp: UnsafePointer[Intersection_C, MutAnyOrigin],
     normals_out: UnsafePointer[Float32, MutAnyOrigin],
     depth_out: UnsafePointer[Float32, MutAnyOrigin],
+    curve_mask_out: UnsafePointer[Float32, MutAnyOrigin],
     fw: Int, fh: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1989,6 +1993,7 @@ def gen_aux_buffers_gpu(
     normals_out[tid*3+1] = ny
     normals_out[tid*3+2] = nz
     depth_out[tid] = d
+    curve_mask_out[tid] = Float32(1.0) if (isects_tmp[tid].hit != Int8(0) and Int(isects_tmp[tid].primId.type) == 5) else Float32(0.0)
 
 
 def gpu_gen_aux_buffers(
@@ -2021,6 +2026,7 @@ def gpu_gen_aux_buffers(
                 handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
                 handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_curve_mask_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].fw, handle[].fh,
                 grid_dim=grid_n, block_dim=block_size,
             )
@@ -2780,6 +2786,7 @@ def atrous_filter_gpu(
     variance: UnsafePointer[Float32, MutAnyOrigin],
     normals: UnsafePointer[Float32, MutAnyOrigin],
     depth: UnsafePointer[Float32, MutAnyOrigin],
+    curve_mask: UnsafePointer[Float32, MutAnyOrigin],
     output: UnsafePointer[Float32, MutAnyOrigin],
     fw: Int, fh: Int,
     step: Int,
@@ -2794,6 +2801,14 @@ def atrous_filter_gpu(
     var px = tid % fw; var py = tid // fw
 
     var cr = input[tid*3]; var cg = input[tid*3+1]; var cb = input[tid*3+2]
+    if curve_mask[tid] > Float32(0.5):
+        # Hair/fur: strand-to-strand self-shadowing has no reliable correlate in
+        # albedo/normal/depth (adjacent strands share material and similar
+        # orientation/distance), so à-trous can't tell real occlusion from noise
+        # and blurs it into a flat blob. Passing raw beauty through here matches
+        # pbrt's own un-denoised look for hair instead of erasing strand detail.
+        output[tid*3] = cr; output[tid*3+1] = cg; output[tid*3+2] = cb
+        return
     var cl = Float32(0.2126)*cr + Float32(0.7152)*cg + Float32(0.0722)*cb
     var var_p = variance[tid]
     var sigma_l2 = sigma_l * sigma_l * var_p + Float32(1e-6)
@@ -2817,6 +2832,8 @@ def atrous_filter_gpu(
                 continue
             var ni = (ny * fw + nx) * 3
             var ni1 = ny * fw + nx
+            if curve_mask[ni1] > Float32(0.5):
+                continue
             var ql = Float32(0.2126)*input[ni] + Float32(0.7152)*input[ni+1] + Float32(0.0722)*input[ni+2]
             var dl = ql - cl
             var w_l = exp(-dl * dl / sigma_l2)
@@ -2894,6 +2911,7 @@ def gpu_atrous_denoise(
             var var_ptr  = handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32]()
             var nrm_ptr  = handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32]()
             var dep_ptr  = handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32]()
+            var cmask_ptr = handle[].atrous_curve_mask_buf.unsafe_ptr().bitcast[Float32]()
             # Ramp passes with frame_count: 1 pass at fc=1, 5 passes at fc>=5.
             # Prevents the large effective radius (31px at 5 passes) from averaging
             # lit pixels with unlit ones during fast camera movement.
@@ -2903,7 +2921,7 @@ def gpu_atrous_denoise(
                 var src_ptr = ping_ptr if i % 2 == 0 else pong_ptr
                 var dst_ptr = pong_ptr if i % 2 == 0 else ping_ptr
                 handle[].ctx.enqueue_function[atrous_filter_gpu](
-                    src_ptr, alb_ptr, var_ptr, nrm_ptr, dep_ptr, dst_ptr,
+                    src_ptr, alb_ptr, var_ptr, nrm_ptr, dep_ptr, cmask_ptr, dst_ptr,
                     fw, fh, step,
                     Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05),
                     grid_dim=grid_n, block_dim=block_size,
