@@ -194,7 +194,7 @@ def debug_trace_pixel(
     """Trace the centre ray of one pixel and print the path bounce-by-bounce
     (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
-    from .bvh import traverse_bvh2_core, test_spheres
+    from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core
     from .geometry import Intersection_C, Material_C, cross, fr_dielectric
     from .shading import _equal_area_sphere_to_square
 
@@ -377,6 +377,38 @@ def debug_trace_pixel(
                 print("        REFLECT dir", rfx3, rfy3, rfz3, "-> hit primType", ptype3, "matType", Int(psc[0].materials[pmatidx3].type), "matIdx", pmatidx3, "t", rint3[0].tHit)
             rint3.free()
             print("        STOP (conductor probe only, not following further)")
+            break
+        elif Int(mat.type) == 1:
+            # Diffuse — occlusion probe toward every light in the scene, offset
+            # along the geometric normal like a real shadow ray would be.
+            var ox1 = hx + gnx*Float32(0.0001)
+            var oy1 = hy + gny*Float32(0.0001)
+            var oz1 = hz + gnz*Float32(0.0001)
+            for dli in range(Int(psc[0].distant_count)):
+                var dl = psc[0].distant_lights[dli]
+                var ldx = -dl.direction.x; var ldy = -dl.direction.y; var ldz = -dl.direction.z
+                var cos_s = gnx*ldx + gny*ldy + gnz*ldz
+                var sray = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
+                var occluded = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray, Float32(2000.0))
+                print("        DISTANT", dli, "dir", ldx, ldy, ldz, "cos_s", cos_s, "occluded", Int(occluded))
+            for ali in range(Int(psc[0].area_light_count)):
+                var al = psc[0].area_lights[ali]
+                var almesh = psc[0].meshes[Int(al.meshIdx)]
+                # Centroid of the light's first triangle — coarse but enough to
+                # tell whether shadow rays toward this light are ever blocked.
+                var lv0 = Int(almesh.vertexIndices[0]); var lv1 = Int(almesh.vertexIndices[1]); var lv2 = Int(almesh.vertexIndices[2])
+                var lcx = (almesh.points[lv0*4]   + almesh.points[lv1*4]   + almesh.points[lv2*4])   / Float32(3.0)
+                var lcy = (almesh.points[lv0*4+1] + almesh.points[lv1*4+1] + almesh.points[lv2*4+1]) / Float32(3.0)
+                var lcz = (almesh.points[lv0*4+2] + almesh.points[lv1*4+2] + almesh.points[lv2*4+2]) / Float32(3.0)
+                var tlx = lcx - ox1; var tly = lcy - oy1; var tlz = lcz - oz1
+                var tdist = _dbg_vlen(tlx, tly, tlz)
+                if tdist > Float32(0.0):
+                    tlx /= tdist; tly /= tdist; tlz /= tdist
+                var cos_sa = gnx*tlx + gny*tly + gnz*tlz
+                var sray2 = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
+                var occluded2 = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray2, tdist * Float32(0.999))
+                print("        AREA", ali, "centroid", lcx, lcy, lcz, "dist", tdist, "cos_s", cos_sa, "occluded", Int(occluded2))
+            print("        STOP (diffuse probe only, not following further)")
             break
         else:
             print("        STOP (non-glass material)")
