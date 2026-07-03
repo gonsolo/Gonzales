@@ -71,16 +71,16 @@ for scene in "${SCENES[@]}"; do
 
     ok=true
 
-    # volumetric-caustic's glass-sphere caustic is an SDS path that plain
+    # volumetric-caustic's glass-sphere caustic and glass-of-water's nested
+    # dielectric/conductor surfaces are SDS-ish light paths that plain
     # unidirectional NEE path tracing cannot resolve at any sample count —
-    # route it through gonzales's --bdpt renderer instead of --gpu. Not
-    # applied to every "Integrator bdpt" scene: glass-of-water needs ~33
-    # bounces through its nested dielectric surfaces, well past BDPT's
-    # hardcoded 10-vertex-per-subpath cap (_BDPT_MAX_VERTS in bdpt.mojo),
-    # so it renders black under --bdpt and stays on --gpu, which already
-    # handles it correctly.
+    # route them through gonzales's --bdpt renderer instead of --gpu.
+    # veach-bidir renders fine under either and is left on --gpu (its
+    # previously-verified path).
     use_bdpt=false
-    [ "$scene" = "volumetric-caustic" ] && use_bdpt=true
+    case "$scene" in
+        volumetric-caustic|glass-of-water) use_bdpt=true ;;
+    esac
 
     # ── gonzales ──────────────────────────────────────────────────────────────
     if [ ! -f "$g_png" ]; then

@@ -6,7 +6,7 @@
 from std.math import sqrt, cos, sin, floor, log, exp, max, abs
 from std.memory import alloc
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C,
+    RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     dot, cross, fr_dielectric, PI, INV_FOUR_PI, INV_PI,
 )
@@ -15,9 +15,13 @@ from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium
+from .bxdf import GeomContext, bxdf_sample_conductor, bxdf_is_delta, ggx_D, ggx_G2
 
-comptime _BDPT_MAX_DEPTH = 8   # max vertices per subpath (excluding endpoints)
-comptime _BDPT_MAX_VERTS = 10  # storage per subpath
+comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
+                                # non-stored delta/dielectric bounces — glass-of-water's
+                                # nested water/ice/glass interfaces need ~30 crossings
+                                # just to reach a real (diffuse) vertex)
+comptime _BDPT_MAX_VERTS = 10  # storage per subpath (only non-delta vertices are stored)
 
 # ── Vertex types ──────────────────────────────────────────────────────────────
 
@@ -27,13 +31,19 @@ struct BDPTVertex(TrivialRegisterPassable):
     var px: Float32; var py: Float32; var pz: Float32   # world position
     var nx: Float32; var ny: Float32; var nz: Float32   # geometric normal (0 for volume)
     var beta_r: Float32; var beta_g: Float32; var beta_b: Float32  # throughput to here
-    var alb_r:  Float32; var alb_g:  Float32; var alb_b: Float32   # BSDF albedo
+    var alb_r:  Float32; var alb_g:  Float32; var alb_b: Float32   # BSDF albedo (F0 for conductor)
     var pdf_fwd: Float32  # area PDF forward (from previous vertex)
-    var pdf_bwd: Float32  # area PDF backward (from next vertex, filled during MIS)
+    var pdf_bwd: Float32  # unused by the equal-weight MIS scheme — repurposed to hold
+                           # the isotropic GGX alpha for mat_kind=1 (conductor) vertices
     var is_surface: Int32  # 1 = surface hit, 0 = volume scatter
-    var is_delta:   Int32  # 1 = specular (dielectric) — cannot be connected
+    var is_delta:   Int32  # 1 = specular (mirror conductor / dielectric) — cannot be connected
     var is_light:   Int32  # 1 = this is a light-source vertex (s=0 in BDPT notation)
     var med_idx:    Int32  # medium index AFTER this vertex (-1 = vacuum)
+    var mat_kind:   Int32  # 0 = Lambertian (diffuse/volume), 1 = rough conductor (GGX)
+    # Direction back toward this vertex's own predecessor on its subpath
+    # (-incoming ray direction). Only populated for mat_kind=1 (GGX needs both
+    # directions around the half-vector); Lambertian/volume don't need it.
+    var wx: Float32; var wy: Float32; var wz: Float32
 
 @always_inline
 def _null_vertex() -> BDPTVertex:
@@ -44,7 +54,8 @@ def _null_vertex() -> BDPTVertex:
         alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1),
+        med_idx=Int32(-1), mat_kind=Int32(0),
+        wx=Float32(0), wy=Float32(0), wz=Float32(0),
     )
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -337,6 +348,46 @@ def _build_camera_path(
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
             beta_r *= mat.albedo.r; beta_g *= mat.albedo.g; beta_b *= mat.albedo.b
 
+        elif mat.type == MatKind.conductor:
+            var gn_c: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var si_c = Int(inter.primId.id1)
+                var sph_c = sd.spheres[si_c]
+                var cnx = hx-sph_c.center.x; var cny = hy-sph_c.center.y; var cnz = hz-sph_c.center.z
+                var cnl = sqrt(cnx*cnx+cny*cny+cnz*cnz)
+                if cnl > Float32(0): cnx /= cnl; cny /= cnl; cnz /= cnl
+                gn_c = SIMD[DType.float32, 3](cnx, cny, cnz)
+            else:
+                gn_c = _geom_normal(inter, sd.meshes)
+            if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
+            var wo_c = SIMD[DType.float32, 3](-rdx, -rdy, -rdz)
+            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
+            var gc_c = GeomContext(
+                normal=gn_c, geo_normal=gn_c, hit_point=SIMD[DType.float32, 3](hx, hy, hz), wo=wo_c,
+                tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
+                bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
+                alb=mat.albedo, pixel_uv=Float32(0),
+            )
+            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
+            var bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
+            if bs_c.is_valid == Int8(0):
+                break
+            if not bxdf_is_delta(bs_c.flags):
+                var v = _null_vertex()
+                v.px = hx; v.py = hy; v.pz = hz
+                v.nx = gn_c[0]; v.ny = gn_c[1]; v.nz = gn_c[2]
+                v.beta_r = beta_r; v.beta_g = beta_g; v.beta_b = beta_b
+                v.alb_r = mat.albedo.r; v.alb_g = mat.albedo.g; v.alb_b = mat.albedo.b
+                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
+                v.pdf_bwd = max(mat.roughU, mat.roughV)
+                v.wx = wo_c[0]; v.wy = wo_c[1]; v.wz = wo_c[2]
+                v.pdf_fwd = Float32(1)
+                v.med_idx = cur_med_idx
+                verts[n_verts] = v; n_verts += 1
+            beta_r *= bs_c.f.r; beta_g *= bs_c.f.g; beta_b *= bs_c.f.b
+            rdx = bs_c.wi[0]; rdy = bs_c.wi[1]; rdz = bs_c.wi[2]
+            rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
+
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
             if inter.primId.type == Int8(4):
@@ -532,6 +583,46 @@ def _build_light_path(
             rox = hx+rdx*Float32(0.0002); roy = hy+rdy*Float32(0.0002); roz = hz+rdz*Float32(0.0002)
             flux_r *= mat.albedo.r; flux_g *= mat.albedo.g; flux_b *= mat.albedo.b
 
+        elif mat.type == MatKind.conductor:
+            var gn_c: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var si_c = Int(inter.primId.id1)
+                var sph_c = sd.spheres[si_c]
+                var cnx = hx-sph_c.center.x; var cny = hy-sph_c.center.y; var cnz = hz-sph_c.center.z
+                var cnl = sqrt(cnx*cnx+cny*cny+cnz*cnz)
+                if cnl > Float32(0): cnx /= cnl; cny /= cnl; cnz /= cnl
+                gn_c = SIMD[DType.float32, 3](cnx, cny, cnz)
+            else:
+                gn_c = _geom_normal(inter, sd.meshes)
+            if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
+            var wo_c = SIMD[DType.float32, 3](-rdx, -rdy, -rdz)
+            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
+            var gc_c = GeomContext(
+                normal=gn_c, geo_normal=gn_c, hit_point=SIMD[DType.float32, 3](hx, hy, hz), wo=wo_c,
+                tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
+                bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
+                alb=mat.albedo, pixel_uv=Float32(0),
+            )
+            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
+            var bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
+            if bs_c.is_valid == Int8(0):
+                break
+            if not bxdf_is_delta(bs_c.flags):
+                var v = _null_vertex()
+                v.px = hx; v.py = hy; v.pz = hz
+                v.nx = gn_c[0]; v.ny = gn_c[1]; v.nz = gn_c[2]
+                v.beta_r = flux_r; v.beta_g = flux_g; v.beta_b = flux_b
+                v.alb_r = mat.albedo.r; v.alb_g = mat.albedo.g; v.alb_b = mat.albedo.b
+                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
+                v.pdf_bwd = max(mat.roughU, mat.roughV)
+                v.wx = wo_c[0]; v.wy = wo_c[1]; v.wz = wo_c[2]
+                v.pdf_fwd = Float32(1)
+                v.med_idx = cur_med_idx
+                verts[n_verts] = v; n_verts += 1
+            flux_r *= bs_c.f.r; flux_g *= bs_c.f.g; flux_b *= bs_c.f.b
+            rdx = bs_c.wi[0]; rdy = bs_c.wi[1]; rdz = bs_c.wi[2]
+            rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
+
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
             if inter.primId.type == Int8(4):
@@ -567,20 +658,57 @@ def _build_light_path(
 # ── BSDF/phase evaluation at a vertex ────────────────────────────────────────
 
 @always_inline
+def _eval_conductor_ggx(
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],   # toward this vertex's own predecessor
+    wi:    SIMD[DType.float32, 3],   # toward the other connected vertex
+    alpha: Float32,
+    f0_r: Float32, f0_g: Float32, f0_b: Float32,
+) -> SIMD[DType.float32, 3]:
+    """Isotropic GGX (Trowbridge-Reitz) conductor f(wo,wi) × |cos(wi,n)|, for an
+    arbitrary (not self-sampled) direction pair — the BDPT connection case that
+    bxdf_sample_conductor (a self-sampled-direction-only throughput multiplier)
+    can't serve. Schlick Fresnel at the half-vector, height-correlated Smith G2."""
+    var cos_o = dot(wo, n)
+    var cos_i = dot(wi, n)
+    if cos_o <= Float32(0) or cos_i <= Float32(0):
+        return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var wh = wo + wi
+    var whl = dot(wh, wh)
+    if whl <= Float32(0):
+        return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    wh = wh * (Float32(1) / sqrt(whl))
+    var cos_h = dot(wh, n)
+    var cos_wo_h = dot(wo, wh)
+    if cos_wo_h < Float32(0): cos_wo_h = -cos_wo_h
+    var d = ggx_D(cos_h, alpha)
+    var g = ggx_G2(cos_o, cos_i, alpha)
+    var one_m = Float32(1) - cos_wo_h
+    var one_m2 = one_m * one_m
+    var schlick = one_m2 * one_m2 * one_m
+    var fr_r = f0_r + (Float32(1) - f0_r) * schlick
+    var fr_g = f0_g + (Float32(1) - f0_g) * schlick
+    var fr_b = f0_b + (Float32(1) - f0_b) * schlick
+    var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
+    return SIMD[DType.float32, 3](k * fr_r, k * fr_g, k * fr_b)
+
+@always_inline
 def _eval_vertex(
     v:   BDPTVertex,
-    wi:  SIMD[DType.float32, 3],   # incoming direction
-    wo:  SIMD[DType.float32, 3],   # outgoing direction
+    dir_to_other:  SIMD[DType.float32, 3],   # direction from v toward the other connected vertex
 ) -> SIMD[DType.float32, 3]:
-    """Evaluate BSDF (or phase) × cos at vertex v for directions wi→vo."""
+    """Evaluate BSDF (or phase) × cos at vertex v toward dir_to_other."""
     if v.is_delta != Int32(0):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     if v.is_surface == Int32(0):
         # Volume scatter: isotropic phase function 1/(4π), no cosine term
         return SIMD[DType.float32, 3](v.alb_r*INV_FOUR_PI, v.alb_g*INV_FOUR_PI, v.alb_b*INV_FOUR_PI)
-    # Surface: Lambertian f = alb/π × |cos(wo,n)|
     var vn = SIMD[DType.float32, 3](v.nx, v.ny, v.nz)
-    var cos_o = dot(wo, vn)
+    if v.mat_kind == Int32(1):
+        var vwo = SIMD[DType.float32, 3](v.wx, v.wy, v.wz)
+        return _eval_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd, v.alb_r, v.alb_g, v.alb_b)
+    # Surface: Lambertian f = alb/π × |cos(wo,n)|
+    var cos_o = dot(dir_to_other, vn)
     if cos_o < Float32(0): cos_o = -cos_o
     return SIMD[DType.float32, 3](v.alb_r*INV_PI*cos_o, v.alb_g*INV_PI*cos_o, v.alb_b*INV_PI*cos_o)
 
@@ -641,9 +769,9 @@ def _connect(
     var dir = SIMD[DType.float32, 3](dx/dist, dy/dist, dz/dist)
     var neg_dir = SIMD[DType.float32, 3](-dir[0], -dir[1], -dir[2])
 
-    # BSDF at camera vertex (outgoing toward light)
-    var f_cam = _eval_vertex(cv, SIMD[DType.float32, 3](Float32(0),Float32(0),Float32(0)), dir)
-    # BSDF at light vertex (outgoing toward camera)
+    # BSDF at camera vertex (toward light)
+    var f_cam = _eval_vertex(cv, dir)
+    # BSDF at light vertex (toward camera)
     var f_lgt: SIMD[DType.float32, 3]
     if lv.is_light == Int32(1):
         # Light emission: f_lgt = Le (emission radiance, no cosine here).
@@ -654,7 +782,7 @@ def _connect(
             return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
         f_lgt = SIMD[DType.float32, 3](lv.alb_r, lv.alb_g, lv.alb_b)
     else:
-        f_lgt = _eval_vertex(lv, neg_dir, neg_dir)
+        f_lgt = _eval_vertex(lv, neg_dir)
 
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)
