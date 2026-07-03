@@ -328,6 +328,32 @@ def debug_trace_pixel(
                 if nl > Float32(0.0): dx /= nl; dy /= nl; dz /= nl
                 ox = hx - nx*Float32(0.0001); oy = hy - ny*Float32(0.0001); oz = hz - nz*Float32(0.0001)
                 print("        -> TRANSMIT dir", dx, dy, dz)
+        elif Int(mat.type) == 5:
+            # CoatedDiffuse — mirror reflection off the coat only (ignore roughness/
+            # transmit-into-base for this probe; just checking what the coat's
+            # specular-ish lobe geometrically faces).
+            var facing5 = (dx*gnx + dy*gny + dz*gnz) < Float32(0.0)
+            var nx5 = gnx if facing5 else -gnx
+            var ny5 = gny if facing5 else -gny
+            var nz5 = gnz if facing5 else -gnz
+            var rcos5 = dx*nx5 + dy*ny5 + dz*nz5
+            var rfx5 = dx - nx5*Float32(2.0)*rcos5
+            var rfy5 = dy - ny5*Float32(2.0)*rcos5
+            var rfz5 = dz - nz5*Float32(2.0)*rcos5
+            var rfl5 = _dbg_vlen(rfx5, rfy5, rfz5)
+            if rfl5 > Float32(0.0): rfx5 /= rfl5; rfy5 /= rfl5; rfz5 /= rfl5
+            var rray5 = Ray_C(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
+            var rint5 = alloc[Intersection_C](1); rint5[0].hit = Int8(0)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray5, Float32(1.0e38), rint5)
+            if rint5[0].hit == Int8(0):
+                print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> MISS (no envmap in this scene)")
+            else:
+                var ptype5 = Int(rint5[0].primId.type)
+                var pmatidx5 = Int(rint5[0].primId.materialIndex)
+                print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> hit primType", ptype5, "matType", Int(psc[0].materials[pmatidx5].type), "matIdx", pmatidx5, "t", rint5[0].tHit)
+            rint5.free()
+            print("        STOP (coateddiffuse probe only, not following further)")
+            break
         elif Int(mat.type) == 3:
             # Conductor — mirror reflection only (ignore roughness for this probe).
             var facing3 = (dx*gnx + dy*gny + dz*gnz) < Float32(0.0)

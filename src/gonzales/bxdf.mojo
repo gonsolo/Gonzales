@@ -1,6 +1,51 @@
 from std.math import sqrt
-from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, fr_dielectric
+from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
+
+# ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
+# Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
+# against a light-chosen direction needs to *evaluate* the distribution at an
+# arbitrary half-vector, plus the matching VNDF sampling pdf, for MIS. All
+# angles here are cosines against the shading normal (local-frame z, or
+# equivalently a dot product in world space — the formulas only need cosines).
+@always_inline
+def ggx_D(cos_theta_h: Float32, alpha: Float32) -> Float32:
+    """Trowbridge-Reitz microfacet distribution at a half-vector whose angle
+    to the normal has cosine cos_theta_h."""
+    var alpha2 = alpha * alpha
+    var cos2 = cos_theta_h * cos_theta_h
+    var denom = cos2 * (alpha2 - Float32(1.0)) + Float32(1.0)
+    if denom <= Float32(0.0):
+        return Float32(0.0)
+    return alpha2 / (PI * denom * denom)
+
+@always_inline
+def ggx_lambda(cos_theta: Float32, alpha: Float32) -> Float32:
+    """Smith Lambda(w) for a direction with cosine cos_theta to the normal."""
+    if cos_theta <= Float32(0.0):
+        return Float32(0.0)
+    var cos2 = cos_theta * cos_theta
+    var tan2 = max(Float32(0.0), Float32(1.0) - cos2) / cos2
+    return (Float32(-1.0) + sqrt(Float32(1.0) + alpha * alpha * tan2)) * Float32(0.5)
+
+@always_inline
+def ggx_G1(cos_theta: Float32, alpha: Float32) -> Float32:
+    return Float32(1.0) / (Float32(1.0) + ggx_lambda(cos_theta, alpha))
+
+@always_inline
+def ggx_G2(cos_o: Float32, cos_i: Float32, alpha: Float32) -> Float32:
+    """Height-correlated Smith masking-shadowing for reflection."""
+    return Float32(1.0) / (Float32(1.0) + ggx_lambda(cos_o, alpha) + ggx_lambda(cos_i, alpha))
+
+@always_inline
+def ggx_vndf_pdf(cos_o: Float32, cos_wm: Float32, d: Float32, alpha: Float32) -> Float32:
+    """PDF (solid angle, over wi) of a reflection direction produced by
+    reflecting a VNDF-sampled half-vector: pdf(wm)/(4|wo.wm|), with
+    pdf(wm) = G1(wo)*D(wm)*max(0,wo.wm)/cos_o (Heitz 2018)."""
+    if cos_o <= Float32(0.0) or cos_wm <= Float32(0.0):
+        return Float32(0.0)
+    var pdf_wm = ggx_G1(cos_o, alpha) * d * cos_wm / cos_o
+    return pdf_wm / (Float32(4.0) * cos_wm)
 
 # ── BxDF flags ────────────────────────────────────────────────────────────────
 struct BxDFFlags:

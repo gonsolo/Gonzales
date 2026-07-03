@@ -2,7 +2,7 @@ from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
-from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit
+from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
@@ -616,8 +616,6 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     if pcg.next_float() < f_entry:
         # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
-        # Single-strategy lobe (no NEE) ⇒ specularBounce=1 takes full light on
-        # miss and the exact pdf is irrelevant.
         var refl = wm * (Float32(2.0) * cos_wm) - wo
         var rlen = dot(refl, refl)
         if rlen > Float32(0.0):
@@ -626,9 +624,102 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].active = 0          # reflected below the surface — discard
             path_ptr[].pcgState = pcg.state
             return
+
+        var cos_o = dot(wo, normal)
+        var d_sampled = ggx_D(dot(normal, wm), coat_alpha)
+
+        # Rough coat: NEE against area lights, MIS-combined with the reflected
+        # ray below. A glossy lobe's reflection cone is too narrow for naive
+        # BSDF sampling to reliably find compact/distant lights (confirmed by
+        # a real missing highlight — lamp's shade never picked up its bulb's
+        # reflection even at 512spp without this). Smooth coat (is_rough_coat
+        # false, e.g. car paint) skips NEE entirely: a delta reflection can
+        # never land on a stochastically-sampled light direction, so any
+        # shadow ray fired there would just be wasted work — that path keeps
+        # its original full-credit-on-hit / specularBounce=1 behaviour below.
+        if is_rough_coat and ctx.lights.area_light_count > 0 and cos_o > Float32(0.0):
+            var ls_u_coat = pcg.next_float()
+            var ls_result_coat = light_sampler_sample(ctx.lights.light_sampler, ls_u_coat)
+            var light_idx_coat = ls_result_coat[0]
+            var light_sel_pdf_coat = ls_result_coat[1]
+            var al_coat = ctx.lights.area_lights[light_idx_coat]
+            var lmesh_coat = ctx.meshes[Int(al_coat.meshIdx)]
+            var lti_coat = Int(pcg.next_uint() % UInt32(max(Int(al_coat.n_tris), 1)))
+            var lb_coat = lti_coat * 3
+            var lv0c = Int(lmesh_coat.vertexIndices[lb_coat])
+            var lv1c = Int(lmesh_coat.vertexIndices[lb_coat + 1])
+            var lv2c = Int(lmesh_coat.vertexIndices[lb_coat + 2])
+            var lp0c = SIMD[DType.float32, 3](lmesh_coat.points[lv0c*4], lmesh_coat.points[lv0c*4+1], lmesh_coat.points[lv0c*4+2])
+            var lp1c = SIMD[DType.float32, 3](lmesh_coat.points[lv1c*4], lmesh_coat.points[lv1c*4+1], lmesh_coat.points[lv1c*4+2])
+            var lp2c = SIMD[DType.float32, 3](lmesh_coat.points[lv2c*4], lmesh_coat.points[lv2c*4+1], lmesh_coat.points[lv2c*4+2])
+            var r1c = pcg.next_float()
+            var r2c = pcg.next_float()
+            var sqrt_r1c = sqrt(r1c)
+            var light_point_c = lp0c * (Float32(1.0) - sqrt_r1c) + lp1c * (sqrt_r1c * (Float32(1.0) - r2c)) + lp2c * (sqrt_r1c * r2c)
+            var lcross_c = cross(lp1c - lp0c, lp2c - lp0c)
+            var light_normal_c = lcross_c
+            var lcross_len_c = dot(lcross_c, lcross_c)
+            if lcross_len_c > Float32(0.0):
+                light_normal_c = lcross_c * (Float32(1.0) / sqrt(lcross_len_c))
+            var to_light_c = light_point_c - hit_point
+            var dist_sq_c = dot(to_light_c, to_light_c)
+            var dist_c = sqrt(dist_sq_c)
+            if dist_c > Float32(0.0001) and al_coat.total_area > Float32(0.0):
+                var wi_c = to_light_c * (Float32(1.0) / dist_c)
+                var cos_s_c = dot(normal, wi_c)
+                var cos_l_c = -dot(light_normal_c, wi_c)
+                if cos_s_c > Float32(0.0) and cos_l_c > Float32(0.0):
+                    var wm_nee = wo + wi_c
+                    var wm_nee_len = dot(wm_nee, wm_nee)
+                    if wm_nee_len > Float32(0.0):
+                        wm_nee = wm_nee * (Float32(1.0) / sqrt(wm_nee_len))
+                        var cos_wm_nee = dot(wo, wm_nee)
+                        if cos_wm_nee > Float32(0.0):
+                            var d_nee = ggx_D(dot(normal, wm_nee), coat_alpha)
+                            var g2_nee = ggx_G2(cos_o, cos_s_c, coat_alpha)
+                            var f_nee = fr_dielectric(cos_wm_nee, ior)
+                            # f(wo,wi)*cos_i = D*G2*F / (4*cos_o)
+                            var f_cos_nee = d_nee * g2_nee * f_nee / (Float32(4.0) * cos_o)
+                            var pdf_light_coat = dist_sq_c * light_sel_pdf_coat / (cos_l_c * al_coat.total_area)
+                            var pdf_bsdf_coat = ggx_vndf_pdf(cos_o, cos_wm_nee, d_nee, coat_alpha)
+                            if pdf_light_coat > Float32(0.0):
+                                var w_coat = power_heuristic(pdf_light_coat, pdf_bsdf_coat)
+                                var contrib_coat = path_ptr[].throughput * al_coat.emission * (f_cos_nee * w_coat / pdf_light_coat)
+                                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_c, dist_c * Float32(0.9999), contrib_coat)
+
+        # Distant (delta) lights through the coat's glossy lobe. No MIS weight —
+        # a delta light direction has zero probability under any stochastic
+        # BSDF sample, so NEE is the only strategy that can ever see it.
+        if is_rough_coat and ctx.lights.distant_count > 0 and cos_o > Float32(0.0):
+            for dl_i_coat in range(ctx.lights.distant_count):
+                var dl_coat = ctx.lights.distant_lights[dl_i_coat]
+                var wi_dl = SIMD[DType.float32, 3](-dl_coat.direction.x, -dl_coat.direction.y, -dl_coat.direction.z)
+                var cos_s_dl = dot(normal, wi_dl)
+                if cos_s_dl > Float32(0.0):
+                    var wm_dl = wo + wi_dl
+                    var wm_dl_len = dot(wm_dl, wm_dl)
+                    if wm_dl_len > Float32(0.0):
+                        wm_dl = wm_dl * (Float32(1.0) / sqrt(wm_dl_len))
+                        var cos_wm_dl = dot(wo, wm_dl)
+                        if cos_wm_dl > Float32(0.0):
+                            var d_dl = ggx_D(dot(normal, wm_dl), coat_alpha)
+                            var g2_dl = ggx_G2(cos_o, cos_s_dl, coat_alpha)
+                            var f_dl = fr_dielectric(cos_wm_dl, ior)
+                            var f_cos_dl = d_dl * g2_dl * f_dl / (Float32(4.0) * cos_o)
+                            var contrib_dl = path_ptr[].throughput * dl_coat.emission * f_cos_dl
+                            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_dl, Float32(2000.0), contrib_dl)
+
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
-        path_ptr[].specularBounce = Int8(1)
-        path_ptr[].lastBsdfPdf = Float32(0.0)
+        if is_rough_coat:
+            # MIS-gate the reflected ray against the NEE above (real pdf_bsdf,
+            # specularBounce=0) instead of the delta-lobe full-credit path.
+            path_ptr[].specularBounce = Int8(0)
+            path_ptr[].lastBsdfPdf = ggx_vndf_pdf(cos_o, cos_wm, d_sampled, coat_alpha)
+        else:
+            # Smooth mirror coat: single-strategy lobe (no NEE) ⇒
+            # specularBounce=1 takes full light on miss/hit, pdf is irrelevant.
+            path_ptr[].specularBounce = Int8(1)
+            path_ptr[].lastBsdfPdf = Float32(0.0)
         path_ptr[].bounce += 1
         path_ptr[].pcgState = pcg.state
         return
