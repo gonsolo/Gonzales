@@ -74,8 +74,10 @@ def bxdf_sample_conductor(
     mat: Material_C,
     u1: Float32, u2: Float32,
 ) -> BxDFSample:
-    var alpha_x = max(mat.roughU * mat.roughU, Float32(0.0001))
-    var alpha_y = max(mat.roughV * mat.roughV, Float32(0.0001))
+    # roughU/V already hold the resolved GGX alpha (see _psc_handle_make_named_material's
+    # remaproughness handling) — no squaring here.
+    var alpha_x = max(mat.roughU, Float32(0.0001))
+    var alpha_y = max(mat.roughV, Float32(0.0001))
     var is_rough = mat.roughU > Float32(0.001) or mat.roughV > Float32(0.001)
     var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
 
@@ -137,8 +139,9 @@ def bxdf_sample_coated_conductor(
             wi = wi * (Float32(1.0) / sqrt(wlen))
         return BxDFSample(wi, white, Float32(1.0), BxDFFlags.delta | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
 
-    var alpha_u = max(mat.roughU * mat.roughU, Float32(0.0001))
-    var alpha_v = max(mat.roughV * mat.roughV, Float32(0.0001))
+    # roughU/V already hold the resolved GGX alpha — no squaring here.
+    var alpha_u = max(mat.roughU, Float32(0.0001))
+    var alpha_v = max(mat.roughV, Float32(0.0001))
     var alpha = (alpha_u + alpha_v) * Float32(0.5)
     var wo_l = Vec3f(dot(gc.wo, gc.tangent), dot(gc.wo, gc.bitangent), dot(gc.wo, gc.normal))
     var wh_l = sample_ggx_vndf(wo_l, alpha, alpha, u1, u2)

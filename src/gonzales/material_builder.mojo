@@ -1,11 +1,11 @@
 from std.memory import alloc
-from std.math import exp
+from std.math import exp, sqrt
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, scanner_parse_param_header,
                     scanner_scan_char, scanner_scan_float,
                     _psc_streq, _psc_strncpy, _psc_strncmp,
                     _psc_type_is_float, _psc_type_is_int, _psc_type_is_str,
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
-                    _psc_skip_value)
+                    _psc_scan_one_bool, _psc_skip_value)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
 from .geometry import RGB, MatKind
 
@@ -48,6 +48,11 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var mat_ior  = Float32(1.5)
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
+    # pbrt default: remaproughness=true means roughU/V are a perceptual
+    # roughness remapped to GGX alpha via sqrt(); false means the parsed
+    # value already IS alpha and must be used as-is (see RoughnessToAlpha
+    # in the pbrt-v4 book, section 9.6.1).
+    var mat_remap_roughness = True
     var tex_idx_for_mat = Int32(-1)
     var normal_tex_idx_for_mat = Int32(-1)
     var mix_name1 = alloc[UInt8](PSC_NAME_MAX)
@@ -105,6 +110,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_roughV = mat_roughU
         elif _psc_streq(name_buf, "vroughness") and _psc_type_is_float(type_buf):
             mat_roughV = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "remaproughness") and type_buf[0] == UInt8(98):  # 'b' bool
+            mat_remap_roughness = _psc_scan_one_bool(handle, is_array)
         elif _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
             _psc_scan_rgb(handle, rgb, is_array)
         elif _psc_streq(name_buf, "transmittance") and _psc_type_is_float(type_buf):
@@ -224,6 +231,17 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     nm.transmittance  = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
     nm.kind           = mat_type
     nm.ior            = mat_ior
+    # Resolve roughU/V to the actual GGX alpha here, once, so every shading call
+    # site can use mat.roughU/roughV directly. Only meaningful for the BSDF
+    # kinds that use roughU/V as an alpha (conductor, dielectric, coated_diffuse's
+    # coat, coated_conductor) — mix's "amount" and hair's beta_m/beta_n reuse the
+    # same Material_C fields for unrelated values and must pass through untouched.
+    if mat_type == MatKind.conductor or mat_type == MatKind.dielectric or \
+       mat_type == MatKind.coated_diffuse or mat_type == MatKind.coated_conductor:
+        if mat_remap_roughness:
+            mat_roughU = sqrt(mat_roughU) if mat_roughU > Float32(0.0) else Float32(0.0)
+            mat_roughV = sqrt(mat_roughV) if mat_roughV > Float32(0.0) else Float32(0.0)
+        # else: roughU/V already IS alpha (pbrt RoughnessToAlpha semantics) — use as-is.
     nm.roughness_u    = mat_roughU
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat

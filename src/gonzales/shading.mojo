@@ -585,8 +585,9 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # split, so the throughput accumulator beta only gathers the base albedo.
     var ior = mat.emission.r            # coat IOR (η_coat/η_air), set at parse
     var inv_ior = Float32(1.0) / ior
-    # Coat GGX roughness (remaproughness=false ⇒ roughness IS alpha). 0 ⇒ smooth
-    # mirror coat (e.g. car paint 0.001); larger ⇒ soft sheen (e.g. tyres 0.4).
+    # roughU/V already hold the resolved GGX alpha (see _psc_handle_make_named_material's
+    # remaproughness handling). 0 ⇒ smooth mirror coat (e.g. car paint 0.001);
+    # larger ⇒ soft sheen (e.g. tyres 0.4).
     var coat_alpha = max(mat.roughU, mat.roughV)
     var is_rough_coat = coat_alpha > Float32(0.001)
     var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
@@ -957,8 +958,9 @@ def shade_conductor(
     # Use interpolated shading normal for smooth specular reflections
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
 
-    var alpha_x = max(mat.roughU * mat.roughU, Float32(0.0001))
-    var alpha_y = max(mat.roughV * mat.roughV, Float32(0.0001))
+    # roughU/V already hold the resolved GGX alpha — no squaring here.
+    var alpha_x = max(mat.roughU, Float32(0.0001))
+    var alpha_y = max(mat.roughV, Float32(0.0001))
 
     # Anisotropy tangent frame: UV-gradient (aligned to texture space) when the
     # mesh has UVs and the material is anisotropic; else an arbitrary Frisvad

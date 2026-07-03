@@ -328,6 +328,30 @@ def debug_trace_pixel(
                 if nl > Float32(0.0): dx /= nl; dy /= nl; dz /= nl
                 ox = hx - nx*Float32(0.0001); oy = hy - ny*Float32(0.0001); oz = hz - nz*Float32(0.0001)
                 print("        -> TRANSMIT dir", dx, dy, dz)
+        elif Int(mat.type) == 3:
+            # Conductor — mirror reflection only (ignore roughness for this probe).
+            var facing3 = (dx*gnx + dy*gny + dz*gnz) < Float32(0.0)
+            var nx3 = gnx if facing3 else -gnx
+            var ny3 = gny if facing3 else -gny
+            var nz3 = gnz if facing3 else -gnz
+            var rcos3 = dx*nx3 + dy*ny3 + dz*nz3
+            var rfx3 = dx - nx3*Float32(2.0)*rcos3
+            var rfy3 = dy - ny3*Float32(2.0)*rcos3
+            var rfz3 = dz - nz3*Float32(2.0)*rcos3
+            var rfl3 = _dbg_vlen(rfx3, rfy3, rfz3)
+            if rfl3 > Float32(0.0): rfx3 /= rfl3; rfy3 /= rfl3; rfz3 /= rfl3
+            var rray3 = Ray_C(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
+            var rint3 = alloc[Intersection_C](1); rint3[0].hit = Int8(0)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray3, Float32(1.0e38), rint3)
+            if rint3[0].hit == Int8(0):
+                print("        REFLECT dir", rfx3, rfy3, rfz3, "-> MISS (no envmap in this scene)")
+            else:
+                var ptype3 = Int(rint3[0].primId.type)
+                var pmatidx3 = Int(rint3[0].primId.materialIndex)
+                print("        REFLECT dir", rfx3, rfy3, rfz3, "-> hit primType", ptype3, "matType", Int(psc[0].materials[pmatidx3].type), "matIdx", pmatidx3, "t", rint3[0].tHit)
+            rint3.free()
+            print("        STOP (conductor probe only, not following further)")
+            break
         else:
             print("        STOP (non-glass material)")
             break

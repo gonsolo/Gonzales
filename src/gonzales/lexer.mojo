@@ -803,6 +803,22 @@ def _psc_scan_one_str(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     if is_array:
         _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
+# pbrt "bool" values are bare (unquoted) `true`/`false` tokens, e.g.
+# `"bool remaproughness" [ false ]` — scanned like the catch-all _psc_skip_value
+# else-branch, but the token is compared instead of discarded.
+def _psc_scan_one_bool(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                      is_array: Int32) -> Bool:
+    var buf = alloc[UInt8](32)
+    var nl_buf = alloc[UInt8](1)
+    nl_buf[0] = UInt8(10)
+    _ = scanner_scan_token(handle, nl_buf, 1, buf, 32)
+    var v = _psc_streq(buf, "true")
+    nl_buf.free()
+    buf.free()
+    if is_array:
+        _ = scanner_scan_char(handle, UInt8(93))  # ']'
+    return v
+
 def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                  rgb: UnsafePointer[Float32, MutAnyOrigin],
                  is_array: Int32):
