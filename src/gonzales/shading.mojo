@@ -2547,6 +2547,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].volume_scattered = Int8(0)
             return
         var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+        var miss_albedo = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
         for inf_i in range(ctx.lights.infinite_count):
             var ilight = ctx.lights.infinite_lights[inf_i]
             # Transform world-space ray direction into light's local frame
@@ -2593,6 +2594,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         env_rgb = ilight.scale
                 else:
                     env_rgb = ilight.scale
+            miss_albedo += env_rgb
             var mis_weight = Float32(1.0)
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
@@ -2617,6 +2619,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                             pdf_light = dp_row * dp_col * Float32(iw) * Float32(ih) * INV_FOUR_PI
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
             path_ptr[].estimate += path_ptr[].throughput * env_rgb * mis_weight
+        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+            path_ptr[].albedo = miss_albedo
         path_ptr[].active = 0
         return
 
