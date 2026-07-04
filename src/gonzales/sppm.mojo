@@ -8,7 +8,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, PI, INV_FOUR_PI,
 )
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
@@ -44,6 +44,18 @@ struct SPPMPixel(TrivialRegisterPassable):
     var valid:  Int32     # 1 = has VP
     var pidx:   Int32     # flat pixel index
     var is_volume: Int32  # 1 = volume scatter VP (isotropic phase fn); 0 = surface
+    # Direct (NEE) lighting accumulator — resampled fresh each SPPM pass (one
+    # shadow ray per pass, same cadence as the photon pass), summed here and
+    # divided by n_passes at finalize time. This is what pbrt's own SPPM
+    # calls "pixel.Ld": a completely separate term from tau/photon-density,
+    # capturing direct illumination at the visible point (which the
+    # photon-density term alone can't reconstruct without heavy noise, since
+    # it's estimating both direct AND indirect/caustic lighting through a
+    # single, indirect-only channel otherwise). Surface VPs only — volume VPs
+    # leave this at 0 (this scene has no participating media; NEE from a
+    # volume scatter point would need a phase-function-weighted variant,
+    # not implemented).
+    var ld_r: Float32; var ld_g: Float32; var ld_b: Float32
 
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
@@ -233,6 +245,7 @@ def _sppm_camera_pass(
             tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
             N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
             is_volume=Int32(0),
+            ld_r=Float32(0), ld_g=Float32(0), ld_b=Float32(0),
         )
 
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
@@ -346,12 +359,18 @@ def _sppm_camera_pass(
 def _sppm_photon_pass(
     photons:      UnsafePointer[SPPMPhoton, MutAnyOrigin],
     n_emit:       Int,
+    max_photons:  Int,
     sd:           SceneDescriptor2_C,
     seed:         UInt64,
     pass_idx:     Int,
 ) -> Int:
     """Emit photons from area lights, trace through glass/media, store at diffuse/volume hits.
-    Returns actual number of stored photons."""
+    n_emit is the number of emitted photon PATHS (drives the flux-per-photon
+    scale factor); max_photons is the storage buffer's capacity, which can
+    be larger since the Russian-roulette diffuse-diffuse continuation (see
+    the diffuse-hit branch below) means one emitted path can generate
+    several stored events, not just one. Returns actual number of stored
+    photons (clamped to max_photons by the caller)."""
     var n_lights = Int(sd.areaLightCount)
     if n_lights == 0:
         return 0
@@ -455,7 +474,13 @@ def _sppm_photon_pass(
                         var sx = rox + rdx * t_free
                         var sy = roy + rdy * t_free
                         var sz = roz + rdz * t_free
-                        if n_stored < n_emit:
+                        # bounce > 0: skip storing at the light's own first
+                        # segment — that direct contribution is now covered
+                        # by _sppm_nee_update instead (matches pbrt's own
+                        # SPPM, which skips photon-grid gathering at depth 0
+                        # specifically to avoid double-counting with its NEE
+                        # term).
+                        if bounce > 0 and n_stored < max_photons:
                             photons[n_stored] = SPPMPhoton(
                                 px=sx, py=sy, pz=sz,
                                 fr=flux_r, fg=flux_g, fb=flux_b,
@@ -489,7 +514,13 @@ def _sppm_photon_pass(
             var hz = roz + rdz * t_hit
 
             if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-                if n_stored < n_emit:
+                # bounce > 0: skip storing a photon at a surface directly hit
+                # by the light with no intermediate bounce — that direct
+                # contribution is now covered by _sppm_nee_update instead
+                # (matches pbrt's own SPPM, which skips gathering at depth 0
+                # for the same reason: avoid double-counting direct light
+                # once via NEE and again via an unfiltered photon density).
+                if bounce > 0 and n_stored < max_photons:
                     photons[n_stored] = SPPMPhoton(
                         px=hx, py=hy, pz=hz,
                         fr=flux_r, fg=flux_g, fb=flux_b,
@@ -624,6 +655,91 @@ def _gather_update(
             vps[i].N_acc = N + _ALPHA * M
 
 
+# ── Direct (NEE) lighting update ──────────────────────────────────────────────
+# Mirrors pbrt-v4's SPPM "pixel.Ld" term: a shadow-ray light sample taken at
+# each visible point EVERY SPPM pass (same cadence as the photon pass),
+# summed here and divided by n_passes at finalize time. Needed because the
+# photon-density (tau) term alone has to represent BOTH direct and indirect
+# lighting through one noisy channel — pbrt keeps them separate, which is
+# why its SPPM output is much smoother/less "blotchy" for the same pass
+# count. Surface VPs only (is_volume == 0); this scene has no participating
+# media, so a phase-function-weighted variant for volume VPs isn't needed.
+
+def _sppm_nee_update(
+    vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
+    n_vps:   Int,
+    sd:      SceneDescriptor2_C,
+    seed:    UInt64,
+    pass_idx: Int,
+):
+    var n_lights = Int(sd.areaLightCount)
+    if n_lights == 0:
+        return
+
+    for i in range(n_vps):
+        var vp = vps[i]
+        if vp.valid == Int32(0) or vp.is_volume == Int32(1):
+            continue
+
+        var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
+
+        # Pick a random area light + triangle + point on it (same scheme as
+        # _sppm_photon_pass's emission sampling).
+        var li = Int(pcg.next_uint() % UInt32(n_lights))
+        var al = sd.areaLights[li]
+        var lmesh = sd.meshes[Int(al.meshIdx)]
+        var n_tris = Int(max(Int(al.n_tris), 1))
+        var ti = Int(pcg.next_uint() % UInt32(n_tris))
+        var lb = ti * 3
+        var lv0 = Int(lmesh.vertexIndices[lb])
+        var lv1 = Int(lmesh.vertexIndices[lb + 1])
+        var lv2 = Int(lmesh.vertexIndices[lb + 2])
+        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+        var ru1 = pcg.next_float()
+        var ru2 = pcg.next_float()
+        var sr1 = sqrt(ru1)
+        var lp = lp0 * (Float32(1.0) - sr1) + lp1 * (sr1 * (Float32(1.0) - ru2)) + lp2 * (sr1 * ru2)
+        var ln = cross(lp1 - lp0, lp2 - lp0)
+        var lnl = dot(ln, ln)
+        if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
+
+        var vpos = SIMD[DType.float32, 3](vp.pos_x, vp.pos_y, vp.pos_z)
+        var vn   = SIMD[DType.float32, 3](vp.nx, vp.ny, vp.nz)
+        var to_light = lp - vpos
+        var dist2 = dot(to_light, to_light)
+        var dist = sqrt(dist2)
+        if dist <= Float32(0.0):
+            continue
+        var wi = to_light * (Float32(1.0) / dist)
+
+        var cos_surface = dot(vn, wi)
+        var cos_light = -dot(ln, wi)
+        if cos_surface <= Float32(0.0) or cos_light <= Float32(0.0):
+            continue
+
+        # Shadow ray, offset from both ends to avoid self-intersection.
+        var shadow_org = vpos + vn * Float32(0.0001)
+        var shadow_ray = Ray_C(Point3f(shadow_org[0], shadow_org[1], shadow_org[2]),
+                                Vec3f(wi[0], wi[1], wi[2]))
+        var t_max = dist * Float32(0.999)
+        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
+                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+            continue
+
+        # pdf_area = 1/(n_lights * total_area) — uniform-over-all-lights
+        # assumption, same as the emission-sampling flux scale factor.
+        var inv_pdf_area = Float32(n_lights) * al.total_area
+        var geom = cos_surface * cos_light / dist2 * inv_pdf_area
+        var brdf_r = vp.alb_r / PI
+        var brdf_g = vp.alb_g / PI
+        var brdf_b = vp.alb_b / PI
+        vps[i].ld_r += brdf_r * al.emission.r * geom
+        vps[i].ld_g += brdf_g * al.emission.g * geom
+        vps[i].ld_b += brdf_b * al.emission.b * geom
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def sppm_render(
@@ -650,10 +766,18 @@ def sppm_render(
           + " " + String(n_passes) + " passes x "
           + String(n_photons_per_pass) + " photons  r=" + String(initial_radius))
 
-    # Allocate visible points (n_pix * _VP_SAMPLES independent samples) and photon buffer
+    # Allocate visible points (n_pix * _VP_SAMPLES independent samples) and photon buffer.
+    # max_photons intentionally equals n_photons_per_pass, NOT a multiple of
+    # it: letting every Russian-roulette diffuse-diffuse continuation event
+    # (see _sppm_photon_pass) store unconditionally was tried and measurably
+    # over-brightened the render (each stored event's flux isn't re-weighted
+    # for "there are now more data points per emitted photon than the
+    # density-estimation formula assumes") — the cap at n_photons_per_pass,
+    # dropping excess bounce events once the buffer fills, is not a bug.
     var n_vps    = n_pix * _VP_SAMPLES
     var vps     = alloc[SPPMPixel](n_vps)
-    var photons = alloc[SPPMPhoton](n_photons_per_pass)
+    var max_photons = n_photons_per_pass
+    var photons = alloc[SPPMPhoton](max_photons)
     var heads   = alloc[Int32](_HSIZE)
     var init_r2 = initial_radius * initial_radius
     var inv_cell = Float32(1.0) / initial_radius  # cell size == initial radius
@@ -676,10 +800,12 @@ def sppm_render(
     # Photon passes
     for pass_idx in range(n_passes):
         var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
-        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, sd, pass_seed, pass_idx)
+        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx)
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
             _gather_update(vps, n_vps, photons, heads, inv_cell)
+        var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
+        _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
         if verbose or (pass_idx + 1) % 10 == 0:
             print("SPPM: pass " + String(pass_idx + 1) + "/" + String(n_passes)
                   + " stored=" + String(n_stored), end="\r")
@@ -701,13 +827,25 @@ def sppm_render(
         var r = Float32(0); var g = Float32(0); var b = Float32(0)
         for vs in range(_VP_SAMPLES):
             var vp = vps[i * _VP_SAMPLES + vs]
+            if vp.valid == Int32(0):
+                continue
+            var vp_r = Float32(0); var vp_g = Float32(0); var vp_b = Float32(0)
             if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
-                # L = beta * tau / (pi * r² * n_passes)
-                # tau already has albedo/pi folded in at gather time
+                # L = tau / (pi * r² * n_passes) — tau already has
+                # albedo/pi folded in at gather time
                 var denom = PI * vp.r2 * Float32(n_passes)
-                r += vp.beta_r * vp.tau_r / denom
-                g += vp.beta_g * vp.tau_g / denom
-                b += vp.beta_b * vp.tau_b / denom
+                vp_r += vp.tau_r / denom
+                vp_g += vp.tau_g / denom
+                vp_b += vp.tau_b / denom
+            if vp.is_volume == Int32(0):
+                # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
+                # pass, averaged over n_passes.
+                vp_r += vp.ld_r / Float32(n_passes)
+                vp_g += vp.ld_g / Float32(n_passes)
+                vp_b += vp.ld_b / Float32(n_passes)
+            r += vp.beta_r * vp_r
+            g += vp.beta_g * vp_g
+            b += vp.beta_b * vp_b
         r /= Float32(_VP_SAMPLES); g /= Float32(_VP_SAMPLES); b /= Float32(_VP_SAMPLES)
 
         # ISO exposure compensation (matches normalize_film)

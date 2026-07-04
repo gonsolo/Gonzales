@@ -21,7 +21,7 @@ from .geometry import (
     DistantLight_C, PointLight_C, InfiniteLight_C, Medium_C, MediumInterface_C,
     Grid_C, LightSampler_C, Instance_C, dot, cross, PI, INV_FOUR_PI,
 )
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
 from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _dielectric_bounce, _sppm_update_medium, _hash_cell, _cosine_hemisphere_sample, _ALPHA, _MAX_B, _HSIZE, _VP_SAMPLES
 from .pbrt_parser import ParsedScene_Mojo
@@ -141,6 +141,7 @@ def sppm_gen_vp_gpu(
         tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
         N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
         is_volume=Int32(0),
+        ld_r=Float32(0), ld_g=Float32(0), ld_b=Float32(0),
     )
 
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
@@ -244,6 +245,7 @@ def sppm_gen_vp_gpu(
 def sppm_emit_photons_gpu(
     photons: UnsafePointer[SPPMPhoton, MutAnyOrigin],
     n_emit: Int,
+    max_photons: Int,
     inter_scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
     stored_counter: UnsafePointer[Int32, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
@@ -347,13 +349,17 @@ def sppm_emit_photons_gpu(
                     var sx = rox + rdx * t_free
                     var sy = roy + rdy * t_free
                     var sz = roz + rdz * t_free
-                    var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
-                    if slot < n_emit:
-                        photons[slot] = SPPMPhoton(
-                            px=sx, py=sy, pz=sz,
-                            fr=flux_r, fg=flux_g, fb=flux_b,
-                            nxt=Int32(-1), is_volume=Int32(1),
-                        )
+                    # bounce > 0: skip storing at the light's own first
+                    # segment — covered by sppm_nee_gpu instead (matches
+                    # pbrt's own SPPM depth>0 gather skip).
+                    if bounce > 0:
+                        var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
+                        if slot < max_photons:
+                            photons[slot] = SPPMPhoton(
+                                px=sx, py=sy, pz=sz,
+                                fr=flux_r, fg=flux_g, fb=flux_b,
+                                nxt=Int32(-1), is_volume=Int32(1),
+                            )
                     var alb_s = med.sigma_s.r / sig_t
                     flux_r *= alb_s; flux_g *= alb_s; flux_b *= alb_s
                     var usp1 = pcg.next_float()
@@ -378,13 +384,18 @@ def sppm_emit_photons_gpu(
         var hz = roz + rdz * t_hit
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-            var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
-            if slot < n_emit:
-                photons[slot] = SPPMPhoton(
-                    px=hx, py=hy, pz=hz,
-                    fr=flux_r, fg=flux_g, fb=flux_b,
-                    nxt=Int32(-1), is_volume=Int32(0),
-                )
+            # bounce > 0: skip storing a photon hit directly by the light
+            # with no intermediate bounce — covered by sppm_nee_gpu instead
+            # (matches pbrt's own SPPM depth>0 gather skip, avoiding
+            # double-counting direct light once via NEE and again here).
+            if bounce > 0:
+                var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
+                if slot < max_photons:
+                    photons[slot] = SPPMPhoton(
+                        px=hx, py=hy, pz=hz,
+                        fr=flux_r, fg=flux_g, fb=flux_b,
+                        nxt=Int32(-1), is_volume=Int32(0),
+                    )
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — see sppm.mojo's _sppm_photon_pass
             # for why this is needed (photons used to always terminate here).
@@ -506,6 +517,84 @@ def sppm_gather_gpu(
         vps[i].N_acc = N + _ALPHA * M
 
 
+def sppm_nee_gpu(
+    vps: UnsafePointer[SPPMPixel, MutAnyOrigin],
+    n_vps: Int,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    n_lights: Int32,
+    seed: UInt64,
+    pass_idx: Int,
+):
+    """Direct (NEE) lighting update — see sppm.mojo's _sppm_nee_update for
+    why this separate term is needed (matches pbrt's "pixel.Ld")."""
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= n_vps or n_lights == 0:
+        return
+    var vp = vps[i]
+    if vp.valid == Int32(0) or vp.is_volume == Int32(1):
+        return
+
+    var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
+
+    var li = Int(pcg.next_uint() % UInt32(n_lights))
+    var al = areaLights[li]
+    var lmesh = meshes[Int(al.meshIdx)]
+    var n_tris = Int(max(Int(al.n_tris), 1))
+    var ti = Int(pcg.next_uint() % UInt32(n_tris))
+    var lb = ti * 3
+    var lv0 = Int(lmesh.vertexIndices[lb])
+    var lv1 = Int(lmesh.vertexIndices[lb + 1])
+    var lv2 = Int(lmesh.vertexIndices[lb + 2])
+    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var ru1 = pcg.next_float()
+    var ru2 = pcg.next_float()
+    var sr1 = sqrt(ru1)
+    var lp = lp0 * (Float32(1.0) - sr1) + lp1 * (sr1 * (Float32(1.0) - ru2)) + lp2 * (sr1 * ru2)
+    var ln = cross(lp1 - lp0, lp2 - lp0)
+    var lnl = dot(ln, ln)
+    if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
+
+    var vpos = SIMD[DType.float32, 3](vp.pos_x, vp.pos_y, vp.pos_z)
+    var vn   = SIMD[DType.float32, 3](vp.nx, vp.ny, vp.nz)
+    var to_light = lp - vpos
+    var dist2 = dot(to_light, to_light)
+    var dist = sqrt(dist2)
+    if dist <= Float32(0.0):
+        return
+    var wi = to_light * (Float32(1.0) / dist)
+
+    var cos_surface = dot(vn, wi)
+    var cos_light = -dot(ln, wi)
+    if cos_surface <= Float32(0.0) or cos_light <= Float32(0.0):
+        return
+
+    var shadow_org = vpos + vn * Float32(0.0001)
+    var shadow_ray = Ray_C(Point3f(shadow_org[0], shadow_org[1], shadow_org[2]),
+                            Vec3f(wi[0], wi[1], wi[2]))
+    var t_max = dist * Float32(0.999)
+    if any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, t_max,
+                          blasNodesArr, blasPrimIdsArr, instances):
+        return
+
+    var inv_pdf_area = Float32(n_lights) * al.total_area
+    var geom = cos_surface * cos_light / dist2 * inv_pdf_area
+    var brdf_r = vp.alb_r / PI
+    var brdf_g = vp.alb_g / PI
+    var brdf_b = vp.alb_b / PI
+    vps[i].ld_r += brdf_r * al.emission.r * geom
+    vps[i].ld_g += brdf_g * al.emission.g * geom
+    vps[i].ld_b += brdf_b * al.emission.b * geom
+
+
 def sppm_finalize_gpu(
     vps: UnsafePointer[SPPMPixel, MutAnyOrigin],
     n_pix: Int,
@@ -524,11 +613,21 @@ def sppm_finalize_gpu(
     var r = Float32(0); var g = Float32(0); var b = Float32(0)
     for vs in range(vp_samples):
         var vp = vps[i * vp_samples + vs]
+        if vp.valid == Int32(0):
+            continue
+        var vp_r = Float32(0); var vp_g = Float32(0); var vp_b = Float32(0)
         if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
             var denom = PI * vp.r2 * Float32(n_passes)
-            r += vp.beta_r * vp.tau_r / denom
-            g += vp.beta_g * vp.tau_g / denom
-            b += vp.beta_b * vp.tau_b / denom
+            vp_r += vp.tau_r / denom
+            vp_g += vp.tau_g / denom
+            vp_b += vp.tau_b / denom
+        if vp.is_volume == Int32(0):
+            vp_r += vp.ld_r / Float32(n_passes)
+            vp_g += vp.ld_g / Float32(n_passes)
+            vp_b += vp.ld_b / Float32(n_passes)
+        r += vp.beta_r * vp_r
+        g += vp.beta_g * vp_g
+        b += vp.beta_b * vp_b
     r /= Float32(vp_samples); g /= Float32(vp_samples); b /= Float32(vp_samples)
 
     r *= iso_scale; g *= iso_scale; b *= iso_scale
@@ -596,8 +695,14 @@ def sppm_render_gpu(
             comptime block_size = 256
 
             var n_vps = n_pix * _VP_SAMPLES
+            # max_photons intentionally equals n_photons_per_pass — see
+            # sppm.mojo's sppm_render for why a larger buffer (letting every
+            # Russian-roulette diffuse-continuation event store
+            # unconditionally) was tried and measurably over-brightened
+            # the render instead of helping.
+            var max_photons = n_photons_per_pass
             var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
-            var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[SPPMPhoton]())
+            var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(max_photons, 1) * size_of[SPPMPhoton]())
             var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
             var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[Intersection_C]())
             var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection_C]())
@@ -666,7 +771,7 @@ def sppm_render_gpu(
                 var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
                 var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
                 handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
-                    photons_ptr, n_photons_per_pass, inter_ph_ptr, counter_ptr,
+                    photons_ptr, n_photons_per_pass, max_photons, inter_ph_ptr, counter_ptr,
                     areaLights, n_lights, meshes,
                     bvh2Nodes, primIds, curves, blasNodesArr, blasPrimIdsArr, instances,
                     materials, mediums, n_mediums, mediumInterfaces, n_medium_ifaces, spheres, n_spheres,
@@ -678,7 +783,7 @@ def sppm_render_gpu(
                 with counter_buf.map_to_host() as host_buf:
                     var src = host_buf.unsafe_ptr().bitcast[Int32]()
                     n_stored_raw = src[0]
-                var n_stored = min(Int(n_stored_raw), n_photons_per_pass)
+                var n_stored = min(Int(n_stored_raw), max_photons)
 
                 if n_stored > 0:
                     handle[].ctx.enqueue_function[sppm_grid_reset_gpu](
@@ -690,6 +795,13 @@ def sppm_render_gpu(
                     handle[].ctx.enqueue_function[sppm_gather_gpu](
                         vps_ptr, n_vps, photons_ptr, heads_ptr, inv_cell,
                         grid_dim=grid_vps, block_dim=block_size)
+
+                var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
+                handle[].ctx.enqueue_function[sppm_nee_gpu](
+                    vps_ptr, n_vps,
+                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances,
+                    areaLights, n_lights, nee_seed, pass_idx,
+                    grid_dim=grid_vps, block_dim=block_size)
 
                 if verbose or (pass_idx + 1) % 10 == 0:
                     print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)
