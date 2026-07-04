@@ -2095,16 +2095,13 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 iw_out.free(); ih_out.free()
                 if load_ok != Int32(0) and iw > 0 and ih > 0:
                     var pixels = pixels_ptr[0]
-                    var tmp_row = alloc[Float32](iw * 3)
-                    for r in range(ih // 2):
-                        var r2 = ih - 1 - r
-                        var off1 = r * iw * 3
-                        var off2 = r2 * iw * 3
-                        for c in range(iw * 3):
-                            tmp_row[c] = pixels[off1 + c]
-                            pixels[off1 + c] = pixels[off2 + c]
-                            pixels[off2 + c] = tmp_row[c]
-                    tmp_row.free()
+                    # Do NOT vertically flip here (removed a flip added in
+                    # 73f368fd "fix upside-down environment"): in this equal-area
+                    # octahedral mapping, row-flip (v -> 1-v) mirrors the decoded
+                    # direction's Y axis, not Z/elevation, so it wasn't a valid
+                    # "upside-down" fix. Confirmed wrong via cast-shadow direction
+                    # (bunny-fur) vs env map luminance centroid; see
+                    # project_infinite_light_shadows memory.
                     raw_pixels = pixels
                     var cdf_size = (ih + 1) + ih * (iw + 1)
                     var cdf_buf = alloc[Float32](cdf_size)
