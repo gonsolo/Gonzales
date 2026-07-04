@@ -109,12 +109,17 @@ for scene in "${SCENES[@]}"; do
                 g_label="BDPT"
             fi
         elif $use_sppm; then
-            if (cd ~/work/gonzales && "$GONZALES" --sppm --sppm-passes 200 --sppm-photons 100000 \
+            # GPU SPPM port (2026-07-04, commit cf49e366): ~25-30x faster than
+            # CPU, verified numerically equivalent (47.4dB PSNR). pbrt has no
+            # GPU sppm mode (see comment above), so this is GPU-vs-CPU here —
+            # architecturally asymmetric, but each side uses its best available
+            # implementation of the same integrator.
+            if (cd ~/work/gonzales && "$GONZALES" --gpu --sppm --sppm-passes 200 --sppm-photons 100000 \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
                 [ -f ~/work/gonzales/"$exr_name" ] && \
                 { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
                            || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
-                g_label="SPPM"
+                g_label="SPPM (GPU)"
             fi
         elif (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
@@ -135,7 +140,11 @@ for scene in "${SCENES[@]}"; do
         fi
         if [ -n "$g_label" ]; then
             # Extract rendering time ("Done: X.Xs" from progress line)
+            # "Done: X.Xs" comes from the wavefront/tile progress line; SPPM
+            # and BDPT print no such progress line, only the universal
+            # "Gonzales Total Execution Time: X s" — fall back to that.
             g_t=$(grep -oP "Done: \K[\d.]+" "$g_log" | tail -1)
+            [ -z "$g_t" ] && g_t=$(grep -oP "Gonzales Total Execution Time: \K[\d.]+" "$g_log" | tail -1)
             echo "${g_t:-?}" > "$g_time_file"
             echo "$g_label" > "$g_mode_file"
             echo "  → gonzales OK ($g_label, ${g_t:-?}s render)"

@@ -125,6 +125,7 @@ for scene in "${SCENES[@]}"; do
         fi
         if [ -n "$g_label" ]; then
             g_t=$(grep -oP "Done: \K[\d.]+" "$g_log" | tail -1)
+            [ -z "$g_t" ] && g_t=$(grep -oP "Gonzales Total Execution Time: \K[\d.]+" "$g_log" | tail -1)
             echo "${g_t:-?}" > "$g_time_file"
             echo "$g_label" > "$g_mode_file"
             echo "  → gonzales OK ($g_label, ${g_t:-?}s render)"
