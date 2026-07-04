@@ -95,6 +95,8 @@ struct ParsedScene_Mojo:
     # ObjectBegin/ObjectEnd template, referenced by Instance_C.blasIdx.
     var blas_nodes_arr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
     var blas_primids_arr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
+    var blas_node_counts:   UnsafePointer[Int32, MutAnyOrigin]  # per-BLAS array length, needed for GPU upload
+    var blas_primid_counts: UnsafePointer[Int32, MutAnyOrigin]
     var blas_count:       Int32
     var instances:        UnsafePointer[Instance_C, MutAnyOrigin]
     var instance_count:   Int32
@@ -1752,6 +1754,12 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var n_templates = len(s[0].object_names)
     var blas_nodes_arr   = alloc[UnsafePointer[BVH2Node, MutAnyOrigin]](max(n_templates, 1))
     var blas_primids_arr = alloc[UnsafePointer[PrimId_C, MutAnyOrigin]](max(n_templates, 1))
+    # Per-BLAS array lengths — the CPU traversal side never needs these (it
+    # just walks from node/primid index 0, self-describing via each node's
+    # offset/count), but GPU upload does: it copies each BLAS's arrays into
+    # their own device buffers and needs to know how many bytes that is.
+    var blas_node_counts   = alloc[Int32](max(n_templates, 1))
+    var blas_primid_counts = alloc[Int32](max(n_templates, 1))
     for tmpl in range(n_templates):
         var mstart = Int(s[0].object_mesh_start[tmpl])
         var mend   = Int(s[0].object_mesh_end[tmpl])
@@ -1786,7 +1794,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         var t_max_nodes = max(Int(t_tris) * 2 + 4, 1)
         var t_nodes = alloc[BVH2Node](t_max_nodes)
         var t_order = alloc[Int32](max(Int(t_tris), 1))
-        _ = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
+        var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
         t_bounds.free()
         var t_prim_ids = alloc[PrimId_C](max(Int(t_tris), 1))
         for k in range(Int(t_tris)):
@@ -1798,6 +1806,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         t_mesh.free(); t_local.free(); t_order.free()
         blas_nodes_arr[tmpl]   = t_nodes
         blas_primids_arr[tmpl] = t_prim_ids
+        blas_node_counts[tmpl]   = t_node_count
+        blas_primid_counts[tmpl] = t_tris
 
     var instances_c = alloc[Instance_C](max(Int(total_instances), 1))
     for k in range(Int(total_instances)):
@@ -2005,6 +2015,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].prim_count_cpu     = total_prims
     psc[0].blas_nodes_arr   = blas_nodes_arr
     psc[0].blas_primids_arr = blas_primids_arr
+    psc[0].blas_node_counts   = blas_node_counts
+    psc[0].blas_primid_counts = blas_primid_counts
     psc[0].blas_count       = Int32(n_templates)
     psc[0].instances        = instances_c
     psc[0].instance_count   = total_instances
@@ -2401,6 +2413,8 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].blas_primids_arr[bi].free()
     psc[0].blas_nodes_arr.free()
     psc[0].blas_primids_arr.free()
+    psc[0].blas_node_counts.free()
+    psc[0].blas_primid_counts.free()
     psc[0].instances.free()
     psc.free()
 

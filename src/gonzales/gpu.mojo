@@ -8,6 +8,7 @@ from std.memory import alloc
 from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
+from .transform import transform_normal_by_instance
 from std.atomic import Atomic
 from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
@@ -36,6 +37,17 @@ struct GpuSceneHandle(Movable):
     var ctx: DeviceContext
     var bvh2Nodes_buf: DeviceBuffer[DType.uint8]
     var primIds_buf: DeviceBuffer[DType.uint8]
+    # Object instancing (see [[project_object_instancing]]/geometry.mojo's
+    # Instance_C docs): one device buffer per BLAS (kept alive here), plus two
+    # small "array of device pointers" buffers so a kernel's
+    # blasNodesArr[i]/blasPrimIdsArr[i] resolves to the right BLAS's buffer.
+    var blas_nodes_bufs: List[DeviceBuffer[DType.uint8]]
+    var blas_primids_bufs: List[DeviceBuffer[DType.uint8]]
+    var blas_nodes_ptrs_buf: DeviceBuffer[DType.uint8]
+    var blas_primids_ptrs_buf: DeviceBuffer[DType.uint8]
+    var n_blas: Int
+    var instances_buf: DeviceBuffer[DType.uint8]
+    var n_instances: Int
     var meshes_buf: DeviceBuffer[DType.uint8]
     var mesh_count: Int
     var materials_buf: DeviceBuffer[DType.uint8]
@@ -118,6 +130,13 @@ def gpu_upload_scene(
     bvh2NodesCount: Int64,
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     primIdsCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasNodeCounts: UnsafePointer[Int32, MutAnyOrigin],
+    blasPrimidCounts: UnsafePointer[Int32, MutAnyOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     meshCount: Int64,
     meshPointsCounts: UnsafePointer[Int64, MutAnyOrigin],
@@ -209,6 +228,62 @@ def gpu_upload_scene(
                     var src = primIds.bitcast[UInt8]()
                     for i in range(Int(primIdsCount) * size_of[PrimId_C]()):
                         dst[i] = src[i]
+
+            # Upload object-instancing data: one device buffer per BLAS (its
+            # nodes + primids), then two small "array of device pointers"
+            # buffers so a kernel's blasNodesArr[i]/blasPrimIdsArr[i] resolves
+            # to the right BLAS — same two-level indirection as the CPU side
+            # (see bvh.mojo's _traverse_instance_leaf).
+            var n_blas_int = Int(blasCount)
+            var blas_nodes_bufs = List[DeviceBuffer[DType.uint8]]()
+            var blas_primids_bufs = List[DeviceBuffer[DType.uint8]]()
+            var blas_nodes_ptrs_host = alloc[UnsafePointer[UInt8, MutAnyOrigin]](max(n_blas_int, 1))
+            var blas_primids_ptrs_host = alloc[UnsafePointer[UInt8, MutAnyOrigin]](max(n_blas_int, 1))
+            for bi in range(n_blas_int):
+                var bn_count = Int(blasNodeCounts[bi])
+                var bn_bytes = max(bn_count, 1) * size_of[BVH2Node]()
+                var bn_buf = ctx.enqueue_create_buffer[DType.uint8](bn_bytes)
+                with bn_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = blasNodesArr[bi].bitcast[UInt8]()
+                    for j in range(bn_count * size_of[BVH2Node]()):
+                        dst[j] = src[j]
+                blas_nodes_ptrs_host[bi] = bn_buf.unsafe_ptr()
+                blas_nodes_bufs.append(bn_buf^)
+
+                var bp_count = Int(blasPrimidCounts[bi])
+                var bp_bytes = max(bp_count, 1) * size_of[PrimId_C]()
+                var bp_buf = ctx.enqueue_create_buffer[DType.uint8](bp_bytes)
+                with bp_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = blasPrimIdsArr[bi].bitcast[UInt8]()
+                    for j in range(bp_count * size_of[PrimId_C]()):
+                        dst[j] = src[j]
+                blas_primids_ptrs_host[bi] = bp_buf.unsafe_ptr()
+                blas_primids_bufs.append(bp_buf^)
+
+            var blas_ptrs_bytes = max(n_blas_int, 1) * size_of[UnsafePointer[UInt8, MutAnyOrigin]]()
+            var blas_nodes_ptrs_buf = ctx.enqueue_create_buffer[DType.uint8](blas_ptrs_bytes)
+            with blas_nodes_ptrs_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().bitcast[UnsafePointer[UInt8, MutAnyOrigin]]()
+                for bi in range(n_blas_int):
+                    dst[bi] = blas_nodes_ptrs_host[bi]
+            var blas_primids_ptrs_buf = ctx.enqueue_create_buffer[DType.uint8](blas_ptrs_bytes)
+            with blas_primids_ptrs_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().bitcast[UnsafePointer[UInt8, MutAnyOrigin]]()
+                for bi in range(n_blas_int):
+                    dst[bi] = blas_primids_ptrs_host[bi]
+            blas_nodes_ptrs_host.free(); blas_primids_ptrs_host.free()
+
+            var n_instances_int = Int(instanceCount)
+            var inst_bytes = max(n_instances_int, 1) * size_of[Instance_C]()
+            var instances_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](inst_bytes)
+            if n_instances_int > 0:
+                with instances_gpu_buf.map_to_host() as host_buf:
+                    var dst = host_buf.unsafe_ptr()
+                    var src = instances.bitcast[UInt8]()
+                    for j in range(n_instances_int * size_of[Instance_C]()):
+                        dst[j] = src[j]
 
             # Upload per-mesh vertex/index/uv data and build device-side mesh structs
             var points_bufs = List[DeviceBuffer[DType.uint8]]()
@@ -659,6 +734,13 @@ def gpu_upload_scene(
                 ctx=ctx^,
                 bvh2Nodes_buf=bvh_buf^,
                 primIds_buf=prim_buf^,
+                blas_nodes_bufs=blas_nodes_bufs^,
+                blas_primids_bufs=blas_primids_bufs^,
+                blas_nodes_ptrs_buf=blas_nodes_ptrs_buf^,
+                blas_primids_ptrs_buf=blas_primids_ptrs_buf^,
+                n_blas=n_blas_int,
+                instances_buf=instances_gpu_buf^,
+                n_instances=n_instances_int,
                 meshes_buf=meshes_buf^,
                 mesh_count=Int(meshCount),
                 materials_buf=mat_buf^,
@@ -848,6 +930,9 @@ def shade_nee_preamble_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -882,9 +967,7 @@ def shade_nee_preamble_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -905,6 +988,9 @@ def shade_diffuse_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -940,9 +1026,7 @@ def shade_diffuse_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -959,6 +1043,9 @@ def shade_coated_diffuse_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -994,9 +1081,7 @@ def shade_coated_diffuse_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1013,6 +1098,9 @@ def shade_diffuse_transmit_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -1047,9 +1135,7 @@ def shade_diffuse_transmit_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1066,6 +1152,9 @@ def shade_mix_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -1101,9 +1190,7 @@ def shade_mix_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1284,6 +1371,9 @@ def sample_medium_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     n_area_lights: Int,
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
@@ -1430,7 +1520,7 @@ def sample_medium_gpu(
                     var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
                     var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                     var shad_tmax = dist * Float32(0.9995)
-                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax):
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances):
                         var T_r: Float32
                         var T_g: Float32
                         var T_b: Float32
@@ -1494,6 +1584,9 @@ def shade_hair_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -1529,9 +1622,7 @@ def shade_hair_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1548,6 +1639,9 @@ def shade_enqueue_shadow_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
     areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     areaLightCount: Int,
@@ -1575,9 +1669,7 @@ def shade_enqueue_shadow_gpu(
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](),
         textures=textures, n_textures=n_textures, shadow_tasks=shadow_tasks,
         px_scale=Float32(0.0), sobol_matrices=UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), guide=null_guide(),
-        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=UnsafePointer[DistantLight_C, MutAnyOrigin](), distant_count=0,
@@ -1592,6 +1684,9 @@ def traverse_shadow_rays_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     count: Int,
@@ -1603,7 +1698,7 @@ def traverse_shadow_rays_gpu(
     if task.active == 0:
         return
     var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax):
+    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax, blasNodesArr, blasPrimIdsArr, instances):
         paths[tid].estimate += RGB(task.contrib.r, task.contrib.g, task.contrib.b)
 
 
@@ -1705,6 +1800,9 @@ def traverse_paths_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
@@ -1722,6 +1820,7 @@ def traverse_paths_gpu(
     traverse_bvh2_core_defer_curves(
         bvh2Nodes, primIds, meshes, curves, paths[tid].ray, Float32(1.0e38), results + tid,
         curve_cand_prim + tid * CURVE_DEFER_K, curve_cand_count + tid,
+        blasNodesArr, blasPrimIdsArr, instances,
     )
     test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
 
@@ -1911,6 +2010,9 @@ def gen_aux_buffers_gpu(
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     n_spheres: Int,
     isects_tmp: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -1948,7 +2050,7 @@ def gen_aux_buffers_gpu(
     var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
     var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     isects_tmp[tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp + tid)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp + tid, blasNodesArr, blasPrimIdsArr, instances)
     test_spheres(spheres, n_spheres, ray, isects_tmp + tid)
 
     var nx = Float32(0); var ny = Float32(0); var nz = Float32(1)
@@ -1983,7 +2085,7 @@ def gen_aux_buffers_gpu(
                 var cs = sqrt(max(Float32(0.0), Float32(1.0) - ch*ch))
                 var cn = cu*ch + cb*cs
                 nx = cn[0]; ny = cn[1]; nz = cn[2]
-        else:
+        elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
             var mesh_idx: Int
             var base_vidx: Int
             if typ == 0:
@@ -2005,8 +2107,16 @@ def gen_aux_buffers_gpu(
             nx = e1y*e2z - e1z*e2y
             ny = e1z*e2x - e1x*e2z
             nz = e1x*e2y - e1y*e2x
+            var inst_idx = isects_tmp[tid].primId.instanceIdx
+            if inst_idx >= Int32(0):
+                var n_obj = SIMD[DType.float32, 3](nx, ny, nz)
+                var n_world = transform_normal_by_instance(instances[Int(inst_idx)].worldToObj, n_obj)
+                nx = n_world[0]; ny = n_world[1]; nz = n_world[2]
             var nl = sqrt(nx*nx + ny*ny + nz*nz)
             if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+        # else: unrecognized primitive type (shouldn't happen — every hit
+        # traverse_bvh2_core can produce is type 0-5) — leave nx/ny/nz at the
+        # miss-ray default (0,0,1) rather than misreading id1/id2 as mesh data.
         if nx*(-dx) + ny*(-dy) + nz*(-dz) < Float32(0):
             nx = -nx; ny = -ny; nz = -nz
 
@@ -2042,6 +2152,9 @@ def gpu_gen_aux_buffers(
                 handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                 handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                 handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                 handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                 handle[].n_spheres,
                 handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -2104,6 +2217,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
@@ -2148,6 +2264,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
                     handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
@@ -2162,6 +2281,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2188,6 +2310,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2214,6 +2339,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2240,6 +2368,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2266,6 +2397,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2343,6 +2477,9 @@ def gpu_render_sample(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2424,6 +2561,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                     handle[].n_spheres,
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
@@ -2468,6 +2608,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
                     handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
@@ -2482,6 +2625,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2508,6 +2654,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2534,6 +2683,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2560,6 +2712,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2586,6 +2741,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,
@@ -2663,6 +2821,9 @@ def gpu_render_wavefront(
                     handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                     handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                     handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
                     handle[].n_area_lights,

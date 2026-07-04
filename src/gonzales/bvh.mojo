@@ -249,6 +249,43 @@ def _traverse_blas_triangles(
 
 
 @always_inline
+def _traverse_instance_leaf(
+    prim: PrimId_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    ray_org: SIMD[DType.float32, 3],
+    ray_dir: SIMD[DType.float32, 3],
+    tMax: Float32,
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId_C]:
+    """Handle one PrimId_C.type==6 (instance) leaf: transform the ray into the
+    instance's object space and walk its BLAS. Returns (hit, tHit, u, v,
+    primId) with primId.instanceIdx already set to this instance's index.
+    Shared by all three top-level traversal functions (traverse_bvh2_core,
+    any_hit_bvh2_core, traverse_bvh2_core_defer_curves) so a correctness fix
+    here only needs to happen once. Returns hit=False without dereferencing
+    anything if instance data isn't available (callers that never populate it
+    — e.g. GPU's own device-side scene upload, which reads the instance-free
+    TLAS instead — pass dangling defaults; see [[project_object_instancing]]
+    for why an unguarded dereference here previously crashed the GPU path)."""
+    var dummy = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
+        return (False, tMax, Float32(0), Float32(0), dummy)
+    var inst_idx = Int(prim.id1)
+    var inst = instances[inst_idx]
+    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
+    var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
+    var blas_prim_ids = blasPrimIdsArr[Int(inst.blasIdx)]
+    var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)
+    if sub[0]:
+        var hit_prim = sub[4]
+        hit_prim.instanceIdx = Int32(inst_idx)
+        return (True, sub[1], sub[2], sub[3], hit_prim)
+    return (False, tMax, Float32(0), Float32(0), dummy)
+
+
+@always_inline
 def _transform_ray_to_instance_space(
     worldToObj: SIMD[DType.float32, 16],
     ray_org: SIMD[DType.float32, 3],
@@ -347,27 +384,12 @@ def traverse_bvh2_core(
                         instHit = False
                     continue
                 elif prim.type == 6:
-                    # Callers that never populate instance data (GPU: its own device-side
-                    # scene upload has no BLAS/instance buffers at all — see
-                    # gpu_upload_scene, which reads the SAME top-level bvh_nodes/prim_ids
-                    # this leaf came from) pass dangling defaults here. Skip rather than
-                    # dereference — this is a hard requirement, not just a nicety: without
-                    # it a GPU ray that reaches this leaf's AABB dereferences a dangling
-                    # pointer and crashes (CUDA_ERROR_ILLEGAL_ADDRESS), confirmed in testing.
-                    if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
-                        continue
-                    var inst_idx = Int(prim.id1)
-                    var inst = instances[inst_idx]
-                    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
-                    var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
-                    var blas_prim_ids = blasPrimIdsArr[Int(inst.blasIdx)]
-                    var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, localTHit)
+                    var sub = _traverse_instance_leaf(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
                         bestV = sub[3]
                         instHitPrim = sub[4]
-                        instHitPrim.instanceIdx = Int32(inst_idx)
                         instHit = True
                     continue
                 else:
@@ -484,6 +506,9 @@ def traverse_bvh2_core_defer_curves(
     resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
     curve_cand_prim: UnsafePointer[Int32, MutAnyOrigin],
     curve_cand_count: UnsafePointer[Int32, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ):
 
     var rdirX = Float32(1.0) / ray.direction.x
@@ -502,6 +527,8 @@ def traverse_bvh2_core_defer_curves(
     var localTHit = tMax
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
+    var instHit = False
+    var instHitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
     var stack = InlineArray[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
@@ -544,6 +571,16 @@ def traverse_bvh2_core_defer_curves(
                             bestU = curve_hit[2]
                             bestV = curve_hit[3]
                             hitIndex = offset + j
+                            instHit = False
+                    continue
+                elif prim.type == 6:
+                    var sub = _traverse_instance_leaf(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit)
+                    if sub[0]:
+                        localTHit = sub[1]
+                        bestU = sub[2]
+                        bestV = sub[3]
+                        instHitPrim = sub[4]
+                        instHit = True
                     continue
                 else:
                     continue
@@ -575,6 +612,7 @@ def traverse_bvh2_core_defer_curves(
                     bestU = hit_res[2]
                     bestV = hit_res[3]
                     hitIndex = offset + j
+                    instHit = False
 
             # Pop next node from stack
             if toVisit == 0:
@@ -625,7 +663,9 @@ def traverse_bvh2_core_defer_curves(
                 toVisit -= 1
                 current = Int(stack_ptr[toVisit])
 
-    if hitIndex != -1:
+    if instHit:
+        resultPtr[0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    elif hitIndex != -1:
         resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
         var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
@@ -683,15 +723,7 @@ def any_hit_bvh2_core(
                         return True
                     continue
                 elif prim.type == 6:
-                    # See the matching guard in traverse_bvh2_core above — required to
-                    # avoid GPU dereferencing dangling instance/BLAS pointers.
-                    if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
-                        continue
-                    var inst = instances[Int(prim.id1)]
-                    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
-                    var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
-                    var blas_prim_ids = blasPrimIdsArr[Int(inst.blasIdx)]
-                    if _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)[0]:
+                    if _traverse_instance_leaf(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax)[0]:
                         return True
                     continue
                 else:

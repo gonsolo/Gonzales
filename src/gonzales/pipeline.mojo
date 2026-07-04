@@ -154,8 +154,14 @@ def _gpu_upload_scene(
         uv_counts[i]  = Int64(psc[0].mesh_uv_n_verts[i])
         nrm_counts[i] = Int64(psc[0].mesh_nrm_n_verts[i])
     var handle = gpu_upload_scene(
-        psc[0].bvh_nodes,      Int64(psc[0].bvh_node_count),
-        psc[0].prim_ids,       Int64(psc[0].prim_count),
+        # CPU-inclusive TLAS (tris+curves+instances) — now that GPU has
+        # BLAS/instance upload + traversal support, it uses the same TLAS
+        # SceneDescriptor2_C does rather than the instance-free one.
+        psc[0].bvh_nodes_cpu,      Int64(psc[0].bvh_node_count_cpu),
+        psc[0].prim_ids_cpu,       Int64(psc[0].prim_count_cpu),
+        psc[0].blas_nodes_arr, psc[0].blas_primids_arr,
+        psc[0].blas_node_counts, psc[0].blas_primid_counts, Int64(psc[0].blas_count),
+        psc[0].instances, Int64(psc[0].instance_count),
         psc[0].meshes,         Int64(n_meshes),
         pts_counts.unsafe_ptr(), fi_counts.unsafe_ptr(),
         vi_counts.unsafe_ptr(), uv_counts.unsafe_ptr(),
