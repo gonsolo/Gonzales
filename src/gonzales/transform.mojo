@@ -121,6 +121,21 @@ def transform_points(
         points_out[b] = rx;  points_out[b+1] = ry;  points_out[b+2] = rz;  points_out[b+3] = Float32(1)
 
 
+@always_inline
+def transform_normal_by_instance(
+    world_to_obj: SIMD[DType.float32, 16],
+    n: SIMD[DType.float32, 3],
+) -> SIMD[DType.float32, 3]:
+    """Same formula as transform_normals below (there: pointer-based, bulk;
+    here: a single normal via an Instance_C's worldToObj, which already IS
+    the "inverse" that function expects as its `inv_matrix` argument)."""
+    var nx = n[0]; var ny = n[1]; var nz = n[2]
+    var wx = world_to_obj[0]*nx + world_to_obj[4]*ny + world_to_obj[8]*nz
+    var wy = world_to_obj[1]*nx + world_to_obj[5]*ny + world_to_obj[9]*nz
+    var wz = world_to_obj[2]*nx + world_to_obj[6]*ny + world_to_obj[10]*nz
+    return SIMD[DType.float32, 3](wx, wy, wz)
+
+
 def transform_normals(
     inv_matrix: UnsafePointer[Float32, MutAnyOrigin],
     normals_in: UnsafePointer[Float32, MutAnyOrigin],

@@ -1,6 +1,6 @@
 from std.memory import alloc
 from std.math import sqrt
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Vec3f, Medium_C, MediumInterface_C, Grid_C, LightSampler_C
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Vec3f, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -78,6 +78,18 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var gridCount: Int64
     var lightSampler: LightSampler_C
 
+    # Object instancing: one private BVH2 ("BLAS") per template, each a
+    # separate allocation reachable via Instance_C.blasIdx, plus TLAS instance
+    # placements. See geometry.mojo's Instance_C docs. instanceCount == 0 for
+    # scenes with no ObjectInstance usage (the blas*/instances pointers may
+    # then be dangling — never dereferenced since no PrimId_C.type==6 leaf
+    # exists in that case).
+    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
+    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
+    var blasCount:      Int64
+    var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
+    var instanceCount:  Int64
+
 # ── Analytical sphere intersection ────────────────────────────────────────────
 
 @always_inline
@@ -125,6 +137,137 @@ def test_spheres(
             result[0].primId.type = Int8(4)
             result[0].primId.id1 = Int64(i)
             result[0].primId.materialIndex = Int64(spheres[i].materialIndex)
+            result[0].primId.instanceIdx = Int32(-1)  # spheres are never instanced; clear any stale value
+
+# ── Object-instance BLAS walk ──────────────────────────────────────────────
+# A BLAS only ever contains ordinary type==0 triangles (built by finalize_scene
+# from one template's mesh range), so this is a plain single-level walk — never
+# recurses into another BLAS or handles spheres/curves/instances. Called from
+# the type==6 branch below with a ray already transformed into the instance's
+# object space (direction NOT renormalized, so tHit stays comparable to the
+# caller's world-space ray parameterization).
+
+@always_inline
+def _traverse_blas_triangles(
+    blasNodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    blasPrimIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    ray_org: SIMD[DType.float32, 3],
+    ray_dir: SIMD[DType.float32, 3],
+    tMax: Float32,
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId_C]:
+    """Returns (hit, tHit, u, v, primId) — primId is the winning BLAS-local
+    type==0 entry as-is (mesh_idx/base_vidx/materialIndex already correct
+    against the shared global `meshes` array); the caller overwrites its
+    `instanceIdx` field before use."""
+    var rdirX = Float32(1.0) / ray_dir[0]
+    var rdirY = Float32(1.0) / ray_dir[1]
+    var rdirZ = Float32(1.0) / ray_dir[2]
+    var orgRdirX = ray_org[0] * rdirX
+    var orgRdirY = ray_org[1] * rdirY
+    var orgRdirZ = ray_org[2] * rdirZ
+    var nearXIsMin = rdirX >= Float32(0.0)
+    var nearYIsMin = rdirY >= Float32(0.0)
+    var nearZIsMin = rdirZ >= Float32(0.0)
+
+    var hasHit = False
+    var hitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+
+    var stack = InlineArray[Int32, 64](fill=Int32(0))
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+
+    while True:
+        var node = blasNodes[current]
+        if node.count > 0:
+            var offset = Int(node.offset)
+            var count = Int(node.count)
+            for j in range(count):
+                var prim = blasPrimIds[offset + j]
+                if prim.type != Int8(0):
+                    continue
+                var mesh_idx = Int(prim.id1)
+                var base_vidx = Int(prim.id2)
+                var mesh = meshes[mesh_idx]
+                var v0 = Int(mesh.vertexIndices[base_vidx])
+                var v1 = Int(mesh.vertexIndices[base_vidx + 1])
+                var v2 = Int(mesh.vertexIndices[base_vidx + 2])
+                var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+                var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+                var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
+                if hit_res[0]:
+                    localTHit = hit_res[1]
+                    bestU = hit_res[2]
+                    bestV = hit_res[3]
+                    hitPrim = prim
+                    hasHit = True
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[toVisit])
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+            var leftNode = blasNodes[leftIdx]
+            var rightNode = blasNodes[rightIdx]
+            var leftHit = intersect_aabb(
+                leftNode.min, leftNode.max,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+            var rightHit = intersect_aabb(
+                rightNode.min, rightNode.max,
+                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                nearXIsMin, nearYIsMin, nearZIsMin, localTHit
+            )
+            var leftIsHit = leftHit[0]
+            var rightIsHit = rightHit[0]
+            if leftIsHit and rightIsHit:
+                if leftHit[1] <= rightHit[1]:
+                    current = leftIdx
+                    stack_ptr[toVisit] = Int32(rightIdx)
+                else:
+                    current = rightIdx
+                    stack_ptr[toVisit] = Int32(leftIdx)
+                toVisit += 1
+            elif leftIsHit:
+                current = leftIdx
+            elif rightIsHit:
+                current = rightIdx
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[toVisit])
+
+    return (hasHit, localTHit, bestU, bestV, hitPrim)
+
+
+@always_inline
+def _transform_ray_to_instance_space(
+    worldToObj: SIMD[DType.float32, 16],
+    ray_org: SIMD[DType.float32, 3],
+    ray_dir: SIMD[DType.float32, 3],
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    """Transform a world-space ray into an instance's object space. The
+    direction is rotated/scaled but NOT renormalized and the origin is NOT
+    re-based on it — this preserves the ray parameterization so a `tHit` found
+    in object space is directly usable as the world-space `tHit` (same trick
+    pbrt's TransformedPrimitive uses)."""
+    var m = worldToObj
+    var ox = m[0]*ray_org[0] + m[4]*ray_org[1] + m[8]*ray_org[2]  + m[12]
+    var oy = m[1]*ray_org[0] + m[5]*ray_org[1] + m[9]*ray_org[2]  + m[13]
+    var oz = m[2]*ray_org[0] + m[6]*ray_org[1] + m[10]*ray_org[2] + m[14]
+    var dx = m[0]*ray_dir[0] + m[4]*ray_dir[1] + m[8]*ray_dir[2]
+    var dy = m[1]*ray_dir[0] + m[5]*ray_dir[1] + m[9]*ray_dir[2]
+    var dz = m[2]*ray_dir[0] + m[6]*ray_dir[1] + m[10]*ray_dir[2]
+    return (SIMD[DType.float32, 3](ox, oy, oz), SIMD[DType.float32, 3](dx, dy, dz))
+
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 
@@ -137,7 +280,14 @@ def traverse_bvh2_core(
     ray: Ray_C,
     tMax: Float32,
     resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ):
+    # Callers that never populate any PrimId_C.type==6 leaf (GPU kernels, which
+    # upload their own device-side scene copy with no instance data at all) can
+    # omit blasNodesArr/blasPrimIdsArr/instances entirely — the dangling
+    # defaults above are never dereferenced since no such leaf will exist.
 
     var rdirX = Float32(1.0) / ray.direction.x
     var rdirY = Float32(1.0) / ray.direction.y
@@ -155,6 +305,8 @@ def traverse_bvh2_core(
     var localTHit = tMax
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
+    var instHit = False
+    var instHitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
     var stack = InlineArray[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
@@ -192,6 +344,22 @@ def traverse_bvh2_core(
                         bestU = curve_hit[2]
                         bestV = curve_hit[3]
                         hitIndex = offset + j
+                        instHit = False
+                    continue
+                elif prim.type == 6:
+                    var inst_idx = Int(prim.id1)
+                    var inst = instances[inst_idx]
+                    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
+                    var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
+                    var blas_prim_ids = blasPrimIdsArr[Int(inst.blasIdx)]
+                    var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, localTHit)
+                    if sub[0]:
+                        localTHit = sub[1]
+                        bestU = sub[2]
+                        bestV = sub[3]
+                        instHitPrim = sub[4]
+                        instHitPrim.instanceIdx = Int32(inst_idx)
+                        instHit = True
                     continue
                 else:
                     continue
@@ -223,6 +391,7 @@ def traverse_bvh2_core(
                     bestU = hit_res[2]
                     bestV = hit_res[3]
                     hitIndex = offset + j
+                    instHit = False
 
             # Pop next node from stack
             if toVisit == 0:
@@ -273,10 +442,12 @@ def traverse_bvh2_core(
                 toVisit -= 1
                 current = Int(stack_ptr[toVisit])
 
-    if hitIndex != -1:
+    if instHit:
+        resultPtr[0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+    elif hitIndex != -1:
         resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
-        var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
         resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
@@ -448,7 +619,7 @@ def traverse_bvh2_core_defer_curves(
     if hitIndex != -1:
         resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
-        var dummyId = PrimId_C(-1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
         resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
@@ -461,6 +632,9 @@ def any_hit_bvh2_core(
     curves: UnsafePointer[Curve_C, MutAnyOrigin],
     ray: Ray_C,
     tMax: Float32,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ) -> Bool:
     var rdirX = Float32(1.0) / ray.direction.x
     var rdirY = Float32(1.0) / ray.direction.y
@@ -497,6 +671,14 @@ def any_hit_bvh2_core(
                 elif prim.type == 5:
                     var curve = curves[Int(prim.id1)]
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
+                        return True
+                    continue
+                elif prim.type == 6:
+                    var inst = instances[Int(prim.id1)]
+                    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
+                    var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
+                    var blas_prim_ids = blasPrimIdsArr[Int(inst.blasIdx)]
+                    if _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)[0]:
                         return True
                     continue
                 else:
@@ -554,7 +736,8 @@ def any_hit_bvh2_core(
 def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
-    traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, ray, tMax, resultPtr)
+    traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, ray, tMax, resultPtr,
+                       scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
 
 
 # ── BVH2 Construction (SAH) ───────────────────────────────────────────

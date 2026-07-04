@@ -100,13 +100,32 @@ for scene in "${SCENES[@]}"; do
 
     ok=true
 
+    # barcelona-pavilion's trees are placed via ObjectInstance — gonzales only
+    # supports object instancing (two-level BVH: BLAS per template + TLAS
+    # instance leaves) on the CPU render path so far (--gpu's device-side
+    # scene upload doesn't carry instance data yet, a documented follow-up
+    # gap). Force CPU-only here so the fix actually shows up in the compare;
+    # --gpu would otherwise "succeed" while silently still missing the trees.
+    force_cpu=false
+    case "$scene" in
+        barcelona-pavilion) force_cpu=true ;;
+    esac
+
     # ── gonzales ──────────────────────────────────────────────────────────────
     if [ ! -f "$g_png" ]; then
         echo "[$idx/$total] gonzales $scene  ${scale_w}×${scale_h} ${SPP}spp"
         g_exr="$OUT/images/pbrt-${scene}-gonzales.exr"
         g_log="$OUT/images/pbrt-${scene}-gonzales.log"
         g_label=""
-        if (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
+        if [ "$force_cpu" = true ]; then
+            if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
+                --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
+                [ -f ~/work/gonzales/"$g_exr_name" ] && \
+                mv ~/work/gonzales/"$g_exr_name" "$g_exr" && \
+                tonemap "$g_exr" "$g_png"; then
+                g_label="CPU"
+            fi
+        elif (cd ~/work/gonzales && "$GONZALES" --gpu --spp "$SPP" \
             --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
             [ -f ~/work/gonzales/"$g_exr_name" ] && \
             mv ~/work/gonzales/"$g_exr_name" "$g_exr" && \

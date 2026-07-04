@@ -83,7 +83,8 @@ def render_tile(
             if paths[i].active == 0:
                 continue
             traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
-                               paths[i].ray, Float32(1.0e38), intersections + i)
+                               paths[i].ray, Float32(1.0e38), intersections + i,
+                               scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
             if scene.sphereCount > 0:
                 test_spheres(scene.spheres, Int(scene.sphereCount), paths[i].ray, intersections + i)
         for i in range(n):
@@ -202,7 +203,8 @@ def render_tile(
                                         var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
                                         var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                                         var shad_tmax = dist * Float32(0.9995)
-                                        if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax):
+                                        if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax,
+                                                                  scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances):
                                             var T_r: Float32
                                             var T_g: Float32
                                             var T_b: Float32
@@ -250,7 +252,9 @@ def render_tile(
                                scene.pointLights, Int(scene.pointLightCount),
                                scene.infiniteLights, Int(scene.infiniteLightCount),
                                scene.spheres, Int(scene.sphereCount),
-                               scene.lightSampler, sp.sobolMatrices, guide_read, guide_write)
+                               scene.lightSampler, sp.sobolMatrices, guide_read,
+                               blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
+                               instances=scene.instances, guide_write=guide_write)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -484,7 +488,8 @@ def render_aux_buffers(
         if dl > Float32(0): dx /= dl; dy /= dl; dz /= dl
 
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         if Int(sd.sphereCount) > 0:
             test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects + i)
 

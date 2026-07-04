@@ -1,11 +1,12 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
+from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
 
 @fieldwise_init
@@ -47,6 +48,13 @@ struct ShadeContext:
     var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
     var guide:            GuideGrid
     var lights:           LightContext
+    # Object instancing (see geometry.mojo's Instance_C docs). GPU call sites
+    # pass dangling/zero-count values — GPU's own device-side scene upload
+    # never populates instance data, so no PrimId_C.type==6 leaf can appear
+    # there and these are never dereferenced on that path.
+    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
+    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
+    var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
 
 @always_inline
 def _shading_normal(
@@ -54,11 +62,16 @@ def _shading_normal(
     v0: Int, v1: Int, v2: Int,
     bu: Float32, bv: Float32,
     geo_normal: SIMD[DType.float32, 3],
+    instance_idx: Int32 = Int32(-1),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ) -> SIMD[DType.float32, 3]:
     """Interpolate per-vertex shading normals with barycentric (bu, bv).
     Falls back to the geometric normal if the mesh has no shading normals.
-    The result is aligned to the same hemisphere as geo_normal (which the
-    caller has already oriented against the incoming ray)."""
+    The result is aligned to the same hemisphere as geo_normal, which the
+    caller has already (a) oriented against the incoming ray and (b), if this
+    hit came from an instanced BLAS (instance_idx >= 0), transformed to world
+    space — mesh.normals are per-vertex OBJECT-space data in that case, so
+    the interpolated result is transformed the same way before comparison."""
     if Int(mesh.normals) <= 4:
         return geo_normal
     var w0 = Float32(1.0) - bu - bv
@@ -66,6 +79,8 @@ def _shading_normal(
     var n1 = SIMD[DType.float32, 3](mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
     var n2 = SIMD[DType.float32, 3](mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
     var sn = n0 * w0 + n1 * bu + n2 * bv
+    if instance_idx >= Int32(0):
+        sn = transform_normal_by_instance(instances[Int(instance_idx)].worldToObj, sn)
     var slen = dot(sn, sn)
     if slen <= Float32(1e-12):
         return geo_normal
@@ -444,8 +459,19 @@ def _geom_normal_and_ray(
     p0: SIMD[DType.float32, 3],
     p1: SIMD[DType.float32, 3],
     p2: SIMD[DType.float32, 3],
+    instance_idx: Int32 = Int32(-1),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    """p0/p1/p2 come straight from `mesh.points` — object-space if this hit
+    came from an instanced BLAS (instance_idx >= 0), so the resulting normal
+    is transformed to world space before face-forwarding against the ray
+    (which is always world-space). The hit point (`ro`, the ray origin the
+    caller combines with tHit) needs no such fixup — tHit is preserved 1:1
+    between object/world parameterizations, see bvh.mojo's
+    _transform_ray_to_instance_space."""
     var gn = cross(p1 - p0, p2 - p0)
+    if instance_idx >= Int32(0):
+        gn = transform_normal_by_instance(instances[Int(instance_idx)].worldToObj, gn)
     var nlen = dot(gn, gn)
     if nlen > Float32(0.0):
         gn = gn * (Float32(1.0) / sqrt(nlen))
@@ -473,7 +499,8 @@ def _shadow_contribute[enqueue_shadow: Bool](
             tmax, RGB(contrib.r, contrib.g, contrib.b), Int32(1), Int32(0))
     else:
         var shadow_ray = Ray_C(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
-        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax):
+        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
+                                  ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
             path_ptr[].estimate += contrib
             # Record in the guide at the PARENT surface (one bounce back):
             # "scatter direction ray.dir from parent_cell leads to illumination W here."
@@ -513,7 +540,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
-    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2, inter.primId.instanceIdx, ctx.instances)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     # Balance heuristic: choose reflect vs transmit proportional to luminance,
@@ -595,10 +622,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
-    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    var (normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2, inter.primId.instanceIdx, ctx.instances)
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     # Use interpolated shading normal (geometric normal still drives hit-point offset)
-    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal)
+    normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, normal, inter.primId.instanceIdx, ctx.instances)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -1304,7 +1331,7 @@ def _build_geom_context_full[use_gpu: Bool](
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
-    var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2, inter.primId.instanceIdx, ctx.instances)
     var ng_ff = geo_normal
 
     var pixel_uv = Float32(0.0)
@@ -1322,7 +1349,7 @@ def _build_geom_context_full[use_gpu: Bool](
                 if rc < Float32(0.05): rc = Float32(0.05)
                 pixel_uv = (inter.tHit * ctx.px_scale / rc) / dpdu_len
 
-    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
     normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
         ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
     if dot(normal, ng_ff) < Float32(0.0):
@@ -2251,10 +2278,11 @@ def _nee_area_lights[enqueue_shadow: Bool](
                 Point3f(probe_org[0], probe_org[1], probe_org[2]),
                 Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
             var probe_tmax = dist * Float32(0.9995)
-            var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
+            var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
             var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
             var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr())
+            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+                               ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
             var probe_inter = probe_store[0]
             var used_mnee = False
             if probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
@@ -2290,7 +2318,8 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                 Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
                                 Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                             var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-                            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr())
+                            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+                                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
                             probe2_inter = probe2_store[0]
                         var ldp_du_v = lp1 - lp0; var ldp_dv_v = lp2 - lp0
                         if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
@@ -2333,7 +2362,8 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                     var wo2fn = wo2f*(Float32(1)/wo2fl)
                                                     var vis2_org = x2_f2 + wo2fn*Float32(0.001)
                                                     var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
-                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999)):
+                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999),
+                                                                  ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
                                                         var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w / pdf_area2)
                                                         path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
                         else:
@@ -2385,7 +2415,8 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                                 var vis_ray = Ray_C(
                                                     Point3f(vis_org[0], vis_org[1], vis_org[2]),
                                                     Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-                                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len_f * Float32(0.999)):
+                                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len_f * Float32(0.999),
+                                                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
                                                     var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s * lobe_w / pdf_area_x2)
                                                     path_ptr[].estimate += path_ptr[].throughput * mnee_wt
             if not used_mnee:
@@ -2868,6 +2899,9 @@ def shade_core_cpu_nee(
     light_sampler: LightSampler_C,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     guide: GuideGrid,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
 ):
     var path_ptr = paths + tid
@@ -2880,6 +2914,7 @@ def shade_core_cpu_nee(
         textures=UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), n_textures=0,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide,
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=distantLightCount,

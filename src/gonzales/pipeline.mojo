@@ -227,7 +227,8 @@ def debug_trace_pixel(
     for bounce in range(8):
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[0].hit = Int8(0)
-        traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, ray, Float32(1.0e38), inter)
+        traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, ray, Float32(1.0e38), inter,
+                            psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
         if psc[0].sphere_count > 0:
             test_spheres(psc[0].spheres, Int(psc[0].sphere_count), ray, inter)
         if inter[0].hit == Int8(0):
@@ -297,7 +298,8 @@ def debug_trace_pixel(
             if rfl > Float32(0.0): rfx /= rfl; rfy /= rfl; rfz /= rfl
             var rray = Ray_C(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
             var rint = alloc[Intersection_C](1); rint[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray, Float32(1.0e38), rint)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray, Float32(1.0e38), rint,
+                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
             if rint[0].hit == Int8(0) and psc[0].infinite_count > 0:
                 var il2 = psc[0].infinite_lights[0]
                 var w2 = il2.world_to_light
@@ -344,7 +346,8 @@ def debug_trace_pixel(
             if rfl5 > Float32(0.0): rfx5 /= rfl5; rfy5 /= rfl5; rfz5 /= rfl5
             var rray5 = Ray_C(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
             var rint5 = alloc[Intersection_C](1); rint5[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray5, Float32(1.0e38), rint5)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray5, Float32(1.0e38), rint5,
+                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
             if rint5[0].hit == Int8(0):
                 print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> MISS (no envmap in this scene)")
             else:
@@ -368,7 +371,8 @@ def debug_trace_pixel(
             if rfl3 > Float32(0.0): rfx3 /= rfl3; rfy3 /= rfl3; rfz3 /= rfl3
             var rray3 = Ray_C(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
             var rint3 = alloc[Intersection_C](1); rint3[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray3, Float32(1.0e38), rint3)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray3, Float32(1.0e38), rint3,
+                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
             if rint3[0].hit == Int8(0):
                 print("        REFLECT dir", rfx3, rfy3, rfz3, "-> MISS (no envmap in this scene)")
             else:
@@ -389,7 +393,8 @@ def debug_trace_pixel(
                 var ldx = -dl.direction.x; var ldy = -dl.direction.y; var ldz = -dl.direction.z
                 var cos_s = gnx*ldx + gny*ldy + gnz*ldz
                 var sray = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
-                var occluded = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray, Float32(2000.0))
+                var occluded = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray, Float32(2000.0),
+                                                  psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
                 print("        DISTANT", dli, "dir", ldx, ldy, ldz, "cos_s", cos_s, "occluded", Int(occluded))
             for ali in range(Int(psc[0].area_light_count)):
                 var al = psc[0].area_lights[ali]
@@ -406,7 +411,8 @@ def debug_trace_pixel(
                     tlx /= tdist; tly /= tdist; tlz /= tdist
                 var cos_sa = gnx*tlx + gny*tly + gnz*tlz
                 var sray2 = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
-                var occluded2 = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray2, tdist * Float32(0.999))
+                var occluded2 = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray2, tdist * Float32(0.999),
+                                                   psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
                 print("        AREA", ali, "centroid", lcx, lcy, lcz, "dist", tdist, "cos_s", cos_sa, "occluded", Int(occluded2))
             print("        STOP (diffuse probe only, not following further)")
             break

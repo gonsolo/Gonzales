@@ -71,6 +71,12 @@ struct MeshAccum(Copyable, Movable):
     var al_rgb:         RGB
     var inside_medium:  Int32
     var outside_medium: Int32
+    # True for meshes captured between ObjectBegin/ObjectEnd (an instancing
+    # template): baked at the CTM active during that block, NOT at each
+    # placement's CTM. finalize_scene excludes these from the ordinary
+    # top-level primitive list — they're only reachable via a per-template
+    # BLAS referenced by Instance_C placements (see pbrt_parser.mojo).
+    var is_object_template: Bool
 
     def __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
         self.points        = List[Float32]()
@@ -83,6 +89,7 @@ struct MeshAccum(Copyable, Movable):
         self.al_rgb        = RGB(Float32(0), Float32(0), Float32(0))
         self.inside_medium  = inside_medium
         self.outside_medium = outside_medium
+        self.is_object_template = False
 
 struct SceneParseState(Movable):
     # Current transform matrix and stack
@@ -182,6 +189,27 @@ struct SceneParseState(Movable):
     var scene_dir:        String
     var object_depth:     Int32
 
+    # ── ObjectBegin/ObjectEnd/ObjectInstance (template + placement capture) ──
+    # Recorded templates: parallel arrays, one entry per ObjectBegin/ObjectEnd
+    # block. Mesh range [object_mesh_start[i], object_mesh_end[i]) indexes into
+    # `meshes` above (those entries have is_object_template=True).
+    var object_names:      List[String]
+    var object_mesh_start: List[Int32]
+    var object_mesh_end:   List[Int32]
+    var object_ctm:        List[Float32]  # 16 floats per template: CTM at that ObjectBegin (Mdef)
+    # Pending (currently-open) ObjectBegin block, valid only while object_depth > 0.
+    var pending_object_name:  String
+    var pending_object_start: Int32
+    var pending_object_ctm:   InlineArray[Float32, 16]
+    # Recorded placements: parallel arrays, one entry per ObjectInstance.
+    # template_idx indexes object_names/object_mesh_start/object_mesh_end
+    # (and, 1:1 in the same order, the BLAS built from each template at
+    # finalize_scene time). obj_to_world/world_to_obj are 16 floats each,
+    # flattened (entry i occupies [i*16, i*16+16)).
+    var instance_template_idx: List[Int32]
+    var instance_obj_to_world: List[Float32]
+    var instance_world_to_obj: List[Float32]
+
     def __init__(out self):
         # Identity CTM
         self.ctm = InlineArray[Float32, 16](fill=Float32(0))
@@ -265,6 +293,17 @@ struct SceneParseState(Movable):
         self.max_depth  = Int32(5)
         self.scene_dir  = String("")
         self.object_depth = Int32(0)
+
+        self.object_names      = List[String]()
+        self.object_mesh_start = List[Int32]()
+        self.object_mesh_end   = List[Int32]()
+        self.object_ctm        = List[Float32]()
+        self.pending_object_name  = String("")
+        self.pending_object_start = Int32(0)
+        self.pending_object_ctm   = InlineArray[Float32, 16](fill=Float32(0))
+        self.instance_template_idx = List[Int32]()
+        self.instance_obj_to_world = List[Float32]()
+        self.instance_world_to_obj = List[Float32]()
 
 
 # ── CTM stack helpers (operate on SceneParseState only) ──────────────────────

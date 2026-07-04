@@ -6,9 +6,10 @@ from std.memory import alloc
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
-    dot, cross, fr_dielectric, PI, INV_FOUR_PI,
+    Instance_C, dot, cross, fr_dielectric, PI, INV_FOUR_PI,
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core
+from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
@@ -49,8 +50,15 @@ struct SPPMPhoton(TrivialRegisterPassable):
 def _geom_normal(
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ) -> SIMD[DType.float32, 3]:
-    """Normalized geometric normal from triangle cross product."""
+    """Normalized geometric normal from triangle cross product. If this hit
+    came from inside an instanced BLAS (primId.instanceIdx >= 0 — see
+    bvh.mojo's traverse_bvh2_core type==6 branch), the mesh data is in that
+    instance's object space, so the normal is transformed to world space
+    before returning (the hit *point*, elsewhere computed as
+    ray_org + ray_dir*tHit, needs no such fixup — see transform.mojo's
+    transform_normal_by_instance for why)."""
     var mi: Int; var bv: Int
     if inter.primId.type == 0:
         mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
@@ -66,6 +74,8 @@ def _geom_normal(
     var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
     var n = cross(p1 - p0, p2 - p0)
+    if inter.primId.instanceIdx >= Int32(0):
+        n = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, n)
     var l = dot(n, n)
     if l > Float32(0.0):
         n = n * (Float32(1.0) / sqrt(l))
@@ -213,7 +223,8 @@ def _sppm_camera_pass(
         for bounce in range(_MAX_B):
             var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
             inter_mem[0].hit = Int8(0)
-            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem)
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem,
+                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
             if inter_mem[0].hit == Int8(0):
                 break
 
@@ -251,7 +262,7 @@ def _sppm_camera_pass(
             var hz = roz + rdz * t_hit
 
             if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-                var gn = _geom_normal(inter, sd.meshes)
+                var gn = _geom_normal(inter, sd.meshes, sd.instances)
                 if dot(gn, ray_dir) > Float32(0.0):
                     gn = gn * Float32(-1.0)
                 vp.pos_x = hx; vp.pos_y = hy; vp.pos_z = hz
@@ -263,7 +274,7 @@ def _sppm_camera_pass(
 
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
-                var gn = _geom_normal(inter, sd.meshes)
+                var gn = _geom_normal(inter, sd.meshes, sd.instances)
                 var hit = SIMD[DType.float32, 3](hx, hy, hz)
                 var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
@@ -397,7 +408,8 @@ def _sppm_photon_pass(
         for bounce in range(_MAX_B):
             var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
             inter_mem[0].hit = Int8(0)
-            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem)
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem,
+                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
             if inter_mem[0].hit == Int8(0):
                 break  # miss
 
@@ -461,7 +473,7 @@ def _sppm_photon_pass(
 
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
-                var gn = _geom_normal(inter, sd.meshes)
+                var gn = _geom_normal(inter, sd.meshes, sd.instances)
                 var hit = SIMD[DType.float32, 3](hx, hy, hz)
                 var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]

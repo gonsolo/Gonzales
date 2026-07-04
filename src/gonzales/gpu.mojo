@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, dot, cross, INV_PI, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from std.atomic import Atomic
@@ -882,6 +882,9 @@ def shade_nee_preamble_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -937,6 +940,9 @@ def shade_diffuse_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -988,6 +994,9 @@ def shade_coated_diffuse_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1038,6 +1047,9 @@ def shade_diffuse_transmit_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1089,6 +1101,9 @@ def shade_mix_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1514,6 +1529,9 @@ def shade_hair_gpu(
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1557,6 +1575,9 @@ def shade_enqueue_shadow_gpu(
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin](),
         textures=textures, n_textures=n_textures, shadow_tasks=shadow_tasks,
         px_scale=Float32(0.0), sobol_matrices=UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), guide=null_guide(),
+        blasNodesArr=UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        blasPrimIdsArr=UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        instances=UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=UnsafePointer[DistantLight_C, MutAnyOrigin](), distant_count=0,
@@ -1925,7 +1946,7 @@ def gen_aux_buffers_gpu(
     var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
 
     var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
-    var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     isects_tmp[tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp + tid)
     test_spheres(spheres, n_spheres, ray, isects_tmp + tid)

@@ -14,7 +14,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
-                        LightSampler_C)
+                        LightSampler_C, Instance_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .sampling import gaussian_norm
@@ -81,6 +81,13 @@ struct ParsedScene_Mojo:
     var grids:            UnsafePointer[Grid_C, MutAnyOrigin]
     var grid_count:       Int32
     var light_sampler:    LightSampler_C
+    # Object instancing: one BLAS (private BVH2, over `meshes` above) per
+    # ObjectBegin/ObjectEnd template, referenced by Instance_C.blasIdx.
+    var blas_nodes_arr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
+    var blas_primids_arr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
+    var blas_count:       Int32
+    var instances:        UnsafePointer[Instance_C, MutAnyOrigin]
+    var instance_count:   Int32
 
 # ── Matrix utilities ──────────────────────────────────────────────────────────
 
@@ -712,11 +719,23 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     shape_type.free()
 
     if is_curve:
-        handle_curve_shape(handle, s)
+        if s[0].object_depth == 0:
+            handle_curve_shape(handle, s)
+        else:
+            # Curve instancing inside ObjectBegin/ObjectEnd isn't supported yet
+            # (only trianglemesh/plymesh templates are, see _psc_finish_object_def) —
+            # skip rather than silently adding an un-instanced curve at the
+            # template's definition-space position.
+            _psc_skip_params(handle)
         return
 
     if is_sphere:
-        handle_sphere_shape(handle, s)
+        if s[0].object_depth == 0:
+            handle_sphere_shape(handle, s)
+        else:
+            # Same rationale as the curve case above — sphere instancing
+            # inside ObjectBegin/ObjectEnd isn't supported yet.
+            _psc_skip_params(handle)
         return
 
     if not is_tri and not is_ply:
@@ -1021,6 +1040,65 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     tex_name.free(); tex_type.free(); tex_class.free()
     type_buf.free(); name_buf.free(); str_val.free()
 
+# ── ObjectBegin/ObjectEnd/ObjectInstance (two-level BVH instancing) ──────────
+# See geometry.mojo's Instance_C docs and bvh.mojo's traverse_bvh2_core
+# type==6 branch for the traversal side. Design: geometry inside
+# ObjectBegin/ObjectEnd is parsed normally (baked at whatever CTM is active
+# during that block, "definition space") but tagged is_object_template=True so
+# finalize_scene excludes it from the ordinary top-level primitive list —
+# instead a private BLAS is built once per template, and each ObjectInstance
+# placement contributes a small TLAS leaf (transform + BLAS reference) rather
+# than a duplicated copy of the geometry.
+
+def _psc_finish_object_def(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    """Called when the outermost ObjectEnd closes a template: mark the
+    meshes captured since the matching ObjectBegin as template-only and
+    record the template's (name, mesh range, definition-time CTM) for
+    finalize_scene and later ObjectInstance directives."""
+    var start = Int(s[0].pending_object_start)
+    var end   = len(s[0].meshes)
+    if end <= start:
+        return  # empty object (e.g. only unsupported AreaLightSource/curves) — nothing to instance
+    for i in range(start, end):
+        s[0].meshes[i].is_object_template = True
+    s[0].object_names.append(s[0].pending_object_name)
+    s[0].object_mesh_start.append(Int32(start))
+    s[0].object_mesh_end.append(Int32(end))
+    for ci in range(16):
+        s[0].object_ctm.append(s[0].pending_object_ctm[ci])
+
+def _psc_emit_object_instance(s: UnsafePointer[SceneParseState, MutAnyOrigin], name: String):
+    """Called on ObjectInstance "name": look up the named template and record
+    a placement (template index + obj_to_world/world_to_obj transforms,
+    derived from the CTM active now vs. the CTM active at that template's
+    ObjectBegin) for finalize_scene to turn into an Instance_C."""
+    var tmpl_idx = -1
+    for i in range(len(s[0].object_names)):
+        if s[0].object_names[i] == name:
+            tmpl_idx = i
+            break
+    if tmpl_idx < 0:
+        return  # unknown/empty object name — nothing to place (e.g. all-skipped-content object)
+
+    # obj_to_world = CTM_now * inverse(CTM_at_ObjectBegin) — since template
+    # geometry is already baked in "CTM_at_ObjectBegin space", this maps it
+    # into this placement's world position without re-parsing/duplicating it.
+    var mdef = alloc[Float32](16)
+    for ci in range(16): mdef[ci] = s[0].object_ctm[tmpl_idx * 16 + ci]
+    var mdef_inv = alloc[Float32](16)
+    _ = matrix_invert(mdef, mdef_inv)
+    var obj_to_world = alloc[Float32](16)
+    matrix_multiply(s[0].ctm.unsafe_ptr(), mdef_inv, obj_to_world)
+    var world_to_obj = alloc[Float32](16)
+    _ = matrix_invert(obj_to_world, world_to_obj)
+
+    s[0].instance_template_idx.append(Int32(tmpl_idx))
+    for ci in range(16):
+        s[0].instance_obj_to_world.append(obj_to_world[ci])
+        s[0].instance_world_to_obj.append(world_to_obj[ci])
+
+    mdef.free(); mdef_inv.free(); obj_to_world.free(); world_to_obj.free()
+
 # ── Main parse loop ───────────────────────────────────────────────────────────
 
 def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
@@ -1072,20 +1150,28 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         elif _psc_streq(kw_buf, "ObjectBegin"):
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
+            if s[0].object_depth == 0:
+                s[0].pending_object_name  = String(unsafe_from_utf8_ptr=obj_name.as_immutable())
+                s[0].pending_object_start = Int32(len(s[0].meshes))
+                s[0].pending_object_ctm   = s[0].ctm
             obj_name.free()
             s[0].object_depth += 1
         elif _psc_streq(kw_buf, "ObjectEnd"):
             if s[0].object_depth > 0:
                 s[0].object_depth -= 1
+                if s[0].object_depth == 0:
+                    _psc_finish_object_def(s)
         elif _psc_streq(kw_buf, "ObjectInstance"):
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
+            var inst_name = String(unsafe_from_utf8_ptr=obj_name.as_immutable())
             obj_name.free()
+            _psc_emit_object_instance(s, inst_name)
         elif _psc_streq(kw_buf, "Shape"):
-            if s[0].object_depth == 0:
-                handle_shape(handle, s)
-            else:
-                _psc_skip_params(handle)
+            # Shapes inside an ObjectBegin/ObjectEnd block ARE parsed (into a
+            # template mesh range, see _psc_finish_object_def) — unlike
+            # AreaLightSource/LightSource below, which stay scoped out.
+            handle_shape(handle, s)
         elif _psc_streq(kw_buf, "AttributeBegin"):
             _psc_handle_attribute_begin(s)
         elif _psc_streq(kw_buf, "AttributeEnd"):
@@ -1534,7 +1620,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     var total_tris = Int32(0)
     for i in range(n_meshes):
-        total_tris += Int32(len(s[0].meshes[i].face_idxs))
+        if not s[0].meshes[i].is_object_template:
+            total_tris += Int32(len(s[0].meshes[i].face_idxs))
 
     # Native curves: precompute per-curve piece count via the same flatness
     # test used for the Curve_C upload below, then greedily merge adjacent
@@ -1580,14 +1667,17 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         curve_group_base[i] = total_curve_groups
         total_curve_groups += Int32(ngroups)
 
-    var total_prims = total_tris + total_curve_groups
+    var total_instances = Int32(len(s[0].instance_template_idx))
+    var total_prims = total_tris + total_curve_groups + total_instances
 
     var prim_bounds = alloc[Float32](Int(total_prims) * 6)
-    var tri_mesh    = alloc[Int32](Int(total_tris))
-    var tri_local   = alloc[Int32](Int(total_tris))
+    var tri_mesh    = alloc[Int32](max(Int(total_tris), 1))
+    var tri_local   = alloc[Int32](max(Int(total_tris), 1))
 
     var flat_idx = Int32(0)
     for mi in range(n_meshes):
+        if s[0].meshes[mi].is_object_template:
+            continue
         var pts = out_pts[mi]
         var vis = out_vis[mi]
         var nt  = Int(out_nt[mi])
@@ -1642,6 +1732,89 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             prim_bounds[b+3] = xmax; prim_bounds[b+4] = ymax; prim_bounds[b+5] = zmax
     group_first_scratch.free(); group_count_scratch.free(); count_pass_scratch.free()
 
+    # ---- Object instancing: one BLAS per template, then a TLAS instance leaf
+    # (transform + BLAS reference) per ObjectInstance placement — see
+    # geometry.mojo's Instance_C docs. A BLAS is a private BVH2 built over
+    # just that template's own mesh range, with ordinary type==0 PrimId_C
+    # entries referencing the SAME GLOBAL `meshes` array (no per-BLAS mesh
+    # storage, no geometry duplication).
+    var n_templates = len(s[0].object_names)
+    var blas_nodes_arr   = alloc[UnsafePointer[BVH2Node, MutAnyOrigin]](max(n_templates, 1))
+    var blas_primids_arr = alloc[UnsafePointer[PrimId_C, MutAnyOrigin]](max(n_templates, 1))
+    for tmpl in range(n_templates):
+        var mstart = Int(s[0].object_mesh_start[tmpl])
+        var mend   = Int(s[0].object_mesh_end[tmpl])
+        var t_tris = Int32(0)
+        for mi in range(mstart, mend):
+            t_tris += Int32(len(s[0].meshes[mi].face_idxs))
+        var t_bounds = alloc[Float32](max(Int(t_tris), 1) * 6)
+        var t_mesh   = alloc[Int32](max(Int(t_tris), 1))
+        var t_local  = alloc[Int32](max(Int(t_tris), 1))
+        var t_flat = Int32(0)
+        for mi in range(mstart, mend):
+            var pts = out_pts[mi]
+            var vis = out_vis[mi]
+            var nt  = Int(out_nt[mi])
+            for ti in range(nt):
+                var v0 = Int(vis[ti*3+0]) * 4
+                var v1 = Int(vis[ti*3+1]) * 4
+                var v2 = Int(vis[ti*3+2]) * 4
+                var x0 = pts[v0]; var y0 = pts[v0+1]; var z0 = pts[v0+2]
+                var x1 = pts[v1]; var y1 = pts[v1+1]; var z1 = pts[v1+2]
+                var x2 = pts[v2]; var y2 = pts[v2+1]; var z2 = pts[v2+2]
+                var tb = Int(t_flat) * 6
+                t_bounds[tb+0] = min(x0, min(x1, x2))
+                t_bounds[tb+1] = min(y0, min(y1, y2))
+                t_bounds[tb+2] = min(z0, min(z1, z2))
+                t_bounds[tb+3] = max(x0, max(x1, x2))
+                t_bounds[tb+4] = max(y0, max(y1, y2))
+                t_bounds[tb+5] = max(z0, max(z1, z2))
+                t_mesh[Int(t_flat)]  = Int32(mi)
+                t_local[Int(t_flat)] = Int32(ti)
+                t_flat += 1
+        var t_max_nodes = max(Int(t_tris) * 2 + 4, 1)
+        var t_nodes = alloc[BVH2Node](t_max_nodes)
+        var t_order = alloc[Int32](max(Int(t_tris), 1))
+        _ = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
+        t_bounds.free()
+        var t_prim_ids = alloc[PrimId_C](max(Int(t_tris), 1))
+        for k in range(Int(t_tris)):
+            var orig = Int(t_order[k])
+            var mi = Int(t_mesh[orig])
+            var ti = Int(t_local[orig])
+            var mat_idx = Int(s[0].meshes[mi].mat_idx)
+            t_prim_ids[k] = PrimId_C(Int64(mi), Int64(ti * 3), Int64(max(mat_idx, 0)), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        t_mesh.free(); t_local.free(); t_order.free()
+        blas_nodes_arr[tmpl]   = t_nodes
+        blas_primids_arr[tmpl] = t_prim_ids
+
+    var instances_c = alloc[Instance_C](max(Int(total_instances), 1))
+    for k in range(Int(total_instances)):
+        var tmpl_idx = Int(s[0].instance_template_idx[k])
+        var o2w = SIMD[DType.float32, 16](0.0)
+        var w2o = SIMD[DType.float32, 16](0.0)
+        for ci in range(16):
+            o2w[ci] = s[0].instance_obj_to_world[k*16+ci]
+            w2o[ci] = s[0].instance_world_to_obj[k*16+ci]
+        instances_c[k] = Instance_C(o2w, w2o, Int32(tmpl_idx))
+
+        # World-space AABB for the TLAS leaf: transform the BLAS root's 8 corners.
+        var root = blas_nodes_arr[tmpl_idx][0]
+        var wxmin = Float32(1e38); var wymin = Float32(1e38); var wzmin = Float32(1e38)
+        var wxmax = Float32(-1e38); var wymax = Float32(-1e38); var wzmax = Float32(-1e38)
+        for corner in range(8):
+            var cx = root.max.x if (corner & 1) != 0 else root.min.x
+            var cy = root.max.y if (corner & 2) != 0 else root.min.y
+            var cz = root.max.z if (corner & 4) != 0 else root.min.z
+            var wx = o2w[0]*cx + o2w[4]*cy + o2w[8]*cz  + o2w[12]
+            var wy = o2w[1]*cx + o2w[5]*cy + o2w[9]*cz  + o2w[13]
+            var wz = o2w[2]*cx + o2w[6]*cy + o2w[10]*cz + o2w[14]
+            wxmin = min(wxmin, wx); wymin = min(wymin, wy); wzmin = min(wzmin, wz)
+            wxmax = max(wxmax, wx); wymax = max(wymax, wy); wzmax = max(wzmax, wz)
+        var ib = (Int(total_tris) + Int(total_curve_groups) + k) * 6
+        prim_bounds[ib+0] = wxmin; prim_bounds[ib+1] = wymin; prim_bounds[ib+2] = wzmin
+        prim_bounds[ib+3] = wxmax; prim_bounds[ib+4] = wymax; prim_bounds[ib+5] = wzmax
+
     var max_bvh_nodes = Int(total_prims) * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_bvh_nodes)
     var bvh_order = alloc[Int32](Int(total_prims))
@@ -1677,17 +1850,26 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 prim_ids[k].id1           = Int64(mi)
                 prim_ids[k].id2           = Int64(ti * 3)
                 prim_ids[k].materialIndex = Int64(max(mat_idx, 0))
-        else:
+        elif orig < Int(total_tris) + Int(total_curve_groups):
             var gidx = orig - Int(total_tris)
             var ci = Int(group_curve_idx[gidx])
             prim_ids[k].type          = Int8(5)
             prim_ids[k].id1           = Int64(ci)
             prim_ids[k].id2           = Int64(group_id2[gidx])
             prim_ids[k].materialIndex = Int64(max(Int(s[0].curves_mat[ci]), 0))
+        else:
+            var inst_idx = orig - Int(total_tris) - Int(total_curve_groups)
+            prim_ids[k].type          = Int8(6)
+            prim_ids[k].id1           = Int64(inst_idx)
+            prim_ids[k].id2           = Int64(0)
+            prim_ids[k].materialIndex = Int64(0)
+        # instanceIdx is only meaningful on a *resolved* triangle hit (set by
+        # traverse_bvh2_core's type==6 branch when it recurses into a BLAS) —
+        # every ordinary top-level entry here, instance leaves included,
+        # starts at -1.
+        prim_ids[k].instanceIdx = Int32(-1)
         prim_ids[k]._pad0 = Int8(0); prim_ids[k]._pad1 = Int8(0)
-        prim_ids[k]._pad2 = Int8(0); prim_ids[k]._pad3 = Int8(0)
-        prim_ids[k]._pad4 = Int8(0); prim_ids[k]._pad5 = Int8(0)
-        prim_ids[k]._pad6 = Int8(0)
+        prim_ids[k]._pad2 = Int8(0)
 
     tri_mesh.free(); tri_local.free(); bvh_order.free(); mesh_al_idx.free()
     curve_group_base.free(); group_curve_idx.free(); group_id2.free()
@@ -1752,6 +1934,11 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].prim_ids         = prim_ids
     psc[0].bvh_node_count   = node_count
     psc[0].prim_count       = total_prims
+    psc[0].blas_nodes_arr   = blas_nodes_arr
+    psc[0].blas_primids_arr = blas_primids_arr
+    psc[0].blas_count       = Int32(n_templates)
+    psc[0].instances        = instances_c
+    psc[0].instance_count   = total_instances
     psc[0].film_w           = s[0].film_w
     psc[0].film_h           = s[0].film_h
     psc[0].camera_fov       = s[0].camera_fov
@@ -2134,6 +2321,14 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].grids.free()
     if Int(psc[0].light_sampler.cdf) > 4:
         psc[0].light_sampler.cdf.free()
+    # blas_nodes_arr/blas_primids_arr/instances are always real allocations
+    # (min size 1, see finalize_scene) regardless of blas_count/instance_count.
+    for bi in range(Int(psc[0].blas_count)):
+        psc[0].blas_nodes_arr[bi].free()
+        psc[0].blas_primids_arr[bi].free()
+    psc[0].blas_nodes_arr.free()
+    psc[0].blas_primids_arr.free()
+    psc[0].instances.free()
     psc.free()
 
 def mojo_apply_overrides(
@@ -2224,4 +2419,9 @@ def mojo_parsed_scene_descriptor(
     sd[0].grids            = psc[0].grids
     sd[0].gridCount        = Int64(psc[0].grid_count)
     sd[0].lightSampler    = psc[0].light_sampler
+    sd[0].blasNodesArr    = psc[0].blas_nodes_arr
+    sd[0].blasPrimIdsArr  = psc[0].blas_primids_arr
+    sd[0].blasCount       = Int64(psc[0].blas_count)
+    sd[0].instances       = psc[0].instances
+    sd[0].instanceCount   = Int64(psc[0].instance_count)
     return sd

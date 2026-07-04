@@ -138,7 +138,8 @@ def _visible_transmittance(
         if remaining < Float32(1e-4): break
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
         # the BVH — traverse_bvh2_core only tests triangles/curves — so they need
         # a separate pass. Seed a sentinel tHit=remaining*0.9995 when the BVH found
@@ -185,7 +186,7 @@ def _visible_transmittance(
                 if snl > Float32(0): snx/=snl; sny/=snl; snz/=snl
                 gn = SIMD[DType.float32, 3](snx, sny, snz)
             else:
-                gn = _geom_normal(inter, sd.meshes)
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
             var cos_i = -dot(dir, n_for_cos)
@@ -209,7 +210,7 @@ def _visible_transmittance(
             # Pure medium boundary: update medium, continue
             if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
                 var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
-                var igna = _geom_normal(inter, sd.meshes)
+                var igna = _geom_normal(inter, sd.meshes, sd.instances)
                 var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
             ox = hx+dir[0]*Float32(0.0002); oy = hy+dir[1]*Float32(0.0002); oz = hz+dir[2]*Float32(0.0002)
@@ -273,7 +274,8 @@ def _build_camera_path(
         if n_verts >= _BDPT_MAX_VERTS: break
         var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
         inter_mem[0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if inter_mem[0].hit == Int8(0): break
 
@@ -331,7 +333,7 @@ def _build_camera_path(
             break  # camera hits light directly → handled by unidirectional contribution
 
         elif mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn = _geom_normal(inter, sd.meshes)
+            var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var v = _null_vertex()
             v.px = hx; v.py = hy; v.pz = hz
@@ -372,7 +374,7 @@ def _build_camera_path(
                 if cnl > Float32(0): cnx /= cnl; cny /= cnl; cnz /= cnl
                 gn_c = SIMD[DType.float32, 3](cnx, cny, cnz)
             else:
-                gn_c = _geom_normal(inter, sd.meshes)
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             var wo_c = SIMD[DType.float32, 3](-rdx, -rdy, -rdz)
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
@@ -412,7 +414,7 @@ def _build_camera_path(
                 if snl > Float32(0): snx /= snl; sny /= snl; snz /= snl
                 gn = SIMD[DType.float32, 3](snx, sny, snz)
             else:
-                gn = _geom_normal(inter, sd.meshes)
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             var hit = SIMD[DType.float32, 3](hx, hy, hz)
             var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, mat.albedo.r, n_bounces, pcg)
             n_bounces += 1
@@ -523,7 +525,8 @@ def _build_light_path(
         if n_verts >= _BDPT_MAX_VERTS: break
         var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
         inter_mem[0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if inter_mem[0].hit == Int8(0): break
 
@@ -571,7 +574,7 @@ def _build_light_path(
         var hx = rox+rdx*t_hit; var hy = roy+rdy*t_hit; var hz = roz+rdz*t_hit
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn = _geom_normal(inter, sd.meshes)
+            var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var v = _null_vertex()
             v.px = hx; v.py = hy; v.pz = hz
@@ -608,7 +611,7 @@ def _build_light_path(
                 if cnl > Float32(0): cnx /= cnl; cny /= cnl; cnz /= cnl
                 gn_c = SIMD[DType.float32, 3](cnx, cny, cnz)
             else:
-                gn_c = _geom_normal(inter, sd.meshes)
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             var wo_c = SIMD[DType.float32, 3](-rdx, -rdy, -rdz)
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
@@ -648,7 +651,7 @@ def _build_light_path(
                 if snl > Float32(0): snx /= snl; sny /= snl; snz /= snl
                 gn = SIMD[DType.float32, 3](snx, sny, snz)
             else:
-                gn = _geom_normal(inter, sd.meshes)
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             var hit = SIMD[DType.float32, 3](hx, hy, hz)
             var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, mat.albedo.r, n_lbounces, pcg)
             n_lbounces += 1
