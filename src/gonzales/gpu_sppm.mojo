@@ -23,7 +23,7 @@ from .geometry import (
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core
 from .rng import PCG32
-from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _dielectric_bounce, _sppm_update_medium, _hash_cell, _ALPHA, _MAX_B, _HSIZE
+from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _dielectric_bounce, _sppm_update_medium, _hash_cell, _cosine_hemisphere_sample, _ALPHA, _MAX_B, _HSIZE, _VP_SAMPLES
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .gpu import GpuSceneHandle
@@ -81,21 +81,6 @@ def _mk_sd_medium(
 
 # ── Kernels ────────────────────────────────────────────────────────────────
 
-def sppm_init_vps_gpu(vps: UnsafePointer[SPPMPixel, MutAnyOrigin], n_pix: Int, init_r2: Float32):
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= n_pix:
-        return
-    vps[i] = SPPMPixel(
-        pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
-        nx=Float32(0), ny=Float32(1), nz=Float32(0),
-        beta_r=Float32(1), beta_g=Float32(1), beta_b=Float32(1),
-        alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
-        tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
-        N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(i),
-        is_volume=Int32(0),
-    )
-
-
 def sppm_reset_i32_gpu(counter: UnsafePointer[Int32, MutAnyOrigin]):
     if block_idx.x == 0 and thread_idx.x == 0:
         counter[0] = Int32(0)
@@ -105,6 +90,7 @@ def sppm_gen_vp_gpu(
     vps: UnsafePointer[SPPMPixel, MutAnyOrigin],
     inter_scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
     n_pix: Int,
+    vp_samples: Int,
     fw: Int32,
     r2c: UnsafePointer[Float32, MutAnyOrigin],
     c2w: UnsafePointer[Float32, MutAnyOrigin],
@@ -125,9 +111,20 @@ def sppm_gen_vp_gpu(
     init_r2: Float32,
     seed: UInt64,
 ):
-    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if pix >= n_pix:
+    """Traces vp_samples independent primary rays per pixel, called ONCE for
+    the whole render (not once per SPPM pass — a per-pass re-trace breaks
+    SPPM's convergence guarantee, since the accumulated r2/tau/N_acc would
+    then track a wandering position/surface instead of a fixed one whenever
+    the path crosses a dielectric surface with a stochastic reflect/refract
+    choice). Each of the vp_samples per pixel gets its own persistent
+    accumulator; sppm_finalize_gpu averages them at the end. Multiple
+    independent samples (rather than one, traced once) is what avoids the
+    old black-speckle bug: P(all vp_samples reflect away from the diffuse
+    surface) = fresnel^vp_samples, negligible for reasonable vp_samples."""
+    var combined = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if combined >= n_pix * vp_samples:
         return
+    var pix = combined // vp_samples
 
     var sd = _mk_sd_medium(meshes, mediums, n_mediums, mediumInterfaces, n_medium_ifaces, spheres, n_spheres)
     var has_media = n_mediums > Int64(0)
@@ -136,7 +133,6 @@ def sppm_gen_vp_gpu(
     var px = pix % Int(fw)
     var py = pix // Int(fw)
 
-    var prev = vps[pix]
     var vp = SPPMPixel(
         pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
         nx=Float32(0), ny=Float32(1), nz=Float32(0),
@@ -147,7 +143,7 @@ def sppm_gen_vp_gpu(
         is_volume=Int32(0),
     )
 
-    var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1), UInt64(1))
+    var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
 
     var fX = Float32(px) + pcg.next_float()
     var fY = Float32(py) + pcg.next_float()
@@ -167,7 +163,7 @@ def sppm_gen_vp_gpu(
     var rox = ox; var roy = oy; var roz = oz
 
     var cur_med_idx = Int32(-1)
-    var inter_ptr = inter_scratch + pix
+    var inter_ptr = inter_scratch + combined
 
     for bounce in range(_MAX_B):
         var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
@@ -242,10 +238,7 @@ def sppm_gen_vp_gpu(
         else:
             break
 
-    vp.r2    = prev.r2
-    vp.tau_r = prev.tau_r; vp.tau_g = prev.tau_g; vp.tau_b = prev.tau_b
-    vp.N_acc = prev.N_acc
-    vps[pix] = vp
+    vps[combined] = vp
 
 
 def sppm_emit_photons_gpu(
@@ -392,7 +385,24 @@ def sppm_emit_photons_gpu(
                     fr=flux_r, fg=flux_g, fb=flux_b,
                     nxt=Int32(-1), is_volume=Int32(0),
                 )
-            break
+            # Russian-roulette continuation for indirect diffuse-diffuse
+            # bounces (color bleeding) — see sppm.mojo's _sppm_photon_pass
+            # for why this is needed (photons used to always terminate here).
+            var rr_prob = max(mat.albedo.r, max(mat.albedo.g, mat.albedo.b))
+            if rr_prob <= Float32(0.0) or pcg.next_float() >= rr_prob:
+                break
+            var gn = _geom_normal(inter, meshes, instances)
+            if dot(gn, ray_dir) > Float32(0.0):
+                gn = gn * Float32(-1.0)
+            var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
+            flux_r *= mat.albedo.r / rr_prob
+            flux_g *= mat.albedo.g / rr_prob
+            flux_b *= mat.albedo.b / rr_prob
+            rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
+            rox = hx + gn[0] * Float32(0.0001)
+            roy = hy + gn[1] * Float32(0.0001)
+            roz = hz + gn[2] * Float32(0.0001)
+            continue
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
@@ -499,21 +509,27 @@ def sppm_gather_gpu(
 def sppm_finalize_gpu(
     vps: UnsafePointer[SPPMPixel, MutAnyOrigin],
     n_pix: Int,
+    vp_samples: Int,
     n_passes: Int32,
     iso_scale: Float32,
     max_comp: Float32,
     out_pixels: UnsafePointer[Float32, MutAnyOrigin],
 ):
+    """Averages the vp_samples independently-converged samples per pixel —
+    see sppm_gen_vp_gpu's docstring for why each sample has its own fixed
+    visible point/accumulator rather than sharing one per pixel."""
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    var vp = vps[i]
     var r = Float32(0); var g = Float32(0); var b = Float32(0)
-    if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
-        var denom = PI * vp.r2 * Float32(n_passes)
-        r = vp.beta_r * vp.tau_r / denom
-        g = vp.beta_g * vp.tau_g / denom
-        b = vp.beta_b * vp.tau_b / denom
+    for vs in range(vp_samples):
+        var vp = vps[i * vp_samples + vs]
+        if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
+            var denom = PI * vp.r2 * Float32(n_passes)
+            r += vp.beta_r * vp.tau_r / denom
+            g += vp.beta_g * vp.tau_g / denom
+            b += vp.beta_b * vp.tau_b / denom
+    r /= Float32(vp_samples); g /= Float32(vp_samples); b /= Float32(vp_samples)
 
     r *= iso_scale; g *= iso_scale; b *= iso_scale
 
@@ -579,10 +595,11 @@ def sppm_render_gpu(
             var handle = handlePtr
             comptime block_size = 256
 
-            var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[SPPMPixel]())
+            var n_vps = n_pix * _VP_SAMPLES
+            var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
             var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[SPPMPhoton]())
             var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
-            var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
+            var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[Intersection_C]())
             var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection_C]())
             var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
             var out_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
@@ -628,20 +645,21 @@ def sppm_render_gpu(
             var n_lights = Int32(handle[].n_area_lights)
 
             var grid_pix = ceildiv(n_pix, block_size)
+            var grid_vps = ceildiv(n_vps, block_size)
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
-            handle[].ctx.enqueue_function[sppm_init_vps_gpu](
-                vps_ptr, n_pix, init_r2, grid_dim=grid_pix, block_dim=block_size)
+            # Camera/visible-point samples are traced ONCE for the whole
+            # render, not per SPPM pass — see sppm_gen_vp_gpu's docstring for
+            # why a per-pass re-trace breaks SPPM's convergence guarantee.
+            var cam_seed = psc[0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
+            handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
+                vps_ptr, inter_cam_ptr, n_pix, _VP_SAMPLES, psc[0].film_w, r2c_ptr, c2w_ptr,
+                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances,
+                materials, mediums, n_mediums, mediumInterfaces, n_medium_ifaces, spheres, n_spheres,
+                init_r2, cam_seed,
+                grid_dim=grid_vps, block_dim=block_size)
 
             for pass_idx in range(n_passes):
-                var cam_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0x9E3779B97F4A7C15 + 7)
-                handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
-                    vps_ptr, inter_cam_ptr, n_pix, psc[0].film_w, r2c_ptr, c2w_ptr,
-                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances,
-                    materials, mediums, n_mediums, mediumInterfaces, n_medium_ifaces, spheres, n_spheres,
-                    init_r2, cam_seed,
-                    grid_dim=grid_pix, block_dim=block_size)
-
                 handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
                     counter_ptr, grid_dim=1, block_dim=1)
 
@@ -670,8 +688,8 @@ def sppm_render_gpu(
                         photons_ptr, n_stored, heads_ptr, inv_cell,
                         grid_dim=grid_ins, block_dim=block_size)
                     handle[].ctx.enqueue_function[sppm_gather_gpu](
-                        vps_ptr, n_pix, photons_ptr, heads_ptr, inv_cell,
-                        grid_dim=grid_pix, block_dim=block_size)
+                        vps_ptr, n_vps, photons_ptr, heads_ptr, inv_cell,
+                        grid_dim=grid_vps, block_dim=block_size)
 
                 if verbose or (pass_idx + 1) % 10 == 0:
                     print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)
@@ -680,7 +698,7 @@ def sppm_render_gpu(
             print("")
 
             handle[].ctx.enqueue_function[sppm_finalize_gpu](
-                vps_ptr, n_pix, Int32(n_passes), iso_scale, max_comp, out_ptr,
+                vps_ptr, n_pix, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp, out_ptr,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
 

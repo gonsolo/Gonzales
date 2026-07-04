@@ -17,6 +17,16 @@ from .postprocess import write_image
 comptime _ALPHA  = Float32(0.7)
 comptime _MAX_B  = 10
 comptime _HSIZE  = 1048576   # 2^20 hash buckets
+# Independent visible-point samples per pixel, traced ONCE for the whole
+# render (not re-traced every SPPM pass — see _sppm_camera_pass's docstring).
+# Needed because the camera ray can cross a dielectric surface (stochastic
+# reflect-vs-refract choice): with only 1 sample, a pixel unlucky enough to
+# draw "reflect" would never see the diffuse surface behind the glass/water
+# at all (the original black-speckle bug). With _VP_SAMPLES independent
+# draws, P(all reflect) is (fresnel)^_VP_SAMPLES — negligible in practice —
+# and each sample gets its own persistent (r2, tau, N_acc) accumulator that
+# converges correctly since its surface/position never changes pass to pass.
+comptime _VP_SAMPLES = 16
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -85,6 +95,27 @@ def _geom_normal(
 def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:
     var h = ix * 73856093 ^ iy * 19349663 ^ iz * 83492791
     return (h % _HSIZE + _HSIZE) % _HSIZE
+
+
+@always_inline
+def _cosine_hemisphere_sample(n: SIMD[DType.float32, 3], u1: Float32, u2: Float32) -> SIMD[DType.float32, 3]:
+    """Cosine-weighted random direction in the hemisphere around normal n
+    (Frisvad tangent frame, same construction used for area-light emission
+    sampling in _sppm_photon_pass)."""
+    var r_samp = sqrt(u1)
+    var theta = Float32(2.0) * PI * u2
+    var lx = r_samp * cos(theta)
+    var lz_loc = r_samp * sin(theta)
+    var ly = sqrt(max(Float32(0.0), Float32(1.0) - u1))
+    var sgn = Float32(1.0) if n[2] >= Float32(0.0) else Float32(-1.0)
+    var a_tf = Float32(-1.0) / (sgn + n[2])
+    var b_tf = n[0] * n[1] * a_tf
+    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sgn*n[0]*n[0]*a_tf, sgn*b_tf, -sgn*n[0])
+    var bitangent = SIMD[DType.float32, 3](b_tf, sgn + n[1]*n[1]*a_tf, -n[1])
+    var d = tangent * lx + bitangent * lz_loc + n * ly
+    var dl = dot(d, d)
+    if dl > Float32(0.0): d = d * (Float32(1.0) / sqrt(dl))
+    return d
 
 
 # ── Dielectric bounce helper ──────────────────────────────────────────────────
@@ -163,8 +194,9 @@ def _sppm_update_medium(
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
 
 def _sppm_camera_pass(
-    vps:      UnsafePointer[SPPMPixel, MutAnyOrigin],
-    n_pix:    Int,
+    vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
+    n_pix:      Int,
+    vp_samples: Int,
     fw:       Int32,
     r2c:      UnsafePointer[Float32, MutAnyOrigin],
     c2w:      UnsafePointer[Float32, MutAnyOrigin],
@@ -172,12 +204,24 @@ def _sppm_camera_pass(
     init_r2:  Float32,
     seed:     UInt64,
 ):
-    """Trace one primary ray per pixel, record visible points at diffuse/volume hits."""
+    """Trace `vp_samples` independent primary rays per pixel, ONCE for the
+    whole render (not once per SPPM pass — see sppm_render's docstring for
+    why a per-pass re-trace breaks SPPM's convergence guarantee). Each sample
+    gets its own persistent (r2, tau, N_acc) accumulator, fixed at this one
+    surface/position for every subsequent photon pass; sppm_render averages
+    the `vp_samples` independently-converged estimates per pixel at the end.
+    Having multiple independent samples (rather than one, traced once) is
+    what avoids the old black-speckle bug: a pixel where the camera ray
+    crosses a dielectric surface makes a genuine random reflect-vs-refract
+    choice each sample, so as long as vp_samples is large enough, at least
+    some samples land on the diffuse floor even if others reflect away."""
     var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
     var inter_mem = alloc[Intersection_C](1)
     var has_media = Int(sd.mediumCount) > 0
 
-    for pix in range(n_pix):
+    for combined in range(n_pix * vp_samples):
+        var pix = combined // vp_samples
+        var vs = combined % vp_samples
         var px = pix % Int(fw)
         var py = pix // Int(fw)
 
@@ -191,16 +235,11 @@ def _sppm_camera_pass(
             is_volume=Int32(0),
         )
 
-        var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1), UInt64(1))
+        var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
 
-        # Sub-pixel jitter, redrawn every pass (this function is called once per
-        # SPPM pass — see sppm_render). Without it, every pass's primary ray is
-        # bit-identical, so a dielectric surface's *deterministic* refracted
-        # direction (only the reflect-vs-refract choice is stochastic, not the
-        # refracted angle itself — see _dielectric_bounce) lands on the exact
-        # same floor point every single pass. Jitter is the only thing that
-        # actually diversifies which floor point gets sampled pass to pass;
-        # re-tracing alone (this function moving inside the pass loop) does not.
+        # Sub-pixel jitter — diversifies which point on a dielectric-obscured
+        # surface (e.g. the caustic floor seen through the water) each of the
+        # vp_samples independent samples lands on.
         var fX = Float32(px) + pcg.next_float()
         var fY = Float32(py) + pcg.next_float()
         var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
@@ -297,19 +336,7 @@ def _sppm_camera_pass(
             else:
                 break  # area_light, conductor, etc.
 
-        # Preserve the persistent SPPM accumulators (r2/tau/N_acc) — only the
-        # visible-point sample itself (position/normal/albedo/beta/valid) is
-        # refreshed by this call. See the docstring above: re-tracing the
-        # camera path per pass (instead of once for the whole render) is the
-        # "stochastic" part of SPPM, and matters a lot here specifically
-        # because the camera ray passes through the scene's dielectric water
-        # surface — each call makes an independent random reflect-vs-refract
-        # choice, landing the visible point at a different spot on the floor
-        # each pass instead of freezing on whichever single spot pass 0 hit.
-        vp.r2    = vps[pix].r2
-        vp.tau_r = vps[pix].tau_r; vp.tau_g = vps[pix].tau_g; vp.tau_b = vps[pix].tau_b
-        vp.N_acc = vps[pix].N_acc
-        vps[pix] = vp
+        vps[combined] = vp
 
     inter_mem.free()
 
@@ -469,7 +496,26 @@ def _sppm_photon_pass(
                         nxt=Int32(-1), is_volume=Int32(0),
                     )
                     n_stored += 1
-                break
+                # Russian-roulette continuation for indirect diffuse-diffuse
+                # bounces (color bleeding) — without this, photons always
+                # terminated at the first diffuse hit, so light could never
+                # bounce off one diffuse surface onto another (e.g. a red
+                # wall tinting a nearby box's facing side).
+                var rr_prob = max(mat.albedo.r, max(mat.albedo.g, mat.albedo.b))
+                if rr_prob <= Float32(0.0) or pcg.next_float() >= rr_prob:
+                    break
+                var gn = _geom_normal(inter, sd.meshes, sd.instances)
+                if dot(gn, ray_dir) > Float32(0.0):
+                    gn = gn * Float32(-1.0)
+                var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
+                flux_r *= mat.albedo.r / rr_prob
+                flux_g *= mat.albedo.g / rr_prob
+                flux_b *= mat.albedo.b / rr_prob
+                rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
+                rox = hx + gn[0] * Float32(0.0001)
+                roy = hy + gn[1] * Float32(0.0001)
+                roz = hz + gn[2] * Float32(0.0001)
+                continue
 
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
@@ -604,75 +650,65 @@ def sppm_render(
           + " " + String(n_passes) + " passes x "
           + String(n_photons_per_pass) + " photons  r=" + String(initial_radius))
 
-    # Allocate visible points and photon buffer
-    var vps     = alloc[SPPMPixel](n_pix)
+    # Allocate visible points (n_pix * _VP_SAMPLES independent samples) and photon buffer
+    var n_vps    = n_pix * _VP_SAMPLES
+    var vps     = alloc[SPPMPixel](n_vps)
     var photons = alloc[SPPMPhoton](n_photons_per_pass)
     var heads   = alloc[Int32](_HSIZE)
     var init_r2 = initial_radius * initial_radius
     var inv_cell = Float32(1.0) / initial_radius  # cell size == initial radius
 
-    # Seed the persistent per-pixel accumulators. The actual visible-point
-    # sample (position/normal/albedo/valid) is (re-)traced fresh every pass
-    # below — see _sppm_camera_pass's docstring for why re-tracing per pass
-    # (not once for the whole render) matters.
-    for i in range(n_pix):
-        vps[i] = SPPMPixel(
-            pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
-            nx=Float32(0), ny=Float32(1), nz=Float32(0),
-            beta_r=Float32(1), beta_g=Float32(1), beta_b=Float32(1),
-            alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
-            tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
-            N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(i),
-            is_volume=Int32(0),
-        )
+    # Trace the camera/visible-point samples ONCE for the whole render — see
+    # _sppm_camera_pass's docstring for why a per-pass re-trace (the old
+    # design) breaks SPPM's convergence guarantee.
+    var cam_seed = psc[0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
+    _sppm_camera_pass(
+        vps, n_pix, _VP_SAMPLES, psc[0].film_w,
+        psc[0].raster_to_camera, psc[0].camera_to_world,
+        sd, init_r2, cam_seed,
+    )
+    if verbose:
+        var n_valid = 0
+        for i in range(n_vps):
+            if vps[i].valid != Int32(0): n_valid += 1
+        print("SPPM: " + String(n_valid) + "/" + String(n_vps) + " visible points found")
 
     # Photon passes
     for pass_idx in range(n_passes):
-        var cam_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0x9E3779B97F4A7C15 + 7)
-        _sppm_camera_pass(
-            vps, n_pix, psc[0].film_w,
-            psc[0].raster_to_camera, psc[0].camera_to_world,
-            sd, init_r2, cam_seed,
-        )
-        if verbose and pass_idx == 0:
-            var n_valid = 0
-            for i in range(n_pix):
-                if vps[i].valid != Int32(0): n_valid += 1
-            print("SPPM: " + String(n_valid) + "/" + String(n_pix) + " visible points found")
-
         var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, sd, pass_seed, pass_idx)
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
-            _gather_update(vps, n_pix, photons, heads, inv_cell)
+            _gather_update(vps, n_vps, photons, heads, inv_cell)
         if verbose or (pass_idx + 1) % 10 == 0:
             print("SPPM: pass " + String(pass_idx + 1) + "/" + String(n_passes)
                   + " stored=" + String(n_stored), end="\r")
 
     print("")  # newline after progress
 
-    # Assemble output image
-    var total_photons = Float32(n_passes * n_photons_per_pass)
+    # Assemble output image: average the _VP_SAMPLES independently-converged
+    # samples per pixel (each sample's own r2/tau/N_acc converges correctly
+    # since its position/surface is fixed for the whole render — see
+    # _sppm_camera_pass's docstring). A sample that never found a diffuse/
+    # volume hit (N_acc == 0, e.g. it reflected off the water into the void)
+    # contributes 0 for that sample, same as a path tracer sample that misses
+    # everything — the average over all samples is what correctly reproduces
+    # the fresnel-weighted reflect/refract blend a real specular interface
+    # would show.
     var out_pixels = alloc[Float32](n_pix * 3)
 
     for i in range(n_pix):
         var r = Float32(0); var g = Float32(0); var b = Float32(0)
-        var vp = vps[i]
-        # N_acc > 0 (not vp.valid) is the right gate: vp.valid only reflects
-        # whether the *last* pass's re-traced camera ray happened to land on a
-        # diffuse surface (see _sppm_camera_pass — re-traced every pass, and a
-        # dielectric surface in the path makes that a real coin flip). A pixel
-        # can have perfectly good accumulated tau/N_acc from earlier passes yet
-        # have vp.valid=0 simply because pass 200 happened to reflect instead
-        # of refract — gating on vp.valid here would wrongly zero it out.
-        if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
-            # L = beta * tau / (pi * r² * n_passes)
-            # tau already has albedo/pi folded in at gather time
-            # So final: L = beta * tau / (pi * r² * n_passes)
-            var denom = PI * vp.r2 * Float32(n_passes)
-            r = vp.beta_r * vp.tau_r / denom
-            g = vp.beta_g * vp.tau_g / denom
-            b = vp.beta_b * vp.tau_b / denom
+        for vs in range(_VP_SAMPLES):
+            var vp = vps[i * _VP_SAMPLES + vs]
+            if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
+                # L = beta * tau / (pi * r² * n_passes)
+                # tau already has albedo/pi folded in at gather time
+                var denom = PI * vp.r2 * Float32(n_passes)
+                r += vp.beta_r * vp.tau_r / denom
+                g += vp.beta_g * vp.tau_g / denom
+                b += vp.beta_b * vp.tau_b / denom
+        r /= Float32(_VP_SAMPLES); g /= Float32(_VP_SAMPLES); b /= Float32(_VP_SAMPLES)
 
         # ISO exposure compensation (matches normalize_film)
         r *= iso_scale; g *= iso_scale; b *= iso_scale
