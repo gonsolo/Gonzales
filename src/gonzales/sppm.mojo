@@ -104,6 +104,58 @@ def _geom_normal(
     return n
 
 @always_inline
+def _shading_normal_at(
+    inter: Intersection_C,
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+) -> SIMD[DType.float32, 3]:
+    """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
+    falling back to the flat geometric normal when the mesh has no per-vertex
+    normals. Refraction through a finely-tessellated curved surface (e.g. the
+    wavy water sheet in water-caustic, whose PLY carries per-vertex normals)
+    MUST use the smooth normal — the flat per-triangle normal refracts each
+    triangle's whole patch of light in one direction, producing a blocky/
+    blotchy caustic and the wrong energy distribution. This is what pbrt (and
+    gonzales's own main path tracer via shading.mojo::_shading_normal) does;
+    SPPM previously used only _geom_normal here, which was the discrepancy."""
+    var mi: Int; var bv: Int
+    if inter.primId.type == 0:
+        mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
+    elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    else:
+        return SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    var m = meshes[mi]
+    var v0 = Int(m.vertexIndices[bv])
+    var v1 = Int(m.vertexIndices[bv + 1])
+    var v2 = Int(m.vertexIndices[bv + 2])
+    var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+    var gn = cross(p1 - p0, p2 - p0)
+    if inter.primId.instanceIdx >= Int32(0):
+        gn = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, gn)
+    var gl = dot(gn, gn)
+    if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
+    # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
+    if Int(m.normals) <= 4:
+        return gn
+    var w0 = Float32(1.0) - inter.u - inter.v
+    var n0 = SIMD[DType.float32, 3](m.normals[v0*3], m.normals[v0*3+1], m.normals[v0*3+2])
+    var n1 = SIMD[DType.float32, 3](m.normals[v1*3], m.normals[v1*3+1], m.normals[v1*3+2])
+    var n2 = SIMD[DType.float32, 3](m.normals[v2*3], m.normals[v2*3+1], m.normals[v2*3+2])
+    var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
+    if inter.primId.instanceIdx >= Int32(0):
+        sn = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, sn)
+    var sl = dot(sn, sn)
+    if sl <= Float32(1e-12):
+        return gn
+    sn = sn * (Float32(1.0) / sqrt(sl))
+    if dot(sn, gn) < Float32(0.0):
+        sn = -sn
+    return sn
+
+@always_inline
 def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:
     var h = ix * 73856093 ^ iy * 19349663 ^ iz * 83492791
     return (h % _HSIZE + _HSIZE) % _HSIZE
@@ -326,7 +378,7 @@ def _sppm_camera_pass(
 
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
-                var gn = _geom_normal(inter, sd.meshes, sd.instances)
+                var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
                 var hit = SIMD[DType.float32, 3](hx, hy, hz)
                 var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
@@ -550,7 +602,7 @@ def _sppm_photon_pass(
 
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
-                var gn = _geom_normal(inter, sd.meshes, sd.instances)
+                var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
                 var hit = SIMD[DType.float32, 3](hx, hy, hz)
                 var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]

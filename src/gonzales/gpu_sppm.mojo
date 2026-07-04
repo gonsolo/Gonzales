@@ -23,7 +23,7 @@ from .geometry import (
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
-from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _dielectric_bounce, _sppm_update_medium, _hash_cell, _cosine_hemisphere_sample, _ALPHA, _MAX_B, _HSIZE, _VP_SAMPLES
+from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _shading_normal_at, _dielectric_bounce, _sppm_update_medium, _hash_cell, _cosine_hemisphere_sample, _ALPHA, _MAX_B, _HSIZE, _VP_SAMPLES
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .gpu import GpuSceneHandle
@@ -217,7 +217,7 @@ def sppm_gen_vp_gpu(
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
-            var gn = _geom_normal(inter, meshes, instances)
+            var gn = _shading_normal_at(inter, meshes, instances)
             var hit = SIMD[DType.float32, 3](hx, hy, hz)
             var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
             rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
@@ -417,7 +417,7 @@ def sppm_emit_photons_gpu(
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
-            var gn = _geom_normal(inter, meshes, instances)
+            var gn = _shading_normal_at(inter, meshes, instances)
             var hit = SIMD[DType.float32, 3](hx, hy, hz)
             var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
             rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
