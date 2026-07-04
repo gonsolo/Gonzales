@@ -97,6 +97,7 @@ for scene in "${SCENES[@]}"; do
     g_time_file="$OUT/images/pbrt-${scene}-gonzales.time"
     p_time_file="$OUT/images/pbrt-${scene}-pbrt.time"
     g_mode_file="$OUT/images/pbrt-${scene}-gonzales.mode"
+    p_mode_file="$OUT/images/pbrt-${scene}-pbrt.mode"
 
     ok=true
 
@@ -184,6 +185,7 @@ for scene in "${SCENES[@]}"; do
             if tonemap "$p_exr" "$p_png"; then
                 p_t=$(grep -oP '\(\K[\d.]+(?=s[\)|])' "$p_log" | tail -1)
                 echo "${p_t:-?}" > "$p_time_file"
+                echo "$p_label" > "$p_mode_file"
                 echo "  → pbrt OK ($p_label, ${p_t:-?}s render)"
             else
                 echo "  ✗ tonemap failed"; ok=false
@@ -263,10 +265,13 @@ for scene in "${DONE[@]}"; do
     p_rel="images/pbrt-${scene}-pbrt.png"
     g_time_file="$OUT/images/pbrt-${scene}-gonzales.time"
     p_time_file="$OUT/images/pbrt-${scene}-pbrt.time"
-    g_t="?"; p_t="?"; g_mode="GPU"
+    g_mode_file="$OUT/images/pbrt-${scene}-gonzales.mode"
+    p_mode_file="$OUT/images/pbrt-${scene}-pbrt.mode"
+    g_t="?"; p_t="?"; g_mode="GPU"; p_mode="GPU"
     [ -f "$g_time_file" ] && g_t=$(cat "$g_time_file")
     [ -f "$p_time_file" ] && p_t=$(cat "$p_time_file")
     [ -f "$g_mode_file" ] && g_mode=$(cat "$g_mode_file")
+    [ -f "$p_mode_file" ] && p_mode=$(cat "$p_mode_file")
     cat >> "$HTML" << SCENE
   <div class="card">
     <div class="card-title">${scene}</div>
@@ -280,7 +285,7 @@ for scene in "${DONE[@]}"; do
     </div>
     <div class="timebar">
       <span class="tg">Gonzales ${g_mode}: ${g_t}s</span>
-      <span class="tp">pbrt: ${p_t}s</span>
+      <span class="tp">pbrt ${p_mode}: ${p_t}s</span>
     </div>
   </div>
 SCENE

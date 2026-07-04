@@ -40,10 +40,20 @@ struct ParsedScene_Mojo:
     var mesh_uv_n_verts:  UnsafePointer[Int32, MutAnyOrigin]  # per-mesh UV vertex count; 0 = no UVs
     var mesh_nrm_n_verts: UnsafePointer[Int32, MutAnyOrigin]  # per-mesh normal vertex count; 0 = no shading normals
     var mesh_count:       Int32
-    var bvh_nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
+    var bvh_nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]   # GPU-safe TLAS: tris+curves only, no instance leaves
     var prim_ids:         UnsafePointer[PrimId_C, MutAnyOrigin]
     var bvh_node_count:   Int32
     var prim_count:       Int32
+    # CPU-inclusive TLAS: tris+curves+instances. Used only by
+    # mojo_parsed_scene_descriptor (SceneDescriptor2_C, the CPU render path).
+    # GPU's device-side upload always reads bvh_nodes/prim_ids above instead —
+    # its traversal kernels have no BLAS/instance buffers to resolve a
+    # PrimId_C.type==6 leaf, so one must never appear in its uploaded arrays
+    # (confirmed via testing: it does not degrade gracefully, it crashes).
+    var bvh_nodes_cpu:      UnsafePointer[BVH2Node, MutAnyOrigin]
+    var prim_ids_cpu:       UnsafePointer[PrimId_C, MutAnyOrigin]
+    var bvh_node_count_cpu: Int32
+    var prim_count_cpu:     Int32
     var film_w:           Int32
     var film_h:           Int32
     var camera_fov:       Float32
@@ -1668,7 +1678,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         total_curve_groups += Int32(ngroups)
 
     var total_instances = Int32(len(s[0].instance_template_idx))
-    var total_prims = total_tris + total_curve_groups + total_instances
+    var total_prims_gpu = total_tris + total_curve_groups
+    var total_prims = total_prims_gpu + total_instances
 
     var prim_bounds = alloc[Float32](Int(total_prims) * 6)
     var tri_mesh    = alloc[Int32](max(Int(total_tris), 1))
@@ -1815,6 +1826,29 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         prim_bounds[ib+0] = wxmin; prim_bounds[ib+1] = wymin; prim_bounds[ib+2] = wzmin
         prim_bounds[ib+3] = wxmax; prim_bounds[ib+4] = wymax; prim_bounds[ib+5] = wzmax
 
+    # ---- GPU-safe TLAS: tris + curves only ----
+    # GPU's own device-side scene upload (gpu_upload_scene, via
+    # _gpu_upload_scene in pipeline.mojo) reads psc[0].bvh_nodes/prim_ids
+    # directly and has no BLAS/instance buffers at all. Build it over just
+    # the first `total_prims_gpu` entries of `prim_bounds` (the instance AABBs
+    # live in the tail, past this count, and are simply never read here) so
+    # no PrimId_C.type==6 leaf can ever appear in GPU's uploaded arrays.
+    #
+    # This used to be the ONLY top-level BVH build, shared by CPU and GPU —
+    # splitting it in two was necessary after testing showed GPU crashing
+    # (CUDA_ERROR_ILLEGAL_ADDRESS) on a scene with real instances, even with a
+    # defensive dangling-pointer guard in the shared traversal code guarding
+    # the type==6 branch (bisected: removing that branch entirely made the
+    # crash disappear, so some GPU-codegen quirk with the guard's own pointer
+    # comparison was still letting a dangling dereference through — not worth
+    # chasing further when structurally preventing GPU from ever seeing one
+    # of these leaves is the clean fix anyway).
+    var max_bvh_nodes_gpu = Int(total_prims_gpu) * 2 + 4
+    var bvh_nodes_gpu = alloc[BVH2Node](max_bvh_nodes_gpu)
+    var bvh_order_gpu = alloc[Int32](Int(total_prims_gpu))
+    var node_count_gpu = build_bvh2(prim_bounds, total_prims_gpu, bvh_nodes_gpu, bvh_order_gpu)
+
+    # ---- CPU-inclusive TLAS: tris + curves + instances ----
     var max_bvh_nodes = Int(total_prims) * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_bvh_nodes)
     var bvh_order = alloc[Int32](Int(total_prims))
@@ -1822,6 +1856,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     prim_bounds.free()
 
+    var prim_ids_gpu = alloc[PrimId_C](Int(total_prims_gpu))
     var prim_ids = alloc[PrimId_C](Int(total_prims))
 
     var mesh_al_idx = alloc[Int32](max(n_meshes, 1))
@@ -1832,6 +1867,36 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             running_al += 1
         else:
             mesh_al_idx[mi] = Int32(-1)
+
+    # GPU-safe PrimId assignment — tris + curves only (no instance branch;
+    # `orig` here is always < total_tris + total_curve_groups). Same
+    # tri/curve logic as the CPU-inclusive loop below.
+    for k in range(Int(total_prims_gpu)):
+        var orig = Int(bvh_order_gpu[k])
+        if orig < Int(total_tris):
+            var mi = Int(tri_mesh[orig])
+            var ti = Int(tri_local[orig])
+            if s[0].meshes[mi].is_area_light:
+                var al_idx = Int(mesh_al_idx[mi])
+                prim_ids_gpu[k].type          = Int8(3)
+                prim_ids_gpu[k].id1           = Int64(al_idx)
+                prim_ids_gpu[k].id2           = (Int64(mi) << 32) | Int64(ti)
+                prim_ids_gpu[k].materialIndex = Int64(al_mat_base + al_idx)
+            else:
+                var mat_idx = Int(s[0].meshes[mi].mat_idx)
+                prim_ids_gpu[k].type          = Int8(0)
+                prim_ids_gpu[k].id1           = Int64(mi)
+                prim_ids_gpu[k].id2           = Int64(ti * 3)
+                prim_ids_gpu[k].materialIndex = Int64(max(mat_idx, 0))
+        else:
+            var gidx = orig - Int(total_tris)
+            var ci = Int(group_curve_idx[gidx])
+            prim_ids_gpu[k].type          = Int8(5)
+            prim_ids_gpu[k].id1           = Int64(ci)
+            prim_ids_gpu[k].id2           = Int64(group_id2[gidx])
+            prim_ids_gpu[k].materialIndex = Int64(max(Int(s[0].curves_mat[ci]), 0))
+        prim_ids_gpu[k].instanceIdx = Int32(-1)
+        prim_ids_gpu[k]._pad0 = Int8(0); prim_ids_gpu[k]._pad1 = Int8(0); prim_ids_gpu[k]._pad2 = Int8(0)
 
     for k in range(Int(total_prims)):
         var orig = Int(bvh_order[k])
@@ -1871,7 +1936,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         prim_ids[k]._pad0 = Int8(0); prim_ids[k]._pad1 = Int8(0)
         prim_ids[k]._pad2 = Int8(0)
 
-    tri_mesh.free(); tri_local.free(); bvh_order.free(); mesh_al_idx.free()
+    tri_mesh.free(); tri_local.free(); bvh_order.free(); bvh_order_gpu.free(); mesh_al_idx.free()
     curve_group_base.free(); group_curve_idx.free(); group_id2.free()
 
     # ---- Sampler params ----
@@ -1930,10 +1995,14 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].mesh_uv_n_verts  = out_uv_nv
     psc[0].mesh_nrm_n_verts = out_nrm_nv
     psc[0].mesh_count       = Int32(n_meshes)
-    psc[0].bvh_nodes        = bvh_nodes
-    psc[0].prim_ids         = prim_ids
-    psc[0].bvh_node_count   = node_count
-    psc[0].prim_count       = total_prims
+    psc[0].bvh_nodes        = bvh_nodes_gpu
+    psc[0].prim_ids         = prim_ids_gpu
+    psc[0].bvh_node_count   = node_count_gpu
+    psc[0].prim_count       = total_prims_gpu
+    psc[0].bvh_nodes_cpu      = bvh_nodes
+    psc[0].prim_ids_cpu       = prim_ids
+    psc[0].bvh_node_count_cpu = node_count
+    psc[0].prim_count_cpu     = total_prims
     psc[0].blas_nodes_arr   = blas_nodes_arr
     psc[0].blas_primids_arr = blas_primids_arr
     psc[0].blas_count       = Int32(n_templates)
@@ -2285,6 +2354,10 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].bvh_nodes.free()
     if psc[0].prim_count > 0:
         psc[0].prim_ids.free()
+    if psc[0].bvh_node_count_cpu > 0:
+        psc[0].bvh_nodes_cpu.free()
+    if psc[0].prim_count_cpu > 0:
+        psc[0].prim_ids_cpu.free()
     if Int(psc[0].raster_to_camera) > 4:
         psc[0].raster_to_camera.free()
     if Int(psc[0].camera_to_world) > 4:
@@ -2392,8 +2465,8 @@ def mojo_parsed_scene_descriptor(
     psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]
 ) -> UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]:
     var sd = alloc[SceneDescriptor2_C](1)
-    sd[0].bvh2Nodes        = psc[0].bvh_nodes
-    sd[0].primIds          = psc[0].prim_ids
+    sd[0].bvh2Nodes        = psc[0].bvh_nodes_cpu
+    sd[0].primIds          = psc[0].prim_ids_cpu
     sd[0].meshes           = psc[0].meshes
     sd[0].meshCount        = Int64(psc[0].mesh_count)
     sd[0].materials        = psc[0].materials

@@ -347,6 +347,15 @@ def traverse_bvh2_core(
                         instHit = False
                     continue
                 elif prim.type == 6:
+                    # Callers that never populate instance data (GPU: its own device-side
+                    # scene upload has no BLAS/instance buffers at all — see
+                    # gpu_upload_scene, which reads the SAME top-level bvh_nodes/prim_ids
+                    # this leaf came from) pass dangling defaults here. Skip rather than
+                    # dereference — this is a hard requirement, not just a nicety: without
+                    # it a GPU ray that reaches this leaf's AABB dereferences a dangling
+                    # pointer and crashes (CUDA_ERROR_ILLEGAL_ADDRESS), confirmed in testing.
+                    if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
+                        continue
                     var inst_idx = Int(prim.id1)
                     var inst = instances[inst_idx]
                     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
@@ -674,6 +683,10 @@ def any_hit_bvh2_core(
                         return True
                     continue
                 elif prim.type == 6:
+                    # See the matching guard in traverse_bvh2_core above — required to
+                    # avoid GPU dereferencing dangling instance/BLAS pointers.
+                    if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
+                        continue
                     var inst = instances[Int(prim.id1)]
                     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
                     var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
