@@ -9,6 +9,7 @@ from .postprocess import denoise, write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
 from .sppm import sppm_render
+from .gpu_sppm import sppm_render_gpu
 from .bdpt import bdpt_render
 from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
@@ -461,7 +462,23 @@ def parse_and_render(
     var n_pixels = Int(fw) * Int(fh)
     var results = List[TileResult_C](capacity=n_pixels)
 
-    if use_gpu:
+    if use_gpu and use_sppm:
+        var sd = mojo_parsed_scene_descriptor(psc)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
+        if Int(handle) <= 8:
+            sd.free()
+            mojo_parsed_free(psc)
+            return Int32(-1)
+        var ret = sppm_render_gpu(
+            handle, psc, sd[0],
+            Int(sppm_passes), Int(sppm_photons), sppm_radius,
+            no_denoise, verbose,
+        )
+        gpu_free_scene(handle)
+        sd.free()
+        mojo_parsed_free(psc)
+        return ret
+    elif use_gpu:
         var spp = Int(psc[0].samples_per_pixel)
         # World units spanned by one pixel per unit distance (for mip LOD):
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
