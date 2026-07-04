@@ -189,6 +189,14 @@ struct SceneParseState(Movable):
     var scene_dir:        String
     var object_depth:     Int32
 
+    # SPPM integrator params (Integrator "sppm" "float radius"/"integer
+    # photonsperiteration"), read from the scene when present. Sentinels
+    # (-1) mean "not specified" — the caller falls back to a CLI flag or
+    # a pbrt-matching default (photonsperiteration defaults to film_w*film_h
+    # when unspecified, same as pbrt-v4's own SPPM integrator).
+    var sppm_radius:            Float32
+    var sppm_photons_per_iter:  Int32
+
     # ── ObjectBegin/ObjectEnd/ObjectInstance (template + placement capture) ──
     # Recorded templates: parallel arrays, one entry per ObjectBegin/ObjectEnd
     # block. Mesh range [object_mesh_start[i], object_mesh_end[i]) indexes into
@@ -293,6 +301,8 @@ struct SceneParseState(Movable):
         self.max_depth  = Int32(5)
         self.scene_dir  = String("")
         self.object_depth = Int32(0)
+        self.sppm_radius = Float32(-1)
+        self.sppm_photons_per_iter = Int32(-1)
 
         self.object_names      = List[String]()
         self.object_mesh_start = List[Int32]()

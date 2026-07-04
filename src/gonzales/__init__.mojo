@@ -48,8 +48,8 @@ def main() raises:
     var spp_override = Int32(0)
     var use_sppm = False
     var sppm_passes = Int32(64)
-    var sppm_photons = Int32(200000)
-    var sppm_radius = Float32(0.05)
+    var sppm_photons = Int32(-1)   # -1 = not passed on CLI; fall back to scene/pbrt-matching default
+    var sppm_radius = Float32(-1)  # -1 = not passed on CLI; fall back to scene/pbrt-matching default
     var use_guide = False
     var use_bdpt = False
     var bdpt_spp = Int32(64)

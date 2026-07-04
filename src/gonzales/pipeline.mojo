@@ -15,6 +15,28 @@ from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge,
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 
+# Resolve effective SPPM radius/photons-per-pass: an explicit CLI flag
+# (sentinel -1 = not passed) wins; otherwise fall back to what the scene's
+# own `Integrator "sppm"` directive specifies; otherwise a last-resort
+# default (0.05 for radius; film_w*film_h for photons, matching pbrt-v4's
+# own SPPM integrator default of "one photon per pixel" when
+# photonsperiteration is unspecified).
+def _resolve_sppm_params(
+    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    sppm_photons_cli: Int32,
+    sppm_radius_cli: Float32,
+) -> Tuple[Int32, Float32]:
+    var radius = sppm_radius_cli
+    if radius <= Float32(0):
+        radius = psc[0].sppm_radius if psc[0].sppm_radius > Float32(0) else Float32(0.05)
+    var photons = sppm_photons_cli
+    if photons <= Int32(0):
+        if psc[0].sppm_photons_per_iter > Int32(0):
+            photons = psc[0].sppm_photons_per_iter
+        else:
+            photons = psc[0].film_w * psc[0].film_h
+    return (photons, radius)
+
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
 def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutAnyOrigin]]:
@@ -440,8 +462,8 @@ def parse_and_render(
     verbose: Bool = False,
     use_sppm: Bool = False,
     sppm_passes: Int32 = Int32(64),
-    sppm_photons: Int32 = Int32(200000),
-    sppm_radius: Float32 = Float32(0.05),
+    sppm_photons: Int32 = Int32(-1),
+    sppm_radius: Float32 = Float32(-1),
     use_guide: Bool = False,
     use_bdpt: Bool = False,
     bdpt_spp: Int32 = Int32(64),
@@ -469,9 +491,10 @@ def parse_and_render(
             sd.free()
             mojo_parsed_free(psc)
             return Int32(-1)
+        var resolved = _resolve_sppm_params(psc, sppm_photons, sppm_radius)
         var ret = sppm_render_gpu(
             handle, psc, sd[0],
-            Int(sppm_passes), Int(sppm_photons), sppm_radius,
+            Int(sppm_passes), Int(resolved[0]), resolved[1],
             no_denoise, verbose,
         )
         gpu_free_scene(handle)
@@ -547,9 +570,10 @@ def parse_and_render(
         return ret
     elif use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc)
+        var resolved = _resolve_sppm_params(psc, sppm_photons, sppm_radius)
         var ret = sppm_render(
             psc, sd[0],
-            Int(sppm_passes), Int(sppm_photons), sppm_radius,
+            Int(sppm_passes), Int(resolved[0]), resolved[1],
             no_denoise, verbose,
         )
         sd.free()

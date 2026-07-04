@@ -72,6 +72,8 @@ struct ParsedScene_Mojo:
     var n_base4_digits:   Int32
     var max_depth:        Int32
     var rng_seed:         UInt64
+    var sppm_radius:            Float32  # -1 = not specified by scene; caller falls back to CLI/default
+    var sppm_photons_per_iter:  Int32    # -1 = not specified by scene; pbrt itself defaults to film_w*film_h
     var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
     var tex_count:        Int32
     var distant_lights:   UnsafePointer[DistantLight_C, MutAnyOrigin]
@@ -238,6 +240,10 @@ def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         var is_array = ia[0]
         if _psc_streq(name_buf, "maxdepth") and _psc_type_is_int(type_buf):
             s[0].max_depth = _psc_scan_one_int(handle, is_array)
+        elif _psc_streq(name_buf, "radius") and _psc_type_is_float(type_buf):
+            s[0].sppm_radius = _psc_scan_one_float(handle, is_array)
+        elif _psc_streq(name_buf, "photonsperiteration") and _psc_type_is_int(type_buf):
+            s[0].sppm_photons_per_iter = _psc_scan_one_int(handle, is_array)
         else:
             _psc_skip_value(handle, type_buf, is_array)
             if is_array:
@@ -2039,6 +2045,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].n_base4_digits   = n_base4
     psc[0].max_depth        = s[0].max_depth
     psc[0].rng_seed         = rng_seed
+    psc[0].sppm_radius           = s[0].sppm_radius
+    psc[0].sppm_photons_per_iter = s[0].sppm_photons_per_iter
     psc[0].tex_filenames    = tex_ptrs
     psc[0].tex_count        = Int32(n_tex)
 

@@ -114,7 +114,15 @@ for scene in "${SCENES[@]}"; do
             # GPU sppm mode (see comment above), so this is GPU-vs-CPU here —
             # architecturally asymmetric, but each side uses its best available
             # implementation of the same integrator.
-            if (cd ~/work/gonzales && "$GONZALES" --gpu --sppm --sppm-passes 200 --sppm-photons 100000 \
+            #
+            # No --sppm-radius/--sppm-photons here (deliberately): both now
+            # resolve from the scene's own Integrator "sppm" directive
+            # ("float radius" [0.01] for this scene) or, absent that, a
+            # pbrt-matching default (photons/pass = film_w*film_h) — matching
+            # pbrt's own behavior instead of a hardcoded CLI value that used to
+            # be 5x pbrt's radius and ~10x fewer photons/pass, which was the
+            # root cause of gonzales's caustic looking "splotchy" vs pbrt's.
+            if (cd ~/work/gonzales && "$GONZALES" --gpu --sppm --sppm-passes 200 \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
                 [ -f ~/work/gonzales/"$exr_name" ] && \
                 { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
