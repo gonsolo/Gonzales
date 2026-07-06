@@ -162,10 +162,15 @@ test_release: release
 # `mojo run` invocation (TestSuite.discover_tests[__functions_in_module()]).
 UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
 ut: unittest
-unittest:
+# Depends on the OIIO/viewer bridge libs (not the full $(GONZALES) binary)
+# because a few tests (e.g. test_gpu_scene_upload.mojo) compile real code
+# from pbrt_parser.mojo/shading.mojo that references their C symbols
+# (load_texture_rgb, texture, ...) even on a code path that never executes
+# them — the JIT still needs the symbols resolvable at link time.
+unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB)
 	@for f in $(UNIT_TEST_SRCS); do \
 		echo "=== $$f ==="; \
-		uv run mojo run -I src $$f || exit 1; \
+		uv run mojo run -I src $(MOJO_LINK_FLAGS) $$f || exit 1; \
 	done
 
 # GPU profiling with Nsight Compute (needs nsight-compute + admin perf-counter
