@@ -6,7 +6,7 @@
 from std.math import sqrt, cos, sin, floor, log, exp, max, abs
 from std.memory import alloc
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, Frame,
+    RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     dot, cross, fr_dielectric, PI, INV_FOUR_PI, INV_PI,
 )
@@ -28,8 +28,8 @@ comptime _BDPT_MAX_VERTS = 10  # storage per subpath (only non-delta vertices ar
 @fieldwise_init
 struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
-    var px: Float32; var py: Float32; var pz: Float32   # world position
-    var nx: Float32; var ny: Float32; var nz: Float32   # geometric normal (0 for volume)
+    var pos:    Point3f  # world position
+    var normal: Vec3f    # geometric normal (0 for volume)
     var beta: RGB  # throughput to here
     var alb:  RGB  # BSDF albedo (F0 for conductor)
     var pdf_fwd: Float32  # area PDF forward (from previous vertex)
@@ -43,19 +43,19 @@ struct BDPTVertex(TrivialRegisterPassable):
     # Direction back toward this vertex's own predecessor on its subpath
     # (-incoming ray direction). Only populated for mat_kind=1 (GGX needs both
     # directions around the half-vector); Lambertian/volume don't need it.
-    var wx: Float32; var wy: Float32; var wz: Float32
+    var wo: Vec3f
 
 @always_inline
 def _null_vertex() -> BDPTVertex:
     return BDPTVertex(
-        px=Float32(0), py=Float32(0), pz=Float32(0),
-        nx=Float32(0), ny=Float32(1), nz=Float32(0),
+        pos=Point3f(Float32(0), Float32(0), Float32(0)),
+        normal=Vec3f(Float32(0), Float32(1), Float32(0)),
         beta=RGB(Float32(0), Float32(0), Float32(0)),
         alb=RGB(Float32(0), Float32(0), Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0),
-        wx=Float32(0), wy=Float32(0), wz=Float32(0),
+        wo=Vec3f(Float32(0), Float32(0), Float32(0)),
     )
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -66,20 +66,20 @@ def _bdpt_medium_update(
     inter:   Intersection_C,
     mat:     Material_C,
     sd:      SceneDescriptor2_C,
-    hx: Float32, hy: Float32, hz: Float32,
+    hit: Point3f,
 ) -> Int32:
     """Determine new current_medium_idx after crossing a surface."""
     if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
         return Int32(-1)
     var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
-    var nx: Float32; var ny: Float32; var nz: Float32
+    var n: Vec3f
     if inter.primId.type == Int8(4):
         # Analytic sphere: outward normal = normalize(hit - center)
         var si = Int(inter.primId.id1)
         var sph = sd.spheres[si]
-        nx = hx - sph.center.x; ny = hy - sph.center.y; nz = hz - sph.center.z
-        var nl = sqrt(nx*nx + ny*ny + nz*nz)
-        if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+        n = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
+        var nl = n.length()
+        if nl > Float32(0): n = n / nl
     else:
         var mi: Int; var bv: Int
         if inter.primId.type == 0:
@@ -88,55 +88,39 @@ def _bdpt_medium_update(
             mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
         var m  = sd.meshes[mi]
         var v0 = Int(m.vertexIndices[bv]); var v1 = Int(m.vertexIndices[bv+1]); var v2 = Int(m.vertexIndices[bv+2])
-        var e1x = m.points[v1*4]-m.points[v0*4]; var e1y = m.points[v1*4+1]-m.points[v0*4+1]; var e1z = m.points[v1*4+2]-m.points[v0*4+2]
-        var e2x = m.points[v2*4]-m.points[v0*4]; var e2y = m.points[v2*4+1]-m.points[v0*4+1]; var e2z = m.points[v2*4+2]-m.points[v0*4+2]
-        nx = e1y*e2z - e1z*e2y; ny = e1z*e2x - e1x*e2z; nz = e1x*e2y - e1y*e2x
-    var md = ray_dir[0]*nx + ray_dir[1]*ny + ray_dir[2]*nz
+        var p0 = Point3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+        var p1 = Point3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+        var p2 = Point3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+        var e1 = p1 - p0; var e2 = p2 - p0
+        n = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
+    var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
-
-@always_inline
-def _transmittance(
-    sd:      SceneDescriptor2_C,
-    med_idx: Int32,
-    dist:    Float32,
-) -> SIMD[DType.float32, 3]:
-    """Beer-Lambert transmittance through a homogeneous medium over distance."""
-    if Int(med_idx) < 0 or sd.mediumCount == Int64(0):
-        return SIMD[DType.float32, 3](Float32(1), Float32(1), Float32(1))
-    var med = sd.mediums[Int(med_idx)]
-    var tr = exp(-(med.sigma_a.r + med.sigma_s.r) * dist)
-    var tg = exp(-(med.sigma_a.g + med.sigma_s.g) * dist)
-    var tb = exp(-(med.sigma_a.b + med.sigma_s.b) * dist)
-    return SIMD[DType.float32, 3](tr, tg, tb)
 
 # ── Visibility with transmittance ─────────────────────────────────────────────
 
 def _visible_transmittance(
-    ax: Float32, ay: Float32, az: Float32,
-    bx: Float32, by: Float32, bz: Float32,
+    a: Point3f, b: Point3f,
     med_idx: Int32,
     sd:      SceneDescriptor2_C,
 ) -> SIMD[DType.float32, 3]:
     """Returns transmittance along segment AB, or (0,0,0) if occluded.
     Glass (dielectric) surfaces are passed through with Fresnel transmittance."""
-    var dx = bx - ax; var dy = by - ay; var dz = bz - az
-    var dist_total = sqrt(dx*dx + dy*dy + dz*dz)
+    var d = b - a
+    var dist_total = d.length()
     if dist_total < Float32(1e-5):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     var inv = Float32(1) / dist_total
-    var dir = SIMD[DType.float32, 3](dx*inv, dy*inv, dz*inv)
+    var dir = SIMD[DType.float32, 3](d.x*inv, d.y*inv, d.z*inv)
 
     var Tr = RGB(Float32(1), Float32(1), Float32(1))
-    var ox = ax + dir[0]*Float32(0.0002)
-    var oy = ay + dir[1]*Float32(0.0002)
-    var oz = az + dir[2]*Float32(0.0002)
+    var org = a + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
     var remaining = dist_total - Float32(0.0002)
     var cur_med = med_idx
 
     var inter_mem = alloc[Intersection_C](1)
     for _ in range(8):
         if remaining < Float32(1e-4): break
-        var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dir[0], dir[1], dir[2]))
+        var ray = Ray_C(org, Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -165,7 +149,7 @@ def _visible_transmittance(
         var t_hit = inter.tHit
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
-        var hx = ox + dir[0]*t_hit; var hy = oy + dir[1]*t_hit; var hz = oz + dir[2]*t_hit
+        var hit = org + Vec3f(dir[0], dir[1], dir[2]) * t_hit
 
         # Beer-Lambert through medium segment up to hit
         if Int(cur_med) >= 0:
@@ -179,10 +163,10 @@ def _visible_transmittance(
             if inter.primId.type == Int8(4):
                 var si = Int(inter.primId.id1)
                 var sph = sd.spheres[si]
-                var snx = hx-sph.center.x; var sny = hy-sph.center.y; var snz = hz-sph.center.z
-                var snl = sqrt(snx*snx+sny*sny+snz*snz)
-                if snl > Float32(0): snx/=snl; sny/=snl; snz/=snl
-                gn = SIMD[DType.float32, 3](snx, sny, snz)
+                var sn = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
+                var snl = sn.length()
+                if snl > Float32(0): sn = sn / snl
+                gn = sn.to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
             var facing = dot(dir, gn) < Float32(0)
@@ -201,7 +185,7 @@ def _visible_transmittance(
                 var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
                 var md = dir[0]*gn[0]+dir[1]*gn[1]+dir[2]*gn[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
-            ox = hx+dir[0]*Float32(0.0002); oy = hy+dir[1]*Float32(0.0002); oz = hz+dir[2]*Float32(0.0002)
+            org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 
         elif mat.type == MatKind.interface:
@@ -211,7 +195,7 @@ def _visible_transmittance(
                 var igna = _geom_normal(inter, sd.meshes, sd.instances)
                 var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
-            ox = hx+dir[0]*Float32(0.0002); oy = hy+dir[1]*Float32(0.0002); oz = hz+dir[2]*Float32(0.0002)
+            org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
             remaining = remaining - t_hit - Float32(0.0002)
 
         else:
@@ -256,12 +240,14 @@ def _build_camera_path(
         cx /= cw; cy /= cw; cz /= cw
     var cl = sqrt(cx*cx + cy*cy + cz*cz)
     if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-    var rdx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var rdy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var rdz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
-    var dl = sqrt(rdx*rdx + rdy*rdy + rdz*rdz)
-    if dl > Float32(0.0): rdx /= dl; rdy /= dl; rdz /= dl
-    var rox = c2w[12]; var roy = c2w[13]; var roz = c2w[14]
+    var rd = Vec3f(
+        c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
+        c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
+        c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+    )
+    var dl = rd.length()
+    if dl > Float32(0.0): rd = rd / dl
+    var ro = Point3f(c2w[12], c2w[13], c2w[14])
 
     var n_verts = 0
     var n_bounces = 0  # total surface hits including glass (for _dielectric_bounce entering logic)
@@ -270,7 +256,7 @@ def _build_camera_path(
 
     for _ in range(_BDPT_MAX_DEPTH):
         if n_verts >= _BDPT_MAX_VERTS: break
-        var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
+        var ray = Ray_C(ro, rd)
         inter_mem[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -279,7 +265,7 @@ def _build_camera_path(
 
         var inter = inter_mem[0]
         var t_hit = inter.tHit
-        var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+        var ray_dir = rd.to_simd()
 
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
@@ -291,9 +277,7 @@ def _build_camera_path(
                 var t_free = -log(max(u, Float32(1e-7))) / sig_t
                 if t_free < t_hit:
                     # Volume scatter vertex
-                    var sx = rox + rdx*t_free
-                    var sy = roy + rdy*t_free
-                    var sz = roz + rdz*t_free
+                    var sp = ro + rd*t_free
                     var alb_s = med.sigma_s.r / sig_t
                     var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0) else alb_s
                     var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0) else alb_s
@@ -301,7 +285,7 @@ def _build_camera_path(
                     # BDPT vertex beta: Tr/pdf_free × phase/pdf_phase = 1/sig_t × sig_s = alb_s
                     # (exp(-sig_t×t) cancels between Tr numerator and pdf denominator)
                     var v = _null_vertex()
-                    v.px = sx; v.py = sy; v.pz = sz
+                    v.pos = sp
                     v.beta = beta * alb_med
                     v.alb = alb_med
                     v.is_surface = Int32(0); v.is_delta = Int32(0)
@@ -314,10 +298,8 @@ def _build_camera_path(
                     var cosT = Float32(2)*u1 - Float32(1)
                     var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
                     var phi  = Float32(2)*PI*u2
-                    rdx = sinT*cos(phi); rdy = sinT*sin(phi); rdz = cosT
-                    rox = sx + rdx*Float32(0.0002)
-                    roy = sy + rdy*Float32(0.0002)
-                    roz = sz + rdz*Float32(0.0002)
+                    rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                    ro = sp + rd*Float32(0.0002)
                     continue
                 else:
                     # Beer-Lambert through full segment to surface
@@ -325,7 +307,7 @@ def _build_camera_path(
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
-        var hx = rox + rdx*t_hit; var hy = roy + rdy*t_hit; var hz = roz + rdz*t_hit
+        var hit = ro + rd*t_hit
 
         if mat.type == MatKind.area_light:
             break  # camera hits light directly → handled by unidirectional contribution
@@ -334,8 +316,8 @@ def _build_camera_path(
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var v = _null_vertex()
-            v.px = hx; v.py = hy; v.pz = hz
-            v.nx = gn[0]; v.ny = gn[1]; v.nz = gn[2]
+            v.pos = hit
+            v.normal = vec3f(gn)
             v.beta = beta
             v.alb = mat.albedo
             v.is_surface = Int32(1); v.is_delta = Int32(0)
@@ -353,12 +335,14 @@ def _build_camera_path(
             var b_tf = gn_n[0]*gn_n[1]*a_tf
             var tx = Float32(1)+sgn*gn_n[0]*gn_n[0]*a_tf; var ty = sgn*b_tf; var tz = -sgn*gn_n[0]
             var bx_v = b_tf; var by_v = sgn+gn_n[1]*gn_n[1]*a_tf; var bz_v = -gn_n[1]
-            rdx = tx*lx + bx_v*lz_loc + gn_n[0]*ly
-            rdy = ty*lx + by_v*lz_loc + gn_n[1]*ly
-            rdz = tz*lx + bz_v*lz_loc + gn_n[2]*ly
-            var nd = sqrt(rdx*rdx+rdy*rdy+rdz*rdz)
-            if nd > Float32(0): rdx /= nd; rdy /= nd; rdz /= nd
-            rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
+            rd = Vec3f(
+                tx*lx + bx_v*lz_loc + gn_n[0]*ly,
+                ty*lx + by_v*lz_loc + gn_n[1]*ly,
+                tz*lx + bz_v*lz_loc + gn_n[2]*ly,
+            )
+            var nd = rd.length()
+            if nd > Float32(0): rd = rd / nd
+            ro = hit + rd*Float32(0.0002)
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
             beta *= mat.albedo
 
@@ -367,17 +351,17 @@ def _build_camera_path(
             if inter.primId.type == Int8(4):
                 var si_c = Int(inter.primId.id1)
                 var sph_c = sd.spheres[si_c]
-                var cnx = hx-sph_c.center.x; var cny = hy-sph_c.center.y; var cnz = hz-sph_c.center.z
-                var cnl = sqrt(cnx*cnx+cny*cny+cnz*cnz)
-                if cnl > Float32(0): cnx /= cnl; cny /= cnl; cnz /= cnl
-                gn_c = SIMD[DType.float32, 3](cnx, cny, cnz)
+                var cn = hit - Point3f(sph_c.center.x, sph_c.center.y, sph_c.center.z)
+                var cnl = cn.length()
+                if cnl > Float32(0): cn = cn / cnl
+                gn_c = cn.to_simd()
             else:
                 gn_c = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
-            var wo_c = SIMD[DType.float32, 3](-rdx, -rdy, -rdz)
+            var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
-                normal=gn_c, geo_normal=gn_c, hit_point=SIMD[DType.float32, 3](hx, hy, hz), wo=wo_c,
+                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
                 tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
                 bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
                 alb=mat.albedo, pixel_uv=Float32(0),
@@ -388,46 +372,45 @@ def _build_camera_path(
                 break
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
-                v.px = hx; v.py = hy; v.pz = hz
-                v.nx = gn_c[0]; v.ny = gn_c[1]; v.nz = gn_c[2]
+                v.pos = hit
+                v.normal = vec3f(gn_c)
                 v.beta = beta
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
                 v.pdf_bwd = max(mat.roughU, mat.roughV)
-                v.wx = wo_c[0]; v.wy = wo_c[1]; v.wz = wo_c[2]
+                v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 verts[n_verts] = v; n_verts += 1
             beta *= bs_c.f
-            rdx = bs_c.wi[0]; rdy = bs_c.wi[1]; rdz = bs_c.wi[2]
-            rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
+            rd = vec3f(bs_c.wi)
+            ro = hit + rd*Float32(0.0002)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
             if inter.primId.type == Int8(4):
                 var si = Int(inter.primId.id1)
                 var sph = sd.spheres[si]
-                var snx = hx-sph.center.x; var sny = hy-sph.center.y; var snz = hz-sph.center.z
-                var snl = sqrt(snx*snx+sny*sny+snz*snz)
-                if snl > Float32(0): snx /= snl; sny /= snl; snz /= snl
-                gn = SIMD[DType.float32, 3](snx, sny, snz)
+                var sn = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
+                var snl = sn.length()
+                if snl > Float32(0): sn = sn / snl
+                gn = sn.to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
-            var hit = SIMD[DType.float32, 3](hx, hy, hz)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, mat.albedo.r, n_bounces, pcg)
+            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg)
             n_bounces += 1
             # Specular vertex: no BSDF record needed, just track throughput
             if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hx, hy, hz)
+                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-            rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+            rd = vec3f(new_dir)
+            ro = point3f(new_org)
 
         elif mat.type == MatKind.interface:
             if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hx, hy, hz)
+                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
+            ro = hit + rd*Float32(0.0002)
 
         else:
             break
@@ -470,12 +453,12 @@ def _build_light_path(
     # (e.g. ceiling lights with winding that produces an upward geometric normal but
     # scene-specified normals pointing downward into the room).
     if Int(lmesh.normals) > 4:
-        var sn0x = lmesh.normals[lv0*3]; var sn0y = lmesh.normals[lv0*3+1]; var sn0z = lmesh.normals[lv0*3+2]
-        var sn1x = lmesh.normals[lv1*3]; var sn1y = lmesh.normals[lv1*3+1]; var sn1z = lmesh.normals[lv1*3+2]
-        var sn2x = lmesh.normals[lv2*3]; var sn2y = lmesh.normals[lv2*3+1]; var sn2z = lmesh.normals[lv2*3+2]
-        var snx = (sn0x+sn1x+sn2x)/Float32(3); var sny = (sn0y+sn1y+sn2y)/Float32(3); var snz = (sn0z+sn1z+sn2z)/Float32(3)
-        var snl = sqrt(snx*snx+sny*sny+snz*snz)
-        if snl > Float32(0): ln = SIMD[DType.float32, 3](snx/snl, sny/snl, snz/snl)
+        var sn0 = Vec3f(lmesh.normals[lv0*3], lmesh.normals[lv0*3+1], lmesh.normals[lv0*3+2])
+        var sn1 = Vec3f(lmesh.normals[lv1*3], lmesh.normals[lv1*3+1], lmesh.normals[lv1*3+2])
+        var sn2 = Vec3f(lmesh.normals[lv2*3], lmesh.normals[lv2*3+1], lmesh.normals[lv2*3+2])
+        var sn_avg = (sn0 + sn1 + sn2) / Float32(3)
+        var snl = sn_avg.length()
+        if snl > Float32(0): ln = (sn_avg / snl).to_simd()
 
     # Cosine-weighted emission direction
     var du1 = pcg.next_float(); var du2 = pcg.next_float()
@@ -496,8 +479,8 @@ def _build_light_path(
     # G already handles the cos_l factor, so f_lgt = Le (no extra cos multiply).
     var area_weight = al.total_area * Float32(n_lights)
     var lv0_vert = _null_vertex()
-    lv0_vert.px = lp[0]; lv0_vert.py = lp[1]; lv0_vert.pz = lp[2]
-    lv0_vert.nx = ln[0]; lv0_vert.ny = ln[1]; lv0_vert.nz = ln[2]
+    lv0_vert.pos = point3f(lp)
+    lv0_vert.normal = vec3f(ln)
     lv0_vert.beta = RGB(area_weight, area_weight, area_weight)
     lv0_vert.alb = al.emission
     lv0_vert.is_surface = Int32(1); lv0_vert.is_light = Int32(1)
@@ -510,8 +493,8 @@ def _build_light_path(
     # β = Le × area × n_lights × π / cos_θ_emitted
     var cos_theta_emit = max(ly, Float32(0.01))
     var flux = al.emission * (area_weight * PI / cos_theta_emit)
-    var rox = lp[0]+ln[0]*Float32(0.0001); var roy = lp[1]+ln[1]*Float32(0.0001); var roz = lp[2]+ln[2]*Float32(0.0001)
-    var rdx = pdir[0]; var rdy = pdir[1]; var rdz = pdir[2]
+    var ro = point3f(lp) + vec3f(ln)*Float32(0.0001)
+    var rd = vec3f(pdir)
     var cur_med_idx = default_emit_med
     var n_verts = 1  # vertex 0 is the light point itself
     var n_lbounces = 1  # counts all surface hits (1 = after initial light vertex)
@@ -519,7 +502,7 @@ def _build_light_path(
     var inter_mem = alloc[Intersection_C](1)
     for _ in range(_BDPT_MAX_DEPTH):
         if n_verts >= _BDPT_MAX_VERTS: break
-        var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
+        var ray = Ray_C(ro, rd)
         inter_mem[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), inter_mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -528,7 +511,7 @@ def _build_light_path(
 
         var inter = inter_mem[0]
         var t_hit = inter.tHit
-        var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+        var ray_dir = rd.to_simd()
 
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
@@ -539,14 +522,14 @@ def _build_light_path(
                 var u = pcg.next_float()
                 var t_free = -log(max(u, Float32(1e-7))) / sig_t
                 if t_free < t_hit:
-                    var sx = rox+rdx*t_free; var sy = roy+rdy*t_free; var sz = roz+rdz*t_free
+                    var sp = ro + rd*t_free
                     var alb_s = med.sigma_s.r / sig_t
                     var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0) else alb_s
                     var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0) else alb_s
                     var alb_med = RGB(alb_s, alb_g_s, alb_b_s)
                     # BDPT vertex beta: exp(-sig_t×t)/pdf_free × alb_s = 1/sig_t × alb_s = alb_s (for sig_t=1)
                     var v = _null_vertex()
-                    v.px = sx; v.py = sy; v.pz = sz
+                    v.pos = sp
                     v.beta = flux * alb_med
                     v.alb = alb_med
                     v.is_surface = Int32(0); v.is_delta = Int32(0)
@@ -559,22 +542,22 @@ def _build_light_path(
                     var cosT = Float32(2)*u1 - Float32(1)
                     var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
                     var phi  = Float32(2)*PI*u2
-                    rdx = sinT*cos(phi); rdy = sinT*sin(phi); rdz = cosT
-                    rox = sx+rdx*Float32(0.0002); roy = sy+rdy*Float32(0.0002); roz = sz+rdz*Float32(0.0002)
+                    rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                    ro = sp + rd*Float32(0.0002)
                     continue
                 else:
                     flux *= RGB(exp(-sigma_t.r*t_hit), exp(-sigma_t.g*t_hit), exp(-sigma_t.b*t_hit))
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
-        var hx = rox+rdx*t_hit; var hy = roy+rdy*t_hit; var hz = roz+rdz*t_hit
+        var hit = ro + rd*t_hit
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var v = _null_vertex()
-            v.px = hx; v.py = hy; v.pz = hz
-            v.nx = gn[0]; v.ny = gn[1]; v.nz = gn[2]
+            v.pos = hit
+            v.normal = vec3f(gn)
             v.beta = flux
             v.alb = mat.albedo
             v.is_surface = Int32(1); v.is_delta = Int32(0)
@@ -588,13 +571,15 @@ def _build_light_path(
             var a_tf2 = Float32(-1)/(sgn2+gn[2]); var b_tf2 = gn[0]*gn[1]*a_tf2
             var tx2 = Float32(1)+sgn2*gn[0]*gn[0]*a_tf2; var ty2 = sgn2*b_tf2; var tz2 = -sgn2*gn[0]
             var bx_v2 = b_tf2; var by_v2 = sgn2+gn[1]*gn[1]*a_tf2; var bz_v2 = -gn[1]
-            rdx = tx2*lx2+bx_v2*lz_l2+gn[0]*ly2
-            rdy = ty2*lx2+by_v2*lz_l2+gn[1]*ly2
-            rdz = tz2*lx2+bz_v2*lz_l2+gn[2]*ly2
-            var nd = sqrt(rdx*rdx+rdy*rdy+rdz*rdz)
+            rd = Vec3f(
+                tx2*lx2+bx_v2*lz_l2+gn[0]*ly2,
+                ty2*lx2+by_v2*lz_l2+gn[1]*ly2,
+                tz2*lx2+bz_v2*lz_l2+gn[2]*ly2,
+            )
+            var nd = rd.length()
             if nd > Float32(0):
-                rdx /= nd; rdy /= nd; rdz /= nd
-            rox = hx+rdx*Float32(0.0002); roy = hy+rdy*Float32(0.0002); roz = hz+rdz*Float32(0.0002)
+                rd = rd / nd
+            ro = hit + rd*Float32(0.0002)
             flux *= mat.albedo
 
         elif mat.type == MatKind.conductor:
@@ -602,17 +587,17 @@ def _build_light_path(
             if inter.primId.type == Int8(4):
                 var si_c = Int(inter.primId.id1)
                 var sph_c = sd.spheres[si_c]
-                var cnx = hx-sph_c.center.x; var cny = hy-sph_c.center.y; var cnz = hz-sph_c.center.z
-                var cnl = sqrt(cnx*cnx+cny*cny+cnz*cnz)
-                if cnl > Float32(0): cnx /= cnl; cny /= cnl; cnz /= cnl
-                gn_c = SIMD[DType.float32, 3](cnx, cny, cnz)
+                var cn = hit - Point3f(sph_c.center.x, sph_c.center.y, sph_c.center.z)
+                var cnl = cn.length()
+                if cnl > Float32(0): cn = cn / cnl
+                gn_c = cn.to_simd()
             else:
                 gn_c = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
-            var wo_c = SIMD[DType.float32, 3](-rdx, -rdy, -rdz)
+            var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
-                normal=gn_c, geo_normal=gn_c, hit_point=SIMD[DType.float32, 3](hx, hy, hz), wo=wo_c,
+                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
                 tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
                 bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
                 alb=mat.albedo, pixel_uv=Float32(0),
@@ -623,45 +608,44 @@ def _build_light_path(
                 break
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
-                v.px = hx; v.py = hy; v.pz = hz
-                v.nx = gn_c[0]; v.ny = gn_c[1]; v.nz = gn_c[2]
+                v.pos = hit
+                v.normal = vec3f(gn_c)
                 v.beta = flux
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
                 v.pdf_bwd = max(mat.roughU, mat.roughV)
-                v.wx = wo_c[0]; v.wy = wo_c[1]; v.wz = wo_c[2]
+                v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 verts[n_verts] = v; n_verts += 1
             flux *= bs_c.f
-            rdx = bs_c.wi[0]; rdy = bs_c.wi[1]; rdz = bs_c.wi[2]
-            rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
+            rd = vec3f(bs_c.wi)
+            ro = hit + rd*Float32(0.0002)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
             if inter.primId.type == Int8(4):
                 var si = Int(inter.primId.id1)
                 var sph = sd.spheres[si]
-                var snx = hx-sph.center.x; var sny = hy-sph.center.y; var snz = hz-sph.center.z
-                var snl = sqrt(snx*snx+sny*sny+snz*snz)
-                if snl > Float32(0): snx /= snl; sny /= snl; snz /= snl
-                gn = SIMD[DType.float32, 3](snx, sny, snz)
+                var sn = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
+                var snl = sn.length()
+                if snl > Float32(0): sn = sn / snl
+                gn = sn.to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
-            var hit = SIMD[DType.float32, 3](hx, hy, hz)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, mat.albedo.r, n_lbounces, pcg)
+            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg)
             n_lbounces += 1
             if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hx, hy, hz)
+                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-            rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+            rd = vec3f(new_dir)
+            ro = point3f(new_org)
 
         elif mat.type == MatKind.interface:
             if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hx, hy, hz)
+                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            rox = hx+rdx*Float32(0.0002); roy = hy+rdy*Float32(0.0002); roz = hz+rdz*Float32(0.0002)
+            ro = hit + rd*Float32(0.0002)
 
         else:
             break
@@ -715,9 +699,9 @@ def _eval_vertex(
     if v.is_surface == Int32(0):
         # Volume scatter: isotropic phase function 1/(4π), no cosine term
         return SIMD[DType.float32, 3](v.alb.r*INV_FOUR_PI, v.alb.g*INV_FOUR_PI, v.alb.b*INV_FOUR_PI)
-    var vn = SIMD[DType.float32, 3](v.nx, v.ny, v.nz)
+    var vn = v.normal.to_simd()
     if v.mat_kind == Int32(1):
-        var vwo = SIMD[DType.float32, 3](v.wx, v.wy, v.wz)
+        var vwo = v.wo.to_simd()
         return _eval_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd, v.alb)
     # Surface: Lambertian f = alb/π × |cos(wo,n)|
     var cos_o = dot(dir_to_other, vn)
@@ -731,22 +715,20 @@ def _geom_term(
     a: BDPTVertex, b: BDPTVertex,
 ) -> Float32:
     """Geometry factor G(a,b) = |cos_a| × |cos_b| / dist²."""
-    var dx = b.px-a.px; var dy = b.py-a.py; var dz = b.pz-a.pz
-    var dist2 = dx*dx+dy*dy+dz*dz
+    var d3 = b.pos - a.pos
+    var dist2 = d3.length_sq()
     if dist2 < Float32(1e-8): return Float32(0)
     var d = sqrt(dist2)
-    var dir = SIMD[DType.float32, 3](dx/d, dy/d, dz/d)
+    var dir = d3.to_simd() / d
     var cos_a: Float32
     if a.is_surface == Int32(1):
-        var an = SIMD[DType.float32, 3](a.nx, a.ny, a.nz)
-        cos_a = dot(dir, an)
+        cos_a = dot(dir, a.normal.to_simd())
         if cos_a < Float32(0): cos_a = -cos_a
     else:
         cos_a = Float32(1)   # volume: no cosine
     var cos_b: Float32
     if b.is_surface == Int32(1):
-        var bn = SIMD[DType.float32, 3](b.nx, b.ny, b.nz)
-        cos_b = dot(dir, bn)
+        cos_b = dot(dir, b.normal.to_simd())
         if cos_b < Float32(0): cos_b = -cos_b
     else:
         cos_b = Float32(1)
@@ -765,8 +747,8 @@ def _connect(
     if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
 
-    var dx = lv.px-cv.px; var dy = lv.py-cv.py; var dz = lv.pz-cv.pz
-    var dist2 = dx*dx+dy*dy+dz*dz
+    var d3 = lv.pos - cv.pos
+    var dist2 = d3.length_sq()
     if dist2 < Float32(1e-8):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     var dist = sqrt(dist2)
@@ -774,12 +756,12 @@ def _connect(
     # Determine medium for the shadow segment.
     # Use camera vertex's medium (both should agree in a well-defined scene).
     var seg_med = cv.med_idx
-    var Tr = _visible_transmittance(cv.px, cv.py, cv.pz, lv.px, lv.py, lv.pz, seg_med, sd)
+    var Tr = _visible_transmittance(cv.pos, lv.pos, seg_med, sd)
     if Tr[0] < Float32(1e-7) and Tr[1] < Float32(1e-7) and Tr[2] < Float32(1e-7):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
 
-    var dir = SIMD[DType.float32, 3](dx/dist, dy/dist, dz/dist)
-    var neg_dir = SIMD[DType.float32, 3](-dir[0], -dir[1], -dir[2])
+    var dir = d3.to_simd() / dist
+    var neg_dir = -dir
 
     # BSDF at camera vertex (toward light)
     var f_cam = _eval_vertex(cv, dir)
@@ -788,7 +770,7 @@ def _connect(
     if lv.is_light == Int32(1):
         # Light emission: f_lgt = Le (emission radiance, no cosine here).
         # _geom_term already computes cos_l at the light surface, so don't multiply again.
-        var ln = SIMD[DType.float32, 3](lv.nx, lv.ny, lv.nz)
+        var ln = lv.normal.to_simd()
         var cos_l = dot(neg_dir, ln)  # emission normal vs direction toward cv
         if cos_l <= Float32(0):
             return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))

@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, dot, cross, INV_PI, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from .transform import transform_normal_by_instance
@@ -1478,9 +1478,7 @@ def sample_medium_gpu(
     var u_mode = pcg.next_float()
     if u_mode < p_scatter:
         # Volume scatter: compute scatter point
-        var new_ox = path_ptr[].ray.origin.x + t_free * path_ptr[].ray.direction.x
-        var new_oy = path_ptr[].ray.origin.y + t_free * path_ptr[].ray.direction.y
-        var new_oz = path_ptr[].ray.origin.z + t_free * path_ptr[].ray.direction.z
+        var scatter_pt = path_ptr[].ray.origin + path_ptr[].ray.direction * t_free
         # ── Volume scatter NEE — area light direct lighting ──────────────
         if n_area_lights > 0 and n_light_sampler > 0:
             var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
@@ -1505,16 +1503,16 @@ def sample_medium_gpu(
             var lcross = cross(lp1 - lp0, lp2 - lp0)
             var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
             var light_normal = lcross * (Float32(1) / lcross_len)
-            var scatter_pt = SIMD[DType.float32, 3](new_ox, new_oy, new_oz)
-            var to_light = light_point - scatter_pt
+            var scatter_pt_s = scatter_pt.to_simd()
+            var to_light = light_point - scatter_pt_s
             var dist_sq = dot(to_light, to_light)
             var dist = sqrt(dist_sq)
             if dist > Float32(0.0001) and al.total_area > Float32(0):
                 var shadow_dir = to_light * (Float32(1) / dist)
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_l > Float32(0):
-                    var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
-                    var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                    var shad_org = point3f(scatter_pt_s + shadow_dir * Float32(0.0002))
+                    var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
                     var shad_tmax = dist * Float32(0.9995)
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances):
                         var T: RGB
@@ -1535,7 +1533,7 @@ def sample_medium_gpu(
                                     ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
                                     if ts >= dist:
                                         break
-                                    var ps = scatter_pt + shadow_dir * ts
+                                    var ps = scatter_pt_s + shadow_dir * ts
                                     var density_s = grid_sample_density(grid, ps)
                                     Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
                                     if Tval < Float32(1e-4):
@@ -1554,7 +1552,7 @@ def sample_medium_gpu(
         var sin_theta = sqrt(max(Float32(0.0), Float32(1.0) - cos_theta * cos_theta))
         var phi = Float32(6.28318530718) * u2
         path_ptr[].ray = Ray_C(
-            Point3f(new_ox, new_oy, new_oz),
+            scatter_pt,
             Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = INV_FOUR_PI
@@ -2030,20 +2028,22 @@ def gen_aux_buffers_gpu(
     if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
 
     # Camera → world
-    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
-    var dl = sqrt(dx*dx + dy*dy + dz*dz)
-    if dl > Float32(0): dx /= dl; dy /= dl; dz /= dl
-    var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+    var dir = Vec3f(
+        c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
+        c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
+        c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+    )
+    var dl = dir.length()
+    if dl > Float32(0): dir = dir / dl
+    var org = Point3f(c2w[12], c2w[13], c2w[14])
 
-    var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+    var ray = Ray_C(org, dir)
     var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     isects_tmp[tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp + tid, blasNodesArr, blasPrimIdsArr, instances)
     test_spheres(spheres, n_spheres, ray, isects_tmp + tid)
 
-    var nx = Float32(0); var ny = Float32(0); var nz = Float32(1)
+    var normal = Vec3f(Float32(0), Float32(0), Float32(1))
     var d = Float32(1e38)
 
     if isects_tmp[tid].hit != Int8(0):
@@ -2052,11 +2052,9 @@ def gen_aux_buffers_gpu(
         if typ == 4:
             var si = Int(isects_tmp[tid].primId.id1)
             var sc = spheres[si].center
-            var hx = ox + dx*d - sc.x
-            var hy = oy + dy*d - sc.y
-            var hz = oz + dz*d - sc.z
-            var hl = sqrt(hx*hx + hy*hy + hz*hz)
-            if hl > Float32(0): nx = hx/hl; ny = hy/hl; nz = hz/hl
+            var h = (org + dir*d) - Point3f(sc.x, sc.y, sc.z)
+            var hl = h.length()
+            if hl > Float32(0): normal = h / hl
         elif typ == 5:
             # Approximate outward normal for the denoiser G-buffer: h alone
             # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,
@@ -2074,7 +2072,7 @@ def gen_aux_buffers_gpu(
                 var ch = isects_tmp[tid].u
                 var cs = sqrt(max(Float32(0.0), Float32(1.0) - ch*ch))
                 var cn = cu*ch + cb*cs
-                nx = cn[0]; ny = cn[1]; nz = cn[2]
+                normal = vec3f(cn)
         elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
             var mesh_idx: Int
             var base_vidx: Int
@@ -2088,31 +2086,26 @@ def gen_aux_buffers_gpu(
             var vi0 = Int(mesh.vertexIndices[base_vidx])
             var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
             var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
-            var e1x = mesh.points[vi1*4]   - mesh.points[vi0*4]
-            var e1y = mesh.points[vi1*4+1] - mesh.points[vi0*4+1]
-            var e1z = mesh.points[vi1*4+2] - mesh.points[vi0*4+2]
-            var e2x = mesh.points[vi2*4]   - mesh.points[vi0*4]
-            var e2y = mesh.points[vi2*4+1] - mesh.points[vi0*4+1]
-            var e2z = mesh.points[vi2*4+2] - mesh.points[vi0*4+2]
-            nx = e1y*e2z - e1z*e2y
-            ny = e1z*e2x - e1x*e2z
-            nz = e1x*e2y - e1y*e2x
+            var p0 = Point3f(mesh.points[vi0*4], mesh.points[vi0*4+1], mesh.points[vi0*4+2])
+            var p1 = Point3f(mesh.points[vi1*4], mesh.points[vi1*4+1], mesh.points[vi1*4+2])
+            var p2 = Point3f(mesh.points[vi2*4], mesh.points[vi2*4+1], mesh.points[vi2*4+2])
+            var e1 = p1 - p0; var e2 = p2 - p0
+            normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
             var inst_idx = isects_tmp[tid].primId.instanceIdx
             if inst_idx >= Int32(0):
-                var n_obj = SIMD[DType.float32, 3](nx, ny, nz)
-                var n_world = transform_normal_by_instance(instances[Int(inst_idx)].worldToObj, n_obj)
-                nx = n_world[0]; ny = n_world[1]; nz = n_world[2]
-            var nl = sqrt(nx*nx + ny*ny + nz*nz)
-            if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+                var n_world = transform_normal_by_instance(instances[Int(inst_idx)].worldToObj, normal.to_simd())
+                normal = vec3f(n_world)
+            var nl = normal.length()
+            if nl > Float32(0): normal = normal / nl
         # else: unrecognized primitive type (shouldn't happen — every hit
-        # traverse_bvh2_core can produce is type 0-5) — leave nx/ny/nz at the
+        # traverse_bvh2_core can produce is type 0-5) — leave normal at the
         # miss-ray default (0,0,1) rather than misreading id1/id2 as mesh data.
-        if nx*(-dx) + ny*(-dy) + nz*(-dz) < Float32(0):
-            nx = -nx; ny = -ny; nz = -nz
+        if normal.dot(-dir) < Float32(0):
+            normal = -normal
 
-    normals_out[tid*3+0] = nx
-    normals_out[tid*3+1] = ny
-    normals_out[tid*3+2] = nz
+    normals_out[tid*3+0] = normal.x
+    normals_out[tid*3+1] = normal.y
+    normals_out[tid*3+2] = normal.z
     depth_out[tid] = d
     curve_mask_out[tid] = Float32(1.0) if (isects_tmp[tid].hit != Int8(0) and Int(isects_tmp[tid].primId.type) == 5) else Float32(0.0)
 
@@ -2986,7 +2979,7 @@ def atrous_filter_gpu(
     var sigma_l2 = sigma_l * sigma_l * var_p + Float32(1e-6)
     var sigma_a2 = sigma_a * sigma_a
     var ca = RGB(albedo[tid*3], albedo[tid*3+1], albedo[tid*3+2])
-    var cnx = normals[tid*3]; var cny = normals[tid*3+1]; var cnz = normals[tid*3+2]
+    var cn = Vec3f(normals[tid*3], normals[tid*3+1], normals[tid*3+2])
     var cd = depth[tid]
     var inv_sn = Float32(1) / sigma_n
     var inv2sd = Float32(1) / (Float32(2) * sigma_d * sigma_d)
@@ -3011,7 +3004,7 @@ def atrous_filter_gpu(
             var w_l = exp(-dl * dl / sigma_l2)
             var dalb = RGB(albedo[ni], albedo[ni+1], albedo[ni+2]) - ca
             var w_a = exp(-(dalb * dalb).sum() / sigma_a2)
-            var ndot = normals[ni]*cnx + normals[ni+1]*cny + normals[ni+2]*cnz
+            var ndot = normals[ni]*cn.x + normals[ni+1]*cn.y + normals[ni+2]*cn.z
             var normal_diff = max(Float32(0), Float32(1) - ndot)
             var dd = min(depth[ni1], Float32(1e18)) - cd_clamped
             var rel_depth2 = (dd * dd) / cd_sq

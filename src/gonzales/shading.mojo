@@ -507,10 +507,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
             # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
             # the path came from and ray.direction is the scatter direction that arrived here.
             if Int(guide_write.energy) > 4 and path_ptr[].bounce > 0:
-                var parent_x = path_ptr[].ray.origin.x
-                var parent_y = path_ptr[].ray.origin.y
-                var parent_z = path_ptr[].ray.origin.z
-                var parent_cell = guide_pos_to_cell(guide_write, parent_x, parent_y, parent_z)
+                var parent_cell = guide_pos_to_cell(guide_write, path_ptr[].ray.origin)
                 if parent_cell >= 0:
                     var w = contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
                     # Normalize by current throughput to record incoming radiance at
@@ -2552,7 +2549,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var pdf_mix: Float32
 
     if Int(ctx.guide.energy) > 4:
-        var cell = guide_pos_to_cell(ctx.guide, hit_point[0], hit_point[1], hit_point[2])
+        var cell = guide_pos_to_cell(ctx.guide, Point3f(hit_point[0], hit_point[1], hit_point[2]))
         var bsdf_s = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
         var bsdf_dir = bsdf_s[0]
         var pdf_b = bsdf_s[1]  # cos(theta)/π at bsdf_dir

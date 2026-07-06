@@ -2,7 +2,7 @@ from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
@@ -24,7 +24,6 @@ def render_tile(
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
     var maxD = Int(maxDepth)
-    var orgX = cameraToWorld[12]; var orgY = cameraToWorld[13]; var orgZ = cameraToWorld[14]
     var tileW = Int(tileMaxX - tileMinX)
     var tileH = Int(tileMaxY - tileMinY)
     var spp = Int(sp.samplesPerPixel)
@@ -160,9 +159,7 @@ def render_tile(
                             var cos_theta = Float32(2) * u1 - Float32(1)
                             var sin_theta = sqrt(max(Float32(0), Float32(1) - cos_theta * cos_theta))
                             var phi = Float32(6.28318530718) * u2
-                            var ox = paths[i].ray.origin.x + t_free * paths[i].ray.direction.x
-                            var oy = paths[i].ray.origin.y + t_free * paths[i].ray.direction.y
-                            var oz = paths[i].ray.origin.z + t_free * paths[i].ray.direction.z
+                            var scatter_pt = paths[i].ray.origin + paths[i].ray.direction * t_free
                             # ── Volume scatter NEE — area light direct lighting ──────────
                             if Int(scene.areaLightCount) > 0 and Int(scene.lightSampler.n) > 0:
                                 var pcg_nee = PCG32(paths[i].pcgState, paths[i].pcgInc)
@@ -188,16 +185,16 @@ def render_tile(
                                 var lcross = cross(lp1 - lp0, lp2 - lp0)
                                 var lcross_len = sqrt(dot(lcross, lcross))
                                 var light_normal = lcross * (Float32(1) / max(lcross_len, Float32(1e-7)))
-                                var scatter_pt = SIMD[DType.float32, 3](ox, oy, oz)
-                                var to_light = light_point - scatter_pt
+                                var scatter_pt_s = scatter_pt.to_simd()
+                                var to_light = light_point - scatter_pt_s
                                 var dist_sq = dot(to_light, to_light)
                                 var dist = sqrt(dist_sq)
                                 if dist > Float32(0.0001) and al.total_area > Float32(0):
                                     var shadow_dir = to_light * (Float32(1) / dist)
                                     var cos_l = -dot(light_normal, shadow_dir)
                                     if cos_l > Float32(0):
-                                        var shad_org = scatter_pt + shadow_dir * Float32(0.0002)
-                                        var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+                                        var shad_org = point3f(scatter_pt_s + shadow_dir * Float32(0.0002))
+                                        var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
                                         var shad_tmax = dist * Float32(0.9995)
                                         if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax,
                                                                   scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances):
@@ -215,7 +212,7 @@ def render_tile(
                                                         ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
                                                         if ts >= dist:
                                                             break
-                                                        var ps = scatter_pt + shadow_dir * ts
+                                                        var ps = scatter_pt_s + shadow_dir * ts
                                                         var density_s = grid_sample_density(grid_s, ps)
                                                         Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
                                                         if Tval < Float32(1e-4):
@@ -228,7 +225,7 @@ def render_tile(
                                             var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
                                             paths[i].estimate += paths[i].throughput * al.emission * T * (geom * INV_FOUR_PI)
                             paths[i].volume_scattered = Int8(1)
-                            paths[i].ray = Ray_C(Point3f(ox, oy, oz), Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
+                            paths[i].ray = Ray_C(scatter_pt, Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
                             paths[i].specularBounce = Int8(0)
                             intersections[i].hit = Int8(0)
         for i in range(n):
@@ -258,17 +255,15 @@ def render_tile(
             if mi_mat.medium_interface_idx < Int32(0):
                 continue
             var iface = scene.mediumInterfaces[Int(mi_mat.medium_interface_idx)]
-            var mi_nx: Float32; var mi_ny: Float32; var mi_nz: Float32
+            var mi_n: Vec3f
             if intersections[i].primId.type == 4:
                 # Sphere: outward normal = hit point - center. Medium-bounding
                 # volumes are commonly a big invisible sphere (e.g.
                 # smoke-plume's MediumInterface .. Shape sphere), so this
                 # case matters even though spheres rarely carry real shading.
                 var mi_sph = scene.spheres[Int(intersections[i].primId.id1)]
-                var mi_hx = paths[i].ray.origin.x + intersections[i].tHit * paths[i].ray.direction.x - mi_sph.center.x
-                var mi_hy = paths[i].ray.origin.y + intersections[i].tHit * paths[i].ray.direction.y - mi_sph.center.y
-                var mi_hz = paths[i].ray.origin.z + intersections[i].tHit * paths[i].ray.direction.z - mi_sph.center.z
-                mi_nx = mi_hx; mi_ny = mi_hy; mi_nz = mi_hz
+                var mi_hit = paths[i].ray.origin + paths[i].ray.direction * intersections[i].tHit
+                mi_n = mi_hit - Point3f(mi_sph.center.x, mi_sph.center.y, mi_sph.center.z)
             else:
                 var mi_mesh_idx: Int
                 var mi_base_vidx: Int
@@ -282,16 +277,12 @@ def render_tile(
                 var mi_vi0 = Int(mi_m.vertexIndices[mi_base_vidx])
                 var mi_vi1 = Int(mi_m.vertexIndices[mi_base_vidx + 1])
                 var mi_vi2 = Int(mi_m.vertexIndices[mi_base_vidx + 2])
-                var mi_e1x = mi_m.points[mi_vi1*4]   - mi_m.points[mi_vi0*4]
-                var mi_e1y = mi_m.points[mi_vi1*4+1] - mi_m.points[mi_vi0*4+1]
-                var mi_e1z = mi_m.points[mi_vi1*4+2] - mi_m.points[mi_vi0*4+2]
-                var mi_e2x = mi_m.points[mi_vi2*4]   - mi_m.points[mi_vi0*4]
-                var mi_e2y = mi_m.points[mi_vi2*4+1] - mi_m.points[mi_vi0*4+1]
-                var mi_e2z = mi_m.points[mi_vi2*4+2] - mi_m.points[mi_vi0*4+2]
-                mi_nx = mi_e1y * mi_e2z - mi_e1z * mi_e2y
-                mi_ny = mi_e1z * mi_e2x - mi_e1x * mi_e2z
-                mi_nz = mi_e1x * mi_e2y - mi_e1y * mi_e2x
-            var mi_dot = paths[i].ray.direction.x * mi_nx + paths[i].ray.direction.y * mi_ny + paths[i].ray.direction.z * mi_nz
+                var mi_p0 = Point3f(mi_m.points[mi_vi0*4], mi_m.points[mi_vi0*4+1], mi_m.points[mi_vi0*4+2])
+                var mi_p1 = Point3f(mi_m.points[mi_vi1*4], mi_m.points[mi_vi1*4+1], mi_m.points[mi_vi1*4+2])
+                var mi_p2 = Point3f(mi_m.points[mi_vi2*4], mi_m.points[mi_vi2*4+1], mi_m.points[mi_vi2*4+2])
+                var mi_e1 = mi_p1 - mi_p0; var mi_e2 = mi_p2 - mi_p0
+                mi_n = Vec3f(mi_e1.y*mi_e2.z - mi_e1.z*mi_e2.y, mi_e1.z*mi_e2.x - mi_e1.x*mi_e2.z, mi_e1.x*mi_e2.y - mi_e1.y*mi_e2.x)
+            var mi_dot = paths[i].ray.direction.x * mi_n.x + paths[i].ray.direction.y * mi_n.y + paths[i].ray.direction.z * mi_n.z
             if mi_dot > Float32(0):
                 paths[i].current_medium_idx = iface.outside_medium_idx
             else:
@@ -442,9 +433,7 @@ def render_aux_buffers(
     var h  = Int(max_y - min_y)
     var n_pixels = w * h
     var sd = scene[0]
-    var ox = cameraToWorld[12]
-    var oy = cameraToWorld[13]
-    var oz = cameraToWorld[14]
+    var org = Point3f(cameraToWorld[12], cameraToWorld[13], cameraToWorld[14])
     var isects = alloc[Intersection_C](n_pixels)
 
     @parameter
@@ -465,19 +454,21 @@ def render_aux_buffers(
         if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
 
         # cameraToWorld rotation (upper-left 3×3)
-        var dx = cameraToWorld[0]*cx + cameraToWorld[4]*cy + cameraToWorld[8]*cz
-        var dy = cameraToWorld[1]*cx + cameraToWorld[5]*cy + cameraToWorld[9]*cz
-        var dz = cameraToWorld[2]*cx + cameraToWorld[6]*cy + cameraToWorld[10]*cz
-        var dl = sqrt(dx*dx + dy*dy + dz*dz)
-        if dl > Float32(0): dx /= dl; dy /= dl; dz /= dl
+        var dir = Vec3f(
+            cameraToWorld[0]*cx + cameraToWorld[4]*cy + cameraToWorld[8]*cz,
+            cameraToWorld[1]*cx + cameraToWorld[5]*cy + cameraToWorld[9]*cz,
+            cameraToWorld[2]*cx + cameraToWorld[6]*cy + cameraToWorld[10]*cz,
+        )
+        var dl = dir.length()
+        if dl > Float32(0): dir = dir / dl
 
-        var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+        var ray = Ray_C(org, dir)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         if Int(sd.sphereCount) > 0:
             test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects + i)
 
-        var nx = Float32(0); var ny = Float32(0); var nz = Float32(1)   # background
+        var normal = Vec3f(Float32(0), Float32(0), Float32(1))   # background
         var d  = Float32(1e38)
 
         if isects[i].hit != Int8(0):
@@ -487,11 +478,9 @@ def render_aux_buffers(
                 # Sphere: normal = normalize(hit_point - center)
                 var si  = Int(isects[i].primId.id1)
                 var sc  = sd.spheres[si].center
-                var hx  = ox + dx*d - sc.x
-                var hy  = oy + dy*d - sc.y
-                var hz  = oz + dz*d - sc.z
-                var hl  = sqrt(hx*hx + hy*hy + hz*hz)
-                if hl > Float32(0): nx = hx/hl; ny = hy/hl; nz = hz/hl
+                var h   = (org + dir*d) - Point3f(sc.x, sc.y, sc.z)
+                var hl  = h.length()
+                if hl > Float32(0): normal = h / hl
             else:
                 # Triangle (types 0, 1, 2, 3): geometric normal from edge cross product
                 var mesh_idx: Int
@@ -506,24 +495,20 @@ def render_aux_buffers(
                 var vi0 = Int(mesh.vertexIndices[base_vidx])
                 var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
                 var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
-                var e1x = mesh.points[vi1*4]   - mesh.points[vi0*4]
-                var e1y = mesh.points[vi1*4+1] - mesh.points[vi0*4+1]
-                var e1z = mesh.points[vi1*4+2] - mesh.points[vi0*4+2]
-                var e2x = mesh.points[vi2*4]   - mesh.points[vi0*4]
-                var e2y = mesh.points[vi2*4+1] - mesh.points[vi0*4+1]
-                var e2z = mesh.points[vi2*4+2] - mesh.points[vi0*4+2]
-                nx = e1y*e2z - e1z*e2y
-                ny = e1z*e2x - e1x*e2z
-                nz = e1x*e2y - e1y*e2x
-                var nl = sqrt(nx*nx + ny*ny + nz*nz)
-                if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+                var p0 = Point3f(mesh.points[vi0*4], mesh.points[vi0*4+1], mesh.points[vi0*4+2])
+                var p1 = Point3f(mesh.points[vi1*4], mesh.points[vi1*4+1], mesh.points[vi1*4+2])
+                var p2 = Point3f(mesh.points[vi2*4], mesh.points[vi2*4+1], mesh.points[vi2*4+2])
+                var e1 = p1 - p0; var e2 = p2 - p0
+                normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
+                var nl = normal.length()
+                if nl > Float32(0): normal = normal / nl
             # Flip to face incoming ray
-            if nx*(-dx) + ny*(-dy) + nz*(-dz) < Float32(0):
-                nx = -nx; ny = -ny; nz = -nz
+            if normal.dot(-dir) < Float32(0):
+                normal = -normal
 
-        normals_out[i*3 + 0] = nx
-        normals_out[i*3 + 1] = ny
-        normals_out[i*3 + 2] = nz
+        normals_out[i*3 + 0] = normal.x
+        normals_out[i*3 + 1] = normal.y
+        normals_out[i*3 + 2] = normal.z
         depth_out[i] = d
 
     parallelize[trace_pixel](n_pixels)

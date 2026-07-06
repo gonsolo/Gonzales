@@ -4,7 +4,7 @@
 from std.math import sqrt, cos, sin, floor, log, exp, max
 from std.memory import alloc
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C,
+    RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, PI, INV_FOUR_PI,
 )
@@ -34,8 +34,8 @@ comptime _VP_SAMPLES = 16
 @fieldwise_init
 struct SPPMPixel(TrivialRegisterPassable):
     """Visible point from one camera ray + SPPM accumulators."""
-    var pos_x: Float32; var pos_y: Float32; var pos_z: Float32
-    var nx: Float32;    var ny: Float32;    var nz: Float32
+    var pos:    Point3f
+    var normal: Vec3f
     var beta: RGB  # camera throughput
     var alb:  RGB  # surface albedo
     var tau:  RGB  # accumulated flux
@@ -60,7 +60,7 @@ struct SPPMPixel(TrivialRegisterPassable):
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
     """Photon stored at a scatter event (surface diffuse or volume)."""
-    var px: Float32; var py: Float32; var pz: Float32
+    var pos: Point3f
     var flux: RGB  # flux at stored position
     var nxt:       Int32  # chained-list link in hash grid (-1 = end)
     var is_volume: Int32  # 1 = volume scatter photon; 0 = surface diffuse
@@ -229,20 +229,20 @@ def _sppm_update_medium(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
     sd: SceneDescriptor2_C,
-    hx: Float32 = Float32(0), hy: Float32 = Float32(0), hz: Float32 = Float32(0),
+    hit: Point3f = Point3f(Float32(0), Float32(0), Float32(0)),
 ) -> Int32:
     """Return new current_medium_idx after crossing a surface with MediumInterface."""
     if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
         return Int32(-1)  # stays vacuum; caller keeps existing idx if needed
     var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
-    var nx: Float32; var ny: Float32; var nz: Float32
+    var n: Vec3f
     if inter.primId.type == Int8(4):
         # Analytic sphere: outward normal = normalize(hit - center)
         var si = Int(inter.primId.id1)
         var sph = sd.spheres[si]
-        nx = hx - sph.center.x; ny = hy - sph.center.y; nz = hz - sph.center.z
-        var nl = sqrt(nx*nx + ny*ny + nz*nz)
-        if nl > Float32(0): nx /= nl; ny /= nl; nz /= nl
+        n = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
+        var nl = n.length()
+        if nl > Float32(0): n = n / nl
     else:
         var mi: Int; var bv: Int
         if inter.primId.type == 0:
@@ -251,10 +251,12 @@ def _sppm_update_medium(
             mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
         var m = meshes[mi]
         var v0 = Int(m.vertexIndices[bv]); var v1 = Int(m.vertexIndices[bv+1]); var v2 = Int(m.vertexIndices[bv+2])
-        var e1x = m.points[v1*4] - m.points[v0*4]; var e1y = m.points[v1*4+1] - m.points[v0*4+1]; var e1z = m.points[v1*4+2] - m.points[v0*4+2]
-        var e2x = m.points[v2*4] - m.points[v0*4]; var e2y = m.points[v2*4+1] - m.points[v0*4+1]; var e2z = m.points[v2*4+2] - m.points[v0*4+2]
-        nx = e1y*e2z - e1z*e2y; ny = e1z*e2x - e1x*e2z; nz = e1x*e2y - e1y*e2x
-    var md = ray_dir[0]*nx + ray_dir[1]*ny + ray_dir[2]*nz
+        var p0 = Point3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+        var p1 = Point3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+        var p2 = Point3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+        var e1 = p1 - p0; var e2 = p2 - p0
+        n = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
+    var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
 
 def _sppm_camera_pass(
@@ -279,7 +281,7 @@ def _sppm_camera_pass(
     crosses a dielectric surface makes a genuine random reflect-vs-refract
     choice each sample, so as long as vp_samples is large enough, at least
     some samples land on the diffuse floor even if others reflect away."""
-    var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+    var org = Point3f(c2w[12], c2w[13], c2w[14])
     var inter_mem = alloc[Intersection_C](1)
     var has_media = Int(sd.mediumCount) > 0
 
@@ -290,8 +292,8 @@ def _sppm_camera_pass(
         var py = pix // Int(fw)
 
         var vp = SPPMPixel(
-            pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
-            nx=Float32(0), ny=Float32(1), nz=Float32(0),
+            pos=Point3f(Float32(0), Float32(0), Float32(0)),
+            normal=Vec3f(Float32(0), Float32(1), Float32(0)),
             beta=RGB(Float32(1), Float32(1), Float32(1)),
             alb=RGB(Float32(0), Float32(0), Float32(0)),
             tau=RGB(Float32(0), Float32(0), Float32(0)),
@@ -315,17 +317,19 @@ def _sppm_camera_pass(
             cx /= cw; cy /= cw; cz /= cw
         var cl = sqrt(cx*cx + cy*cy + cz*cz)
         if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-        var rdx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-        var rdy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-        var rdz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
-        var dl = sqrt(rdx*rdx + rdy*rdy + rdz*rdz)
-        if dl > Float32(0.0): rdx /= dl; rdy /= dl; rdz /= dl
-        var rox = ox; var roy = oy; var roz = oz
+        var rd = Vec3f(
+            c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
+            c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
+            c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+        )
+        var dl = rd.length()
+        if dl > Float32(0.0): rd = rd / dl
+        var ro = org
 
         var cur_med_idx = Int32(-1)  # camera starts in vacuum
 
         for bounce in range(_MAX_B):
-            var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
+            var ray = Ray_C(ro, rd)
             inter_mem[0].hit = Int8(0)
             traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem,
                                sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -333,7 +337,7 @@ def _sppm_camera_pass(
                 break
 
             var inter = inter_mem[0]
-            var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+            var ray_dir = rd.to_simd()
             var t_hit = inter.tHit
 
             # ── Volume free-flight ────────────────────────────────────────────
@@ -346,10 +350,8 @@ def _sppm_camera_pass(
                     if t_free < t_hit:
                         # Volume scatter — store VP here
                         var alb_s = med.sigma_s.r / sig_t  # single-scatter albedo
-                        vp.pos_x = rox + rdx * t_free
-                        vp.pos_y = roy + rdy * t_free
-                        vp.pos_z = roz + rdz * t_free
-                        vp.nx = Float32(0); vp.ny = Float32(1); vp.nz = Float32(0)
+                        vp.pos = ro + rd * t_free
+                        vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                         vp.alb = RGB(alb_s, alb_s, alb_s)
                         vp.is_volume = Int32(1)
                         vp.valid = Int32(1)
@@ -360,16 +362,14 @@ def _sppm_camera_pass(
 
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
-            var hx = rox + rdx * t_hit
-            var hy = roy + rdy * t_hit
-            var hz = roz + rdz * t_hit
+            var hit = ro + rd * t_hit
 
             if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
                 var gn = _geom_normal(inter, sd.meshes, sd.instances)
                 if dot(gn, ray_dir) > Float32(0.0):
                     gn = gn * Float32(-1.0)
-                vp.pos_x = hx; vp.pos_y = hy; vp.pos_z = hz
-                vp.nx = gn[0]; vp.ny = gn[1]; vp.nz = gn[2]
+                vp.pos = hit
+                vp.normal = vec3f(gn)
                 vp.alb = mat.albedo
                 vp.is_volume = Int32(0)
                 vp.valid = Int32(1)
@@ -378,10 +378,9 @@ def _sppm_camera_pass(
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
-                var hit = SIMD[DType.float32, 3](hx, hy, hz)
-                var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
-                rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-                rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+                var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+                rd = vec3f(new_dir)
+                ro = point3f(new_org)
                 if has_media:
                     var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
                     if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
@@ -393,9 +392,7 @@ def _sppm_camera_pass(
                     var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
                     if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                         cur_med_idx = new_idx
-                rox = hx + rdx * Float32(0.0002)
-                roy = hy + rdy * Float32(0.0002)
-                roz = hz + rdz * Float32(0.0002)
+                ro = hit + rd * Float32(0.0002)
 
             else:
                 break  # area_light, conductor, etc.
@@ -494,14 +491,12 @@ def _sppm_photon_pass(
         var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
         var flux = al.emission * scale
 
-        var rox = lp[0] + ln[0] * Float32(0.0001)
-        var roy = lp[1] + ln[1] * Float32(0.0001)
-        var roz = lp[2] + ln[2] * Float32(0.0001)
-        var rdx = pdir[0]; var rdy = pdir[1]; var rdz = pdir[2]
+        var ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
+        var rd = vec3f(pdir)
         var cur_med_idx = default_emit_med  # start in medium if light is above one
 
         for bounce in range(_MAX_B):
-            var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
+            var ray = Ray_C(ro, rd)
             inter_mem[0].hit = Int8(0)
             traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter_mem,
                                sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -509,7 +504,7 @@ def _sppm_photon_pass(
                 break  # miss
 
             var inter = inter_mem[0]
-            var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+            var ray_dir = rd.to_simd()
             var t_hit = inter.tHit
 
             # ── Volume free-flight ────────────────────────────────────────────
@@ -521,9 +516,7 @@ def _sppm_photon_pass(
                     var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                     if t_free < t_hit:
                         # Volume scatter — store photon and sample new direction
-                        var sx = rox + rdx * t_free
-                        var sy = roy + rdy * t_free
-                        var sz = roz + rdz * t_free
+                        var sp = ro + rd * t_free
                         # bounce > 0: skip storing at the light's own first
                         # segment — that direct contribution is now covered
                         # by _sppm_nee_update instead (matches pbrt's own
@@ -532,7 +525,7 @@ def _sppm_photon_pass(
                         # term).
                         if bounce > 0 and n_stored < max_photons:
                             photons[n_stored] = SPPMPhoton(
-                                px=sx, py=sy, pz=sz,
+                                pos=sp,
                                 flux=flux,
                                 nxt=Int32(-1), is_volume=Int32(1),
                             )
@@ -546,10 +539,8 @@ def _sppm_photon_pass(
                         var cosT = Float32(2.0) * usp1 - Float32(1.0)
                         var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
                         var phiS = Float32(2.0) * PI * usp2
-                        rdx = sinT * cos(phiS); rdy = sinT * sin(phiS); rdz = cosT
-                        rox = sx + rdx * Float32(0.0001)
-                        roy = sy + rdy * Float32(0.0001)
-                        roz = sz + rdz * Float32(0.0001)
+                        rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
+                        ro = sp + rd * Float32(0.0001)
                         continue
                     else:
                         # Apply Beer-Lambert transmittance through segment
@@ -557,9 +548,7 @@ def _sppm_photon_pass(
 
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
-            var hx = rox + rdx * t_hit
-            var hy = roy + rdy * t_hit
-            var hz = roz + rdz * t_hit
+            var hit = ro + rd * t_hit
 
             if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
                 # bounce > 0: skip storing a photon at a surface directly hit
@@ -570,7 +559,7 @@ def _sppm_photon_pass(
                 # once via NEE and again via an unfiltered photon density).
                 if bounce > 0 and n_stored < max_photons:
                     photons[n_stored] = SPPMPhoton(
-                        px=hx, py=hy, pz=hz,
+                        pos=hit,
                         flux=flux,
                         nxt=Int32(-1), is_volume=Int32(0),
                     )
@@ -588,19 +577,16 @@ def _sppm_photon_pass(
                     gn = gn * Float32(-1.0)
                 var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
                 flux *= mat.albedo / rr_prob
-                rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-                rox = hx + gn[0] * Float32(0.0001)
-                roy = hy + gn[1] * Float32(0.0001)
-                roz = hz + gn[2] * Float32(0.0001)
+                rd = vec3f(new_dir)
+                ro = hit + vec3f(gn) * Float32(0.0001)
                 continue
 
             elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
                 var ior = mat.albedo.r
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
-                var hit = SIMD[DType.float32, 3](hx, hy, hz)
-                var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
-                rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-                rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+                var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+                rd = vec3f(new_dir)
+                ro = point3f(new_org)
                 if has_media:
                     var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
                     if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
@@ -611,9 +597,7 @@ def _sppm_photon_pass(
                     var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
                     if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                         cur_med_idx = new_idx
-                rox = hx + rdx * Float32(0.0002)
-                roy = hy + rdy * Float32(0.0002)
-                roz = hz + rdz * Float32(0.0002)
+                ro = hit + rd * Float32(0.0002)
 
             else:
                 # area_light self-hit, conductor, etc.: absorb
@@ -636,9 +620,9 @@ def _build_grid(
         heads[i] = Int32(-1)
     # Insert photons into chained hash table
     for k in range(n_phot):
-        var ix = Int(floor(photons[k].px * inv_cell))
-        var iy = Int(floor(photons[k].py * inv_cell))
-        var iz = Int(floor(photons[k].pz * inv_cell))
+        var ix = Int(floor(photons[k].pos.x * inv_cell))
+        var iy = Int(floor(photons[k].pos.y * inv_cell))
+        var iz = Int(floor(photons[k].pos.z * inv_cell))
         var h = _hash_cell(ix, iy, iz)
         photons[k].nxt = heads[h]
         heads[h] = Int32(k)
@@ -657,17 +641,15 @@ def _gather_update(
         if vps[i].valid == Int32(0):
             continue
         var vp = vps[i]
-        var vx = vp.pos_x; var vy = vp.pos_y; var vz = vp.pos_z
-        var vnx = vp.nx;    var vny = vp.ny;    var vnz = vp.nz
         var r2 = vp.r2
 
         # Accumulate contributions from photons in 3x3x3 neighborhood
         var phi = RGB(Float32(0), Float32(0), Float32(0))
         var M = Float32(0)
 
-        var cix = Int(floor(vx * inv_cell))
-        var ciy = Int(floor(vy * inv_cell))
-        var ciz = Int(floor(vz * inv_cell))
+        var cix = Int(floor(vp.pos.x * inv_cell))
+        var ciy = Int(floor(vp.pos.y * inv_cell))
+        var ciz = Int(floor(vp.pos.z * inv_cell))
         for ddx in range(-1, 2):
             for ddy in range(-1, 2):
                 for ddz in range(-1, 2):
@@ -675,8 +657,8 @@ def _gather_update(
                     var k = Int(heads[h])
                     while k != -1:
                         var ph = photons[k]
-                        var ex = ph.px - vx; var ey = ph.py - vy; var ez = ph.pz - vz
-                        var dist2 = ex*ex + ey*ey + ez*ez
+                        var e = ph.pos - vp.pos
+                        var dist2 = e.length_sq()
                         if dist2 <= r2 and ph.is_volume == vp.is_volume:
                             # Surface VP: Lambertian f=alb/π; Volume VP: isotropic phase f=alb/(4π)
                             var f: Float32
@@ -747,8 +729,8 @@ def _sppm_nee_update(
         var lnl = dot(ln, ln)
         if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
 
-        var vpos = SIMD[DType.float32, 3](vp.pos_x, vp.pos_y, vp.pos_z)
-        var vn   = SIMD[DType.float32, 3](vp.nx, vp.ny, vp.nz)
+        var vpos = vp.pos.to_simd()
+        var vn   = vp.normal.to_simd()
         var to_light = lp - vpos
         var dist2 = dot(to_light, to_light)
         var dist = sqrt(dist2)
@@ -762,9 +744,8 @@ def _sppm_nee_update(
             continue
 
         # Shadow ray, offset from both ends to avoid self-intersection.
-        var shadow_org = vpos + vn * Float32(0.0001)
-        var shadow_ray = Ray_C(Point3f(shadow_org[0], shadow_org[1], shadow_org[2]),
-                                Vec3f(wi[0], wi[1], wi[2]))
+        var shadow_org = vp.pos + vp.normal * Float32(0.0001)
+        var shadow_ray = Ray_C(shadow_org, vec3f(wi))
         var t_max = dist * Float32(0.999)
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):

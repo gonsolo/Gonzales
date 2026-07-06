@@ -16,7 +16,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, floor, log, exp, max
 from std.memory import alloc
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C,
+    RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C,
     DistantLight_C, PointLight_C, InfiniteLight_C, Medium_C, MediumInterface_C,
     Grid_C, LightSampler_C, Instance_C, dot, cross, PI, INV_FOUR_PI,
@@ -129,13 +129,13 @@ def sppm_gen_vp_gpu(
     var sd = _mk_sd_medium(meshes, mediums, n_mediums, mediumInterfaces, n_medium_ifaces, spheres, n_spheres)
     var has_media = n_mediums > Int64(0)
 
-    var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+    var org = Point3f(c2w[12], c2w[13], c2w[14])
     var px = pix % Int(fw)
     var py = pix // Int(fw)
 
     var vp = SPPMPixel(
-        pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
-        nx=Float32(0), ny=Float32(1), nz=Float32(0),
+        pos=Point3f(Float32(0), Float32(0), Float32(0)),
+        normal=Vec3f(Float32(0), Float32(1), Float32(0)),
         beta=RGB(Float32(1), Float32(1), Float32(1)),
         alb=RGB(Float32(0), Float32(0), Float32(0)),
         tau=RGB(Float32(0), Float32(0), Float32(0)),
@@ -156,18 +156,20 @@ def sppm_gen_vp_gpu(
         cx /= cw; cy /= cw; cz /= cw
     var cl = sqrt(cx*cx + cy*cy + cz*cz)
     if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-    var rdx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var rdy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var rdz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
-    var dl = sqrt(rdx*rdx + rdy*rdy + rdz*rdz)
-    if dl > Float32(0.0): rdx /= dl; rdy /= dl; rdz /= dl
-    var rox = ox; var roy = oy; var roz = oz
+    var rd = Vec3f(
+        c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
+        c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
+        c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+    )
+    var dl = rd.length()
+    if dl > Float32(0.0): rd = rd / dl
+    var ro = org
 
     var cur_med_idx = Int32(-1)
     var inter_ptr = inter_scratch + combined
 
     for bounce in range(_MAX_B):
-        var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
+        var ray = Ray_C(ro, rd)
         inter_ptr[0].hit = Int8(0)
         traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1.0e38), inter_ptr,
                            blasNodesArr, blasPrimIdsArr, instances)
@@ -175,7 +177,7 @@ def sppm_gen_vp_gpu(
             break
 
         var inter = inter_ptr[0]
-        var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+        var ray_dir = rd.to_simd()
         var t_hit = inter.tHit
 
         if has_media and Int(cur_med_idx) >= 0:
@@ -186,10 +188,8 @@ def sppm_gen_vp_gpu(
                 var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                 if t_free < t_hit:
                     var alb_s = med.sigma_s.r / sig_t
-                    vp.pos_x = rox + rdx * t_free
-                    vp.pos_y = roy + rdy * t_free
-                    vp.pos_z = roz + rdz * t_free
-                    vp.nx = Float32(0); vp.ny = Float32(1); vp.nz = Float32(0)
+                    vp.pos = ro + rd * t_free
+                    vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                     vp.alb = RGB(alb_s, alb_s, alb_s)
                     vp.is_volume = Int32(1)
                     vp.valid = Int32(1)
@@ -199,16 +199,14 @@ def sppm_gen_vp_gpu(
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = materials[mat_idx]
-        var hx = rox + rdx * t_hit
-        var hy = roy + rdy * t_hit
-        var hz = roz + rdz * t_hit
+        var hit = ro + rd * t_hit
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, meshes, instances)
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
-            vp.pos_x = hx; vp.pos_y = hy; vp.pos_z = hz
-            vp.nx = gn[0]; vp.ny = gn[1]; vp.nz = gn[2]
+            vp.pos = hit
+            vp.normal = vec3f(gn)
             vp.alb = mat.albedo
             vp.is_volume = Int32(0)
             vp.valid = Int32(1)
@@ -217,10 +215,9 @@ def sppm_gen_vp_gpu(
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, meshes, instances)
-            var hit = SIMD[DType.float32, 3](hx, hy, hz)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
-            rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-            rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+            rd = vec3f(new_dir)
+            ro = point3f(new_org)
             if has_media:
                 var new_idx = _sppm_update_medium(ray_dir, inter, meshes, mat, sd)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
@@ -231,9 +228,7 @@ def sppm_gen_vp_gpu(
                 var new_idx = _sppm_update_medium(ray_dir, inter, meshes, mat, sd)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
-            rox = hx + rdx * Float32(0.0002)
-            roy = hy + rdy * Float32(0.0002)
-            roz = hz + rdz * Float32(0.0002)
+            ro = hit + rd * Float32(0.0002)
 
         else:
             break
@@ -318,15 +313,13 @@ def sppm_emit_photons_gpu(
     var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
     var flux = al.emission * scale
 
-    var rox = lp[0] + ln[0] * Float32(0.0001)
-    var roy = lp[1] + ln[1] * Float32(0.0001)
-    var roz = lp[2] + ln[2] * Float32(0.0001)
-    var rdx = pdir[0]; var rdy = pdir[1]; var rdz = pdir[2]
+    var ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
+    var rd = vec3f(pdir)
     var cur_med_idx = default_emit_med
     var inter_ptr = inter_scratch + k
 
     for bounce in range(_MAX_B):
-        var ray = Ray_C(Point3f(rox, roy, roz), Vec3f(rdx, rdy, rdz))
+        var ray = Ray_C(ro, rd)
         inter_ptr[0].hit = Int8(0)
         traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1.0e38), inter_ptr,
                            blasNodesArr, blasPrimIdsArr, instances)
@@ -334,7 +327,7 @@ def sppm_emit_photons_gpu(
             break
 
         var inter = inter_ptr[0]
-        var ray_dir = SIMD[DType.float32, 3](rdx, rdy, rdz)
+        var ray_dir = rd.to_simd()
         var t_hit = inter.tHit
 
         if has_media and Int(cur_med_idx) >= 0:
@@ -344,9 +337,7 @@ def sppm_emit_photons_gpu(
             if sig_t > Float32(0):
                 var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                 if t_free < t_hit:
-                    var sx = rox + rdx * t_free
-                    var sy = roy + rdy * t_free
-                    var sz = roz + rdz * t_free
+                    var sp = ro + rd * t_free
                     # bounce > 0: skip storing at the light's own first
                     # segment — covered by sppm_nee_gpu instead (matches
                     # pbrt's own SPPM depth>0 gather skip).
@@ -354,7 +345,7 @@ def sppm_emit_photons_gpu(
                         var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
                         if slot < max_photons:
                             photons[slot] = SPPMPhoton(
-                                px=sx, py=sy, pz=sz,
+                                pos=sp,
                                 flux=flux,
                                 nxt=Int32(-1), is_volume=Int32(1),
                             )
@@ -365,19 +356,15 @@ def sppm_emit_photons_gpu(
                     var cosT = Float32(2.0) * usp1 - Float32(1.0)
                     var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
                     var phiS = Float32(2.0) * PI * usp2
-                    rdx = sinT * cos(phiS); rdy = sinT * sin(phiS); rdz = cosT
-                    rox = sx + rdx * Float32(0.0001)
-                    roy = sy + rdy * Float32(0.0001)
-                    roz = sz + rdz * Float32(0.0001)
+                    rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
+                    ro = sp + rd * Float32(0.0001)
                     continue
                 else:
                     flux *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = materials[mat_idx]
-        var hx = rox + rdx * t_hit
-        var hy = roy + rdy * t_hit
-        var hz = roz + rdz * t_hit
+        var hit = ro + rd * t_hit
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             # bounce > 0: skip storing a photon hit directly by the light
@@ -388,7 +375,7 @@ def sppm_emit_photons_gpu(
                 var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
                 if slot < max_photons:
                     photons[slot] = SPPMPhoton(
-                        px=hx, py=hy, pz=hz,
+                        pos=hit,
                         flux=flux,
                         nxt=Int32(-1), is_volume=Int32(0),
                     )
@@ -403,19 +390,16 @@ def sppm_emit_photons_gpu(
                 gn = gn * Float32(-1.0)
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
             flux *= mat.albedo / rr_prob
-            rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-            rox = hx + gn[0] * Float32(0.0001)
-            roy = hy + gn[1] * Float32(0.0001)
-            roz = hz + gn[2] * Float32(0.0001)
+            rd = vec3f(new_dir)
+            ro = hit + vec3f(gn) * Float32(0.0001)
             continue
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, meshes, instances)
-            var hit = SIMD[DType.float32, 3](hx, hy, hz)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit, gn, ior, bounce, pcg)
-            rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
-            rox = new_org[0]; roy = new_org[1]; roz = new_org[2]
+            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+            rd = vec3f(new_dir)
+            ro = point3f(new_org)
             if has_media:
                 var new_idx = _sppm_update_medium(ray_dir, inter, meshes, mat, sd)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
@@ -426,9 +410,7 @@ def sppm_emit_photons_gpu(
                 var new_idx = _sppm_update_medium(ray_dir, inter, meshes, mat, sd)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
-            rox = hx + rdx * Float32(0.0002)
-            roy = hy + rdy * Float32(0.0002)
-            roz = hz + rdz * Float32(0.0002)
+            ro = hit + rd * Float32(0.0002)
 
         else:
             break
@@ -450,9 +432,9 @@ def sppm_grid_insert_gpu(
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_stored:
         return
-    var ix = Int(floor(photons[k].px * inv_cell))
-    var iy = Int(floor(photons[k].py * inv_cell))
-    var iz = Int(floor(photons[k].pz * inv_cell))
+    var ix = Int(floor(photons[k].pos.x * inv_cell))
+    var iy = Int(floor(photons[k].pos.y * inv_cell))
+    var iz = Int(floor(photons[k].pos.z * inv_cell))
     var h = _hash_cell(ix, iy, iz)
     var old = Atomic._xchg(heads + h, Int32(k))
     photons[k].nxt = old
@@ -471,15 +453,14 @@ def sppm_gather_gpu(
     if vps[i].valid == Int32(0):
         return
     var vp = vps[i]
-    var vx = vp.pos_x; var vy = vp.pos_y; var vz = vp.pos_z
     var r2 = vp.r2
 
     var phi = RGB(Float32(0), Float32(0), Float32(0))
     var M = Float32(0)
 
-    var cix = Int(floor(vx * inv_cell))
-    var ciy = Int(floor(vy * inv_cell))
-    var ciz = Int(floor(vz * inv_cell))
+    var cix = Int(floor(vp.pos.x * inv_cell))
+    var ciy = Int(floor(vp.pos.y * inv_cell))
+    var ciz = Int(floor(vp.pos.z * inv_cell))
     for ddx in range(-1, 2):
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
@@ -487,8 +468,8 @@ def sppm_gather_gpu(
                 var k = Int(heads[h])
                 while k != -1:
                     var ph = photons[k]
-                    var ex = ph.px - vx; var ey = ph.py - vy; var ez = ph.pz - vz
-                    var dist2 = ex*ex + ey*ey + ez*ez
+                    var e = ph.pos - vp.pos
+                    var dist2 = e.length_sq()
                     if dist2 <= r2 and ph.is_volume == vp.is_volume:
                         var f: Float32
                         if vp.is_volume == Int32(1):
@@ -553,8 +534,8 @@ def sppm_nee_gpu(
     var lnl = dot(ln, ln)
     if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
 
-    var vpos = SIMD[DType.float32, 3](vp.pos_x, vp.pos_y, vp.pos_z)
-    var vn   = SIMD[DType.float32, 3](vp.nx, vp.ny, vp.nz)
+    var vpos = vp.pos.to_simd()
+    var vn   = vp.normal.to_simd()
     var to_light = lp - vpos
     var dist2 = dot(to_light, to_light)
     var dist = sqrt(dist2)
@@ -567,9 +548,8 @@ def sppm_nee_gpu(
     if cos_surface <= Float32(0.0) or cos_light <= Float32(0.0):
         return
 
-    var shadow_org = vpos + vn * Float32(0.0001)
-    var shadow_ray = Ray_C(Point3f(shadow_org[0], shadow_org[1], shadow_org[2]),
-                            Vec3f(wi[0], wi[1], wi[2]))
+    var shadow_org = vp.pos + vp.normal * Float32(0.0001)
+    var shadow_ray = Ray_C(shadow_org, vec3f(wi))
     var t_max = dist * Float32(0.999)
     if any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, t_max,
                           blasNodesArr, blasPrimIdsArr, instances):

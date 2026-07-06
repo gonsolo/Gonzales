@@ -4,7 +4,7 @@ from std.math import sqrt, tan
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, render_aux_buffers, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, TileResult_C, PathState_C, Ray_C, dot
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot
 from .postprocess import denoise, write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
@@ -602,9 +602,7 @@ def parse_and_render(
             comptime N_GUIDE_THREADS: Int = 16
             var write_guides = alloc[GuideGrid](N_GUIDE_THREADS)
             for gi in range(N_GUIDE_THREADS):
-                write_guides[gi] = guide_create(
-                    root.min.x, root.min.y, root.min.z,
-                    root.max.x, root.max.y, root.max.z)
+                write_guides[gi] = guide_create(Bounds3f(root.min, root.max))
             var spp = psc[0].samples_per_pixel
             var pilot_spp = max(Int32(1), spp // Int32(2))
             var main_spp  = spp - pilot_spp

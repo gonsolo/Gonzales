@@ -15,8 +15,8 @@ struct BVH2Node(TrivialRegisterPassable):
 @always_inline
 def intersect_aabb(
     bmin: Point3f, bmax: Point3f,
-    rdirX: Float32, rdirY: Float32, rdirZ: Float32,
-    orgRdirX: Float32, orgRdirY: Float32, orgRdirZ: Float32,
+    rdir: Vec3f,
+    orgRdir: Vec3f,
     nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
     tMax: Float32
 ) -> Tuple[Bool, Float32]:
@@ -27,13 +27,13 @@ def intersect_aabb(
     var nearZ = bmin.z if nearZIsMin else bmax.z
     var farZ  = bmax.z if nearZIsMin else bmin.z
 
-    var tNearX = nearX * rdirX - orgRdirX
-    var tNearY = nearY * rdirY - orgRdirY
-    var tNearZ = nearZ * rdirZ - orgRdirZ
+    var tNearX = nearX * rdir.x - orgRdir.x
+    var tNearY = nearY * rdir.y - orgRdir.y
+    var tNearZ = nearZ * rdir.z - orgRdir.z
 
-    var tFarX = farX * rdirX - orgRdirX
-    var tFarY = farY * rdirY - orgRdirY
-    var tFarZ = farZ * rdirZ - orgRdirZ
+    var tFarX = farX * rdir.x - orgRdir.x
+    var tFarY = farY * rdir.y - orgRdir.y
+    var tFarZ = farZ * rdir.z - orgRdir.z
 
     # tNear = max(tNearX, tNearY, tNearZ, 0)
     var tNear = tNearX if tNearX > tNearY else tNearY
@@ -160,15 +160,11 @@ def _traverse_blas_triangles(
     type==0 entry as-is (mesh_idx/base_vidx/materialIndex already correct
     against the shared global `meshes` array); the caller overwrites its
     `instanceIdx` field before use."""
-    var rdirX = Float32(1.0) / ray_dir[0]
-    var rdirY = Float32(1.0) / ray_dir[1]
-    var rdirZ = Float32(1.0) / ray_dir[2]
-    var orgRdirX = ray_org[0] * rdirX
-    var orgRdirY = ray_org[1] * rdirY
-    var orgRdirZ = ray_org[2] * rdirZ
-    var nearXIsMin = rdirX >= Float32(0.0)
-    var nearYIsMin = rdirY >= Float32(0.0)
-    var nearZIsMin = rdirZ >= Float32(0.0)
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var orgRdir = Vec3f(ray_org[0] * rdir.x, ray_org[1] * rdir.y, ray_org[2] * rdir.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
 
     var hasHit = False
     var hitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -217,12 +213,12 @@ def _traverse_blas_triangles(
             var rightNode = blasNodes[rightIdx]
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var leftIsHit = leftHit[0]
@@ -326,17 +322,11 @@ def traverse_bvh2_core(
     # omit blasNodesArr/blasPrimIdsArr/instances entirely — the dangling
     # defaults above are never dereferenced since no such leaf will exist.
 
-    var rdirX = Float32(1.0) / ray.direction.x
-    var rdirY = Float32(1.0) / ray.direction.y
-    var rdirZ = Float32(1.0) / ray.direction.z
-
-    var orgRdirX = ray.origin.x * rdirX
-    var orgRdirY = ray.origin.y * rdirY
-    var orgRdirZ = ray.origin.z * rdirZ
-
-    var nearXIsMin = rdirX >= Float32(0.0)
-    var nearYIsMin = rdirY >= Float32(0.0)
-    var nearZIsMin = rdirZ >= Float32(0.0)
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var orgRdir = Vec3f(ray.origin.x * rdir.x, ray.origin.y * rdir.y, ray.origin.z * rdir.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
 
     var hitIndex: Int = -1
     var localTHit = tMax
@@ -439,12 +429,12 @@ def traverse_bvh2_core(
 
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
 
@@ -511,17 +501,11 @@ def traverse_bvh2_core_defer_curves(
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ):
 
-    var rdirX = Float32(1.0) / ray.direction.x
-    var rdirY = Float32(1.0) / ray.direction.y
-    var rdirZ = Float32(1.0) / ray.direction.z
-
-    var orgRdirX = ray.origin.x * rdirX
-    var orgRdirY = ray.origin.y * rdirY
-    var orgRdirZ = ray.origin.z * rdirZ
-
-    var nearXIsMin = rdirX >= Float32(0.0)
-    var nearYIsMin = rdirY >= Float32(0.0)
-    var nearZIsMin = rdirZ >= Float32(0.0)
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var orgRdir = Vec3f(ray.origin.x * rdir.x, ray.origin.y * rdir.y, ray.origin.z * rdir.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
 
     var hitIndex: Int = -1
     var localTHit = tMax
@@ -629,12 +613,12 @@ def traverse_bvh2_core_defer_curves(
 
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
 
@@ -685,15 +669,11 @@ def any_hit_bvh2_core(
     blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ) -> Bool:
-    var rdirX = Float32(1.0) / ray.direction.x
-    var rdirY = Float32(1.0) / ray.direction.y
-    var rdirZ = Float32(1.0) / ray.direction.z
-    var orgRdirX = ray.origin.x * rdirX
-    var orgRdirY = ray.origin.y * rdirY
-    var orgRdirZ = ray.origin.z * rdirZ
-    var nearXIsMin = rdirX >= Float32(0.0)
-    var nearYIsMin = rdirY >= Float32(0.0)
-    var nearZIsMin = rdirZ >= Float32(0.0)
+    var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
+    var orgRdir = Vec3f(ray.origin.x * rdir.x, ray.origin.y * rdir.y, ray.origin.z * rdir.z)
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
     var stack = InlineArray[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
@@ -748,11 +728,11 @@ def any_hit_bvh2_core(
             var rightNode = bvh2Nodes[rightIdx]
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, tMax)
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdirX, rdirY, rdirZ, orgRdirX, orgRdirY, orgRdirZ,
+                rdir, orgRdir,
                 nearXIsMin, nearYIsMin, nearZIsMin, tMax)
             var leftIsHit = leftHit[0]
             var rightIsHit = rightHit[0]

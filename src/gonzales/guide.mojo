@@ -6,6 +6,7 @@
 
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min
+from .geometry import Point3f, Bounds3f
 
 comptime GUIDE_DIMS: Int = 16
 comptime GUIDE_BINS: Int = 64    # 8 × 8 equal-area octahedral bins
@@ -17,31 +18,23 @@ comptime FOUR_PI_F: Float32 = 12.566370614359172953950
 
 @fieldwise_init
 struct GuideGrid(TrivialRegisterPassable):
-    var energy:    UnsafePointer[Float32, MutAnyOrigin]  # [GUIDE_CELLS × GUIDE_BINS]
-    var aabb_min_x: Float32
-    var aabb_min_y: Float32
-    var aabb_min_z: Float32
-    var aabb_max_x: Float32
-    var aabb_max_y: Float32
-    var aabb_max_z: Float32
+    var energy: UnsafePointer[Float32, MutAnyOrigin]  # [GUIDE_CELLS × GUIDE_BINS]
+    var bounds: Bounds3f
 
 def null_guide() -> GuideGrid:
     """Sentinel GuideGrid. unsafe_dangling() for Float32 returns align_of=4.
     Guard: Int(energy) > 4 → active guide; ≤ 4 → disabled."""
     return GuideGrid(
         UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        Float32(0), Float32(0), Float32(0), Float32(1), Float32(1), Float32(1),
+        Bounds3f(Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(1), Float32(1), Float32(1))),
     )
 
-def guide_create(
-    aabb_min_x: Float32, aabb_min_y: Float32, aabb_min_z: Float32,
-    aabb_max_x: Float32, aabb_max_y: Float32, aabb_max_z: Float32,
-) -> GuideGrid:
+def guide_create(bounds: Bounds3f) -> GuideGrid:
     var n = GUIDE_CELLS * GUIDE_BINS
     var e = alloc[Float32](n)
     for i in range(n):
         e[i] = Float32(0)
-    return GuideGrid(e, aabb_min_x, aabb_min_y, aabb_min_z, aabb_max_x, aabb_max_y, aabb_max_z)
+    return GuideGrid(e, bounds)
 
 def guide_free(g: GuideGrid):
     if Int(g.energy) > 4:
@@ -56,16 +49,13 @@ def guide_merge(dst: GuideGrid, src: GuideGrid):
 # ── Spatial cell lookup ────────────────────────────────────────────────────────
 
 @always_inline
-def guide_pos_to_cell(g: GuideGrid, x: Float32, y: Float32, z: Float32) -> Int:
+def guide_pos_to_cell(g: GuideGrid, p: Point3f) -> Int:
     """Map a world-space position to a cell index. Returns -1 if outside AABB."""
-    var ext_x = g.aabb_max_x - g.aabb_min_x
-    var ext_y = g.aabb_max_y - g.aabb_min_y
-    var ext_z = g.aabb_max_z - g.aabb_min_z
-    if ext_x <= Float32(0) or ext_y <= Float32(0) or ext_z <= Float32(0):
+    var ext = g.bounds.max - g.bounds.min
+    if ext.x <= Float32(0) or ext.y <= Float32(0) or ext.z <= Float32(0):
         return -1
-    var fx = (x - g.aabb_min_x) / ext_x
-    var fy = (y - g.aabb_min_y) / ext_y
-    var fz = (z - g.aabb_min_z) / ext_z
+    var f = (p - g.bounds.min)
+    var fx = f.x / ext.x; var fy = f.y / ext.y; var fz = f.z / ext.z
     if fx < Float32(0) or fx >= Float32(1) or fy < Float32(0) or fy >= Float32(1) or fz < Float32(0) or fz >= Float32(1):
         return -1
     var cx = min(Int(fx * Float32(GUIDE_DIMS)), GUIDE_DIMS - 1)

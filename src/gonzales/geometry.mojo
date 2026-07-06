@@ -107,6 +107,13 @@ def point3f(s: SIMD[DType.float32, 3]) -> Point3f:
     return Point3f(s[0], s[1], s[2])
 
 # <</listing>>
+
+@fieldwise_init
+struct Bounds3f(TrivialRegisterPassable):
+    """An axis-aligned bounding box (world space)."""
+    var min: Point3f
+    var max: Point3f
+
 # ── Color / Spectrum ───────────────────────────────────────────────────────────
 # SampledSpectrum is currently an RGB triple. This alias makes the shader code
 # forward-compatible with a future spectral representation.
