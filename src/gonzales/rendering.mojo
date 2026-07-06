@@ -2,7 +2,7 @@ from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
@@ -478,8 +478,29 @@ def render_aux_buffers(
                 # Sphere: normal = normalize(hit_point - center)
                 var si  = Int(isects[i].primId.id1)
                 normal = sphere_outward_normal(org + dir*d, sd.spheres[si].center)
-            else:
-                # Triangle (types 0, 1, 2, 3): geometric normal from edge cross product
+            elif typ == 5:
+                # Native curve: reconstruct the geometric normal the same way
+                # shade_hair does (shading.mojo) — h/v come straight from
+                # intersect_curve via Intersection_C.u/.v, no tessellated mesh.
+                var curve = sd.curves[Int(isects[i].primId.id1)]
+                var h = max(Float32(-0.99), min(Float32(0.99), isects[i].u))
+                var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[i].v * Float32(curve.n_pieces))))
+                var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+                var seg_axis = q1 - q0
+                var seg_len = sqrt(dot(seg_axis, seg_axis))
+                var tangent: SIMD[DType.float32, 3]
+                if seg_len > Float32(1e-8):
+                    tangent = seg_axis * (Float32(1.0) / seg_len)
+                else:
+                    tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
+                var n_perp = _curve_perp_axis(tangent)
+                var b_perp0 = cross(tangent, n_perp)
+                var geo = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+                var gl = sqrt(dot(geo, geo))
+                if gl > Float32(0):
+                    normal = Vec3f(geo[0] / gl, geo[1] / gl, geo[2] / gl)
+            elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
+                # Triangle: geometric normal from edge cross product
                 var mesh_idx: Int
                 var base_vidx: Int
                 if typ == 0:
@@ -499,6 +520,11 @@ def render_aux_buffers(
                 normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
                 var nl = normal.length()
                 if nl > Float32(0): normal = normal / nl
+            # else: unrecognized hit type (shouldn't occur for a real
+            # Intersection_C — type==6 only ever exists as a transient BVH
+            # leaf marker, resolved into type 0-3 with instanceIdx set before
+            # traversal returns) — leave `normal` at its background default
+            # rather than guessing.
             # Flip to face incoming ray
             if normal.dot(-dir) < Float32(0):
                 normal = -normal
