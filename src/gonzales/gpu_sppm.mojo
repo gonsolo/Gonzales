@@ -136,12 +136,12 @@ def sppm_gen_vp_gpu(
     var vp = SPPMPixel(
         pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
         nx=Float32(0), ny=Float32(1), nz=Float32(0),
-        beta_r=Float32(1), beta_g=Float32(1), beta_b=Float32(1),
-        alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
-        tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
+        beta=RGB(Float32(1), Float32(1), Float32(1)),
+        alb=RGB(Float32(0), Float32(0), Float32(0)),
+        tau=RGB(Float32(0), Float32(0), Float32(0)),
         N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
         is_volume=Int32(0),
-        ld_r=Float32(0), ld_g=Float32(0), ld_b=Float32(0),
+        ld=RGB(Float32(0), Float32(0), Float32(0)),
     )
 
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
@@ -180,7 +180,8 @@ def sppm_gen_vp_gpu(
 
         if has_media and Int(cur_med_idx) >= 0:
             var med = mediums[Int(cur_med_idx)]
-            var sig_t = med.sigma_a.r + med.sigma_s.r
+            var sigma_t = med.sigma_a + med.sigma_s
+            var sig_t = sigma_t.r
             if sig_t > Float32(0):
                 var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                 if t_free < t_hit:
@@ -189,14 +190,12 @@ def sppm_gen_vp_gpu(
                     vp.pos_y = roy + rdy * t_free
                     vp.pos_z = roz + rdz * t_free
                     vp.nx = Float32(0); vp.ny = Float32(1); vp.nz = Float32(0)
-                    vp.alb_r = alb_s; vp.alb_g = alb_s; vp.alb_b = alb_s
+                    vp.alb = RGB(alb_s, alb_s, alb_s)
                     vp.is_volume = Int32(1)
                     vp.valid = Int32(1)
                     break
                 else:
-                    vp.beta_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
-                    vp.beta_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
-                    vp.beta_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+                    vp.beta *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = materials[mat_idx]
@@ -210,7 +209,7 @@ def sppm_gen_vp_gpu(
                 gn = gn * Float32(-1.0)
             vp.pos_x = hx; vp.pos_y = hy; vp.pos_z = hz
             vp.nx = gn[0]; vp.ny = gn[1]; vp.nz = gn[2]
-            vp.alb_r = mat.albedo.r; vp.alb_g = mat.albedo.g; vp.alb_b = mat.albedo.b
+            vp.alb = mat.albedo
             vp.is_volume = Int32(0)
             vp.valid = Int32(1)
             break
@@ -317,9 +316,7 @@ def sppm_emit_photons_gpu(
     if pdl > Float32(0.0): pdir = pdir * (Float32(1.0) / sqrt(pdl))
 
     var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
-    var flux_r = al.emission.r * scale
-    var flux_g = al.emission.g * scale
-    var flux_b = al.emission.b * scale
+    var flux = al.emission * scale
 
     var rox = lp[0] + ln[0] * Float32(0.0001)
     var roy = lp[1] + ln[1] * Float32(0.0001)
@@ -342,7 +339,8 @@ def sppm_emit_photons_gpu(
 
         if has_media and Int(cur_med_idx) >= 0:
             var med = mediums[Int(cur_med_idx)]
-            var sig_t = med.sigma_s.r + med.sigma_a.r
+            var sigma_t = med.sigma_a + med.sigma_s
+            var sig_t = sigma_t.r
             if sig_t > Float32(0):
                 var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                 if t_free < t_hit:
@@ -357,11 +355,11 @@ def sppm_emit_photons_gpu(
                         if slot < max_photons:
                             photons[slot] = SPPMPhoton(
                                 px=sx, py=sy, pz=sz,
-                                fr=flux_r, fg=flux_g, fb=flux_b,
+                                flux=flux,
                                 nxt=Int32(-1), is_volume=Int32(1),
                             )
                     var alb_s = med.sigma_s.r / sig_t
-                    flux_r *= alb_s; flux_g *= alb_s; flux_b *= alb_s
+                    flux *= alb_s
                     var usp1 = pcg.next_float()
                     var usp2 = pcg.next_float()
                     var cosT = Float32(2.0) * usp1 - Float32(1.0)
@@ -373,9 +371,7 @@ def sppm_emit_photons_gpu(
                     roz = sz + rdz * Float32(0.0001)
                     continue
                 else:
-                    flux_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
-                    flux_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
-                    flux_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+                    flux *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = materials[mat_idx]
@@ -393,7 +389,7 @@ def sppm_emit_photons_gpu(
                 if slot < max_photons:
                     photons[slot] = SPPMPhoton(
                         px=hx, py=hy, pz=hz,
-                        fr=flux_r, fg=flux_g, fb=flux_b,
+                        flux=flux,
                         nxt=Int32(-1), is_volume=Int32(0),
                     )
             # Russian-roulette continuation for indirect diffuse-diffuse
@@ -406,9 +402,7 @@ def sppm_emit_photons_gpu(
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
-            flux_r *= mat.albedo.r / rr_prob
-            flux_g *= mat.albedo.g / rr_prob
-            flux_b *= mat.albedo.b / rr_prob
+            flux *= mat.albedo / rr_prob
             rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
             rox = hx + gn[0] * Float32(0.0001)
             roy = hy + gn[1] * Float32(0.0001)
@@ -480,7 +474,7 @@ def sppm_gather_gpu(
     var vx = vp.pos_x; var vy = vp.pos_y; var vz = vp.pos_z
     var r2 = vp.r2
 
-    var phi_r = Float32(0); var phi_g = Float32(0); var phi_b = Float32(0)
+    var phi = RGB(Float32(0), Float32(0), Float32(0))
     var M = Float32(0)
 
     var cix = Int(floor(vx * inv_cell))
@@ -501,19 +495,15 @@ def sppm_gather_gpu(
                             f = INV_FOUR_PI
                         else:
                             f = Float32(1.0) / PI
-                        phi_r += vp.alb_r * f * ph.fr
-                        phi_g += vp.alb_g * f * ph.fg
-                        phi_b += vp.alb_b * f * ph.fb
+                        phi += (vp.alb * f) * ph.flux
                         M += Float32(1.0)
                     k = Int(ph.nxt)
 
     if M > Float32(0.0):
         var N = vp.N_acc
         var ratio = (N + _ALPHA * M) / (N + M)
-        vps[i].r2    = r2 * ratio
-        vps[i].tau_r = (vp.tau_r + phi_r) * ratio
-        vps[i].tau_g = (vp.tau_g + phi_g) * ratio
-        vps[i].tau_b = (vp.tau_b + phi_b) * ratio
+        vps[i].r2  = r2 * ratio
+        vps[i].tau = (vp.tau + phi) * ratio
         vps[i].N_acc = N + _ALPHA * M
 
 
@@ -587,12 +577,8 @@ def sppm_nee_gpu(
 
     var inv_pdf_area = Float32(n_lights) * al.total_area
     var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-    var brdf_r = vp.alb_r / PI
-    var brdf_g = vp.alb_g / PI
-    var brdf_b = vp.alb_b / PI
-    vps[i].ld_r += brdf_r * al.emission.r * geom
-    vps[i].ld_g += brdf_g * al.emission.g * geom
-    vps[i].ld_b += brdf_b * al.emission.b * geom
+    var brdf = vp.alb / PI
+    vps[i].ld += (brdf * al.emission) * geom
 
 
 def sppm_finalize_gpu(
@@ -610,40 +596,33 @@ def sppm_finalize_gpu(
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    var r = Float32(0); var g = Float32(0); var b = Float32(0)
+    var acc = RGB(Float32(0), Float32(0), Float32(0))
     for vs in range(vp_samples):
         var vp = vps[i * vp_samples + vs]
         if vp.valid == Int32(0):
             continue
-        var vp_r = Float32(0); var vp_g = Float32(0); var vp_b = Float32(0)
+        var vp_l = RGB(Float32(0), Float32(0), Float32(0))
         if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
             var denom = PI * vp.r2 * Float32(n_passes)
-            vp_r += vp.tau_r / denom
-            vp_g += vp.tau_g / denom
-            vp_b += vp.tau_b / denom
+            vp_l += vp.tau / denom
         if vp.is_volume == Int32(0):
-            vp_r += vp.ld_r / Float32(n_passes)
-            vp_g += vp.ld_g / Float32(n_passes)
-            vp_b += vp.ld_b / Float32(n_passes)
-        r += vp.beta_r * vp_r
-        g += vp.beta_g * vp_g
-        b += vp.beta_b * vp_b
-    r /= Float32(vp_samples); g /= Float32(vp_samples); b /= Float32(vp_samples)
+            vp_l += vp.ld / Float32(n_passes)
+        acc += vp.beta * vp_l
+    acc = acc / Float32(vp_samples)
 
-    r *= iso_scale; g *= iso_scale; b *= iso_scale
+    acc *= iso_scale
 
-    if r != r or r < Float32(0): r = Float32(0)
-    if g != g or g < Float32(0): g = Float32(0)
-    if b != b or b < Float32(0): b = Float32(0)
+    if acc.r != acc.r or acc.r < Float32(0): acc.r = Float32(0)
+    if acc.g != acc.g or acc.g < Float32(0): acc.g = Float32(0)
+    if acc.b != acc.b or acc.b < Float32(0): acc.b = Float32(0)
     if max_comp > Float32(0):
-        var mx = max(r, max(g, b))
+        var mx = max(acc.r, max(acc.g, acc.b))
         if mx > max_comp:
-            var s = max_comp / mx
-            r *= s; g *= s; b *= s
+            acc *= max_comp / mx
 
-    out_pixels[i * 3 + 0] = r
-    out_pixels[i * 3 + 1] = g
-    out_pixels[i * 3 + 2] = b
+    out_pixels[i * 3 + 0] = acc.r
+    out_pixels[i * 3 + 1] = acc.g
+    out_pixels[i * 3 + 2] = acc.b
 
 
 # ── Host orchestration ───────────────────────────────────────────────────────

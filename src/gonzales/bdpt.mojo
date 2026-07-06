@@ -30,8 +30,8 @@ struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
     var px: Float32; var py: Float32; var pz: Float32   # world position
     var nx: Float32; var ny: Float32; var nz: Float32   # geometric normal (0 for volume)
-    var beta_r: Float32; var beta_g: Float32; var beta_b: Float32  # throughput to here
-    var alb_r:  Float32; var alb_g:  Float32; var alb_b: Float32   # BSDF albedo (F0 for conductor)
+    var beta: RGB  # throughput to here
+    var alb:  RGB  # BSDF albedo (F0 for conductor)
     var pdf_fwd: Float32  # area PDF forward (from previous vertex)
     var pdf_bwd: Float32  # unused by the equal-weight MIS scheme — repurposed to hold
                            # the isotropic GGX alpha for mat_kind=1 (conductor) vertices
@@ -50,8 +50,8 @@ def _null_vertex() -> BDPTVertex:
     return BDPTVertex(
         px=Float32(0), py=Float32(0), pz=Float32(0),
         nx=Float32(0), ny=Float32(1), nz=Float32(0),
-        beta_r=Float32(0), beta_g=Float32(0), beta_b=Float32(0),
-        alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
+        beta=RGB(Float32(0), Float32(0), Float32(0)),
+        alb=RGB(Float32(0), Float32(0), Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0),
@@ -126,7 +126,7 @@ def _visible_transmittance(
     var inv = Float32(1) / dist_total
     var dir = SIMD[DType.float32, 3](dx*inv, dy*inv, dz*inv)
 
-    var Tr_r = Float32(1); var Tr_g = Float32(1); var Tr_b = Float32(1)
+    var Tr = RGB(Float32(1), Float32(1), Float32(1))
     var ox = ax + dir[0]*Float32(0.0002)
     var oy = ay + dir[1]*Float32(0.0002)
     var oz = az + dir[2]*Float32(0.0002)
@@ -157,9 +157,8 @@ def _visible_transmittance(
             # Nothing between here and destination: apply remaining Beer-Lambert
             if Int(cur_med) >= 0:
                 var med = sd.mediums[Int(cur_med)]
-                Tr_r *= exp(-(med.sigma_s.r+med.sigma_a.r)*remaining)
-                Tr_g *= exp(-(med.sigma_s.g+med.sigma_a.g)*remaining)
-                Tr_b *= exp(-(med.sigma_s.b+med.sigma_a.b)*remaining)
+                var sigma_t = med.sigma_a + med.sigma_s
+                Tr *= RGB(exp(-sigma_t.r*remaining), exp(-sigma_t.g*remaining), exp(-sigma_t.b*remaining))
             break
 
         var inter = inter_mem[0]
@@ -171,9 +170,8 @@ def _visible_transmittance(
         # Beer-Lambert through medium segment up to hit
         if Int(cur_med) >= 0:
             var med = sd.mediums[Int(cur_med)]
-            Tr_r *= exp(-(med.sigma_s.r+med.sigma_a.r)*t_hit)
-            Tr_g *= exp(-(med.sigma_s.g+med.sigma_a.g)*t_hit)
-            Tr_b *= exp(-(med.sigma_s.b+med.sigma_a.b)*t_hit)
+            var sigma_t = med.sigma_a + med.sigma_s
+            Tr *= RGB(exp(-sigma_t.r*t_hit), exp(-sigma_t.g*t_hit), exp(-sigma_t.b*t_hit))
 
         if mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # Pass through glass with Fresnel transmittance
@@ -194,8 +192,8 @@ def _visible_transmittance(
             var ior = mat.albedo.r
             var fr = fr_dielectric(cos_i, Float32(1)/ior if facing else ior)
             var T = Float32(1) - fr
-            Tr_r *= T; Tr_g *= T; Tr_b *= T
-            if Tr_r < Float32(1e-7) and Tr_g < Float32(1e-7) and Tr_b < Float32(1e-7):
+            Tr *= T
+            if Tr.r < Float32(1e-7) and Tr.g < Float32(1e-7) and Tr.b < Float32(1e-7):
                 inter_mem.free()
                 return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
             # Update medium after crossing glass surface
@@ -222,7 +220,7 @@ def _visible_transmittance(
             return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
 
     inter_mem.free()
-    return SIMD[DType.float32, 3](Tr_r, Tr_g, Tr_b)
+    return SIMD[DType.float32, 3](Tr.r, Tr.g, Tr.b)
 
 # ── Cosine-area PDF conversion ────────────────────────────────────────────────
 
@@ -267,7 +265,7 @@ def _build_camera_path(
 
     var n_verts = 0
     var n_bounces = 0  # total surface hits including glass (for _dielectric_bounce entering logic)
-    var beta_r = Float32(1); var beta_g = Float32(1); var beta_b = Float32(1)
+    var beta = RGB(Float32(1), Float32(1), Float32(1))
     var cur_med_idx = start_med_idx
 
     for _ in range(_BDPT_MAX_DEPTH):
@@ -286,7 +284,8 @@ def _build_camera_path(
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var sig_t = med.sigma_s.r + med.sigma_a.r
+            var sigma_t = med.sigma_a + med.sigma_s
+            var sig_t = sigma_t.r
             if sig_t > Float32(0):
                 var u = pcg.next_float()
                 var t_free = -log(max(u, Float32(1e-7))) / sig_t
@@ -296,20 +295,21 @@ def _build_camera_path(
                     var sy = roy + rdy*t_free
                     var sz = roz + rdz*t_free
                     var alb_s = med.sigma_s.r / sig_t
-                    var alb_g_s = med.sigma_s.g / (med.sigma_a.g + med.sigma_s.g) if (med.sigma_a.g + med.sigma_s.g) > Float32(0) else alb_s
-                    var alb_b_s = med.sigma_s.b / (med.sigma_a.b + med.sigma_s.b) if (med.sigma_a.b + med.sigma_s.b) > Float32(0) else alb_s
+                    var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0) else alb_s
+                    var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0) else alb_s
+                    var alb_med = RGB(alb_s, alb_g_s, alb_b_s)
                     # BDPT vertex beta: Tr/pdf_free × phase/pdf_phase = 1/sig_t × sig_s = alb_s
                     # (exp(-sig_t×t) cancels between Tr numerator and pdf denominator)
                     var v = _null_vertex()
                     v.px = sx; v.py = sy; v.pz = sz
-                    v.beta_r = beta_r * alb_s; v.beta_g = beta_g * alb_g_s; v.beta_b = beta_b * alb_b_s
-                    v.alb_r = alb_s; v.alb_g = alb_g_s; v.alb_b = alb_b_s
+                    v.beta = beta * alb_med
+                    v.alb = alb_med
                     v.is_surface = Int32(0); v.is_delta = Int32(0)
                     v.pdf_fwd = sig_t * exp(-sig_t * t_free)
                     v.med_idx = cur_med_idx
                     verts[n_verts] = v; n_verts += 1
                     # Continuation beta = prev × alb_s (same as stored vertex beta)
-                    beta_r *= alb_s; beta_g *= alb_g_s; beta_b *= alb_b_s
+                    beta *= alb_med
                     var u1 = pcg.next_float(); var u2 = pcg.next_float()
                     var cosT = Float32(2)*u1 - Float32(1)
                     var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
@@ -321,9 +321,7 @@ def _build_camera_path(
                     continue
                 else:
                     # Beer-Lambert through full segment to surface
-                    beta_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
-                    beta_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
-                    beta_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+                    beta *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -338,8 +336,8 @@ def _build_camera_path(
             var v = _null_vertex()
             v.px = hx; v.py = hy; v.pz = hz
             v.nx = gn[0]; v.ny = gn[1]; v.nz = gn[2]
-            v.beta_r = beta_r; v.beta_g = beta_g; v.beta_b = beta_b
-            v.alb_r = mat.albedo.r; v.alb_g = mat.albedo.g; v.alb_b = mat.albedo.b
+            v.beta = beta
+            v.alb = mat.albedo
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.pdf_fwd = Float32(1)  # placeholder, set by MIS
             v.med_idx = cur_med_idx
@@ -362,7 +360,7 @@ def _build_camera_path(
             if nd > Float32(0): rdx /= nd; rdy /= nd; rdz /= nd
             rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
-            beta_r *= mat.albedo.r; beta_g *= mat.albedo.g; beta_b *= mat.albedo.b
+            beta *= mat.albedo
 
         elif mat.type == MatKind.conductor:
             var gn_c: SIMD[DType.float32, 3]
@@ -392,15 +390,15 @@ def _build_camera_path(
                 var v = _null_vertex()
                 v.px = hx; v.py = hy; v.pz = hz
                 v.nx = gn_c[0]; v.ny = gn_c[1]; v.nz = gn_c[2]
-                v.beta_r = beta_r; v.beta_g = beta_g; v.beta_b = beta_b
-                v.alb_r = mat.albedo.r; v.alb_g = mat.albedo.g; v.alb_b = mat.albedo.b
+                v.beta = beta
+                v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
                 v.pdf_bwd = max(mat.roughU, mat.roughV)
                 v.wx = wo_c[0]; v.wy = wo_c[1]; v.wz = wo_c[2]
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 verts[n_verts] = v; n_verts += 1
-            beta_r *= bs_c.f.r; beta_g *= bs_c.f.g; beta_b *= bs_c.f.b
+            beta *= bs_c.f
             rdx = bs_c.wi[0]; rdy = bs_c.wi[1]; rdz = bs_c.wi[2]
             rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
 
@@ -447,7 +445,7 @@ def _build_light_path(
     default_emit_med: Int32,
 ) -> Int:
     """Emit a photon from a random light and trace a light subpath.
-    Returns (n_verts, pcg, flux_r, flux_g, flux_b, total_light_pdf)."""
+    Returns (n_verts, pcg, flux, total_light_pdf)."""
     var n_lights = Int(sd.areaLightCount)
     if n_lights == 0:
         return 0
@@ -500,8 +498,8 @@ def _build_light_path(
     var lv0_vert = _null_vertex()
     lv0_vert.px = lp[0]; lv0_vert.py = lp[1]; lv0_vert.pz = lp[2]
     lv0_vert.nx = ln[0]; lv0_vert.ny = ln[1]; lv0_vert.nz = ln[2]
-    lv0_vert.beta_r = area_weight; lv0_vert.beta_g = area_weight; lv0_vert.beta_b = area_weight
-    lv0_vert.alb_r = al.emission.r; lv0_vert.alb_g = al.emission.g; lv0_vert.alb_b = al.emission.b
+    lv0_vert.beta = RGB(area_weight, area_weight, area_weight)
+    lv0_vert.alb = al.emission
     lv0_vert.is_surface = Int32(1); lv0_vert.is_light = Int32(1)
     lv0_vert.pdf_fwd = Float32(1) / area_weight
     lv0_vert.med_idx = default_emit_med
@@ -511,9 +509,7 @@ def _build_light_path(
     # cos_θ_emitted = ly (the cosine of the sampled direction against the light normal).
     # β = Le × area × n_lights × π / cos_θ_emitted
     var cos_theta_emit = max(ly, Float32(0.01))
-    var flux_r = al.emission.r * area_weight * PI / cos_theta_emit
-    var flux_g = al.emission.g * area_weight * PI / cos_theta_emit
-    var flux_b = al.emission.b * area_weight * PI / cos_theta_emit
+    var flux = al.emission * (area_weight * PI / cos_theta_emit)
     var rox = lp[0]+ln[0]*Float32(0.0001); var roy = lp[1]+ln[1]*Float32(0.0001); var roz = lp[2]+ln[2]*Float32(0.0001)
     var rdx = pdir[0]; var rdy = pdir[1]; var rdz = pdir[2]
     var cur_med_idx = default_emit_med
@@ -537,26 +533,28 @@ def _build_light_path(
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var sig_t = med.sigma_s.r + med.sigma_a.r
+            var sigma_t = med.sigma_a + med.sigma_s
+            var sig_t = sigma_t.r
             if sig_t > Float32(0):
                 var u = pcg.next_float()
                 var t_free = -log(max(u, Float32(1e-7))) / sig_t
                 if t_free < t_hit:
                     var sx = rox+rdx*t_free; var sy = roy+rdy*t_free; var sz = roz+rdz*t_free
                     var alb_s = med.sigma_s.r / sig_t
-                    var alb_g_s = med.sigma_s.g / (med.sigma_a.g + med.sigma_s.g) if (med.sigma_a.g + med.sigma_s.g) > Float32(0) else alb_s
-                    var alb_b_s = med.sigma_s.b / (med.sigma_a.b + med.sigma_s.b) if (med.sigma_a.b + med.sigma_s.b) > Float32(0) else alb_s
+                    var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0) else alb_s
+                    var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0) else alb_s
+                    var alb_med = RGB(alb_s, alb_g_s, alb_b_s)
                     # BDPT vertex beta: exp(-sig_t×t)/pdf_free × alb_s = 1/sig_t × alb_s = alb_s (for sig_t=1)
                     var v = _null_vertex()
                     v.px = sx; v.py = sy; v.pz = sz
-                    v.beta_r = flux_r * alb_s; v.beta_g = flux_g * alb_g_s; v.beta_b = flux_b * alb_b_s
-                    v.alb_r = alb_s; v.alb_g = alb_g_s; v.alb_b = alb_b_s
+                    v.beta = flux * alb_med
+                    v.alb = alb_med
                     v.is_surface = Int32(0); v.is_delta = Int32(0)
                     v.pdf_fwd = sig_t * exp(-sig_t * t_free)
                     v.med_idx = cur_med_idx
                     verts[n_verts] = v; n_verts += 1
                     # Continuation: flux = prev × alb_s (same as stored vertex beta)
-                    flux_r *= alb_s; flux_g *= alb_g_s; flux_b *= alb_b_s
+                    flux *= alb_med
                     var u1 = pcg.next_float(); var u2 = pcg.next_float()
                     var cosT = Float32(2)*u1 - Float32(1)
                     var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
@@ -565,9 +563,7 @@ def _build_light_path(
                     rox = sx+rdx*Float32(0.0002); roy = sy+rdy*Float32(0.0002); roz = sz+rdz*Float32(0.0002)
                     continue
                 else:
-                    flux_r *= exp(-(med.sigma_a.r+med.sigma_s.r)*t_hit)
-                    flux_g *= exp(-(med.sigma_a.g+med.sigma_s.g)*t_hit)
-                    flux_b *= exp(-(med.sigma_a.b+med.sigma_s.b)*t_hit)
+                    flux *= RGB(exp(-sigma_t.r*t_hit), exp(-sigma_t.g*t_hit), exp(-sigma_t.b*t_hit))
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -579,8 +575,8 @@ def _build_light_path(
             var v = _null_vertex()
             v.px = hx; v.py = hy; v.pz = hz
             v.nx = gn[0]; v.ny = gn[1]; v.nz = gn[2]
-            v.beta_r = flux_r; v.beta_g = flux_g; v.beta_b = flux_b
-            v.alb_r = mat.albedo.r; v.alb_g = mat.albedo.g; v.alb_b = mat.albedo.b
+            v.beta = flux
+            v.alb = mat.albedo
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
             verts[n_verts] = v; n_verts += 1
@@ -599,7 +595,7 @@ def _build_light_path(
             if nd > Float32(0):
                 rdx /= nd; rdy /= nd; rdz /= nd
             rox = hx+rdx*Float32(0.0002); roy = hy+rdy*Float32(0.0002); roz = hz+rdz*Float32(0.0002)
-            flux_r *= mat.albedo.r; flux_g *= mat.albedo.g; flux_b *= mat.albedo.b
+            flux *= mat.albedo
 
         elif mat.type == MatKind.conductor:
             var gn_c: SIMD[DType.float32, 3]
@@ -629,15 +625,15 @@ def _build_light_path(
                 var v = _null_vertex()
                 v.px = hx; v.py = hy; v.pz = hz
                 v.nx = gn_c[0]; v.ny = gn_c[1]; v.nz = gn_c[2]
-                v.beta_r = flux_r; v.beta_g = flux_g; v.beta_b = flux_b
-                v.alb_r = mat.albedo.r; v.alb_g = mat.albedo.g; v.alb_b = mat.albedo.b
+                v.beta = flux
+                v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
                 v.pdf_bwd = max(mat.roughU, mat.roughV)
                 v.wx = wo_c[0]; v.wy = wo_c[1]; v.wz = wo_c[2]
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 verts[n_verts] = v; n_verts += 1
-            flux_r *= bs_c.f.r; flux_g *= bs_c.f.g; flux_b *= bs_c.f.b
+            flux *= bs_c.f
             rdx = bs_c.wi[0]; rdy = bs_c.wi[1]; rdz = bs_c.wi[2]
             rox = hx + rdx*Float32(0.0002); roy = hy + rdy*Float32(0.0002); roz = hz + rdz*Float32(0.0002)
 
@@ -681,7 +677,7 @@ def _eval_conductor_ggx(
     wo:    SIMD[DType.float32, 3],   # toward this vertex's own predecessor
     wi:    SIMD[DType.float32, 3],   # toward the other connected vertex
     alpha: Float32,
-    f0_r: Float32, f0_g: Float32, f0_b: Float32,
+    f0: RGB,
 ) -> SIMD[DType.float32, 3]:
     """Isotropic GGX (Trowbridge-Reitz) conductor f(wo,wi) × |cos(wi,n)|, for an
     arbitrary (not self-sampled) direction pair — the BDPT connection case that
@@ -704,11 +700,9 @@ def _eval_conductor_ggx(
     var one_m = Float32(1) - cos_wo_h
     var one_m2 = one_m * one_m
     var schlick = one_m2 * one_m2 * one_m
-    var fr_r = f0_r + (Float32(1) - f0_r) * schlick
-    var fr_g = f0_g + (Float32(1) - f0_g) * schlick
-    var fr_b = f0_b + (Float32(1) - f0_b) * schlick
+    var fr = f0 + (RGB(Float32(1), Float32(1), Float32(1)) - f0) * schlick
     var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
-    return SIMD[DType.float32, 3](k * fr_r, k * fr_g, k * fr_b)
+    return SIMD[DType.float32, 3](k * fr.r, k * fr.g, k * fr.b)
 
 @always_inline
 def _eval_vertex(
@@ -720,15 +714,15 @@ def _eval_vertex(
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     if v.is_surface == Int32(0):
         # Volume scatter: isotropic phase function 1/(4π), no cosine term
-        return SIMD[DType.float32, 3](v.alb_r*INV_FOUR_PI, v.alb_g*INV_FOUR_PI, v.alb_b*INV_FOUR_PI)
+        return SIMD[DType.float32, 3](v.alb.r*INV_FOUR_PI, v.alb.g*INV_FOUR_PI, v.alb.b*INV_FOUR_PI)
     var vn = SIMD[DType.float32, 3](v.nx, v.ny, v.nz)
     if v.mat_kind == Int32(1):
         var vwo = SIMD[DType.float32, 3](v.wx, v.wy, v.wz)
-        return _eval_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd, v.alb_r, v.alb_g, v.alb_b)
+        return _eval_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd, v.alb)
     # Surface: Lambertian f = alb/π × |cos(wo,n)|
     var cos_o = dot(dir_to_other, vn)
     if cos_o < Float32(0): cos_o = -cos_o
-    return SIMD[DType.float32, 3](v.alb_r*INV_PI*cos_o, v.alb_g*INV_PI*cos_o, v.alb_b*INV_PI*cos_o)
+    return SIMD[DType.float32, 3](v.alb.r*INV_PI*cos_o, v.alb.g*INV_PI*cos_o, v.alb.b*INV_PI*cos_o)
 
 # ── Geometry term ─────────────────────────────────────────────────────────────
 
@@ -798,17 +792,18 @@ def _connect(
         var cos_l = dot(neg_dir, ln)  # emission normal vs direction toward cv
         if cos_l <= Float32(0):
             return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
-        f_lgt = SIMD[DType.float32, 3](lv.alb_r, lv.alb_g, lv.alb_b)
+        f_lgt = SIMD[DType.float32, 3](lv.alb.r, lv.alb.g, lv.alb.b)
     else:
         f_lgt = _eval_vertex(lv, neg_dir)
 
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)
 
+    var beta = cv.beta * lv.beta
     var contrib = f_cam * f_lgt * SIMD[DType.float32, 3](G, G, G) * Tr
-    contrib[0] *= cv.beta_r * lv.beta_r
-    contrib[1] *= cv.beta_g * lv.beta_g
-    contrib[2] *= cv.beta_b * lv.beta_b
+    contrib[0] *= beta.r
+    contrib[1] *= beta.g
+    contrib[2] *= beta.b
     return contrib
 
 # ── Main BDPT render ──────────────────────────────────────────────────────────
@@ -840,12 +835,10 @@ def bdpt_render(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    # Output buffer: R, G, B per pixel
-    var buf_r = alloc[Float32](n_pix)
-    var buf_g = alloc[Float32](n_pix)
-    var buf_b = alloc[Float32](n_pix)
+    # Output buffer: one RGB per pixel
+    var buf = alloc[RGB](n_pix)
     for i in range(n_pix):
-        buf_r[i] = Float32(0); buf_g[i] = Float32(0); buf_b[i] = Float32(0)
+        buf[i] = RGB(Float32(0), Float32(0), Float32(0))
 
     var cam_verts   = alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var light_verts = alloc[BDPTVertex](_BDPT_MAX_VERTS)
@@ -856,7 +849,7 @@ def bdpt_render(
 
     for pix in range(n_pix):
         var px = pix % fw; var py = pix // fw
-        var acc_r = Float32(0); var acc_g = Float32(0); var acc_b = Float32(0)
+        var acc = RGB(Float32(0), Float32(0), Float32(0))
 
         for si in range(n_spp):
             var pcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
@@ -886,7 +879,7 @@ def bdpt_render(
                     var k = ci + li
                     if k < 20: strat_count[k] = strat_count[k] + Int32(1)
 
-            var sum_r = Float32(0); var sum_g = Float32(0); var sum_b = Float32(0)
+            var sum = RGB(Float32(0), Float32(0), Float32(0))
             for ci in range(n_cam):
                 if cam_verts[ci].is_delta != Int32(0): continue
                 for li in range(n_light):
@@ -895,16 +888,12 @@ def bdpt_render(
                     var ns = Float32(strat_count[k]) if k < 20 else Float32(1)
                     if ns < Float32(1): ns = Float32(1)
                     var c = _connect(cam_verts[ci], light_verts[li], sd, has_med)
-                    sum_r += c[0] / ns; sum_g += c[1] / ns; sum_b += c[2] / ns
+                    sum += RGB(c[0], c[1], c[2]) / ns
 
-            acc_r += sum_r
-            acc_g += sum_g
-            acc_b += sum_b
+            acc += sum
 
         var inv_spp = iso_scale / Float32(n_spp)
-        buf_r[pix] = acc_r * inv_spp
-        buf_g[pix] = acc_g * inv_spp
-        buf_b[pix] = acc_b * inv_spp
+        buf[pix] = acc * inv_spp
 
         if verbose and pix % (n_pix // 10 + 1) == 0:
             print("BDPT: " + String(pix * 100 // n_pix) + "%")
@@ -914,15 +903,15 @@ def bdpt_render(
     # Clamp and write image
     var pixels = alloc[Float32](n_pix * 3)
     for i in range(n_pix):
-        var r = buf_r[i]; var g = buf_g[i]; var b = buf_b[i]
+        var c = buf[i]
         if max_comp > Float32(0):
-            r = r if r < max_comp else max_comp
-            g = g if g < max_comp else max_comp
-            b = b if b < max_comp else max_comp
-        pixels[i*3]   = r
-        pixels[i*3+1] = g
-        pixels[i*3+2] = b
-    buf_r.free(); buf_g.free(); buf_b.free()
+            c.r = c.r if c.r < max_comp else max_comp
+            c.g = c.g if c.g < max_comp else max_comp
+            c.b = c.b if c.b < max_comp else max_comp
+        pixels[i*3]   = c.r
+        pixels[i*3+1] = c.g
+        pixels[i*3+2] = c.b
+    buf.free()
 
     _ = write_image(pixels, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
     pixels.free()

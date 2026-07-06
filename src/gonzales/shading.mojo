@@ -1498,11 +1498,9 @@ def _hair_eval_lobes(
     var N1 = _hair_logistic(x1, s)
     var N2 = _hair_logistic(x2, s)
     var N3 = Float32(0.5) * INV_PI
-    var f_r = A0.r*M0*N0 + A1.r*M1*N1 + A2.r*M2*N2 + A3.r*M3*N3
-    var f_g = A0.g*M0*N0 + A1.g*M1*N1 + A2.g*M2*N2 + A3.g*M3*N3
-    var f_b = A0.b*M0*N0 + A1.b*M1*N1 + A2.b*M2*N2 + A3.b*M3*N3
+    var f = A0*(M0*N0) + A1*(M1*N1) + A2*(M2*N2) + A3*(M3*N3)
     var pdf_over_cos = (lum0*M0*N0 + lum1*M1*N1 + lum2*M2*N2 + lum3*M3*N3) / total_lum
-    return (cos_ti, RGB(f_r, f_g, f_b), pdf_over_cos)
+    return (cos_ti, f, pdf_over_cos)
 
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](

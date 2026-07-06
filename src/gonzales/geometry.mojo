@@ -154,6 +154,11 @@ struct RGB(TrivialRegisterPassable):
         self.r += o.r; self.g += o.g; self.b += o.b
 
     @always_inline
+    def sum(self) -> Float32:
+        """Sum of the three channels — e.g. for a squared-distance reduction."""
+        return self.r + self.g + self.b
+
+    @always_inline
     def is_black(self) -> Bool:
         """Returns True when all channels are zero or negative."""
         return self.r <= Float32(0.0) and self.g <= Float32(0.0) and self.b <= Float32(0.0)

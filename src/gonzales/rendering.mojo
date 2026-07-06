@@ -99,9 +99,7 @@ def render_tile(
             var med_idx = Int(paths[i].current_medium_idx)
             if med_idx >= 0 and Int(scene.mediumCount) > 0 and intersections[i].hit != Int8(0):
                 var med = scene.mediums[med_idx]
-                var sigma_t_r = med.sigma_a.r + med.sigma_s.r
-                var sigma_t_g = med.sigma_a.g + med.sigma_s.g
-                var sigma_t_b = med.sigma_a.b + med.sigma_s.b
+                var sigma_t = med.sigma_a + med.sigma_s
                 var t_surf = intersections[i].tHit
                 var pcg_vol = PCG32(paths[i].pcgState, paths[i].pcgInc)
 
@@ -112,7 +110,7 @@ def render_tile(
 
                 if med.grid_idx >= Int32(0):
                     var grid = scene.grids[Int(med.grid_idx)]
-                    var sigma_maj = grid.max_density * sigma_t_r
+                    var sigma_maj = grid.max_density * sigma_t.r
                     if sigma_maj > Float32(0.0):
                         var ray_org = SIMD[DType.float32, 3](paths[i].ray.origin.x, paths[i].ray.origin.y, paths[i].ray.origin.z)
                         var ray_dir = SIMD[DType.float32, 3](paths[i].ray.direction.x, paths[i].ray.direction.y, paths[i].ray.direction.z)
@@ -125,7 +123,7 @@ def render_tile(
                             if t >= t_surf:
                                 break
                             var density = grid_sample_density(grid, ray_org + t * ray_dir)
-                            var sigma_t_real = density * sigma_t_r
+                            var sigma_t_real = density * sigma_t.r
                             var u2 = pcg_vol.next_float()
                             if u2 < sigma_t_real / sigma_maj:
                                 have_collision = True
@@ -133,17 +131,15 @@ def render_tile(
                                 break
                         # Density cancels out of the scatter/absorb ratio given a
                         # real collision already happened — see gpu.mojo.
-                        p_absorb  = med.sigma_a.r / max(sigma_t_r, Float32(1e-7))
-                        p_scatter = med.sigma_s.r / max(sigma_t_r, Float32(1e-7))
+                        p_absorb  = med.sigma_a.r / max(sigma_t.r, Float32(1e-7))
+                        p_scatter = med.sigma_s.r / max(sigma_t.r, Float32(1e-7))
                 else:
-                    var sigma_maj = sigma_t_r
+                    var sigma_maj = sigma_t.r
                     if sigma_maj > Float32(0.0):
                         var u_free = pcg_vol.next_float()
                         t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
                         var t_seg = min(t_free, t_surf)
-                        paths[i].throughput.r *= exp(-sigma_t_r * t_seg)
-                        paths[i].throughput.g *= exp(-sigma_t_g * t_seg)
-                        paths[i].throughput.b *= exp(-sigma_t_b * t_seg)
+                        paths[i].throughput *= RGB(exp(-sigma_t.r * t_seg), exp(-sigma_t.g * t_seg), exp(-sigma_t.b * t_seg))
                         have_collision = t_free < t_surf
                         p_absorb  = med.sigma_a.r / sigma_maj
                         p_scatter = med.sigma_s.r / sigma_maj
@@ -205,13 +201,11 @@ def render_tile(
                                         var shad_tmax = dist * Float32(0.9995)
                                         if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax,
                                                                   scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances):
-                                            var T_r: Float32
-                                            var T_g: Float32
-                                            var T_b: Float32
+                                            var T: RGB
                                             if med.grid_idx >= Int32(0):
                                                 var grid_s = scene.grids[Int(med.grid_idx)]
-                                                var sigma_maj_s = grid_s.max_density * sigma_t_r
-                                                var T = Float32(1.0)
+                                                var sigma_maj_s = grid_s.max_density * sigma_t.r
+                                                var Tval = Float32(1.0)
                                                 if sigma_maj_s > Float32(0.0):
                                                     var ts = Float32(0.0)
                                                     var siters = 0
@@ -223,20 +217,16 @@ def render_tile(
                                                             break
                                                         var ps = scatter_pt + shadow_dir * ts
                                                         var density_s = grid_sample_density(grid_s, ps)
-                                                        T *= Float32(1.0) - (density_s * sigma_t_r) / sigma_maj_s
-                                                        if T < Float32(1e-4):
-                                                            T = Float32(0.0)
+                                                        Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
+                                                        if Tval < Float32(1e-4):
+                                                            Tval = Float32(0.0)
                                                             break
                                                     paths[i].pcgState = pcg_nee.state
-                                                T_r = T; T_g = T; T_b = T
+                                                T = RGB(Tval, Tval, Tval)
                                             else:
-                                                T_r = exp(-sigma_t_r * dist)
-                                                T_g = exp(-sigma_t_g * dist)
-                                                T_b = exp(-sigma_t_b * dist)
+                                                T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                                             var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
-                                            paths[i].estimate.r += paths[i].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
-                                            paths[i].estimate.g += paths[i].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
-                                            paths[i].estimate.b += paths[i].throughput.b * INV_FOUR_PI * al.emission.b * geom * T_b
+                                            paths[i].estimate += paths[i].throughput * al.emission * T * (geom * INV_FOUR_PI)
                             paths[i].volume_scattered = Int8(1)
                             paths[i].ray = Ray_C(Point3f(ox, oy, oz), Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
                             paths[i].specularBounce = Int8(0)
@@ -314,21 +304,15 @@ def render_tile(
         for ix in range(tileW):
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
-            var sumLR = Float32(0.0); var sumLG = Float32(0.0); var sumLB = Float32(0.0)
-            var sumAR = Float32(0.0); var sumAG = Float32(0.0); var sumAB = Float32(0.0)
+            var sumL = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+            var sumA = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
             var sumW = Float32(0.0)
             for _ in range(spp):
-                sumLR += paths[idx].estimate.r
-                sumLG += paths[idx].estimate.g
-                sumLB += paths[idx].estimate.b
-                sumAR += paths[idx].albedo.r
-                sumAG += paths[idx].albedo.g
-                sumAB += paths[idx].albedo.b
+                sumL += paths[idx].estimate
+                sumA += paths[idx].albedo
                 sumW += sp.filterWeight
                 idx += 1
-            resultsPtr[out] = TileResult_C(
-                RGB(sumLR, sumLG, sumLB), RGB(sumAR, sumAG, sumAB), sumW, px, py,
-            )
+            resultsPtr[out] = TileResult_C(sumL, sumA, sumW, px, py)
             out += 1
 
     intersections.free()
@@ -567,23 +551,19 @@ def normalize_film(
             albedo_out[i * 3 + 1] = Float32(0)
             albedo_out[i * 3 + 2] = Float32(0)
             continue
-        var br = r.estimate.r / w * scale
-        var bg = r.estimate.g / w * scale
-        var bb = r.estimate.b / w * scale
-        if br != br or br < Float32(0): br = Float32(0)
-        if bg != bg or bg < Float32(0): bg = Float32(0)
-        if bb != bb or bb < Float32(0): bb = Float32(0)
+        var b = RGB(r.estimate.r / w * scale, r.estimate.g / w * scale, r.estimate.b / w * scale)
+        if b.r != b.r or b.r < Float32(0): b.r = Float32(0)
+        if b.g != b.g or b.g < Float32(0): b.g = Float32(0)
+        if b.b != b.b or b.b < Float32(0): b.b = Float32(0)
         if max_component_value > Float32(0):
-            var mx = max(br, max(bg, bb))
+            var mx = max(b.r, max(b.g, b.b))
             if mx > max_component_value:
-                var s = max_component_value / mx
-                br *= s
-                bg *= s
-                bb *= s
-        beauty_out[i * 3 + 0] = br
-        beauty_out[i * 3 + 1] = bg
-        beauty_out[i * 3 + 2] = bb
-        albedo_out[i * 3 + 0] = r.albedo.r / w
-        albedo_out[i * 3 + 1] = r.albedo.g / w
-        albedo_out[i * 3 + 2] = r.albedo.b / w
+                b *= max_component_value / mx
+        beauty_out[i * 3 + 0] = b.r
+        beauty_out[i * 3 + 1] = b.g
+        beauty_out[i * 3 + 2] = b.b
+        var a = r.albedo / w
+        albedo_out[i * 3 + 0] = a.r
+        albedo_out[i * 3 + 1] = a.g
+        albedo_out[i * 3 + 2] = a.b
 

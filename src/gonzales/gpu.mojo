@@ -1420,9 +1420,7 @@ def sample_medium_gpu(
     if inter.hit == 0:
         return
     var med = mediums[med_idx]
-    var sigma_t_r = med.sigma_a.r + med.sigma_s.r
-    var sigma_t_g = med.sigma_a.g + med.sigma_s.g
-    var sigma_t_b = med.sigma_a.b + med.sigma_s.b
+    var sigma_t = med.sigma_a + med.sigma_s
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var t_surf = inter.tHit
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
@@ -1433,7 +1431,7 @@ def sample_medium_gpu(
     if med.grid_idx >= Int32(0):
         # ── Heterogeneous: delta tracking ────────────────────────────────
         var grid = grids[Int(med.grid_idx)]
-        var sigma_maj = grid.max_density * sigma_t_r
+        var sigma_maj = grid.max_density * sigma_t.r
         if sigma_maj <= Float32(0.0):
             path_ptr[].pcgState = pcg.state
             return
@@ -1448,7 +1446,7 @@ def sample_medium_gpu(
                 break
             var p_world = ray_org + t * ray_dir
             var density = grid_sample_density(grid, p_world)
-            var sigma_t_real = density * sigma_t_r
+            var sigma_t_real = density * sigma_t.r
             var u2 = pcg.next_float()
             if u2 < sigma_t_real / sigma_maj:
                 collided = True
@@ -1457,19 +1455,17 @@ def sample_medium_gpu(
             path_ptr[].pcgState = pcg.state
             return
         t_free = t
-        albedo_r = med.sigma_s.r / max(sigma_t_r, Float32(1e-7))  # density cancels — see docstring
+        albedo_r = med.sigma_s.r / max(sigma_t.r, Float32(1e-7))  # density cancels — see docstring
     else:
         # ── Homogeneous: closed-form analytic transmittance ──────────────
-        var sigma_maj = sigma_t_r
+        var sigma_maj = sigma_t.r
         if sigma_maj <= Float32(0.0):
             path_ptr[].pcgState = pcg.state
             return
         var u_free = pcg.next_float()
         t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
         var t_seg = min(t_free, t_surf)
-        path_ptr[].throughput.r *= exp(-sigma_t_r * t_seg)
-        path_ptr[].throughput.g *= exp(-sigma_t_g * t_seg)
-        path_ptr[].throughput.b *= exp(-sigma_t_b * t_seg)
+        path_ptr[].throughput *= RGB(exp(-sigma_t.r * t_seg), exp(-sigma_t.g * t_seg), exp(-sigma_t.b * t_seg))
         if t_free >= t_surf:
             path_ptr[].pcgState = pcg.state
             return
@@ -1521,17 +1517,15 @@ def sample_medium_gpu(
                     var shad_ray = Ray_C(Point3f(shad_org[0], shad_org[1], shad_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
                     var shad_tmax = dist * Float32(0.9995)
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances):
-                        var T_r: Float32
-                        var T_g: Float32
-                        var T_b: Float32
+                        var T: RGB
                         if med.grid_idx >= Int32(0):
                             # Ratio-tracking transmittance through the grid (see
                             # sample_medium_gpu's docstring). grid_sample_density
                             # returns 0 past the grid's AABB, so this naturally
                             # stops attenuating once the shadow ray exits it.
                             var grid = grids[Int(med.grid_idx)]
-                            var sigma_maj_s = grid.max_density * sigma_t_r
-                            var T = Float32(1.0)
+                            var sigma_maj_s = grid.max_density * sigma_t.r
+                            var Tval = Float32(1.0)
                             if sigma_maj_s > Float32(0.0):
                                 var ts = Float32(0.0)
                                 var siters = 0
@@ -1543,19 +1537,15 @@ def sample_medium_gpu(
                                         break
                                     var ps = scatter_pt + shadow_dir * ts
                                     var density_s = grid_sample_density(grid, ps)
-                                    T *= Float32(1.0) - (density_s * sigma_t_r) / sigma_maj_s
-                                    if T < Float32(1e-4):
-                                        T = Float32(0.0)
+                                    Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
+                                    if Tval < Float32(1e-4):
+                                        Tval = Float32(0.0)
                                         break
-                            T_r = T; T_g = T; T_b = T
+                            T = RGB(Tval, Tval, Tval)
                         else:
-                            T_r = exp(-sigma_t_r * dist)
-                            T_g = exp(-sigma_t_g * dist)
-                            T_b = exp(-sigma_t_b * dist)
+                            T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
-                        path_ptr[].estimate.r += path_ptr[].throughput.r * INV_FOUR_PI * al.emission.r * geom * T_r
-                        path_ptr[].estimate.g += path_ptr[].throughput.g * INV_FOUR_PI * al.emission.g * geom * T_g
-                        path_ptr[].estimate.b += path_ptr[].throughput.b * INV_FOUR_PI * al.emission.b * geom * T_b
+                        path_ptr[].estimate += path_ptr[].throughput * al.emission * T * (geom * INV_FOUR_PI)
         # Sample isotropic scatter direction
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
@@ -2982,20 +2972,20 @@ def atrous_filter_gpu(
         return
     var px = tid % fw; var py = tid // fw
 
-    var cr = input[tid*3]; var cg = input[tid*3+1]; var cb = input[tid*3+2]
+    var c = RGB(input[tid*3], input[tid*3+1], input[tid*3+2])
     if curve_mask[tid] > Float32(0.5):
         # Hair/fur: strand-to-strand self-shadowing has no reliable correlate in
         # albedo/normal/depth (adjacent strands share material and similar
         # orientation/distance), so à-trous can't tell real occlusion from noise
         # and blurs it into a flat blob. Passing raw beauty through here matches
         # pbrt's own un-denoised look for hair instead of erasing strand detail.
-        output[tid*3] = cr; output[tid*3+1] = cg; output[tid*3+2] = cb
+        output[tid*3] = c.r; output[tid*3+1] = c.g; output[tid*3+2] = c.b
         return
-    var cl = Float32(0.2126)*cr + Float32(0.7152)*cg + Float32(0.0722)*cb
+    var cl = c.luma()
     var var_p = variance[tid]
     var sigma_l2 = sigma_l * sigma_l * var_p + Float32(1e-6)
     var sigma_a2 = sigma_a * sigma_a
-    var car = albedo[tid*3]; var cag = albedo[tid*3+1]; var cab = albedo[tid*3+2]
+    var ca = RGB(albedo[tid*3], albedo[tid*3+1], albedo[tid*3+2])
     var cnx = normals[tid*3]; var cny = normals[tid*3+1]; var cnz = normals[tid*3+2]
     var cd = depth[tid]
     var inv_sn = Float32(1) / sigma_n
@@ -3004,7 +2994,7 @@ def atrous_filter_gpu(
     var cd_clamped = min(cd, Float32(1e18))
     var cd_sq = max(cd_clamped * cd_clamped, Float32(1e-6))
 
-    var acc_r = Float32(0); var acc_g = Float32(0); var acc_b = Float32(0)
+    var acc = RGB(Float32(0), Float32(0), Float32(0))
     var acc_w = Float32(0)
 
     for dy in range(-2, 3):
@@ -3016,11 +3006,11 @@ def atrous_filter_gpu(
             var ni1 = ny * fw + nx
             if curve_mask[ni1] > Float32(0.5):
                 continue
-            var ql = Float32(0.2126)*input[ni] + Float32(0.7152)*input[ni+1] + Float32(0.0722)*input[ni+2]
-            var dl = ql - cl
+            var qc = RGB(input[ni], input[ni+1], input[ni+2])
+            var dl = qc.luma() - cl
             var w_l = exp(-dl * dl / sigma_l2)
-            var dar = albedo[ni] - car; var dag = albedo[ni+1] - cag; var dab = albedo[ni+2] - cab
-            var w_a = exp(-(dar*dar + dag*dag + dab*dab) / sigma_a2)
+            var dalb = RGB(albedo[ni], albedo[ni+1], albedo[ni+2]) - ca
+            var w_a = exp(-(dalb * dalb).sum() / sigma_a2)
             var ndot = normals[ni]*cnx + normals[ni+1]*cny + normals[ni+2]*cnz
             var normal_diff = max(Float32(0), Float32(1) - ndot)
             var dd = min(depth[ni1], Float32(1e18)) - cd_clamped
@@ -3031,13 +3021,14 @@ def atrous_filter_gpu(
             var hy = Float32(0.0625) if ady == 2 else (Float32(0.25) if ady == 1 else Float32(0.375))
             var w_s = hx * hy
             var w = w_s * w_l * w_a * w_nd
-            acc_r += input[ni] * w; acc_g += input[ni+1] * w; acc_b += input[ni+2] * w
+            acc += qc * w
             acc_w += w
 
     if acc_w > Float32(0):
-        output[tid*3] = acc_r / acc_w; output[tid*3+1] = acc_g / acc_w; output[tid*3+2] = acc_b / acc_w
+        var o = acc / acc_w
+        output[tid*3] = o.r; output[tid*3+1] = o.g; output[tid*3+2] = o.b
     else:
-        output[tid*3] = cr; output[tid*3+1] = cg; output[tid*3+2] = cb
+        output[tid*3] = c.r; output[tid*3+1] = c.g; output[tid*3+2] = c.b
 
 
 def gpu_atrous_denoise(

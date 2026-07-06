@@ -36,9 +36,9 @@ struct SPPMPixel(TrivialRegisterPassable):
     """Visible point from one camera ray + SPPM accumulators."""
     var pos_x: Float32; var pos_y: Float32; var pos_z: Float32
     var nx: Float32;    var ny: Float32;    var nz: Float32
-    var beta_r: Float32; var beta_g: Float32; var beta_b: Float32  # camera throughput
-    var alb_r:  Float32; var alb_g:  Float32; var alb_b:  Float32  # surface albedo
-    var tau_r:  Float32; var tau_g:  Float32; var tau_b:  Float32  # accumulated flux
+    var beta: RGB  # camera throughput
+    var alb:  RGB  # surface albedo
+    var tau:  RGB  # accumulated flux
     var N_acc:  Float32   # photon count (alpha-weighted sum)
     var r2:     Float32   # current search radius²
     var valid:  Int32     # 1 = has VP
@@ -55,13 +55,13 @@ struct SPPMPixel(TrivialRegisterPassable):
     # leave this at 0 (this scene has no participating media; NEE from a
     # volume scatter point would need a phase-function-weighted variant,
     # not implemented).
-    var ld_r: Float32; var ld_g: Float32; var ld_b: Float32
+    var ld: RGB
 
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
     """Photon stored at a scatter event (surface diffuse or volume)."""
     var px: Float32; var py: Float32; var pz: Float32
-    var fr: Float32; var fg: Float32; var fb: Float32  # flux at stored position
+    var flux: RGB  # flux at stored position
     var nxt:       Int32  # chained-list link in hash grid (-1 = end)
     var is_volume: Int32  # 1 = volume scatter photon; 0 = surface diffuse
 
@@ -292,12 +292,12 @@ def _sppm_camera_pass(
         var vp = SPPMPixel(
             pos_x=Float32(0), pos_y=Float32(0), pos_z=Float32(0),
             nx=Float32(0), ny=Float32(1), nz=Float32(0),
-            beta_r=Float32(1), beta_g=Float32(1), beta_b=Float32(1),
-            alb_r=Float32(0), alb_g=Float32(0), alb_b=Float32(0),
-            tau_r=Float32(0), tau_g=Float32(0), tau_b=Float32(0),
+            beta=RGB(Float32(1), Float32(1), Float32(1)),
+            alb=RGB(Float32(0), Float32(0), Float32(0)),
+            tau=RGB(Float32(0), Float32(0), Float32(0)),
             N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
             is_volume=Int32(0),
-            ld_r=Float32(0), ld_g=Float32(0), ld_b=Float32(0),
+            ld=RGB(Float32(0), Float32(0), Float32(0)),
         )
 
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
@@ -339,7 +339,8 @@ def _sppm_camera_pass(
             # ── Volume free-flight ────────────────────────────────────────────
             if has_media and Int(cur_med_idx) >= 0:
                 var med = sd.mediums[Int(cur_med_idx)]
-                var sig_t = med.sigma_a.r + med.sigma_s.r
+                var sigma_t = med.sigma_a + med.sigma_s
+                var sig_t = sigma_t.r
                 if sig_t > Float32(0):
                     var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                     if t_free < t_hit:
@@ -349,15 +350,13 @@ def _sppm_camera_pass(
                         vp.pos_y = roy + rdy * t_free
                         vp.pos_z = roz + rdz * t_free
                         vp.nx = Float32(0); vp.ny = Float32(1); vp.nz = Float32(0)
-                        vp.alb_r = alb_s; vp.alb_g = alb_s; vp.alb_b = alb_s
+                        vp.alb = RGB(alb_s, alb_s, alb_s)
                         vp.is_volume = Int32(1)
                         vp.valid = Int32(1)
                         break
                     else:
                         # Transmittance through full segment to surface
-                        vp.beta_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
-                        vp.beta_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
-                        vp.beta_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+                        vp.beta *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
 
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
@@ -371,7 +370,7 @@ def _sppm_camera_pass(
                     gn = gn * Float32(-1.0)
                 vp.pos_x = hx; vp.pos_y = hy; vp.pos_z = hz
                 vp.nx = gn[0]; vp.ny = gn[1]; vp.nz = gn[2]
-                vp.alb_r = mat.albedo.r; vp.alb_g = mat.albedo.g; vp.alb_b = mat.albedo.b
+                vp.alb = mat.albedo
                 vp.is_volume = Int32(0)
                 vp.valid = Int32(1)
                 break
@@ -493,9 +492,7 @@ def _sppm_photon_pass(
         # Photon flux: total_light_power / n_emit
         # total_power = emission * pi * total_area * n_lights (uniform light selection)
         var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
-        var flux_r = al.emission.r * scale
-        var flux_g = al.emission.g * scale
-        var flux_b = al.emission.b * scale
+        var flux = al.emission * scale
 
         var rox = lp[0] + ln[0] * Float32(0.0001)
         var roy = lp[1] + ln[1] * Float32(0.0001)
@@ -518,7 +515,8 @@ def _sppm_photon_pass(
             # ── Volume free-flight ────────────────────────────────────────────
             if has_media and Int(cur_med_idx) >= 0:
                 var med = sd.mediums[Int(cur_med_idx)]
-                var sig_t = med.sigma_s.r + med.sigma_a.r
+                var sigma_t = med.sigma_a + med.sigma_s
+                var sig_t = sigma_t.r
                 if sig_t > Float32(0):
                     var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
                     if t_free < t_hit:
@@ -535,13 +533,13 @@ def _sppm_photon_pass(
                         if bounce > 0 and n_stored < max_photons:
                             photons[n_stored] = SPPMPhoton(
                                 px=sx, py=sy, pz=sz,
-                                fr=flux_r, fg=flux_g, fb=flux_b,
+                                flux=flux,
                                 nxt=Int32(-1), is_volume=Int32(1),
                             )
                             n_stored += 1
                         # Scatter: isotropic phase function, modulate by albedo
                         var alb_s = med.sigma_s.r / sig_t
-                        flux_r *= alb_s; flux_g *= alb_s; flux_b *= alb_s
+                        flux *= alb_s
                         # Sample new isotropic direction (uniform sphere)
                         var usp1 = pcg.next_float()
                         var usp2 = pcg.next_float()
@@ -555,9 +553,7 @@ def _sppm_photon_pass(
                         continue
                     else:
                         # Apply Beer-Lambert transmittance through segment
-                        flux_r *= exp(-(med.sigma_a.r + med.sigma_s.r) * t_hit)
-                        flux_g *= exp(-(med.sigma_a.g + med.sigma_s.g) * t_hit)
-                        flux_b *= exp(-(med.sigma_a.b + med.sigma_s.b) * t_hit)
+                        flux *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
 
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
@@ -575,7 +571,7 @@ def _sppm_photon_pass(
                 if bounce > 0 and n_stored < max_photons:
                     photons[n_stored] = SPPMPhoton(
                         px=hx, py=hy, pz=hz,
-                        fr=flux_r, fg=flux_g, fb=flux_b,
+                        flux=flux,
                         nxt=Int32(-1), is_volume=Int32(0),
                     )
                     n_stored += 1
@@ -591,9 +587,7 @@ def _sppm_photon_pass(
                 if dot(gn, ray_dir) > Float32(0.0):
                     gn = gn * Float32(-1.0)
                 var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
-                flux_r *= mat.albedo.r / rr_prob
-                flux_g *= mat.albedo.g / rr_prob
-                flux_b *= mat.albedo.b / rr_prob
+                flux *= mat.albedo / rr_prob
                 rdx = new_dir[0]; rdy = new_dir[1]; rdz = new_dir[2]
                 rox = hx + gn[0] * Float32(0.0001)
                 roy = hy + gn[1] * Float32(0.0001)
@@ -668,7 +662,7 @@ def _gather_update(
         var r2 = vp.r2
 
         # Accumulate contributions from photons in 3x3x3 neighborhood
-        var phi_r = Float32(0); var phi_g = Float32(0); var phi_b = Float32(0)
+        var phi = RGB(Float32(0), Float32(0), Float32(0))
         var M = Float32(0)
 
         var cix = Int(floor(vx * inv_cell))
@@ -690,9 +684,7 @@ def _gather_update(
                                 f = INV_FOUR_PI
                             else:
                                 f = Float32(1.0) / PI
-                            phi_r += vp.alb_r * f * ph.fr
-                            phi_g += vp.alb_g * f * ph.fg
-                            phi_b += vp.alb_b * f * ph.fb
+                            phi += (vp.alb * f) * ph.flux
                             M += Float32(1.0)
                         k = Int(ph.nxt)
 
@@ -700,10 +692,8 @@ def _gather_update(
         if M > Float32(0.0):
             var N = vp.N_acc
             var ratio = (N + _ALPHA * M) / (N + M)
-            vps[i].r2    = r2 * ratio
-            vps[i].tau_r = (vp.tau_r + phi_r) * ratio
-            vps[i].tau_g = (vp.tau_g + phi_g) * ratio
-            vps[i].tau_b = (vp.tau_b + phi_b) * ratio
+            vps[i].r2  = r2 * ratio
+            vps[i].tau = (vp.tau + phi) * ratio
             vps[i].N_acc = N + _ALPHA * M
 
 
@@ -784,12 +774,8 @@ def _sppm_nee_update(
         # assumption, same as the emission-sampling flux scale factor.
         var inv_pdf_area = Float32(n_lights) * al.total_area
         var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-        var brdf_r = vp.alb_r / PI
-        var brdf_g = vp.alb_g / PI
-        var brdf_b = vp.alb_b / PI
-        vps[i].ld_r += brdf_r * al.emission.r * geom
-        vps[i].ld_g += brdf_g * al.emission.g * geom
-        vps[i].ld_b += brdf_b * al.emission.b * geom
+        var brdf = vp.alb / PI
+        vps[i].ld += (brdf * al.emission) * geom
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -876,46 +862,39 @@ def sppm_render(
     var out_pixels = alloc[Float32](n_pix * 3)
 
     for i in range(n_pix):
-        var r = Float32(0); var g = Float32(0); var b = Float32(0)
+        var acc = RGB(Float32(0), Float32(0), Float32(0))
         for vs in range(_VP_SAMPLES):
             var vp = vps[i * _VP_SAMPLES + vs]
             if vp.valid == Int32(0):
                 continue
-            var vp_r = Float32(0); var vp_g = Float32(0); var vp_b = Float32(0)
+            var vp_l = RGB(Float32(0), Float32(0), Float32(0))
             if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
                 # L = tau / (pi * r² * n_passes) — tau already has
                 # albedo/pi folded in at gather time
                 var denom = PI * vp.r2 * Float32(n_passes)
-                vp_r += vp.tau_r / denom
-                vp_g += vp.tau_g / denom
-                vp_b += vp.tau_b / denom
+                vp_l += vp.tau / denom
             if vp.is_volume == Int32(0):
                 # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
                 # pass, averaged over n_passes.
-                vp_r += vp.ld_r / Float32(n_passes)
-                vp_g += vp.ld_g / Float32(n_passes)
-                vp_b += vp.ld_b / Float32(n_passes)
-            r += vp.beta_r * vp_r
-            g += vp.beta_g * vp_g
-            b += vp.beta_b * vp_b
-        r /= Float32(_VP_SAMPLES); g /= Float32(_VP_SAMPLES); b /= Float32(_VP_SAMPLES)
+                vp_l += vp.ld / Float32(n_passes)
+            acc += vp.beta * vp_l
+        acc = acc / Float32(_VP_SAMPLES)
 
         # ISO exposure compensation (matches normalize_film)
-        r *= iso_scale; g *= iso_scale; b *= iso_scale
+        acc *= iso_scale
 
         # NaN guard and optional max-component clamp
-        if r != r or r < Float32(0): r = Float32(0)
-        if g != g or g < Float32(0): g = Float32(0)
-        if b != b or b < Float32(0): b = Float32(0)
+        if acc.r != acc.r or acc.r < Float32(0): acc.r = Float32(0)
+        if acc.g != acc.g or acc.g < Float32(0): acc.g = Float32(0)
+        if acc.b != acc.b or acc.b < Float32(0): acc.b = Float32(0)
         if max_comp > Float32(0):
-            var mx = max(r, max(g, b))
+            var mx = max(acc.r, max(acc.g, acc.b))
             if mx > max_comp:
-                var s = max_comp / mx
-                r *= s; g *= s; b *= s
+                acc *= max_comp / mx
 
-        out_pixels[i * 3 + 0] = r
-        out_pixels[i * 3 + 1] = g
-        out_pixels[i * 3 + 2] = b
+        out_pixels[i * 3 + 0] = acc.r
+        out_pixels[i * 3 + 1] = acc.g
+        out_pixels[i * 3 + 2] = acc.b
 
     _ = write_image(out_pixels, psc[0].film_w, psc[0].film_h,
                     psc[0].film_filename, Int32(32), Int32(32))

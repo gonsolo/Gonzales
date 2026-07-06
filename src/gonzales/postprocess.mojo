@@ -1,6 +1,7 @@
 from std.ffi import external_call
 from std.math import exp
 from std.collections import List
+from .geometry import RGB
 
 # Joint bilateral denoiser guided by albedo, normals, and depth.
 # beauty/albedo: width*height*3 floats, R,G,B interleaved, row-major.
@@ -43,9 +44,7 @@ def denoise(
         for px in range(w):
             var ci  = (py * w + px) * 3
             var pi  = py * w + px
-            var a0r = albedo[ci + 0]
-            var a0g = albedo[ci + 1]
-            var a0b = albedo[ci + 2]
+            var a0 = RGB(albedo[ci + 0], albedo[ci + 1], albedo[ci + 2])
             var n0x = normals[ci + 0]
             var n0y = normals[ci + 1]
             var n0z = normals[ci + 2]
@@ -53,9 +52,7 @@ def denoise(
             var d0_clamped = min(d0, Float32(1e18))
             var d0_sq = max(d0_clamped * d0_clamped, Float32(1e-6))
 
-            var acc_r = Float32(0)
-            var acc_g = Float32(0)
-            var acc_b = Float32(0)
+            var acc = RGB(Float32(0), Float32(0), Float32(0))
             var acc_w = Float32(0)
 
             for dy in range(-r, r + 1):
@@ -66,10 +63,8 @@ def denoise(
                         continue
                     var ni  = (ny * w + nx) * 3
                     var npi = ny * w + nx
-                    var dar = albedo[ni + 0] - a0r
-                    var dag = albedo[ni + 1] - a0g
-                    var dab = albedo[ni + 2] - a0b
-                    var albedo_dist2 = dar * dar + dag * dag + dab * dab
+                    var dalb = RGB(albedo[ni + 0], albedo[ni + 1], albedo[ni + 2]) - a0
+                    var albedo_dist2 = (dalb * dalb).sum()
                     # Normal: 1 - dot(n0, n_neighbor) is 0 for same dir, 2 for opposite.
                     var ndot = normals[ni+0]*n0x + normals[ni+1]*n0y + normals[ni+2]*n0z
                     var normal_diff = max(Float32(0), Float32(1) - ndot)
@@ -80,19 +75,13 @@ def denoise(
                     var wt = sw[(dy + r) * diam + (dx + r)] * exp(
                         -(albedo_dist2 * inv2sr + normal_diff * inv_sn + rel_depth2 * inv2sd)
                     )
-                    acc_r += beauty[ni + 0] * wt
-                    acc_g += beauty[ni + 1] * wt
-                    acc_b += beauty[ni + 2] * wt
+                    acc += RGB(beauty[ni + 0], beauty[ni + 1], beauty[ni + 2]) * wt
                     acc_w += wt
 
-            if acc_w > Float32(0):
-                output[ci + 0] = acc_r / acc_w
-                output[ci + 1] = acc_g / acc_w
-                output[ci + 2] = acc_b / acc_w
-            else:
-                output[ci + 0] = beauty[ci + 0]
-                output[ci + 1] = beauty[ci + 1]
-                output[ci + 2] = beauty[ci + 2]
+            var result = (acc / acc_w) if acc_w > Float32(0) else RGB(beauty[ci + 0], beauty[ci + 1], beauty[ci + 2])
+            output[ci + 0] = result.r
+            output[ci + 1] = result.g
+            output[ci + 2] = result.b
     # sw freed automatically when it goes out of scope
 
 
