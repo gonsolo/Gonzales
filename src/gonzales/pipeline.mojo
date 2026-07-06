@@ -581,8 +581,8 @@ def parse_and_render(
         return ret
     else:
         var zero = TileResult_C(
-            estimate=RGB(Float32(0), Float32(0), Float32(0)),
-            albedo=RGB(Float32(0), Float32(0), Float32(0)),
+            estimate=RGB(Float32(0)),
+            albedo=RGB(Float32(0)),
             filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
         for _ in range(n_pixels):
             results.append(zero)
@@ -840,8 +840,8 @@ def render_interactive(
     var denoised = List[Float32](capacity=n_pixels * 3)
     for _ in range(n_pixels):
         results.append(TileResult_C(
-            estimate=RGB(Float32(0), Float32(0), Float32(0)),
-            albedo=RGB(Float32(0), Float32(0), Float32(0)),
+            estimate=RGB(Float32(0)),
+            albedo=RGB(Float32(0)),
             filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0)))
     for _ in range(n_pixels * 3): beauty.append(Float32(0)); albedo.append(Float32(0)); denoised.append(Float32(0))
     var frame_count = 0
@@ -880,8 +880,8 @@ def render_interactive(
             depth_int.append(Float32(0))
 
     var zero = TileResult_C(
-        estimate=RGB(Float32(0), Float32(0), Float32(0)),
-        albedo=RGB(Float32(0), Float32(0), Float32(0)),
+        estimate=RGB(Float32(0)),
+        albedo=RGB(Float32(0)),
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
 
     while not viewer_should_close(v):

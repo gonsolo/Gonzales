@@ -26,7 +26,7 @@ def null_guide() -> GuideGrid:
     Guard: Int(energy) > 4 → active guide; ≤ 4 → disabled."""
     return GuideGrid(
         UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        Bounds3f(Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(1), Float32(1), Float32(1))),
+        Bounds3f(Point3f(Float32(0)), Point3f(Float32(1), Float32(1), Float32(1))),
     )
 
 def guide_create(bounds: Bounds3f) -> GuideGrid:

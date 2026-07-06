@@ -254,7 +254,7 @@ def sample_texture[use_gpu: Bool](
 ) -> RGB:
     found = False
     if tex_idx < 0:
-        return RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+        return RGB(Float32(0.0))
     var su = u
     var tv = Float32(1.0) - v  # pbrt V-flip: V=0 at top
     comptime if use_gpu:
@@ -288,7 +288,7 @@ def sample_texture[use_gpu: Bool](
                 if raw:
                     return RGB(rr, gg, bb)
                 return RGB(_srgb_to_linear(rr), _srgb_to_linear(gg), _srgb_to_linear(bb))
-    return RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+    return RGB(Float32(0.0))
 
 @always_inline
 def _tex_lookup[use_gpu: Bool](
@@ -748,7 +748,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                                 # discriminate at all — it barely varies across a curved
                                 # surface's highlight vs. its immediate neighbours).
                                 var boost_coat = min(Float32(1.0), contrib_coat.r * Float32(0.2126) + contrib_coat.g * Float32(0.7152) + contrib_coat.b * Float32(0.0722))
-                                path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0), Float32(1.0), Float32(1.0)) - path_ptr[].albedo) * boost_coat
+                                path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0)) - path_ptr[].albedo) * boost_coat
                                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_c, dist_c * Float32(0.9999), contrib_coat)
 
         # Distant (delta) lights through the coat's glossy lobe. No MIS weight —
@@ -772,7 +772,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                             var f_cos_dl = d_dl * g2_dl * f_dl / (Float32(4.0) * cos_o)
                             var contrib_dl = path_ptr[].throughput * dl_coat.emission * f_cos_dl
                             var boost_dl = min(Float32(1.0), contrib_dl.r * Float32(0.2126) + contrib_dl.g * Float32(0.7152) + contrib_dl.b * Float32(0.0722))
-                            path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0), Float32(1.0), Float32(1.0)) - path_ptr[].albedo) * boost_dl
+                            path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0)) - path_ptr[].albedo) * boost_dl
                             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_dl, Float32(2000.0), contrib_dl)
 
     if pcg.next_float() < f_entry:
@@ -803,7 +803,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     # Transmitted into the coat: random-walk the base/coat-underside layers.
-    var beta = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+    var beta = RGB(Float32(1.0))
     var exited = False
     var exit_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
     var did_nee = False
@@ -1068,7 +1068,7 @@ def shade_dielectric(
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
-    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, RGB(Float32(1), Float32(1), Float32(1)))
+    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, RGB(Float32(1)))
 
 # Thin dielectric (type 9): one-sided glass — Fresnel selects reflect or transmit,
 # but transmitted ray is NOT refracted (direction unchanged). Models window glass,
@@ -1103,7 +1103,7 @@ def shade_thin_dielectric(
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
-    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, RGB(Float32(1), Float32(1), Float32(1)))
+    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, RGB(Float32(1)))
 
 
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
@@ -1167,7 +1167,7 @@ def shade_conductor(
 
     var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
     var gc = GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
-        RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0))
+        RGB(Float32(0.0)), Float32(0.0))
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_conductor(gc, mat, pcg.next_float(), pcg.next_float())
@@ -1206,7 +1206,7 @@ def shade_coated_conductor(
     var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign_n*normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
     var bitangent = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
     var gc = GeomContext(normal, normal, hit_point, wo, tangent, bitangent,
-        RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0))
+        RGB(Float32(0.0)), Float32(0.0))
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_coated_conductor(gc, mat, ior, pcg.next_float(), pcg.next_float(), pcg.next_float())
@@ -1324,7 +1324,7 @@ def _build_geom_context_full[use_gpu: Bool](
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
     if not ok:
         var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-        return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0)), False)
+        return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0)), Float32(0.0)), False)
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -2682,7 +2682,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].volume_scattered = Int8(0)
             return
         var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-        var miss_albedo = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+        var miss_albedo = RGB(Float32(0.0))
         for inf_i in range(ctx.lights.infinite_count):
             var ilight = ctx.lights.infinite_lights[inf_i]
             # Transform world-space ray direction into light's local frame

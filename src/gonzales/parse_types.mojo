@@ -54,9 +54,9 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.mix_name1      = String("")
         self.mix_name2      = String("")
         self.mix_amount     = Float32(0.5)
-        self.transmittance  = RGB(Float32(1), Float32(1), Float32(1))
-        self.checker_tex1   = RGB(Float32(1), Float32(1), Float32(1))
-        self.checker_tex2   = RGB(Float32(0), Float32(0), Float32(0))
+        self.transmittance  = RGB(Float32(1))
+        self.checker_tex1   = RGB(Float32(1))
+        self.checker_tex2   = RGB(Float32(0))
         self.checker_uscale = Float32(1)
         self.checker_vscale = Float32(1)
 
@@ -86,7 +86,7 @@ struct MeshAccum(Copyable, Movable):
         self.normals       = List[Float32]()
         self.mat_idx       = mat_idx
         self.is_area_light = False
-        self.al_rgb        = RGB(Float32(0), Float32(0), Float32(0))
+        self.al_rgb        = RGB(Float32(0))
         self.inside_medium  = inside_medium
         self.outside_medium = outside_medium
         self.is_object_template = False

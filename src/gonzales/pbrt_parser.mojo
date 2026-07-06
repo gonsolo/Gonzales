@@ -1461,7 +1461,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         mats[i].checker_vscale = nm3.checker_vscale
         if material_kind == MatKind.dielectric:
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
-            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+            mats[i].emission = RGB(Float32(0))
         elif material_kind == MatKind.coated_diffuse:
             mats[i].albedo = nm3.albedo
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
@@ -1470,7 +1470,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[i].emission = RGB(ior, Float32(0), Float32(0))
         elif material_kind == MatKind.thin_dielectric:
             mats[i].albedo = RGB(ior, Float32(0), Float32(0))
-            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+            mats[i].emission = RGB(Float32(0))
         elif material_kind == MatKind.mix:
             var idx1 = Int32(0)
             var idx2 = Int32(0)
@@ -1480,7 +1480,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[i].tex_idx = (idx2 << 16) | (idx1 & Int32(0xFFFF))
             mats[i].roughU  = nm3.mix_amount
             mats[i].albedo  = nm3.albedo
-            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+            mats[i].emission = RGB(Float32(0))
         elif material_kind == MatKind.diffuse_transmit:
             mats[i].albedo = nm3.albedo
             mats[i].emission = nm3.transmittance
@@ -1498,7 +1498,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[i].type = MatKind.hair
         else:
             mats[i].albedo = nm3.albedo
-            mats[i].emission = RGB(Float32(0), Float32(0), Float32(0))
+            mats[i].emission = RGB(Float32(0))
 
     # ---- Meshes + area lights ----
     var n_meshes = len(s[0].meshes)
@@ -1573,7 +1573,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             al_list[al_idx].emission   = em
             al_list[al_idx].total_area = t_area
             mats[al_mat_base + al_idx].type     = Int8(2)
-            mats[al_mat_base + al_idx].albedo   = RGB(Float32(0), Float32(0), Float32(0))
+            mats[al_mat_base + al_idx].albedo   = RGB(Float32(0))
             mats[al_mat_base + al_idx].emission = em
             mats[al_mat_base + al_idx].tex_idx  = Int32(-1)
             mats[al_mat_base + al_idx].roughU   = Float32(0)

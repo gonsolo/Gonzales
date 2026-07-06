@@ -48,14 +48,14 @@ struct BDPTVertex(TrivialRegisterPassable):
 @always_inline
 def _null_vertex() -> BDPTVertex:
     return BDPTVertex(
-        pos=Point3f(Float32(0), Float32(0), Float32(0)),
+        pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
-        beta=RGB(Float32(0), Float32(0), Float32(0)),
-        alb=RGB(Float32(0), Float32(0), Float32(0)),
+        beta=RGB(Float32(0)),
+        alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0),
-        wo=Vec3f(Float32(0), Float32(0), Float32(0)),
+        wo=Vec3f(Float32(0)),
     )
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ def _visible_transmittance(
     var inv = Float32(1) / dist_total
     var dir = SIMD[DType.float32, 3](d.x*inv, d.y*inv, d.z*inv)
 
-    var Tr = RGB(Float32(1), Float32(1), Float32(1))
+    var Tr = RGB(Float32(1))
     var org = a + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
     var remaining = dist_total - Float32(0.0002)
     var cur_med = med_idx
@@ -246,7 +246,7 @@ def _build_camera_path(
 
     var n_verts = 0
     var n_bounces = 0  # total surface hits including glass (for _dielectric_bounce entering logic)
-    var beta = RGB(Float32(1), Float32(1), Float32(1))
+    var beta = RGB(Float32(1))
     var cur_med_idx = start_med_idx
 
     for _ in range(_BDPT_MAX_DEPTH):
@@ -594,7 +594,7 @@ def _eval_conductor_ggx(
     var one_m = Float32(1) - cos_wo_h
     var one_m2 = one_m * one_m
     var schlick = one_m2 * one_m2 * one_m
-    var fr = f0 + (RGB(Float32(1), Float32(1), Float32(1)) - f0) * schlick
+    var fr = f0 + (RGB(Float32(1)) - f0) * schlick
     var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
     return SIMD[DType.float32, 3](k * fr.r, k * fr.g, k * fr.b)
 
@@ -730,7 +730,7 @@ def bdpt_render(
     # Output buffer: one RGB per pixel
     var buf = alloc[RGB](n_pix)
     for i in range(n_pix):
-        buf[i] = RGB(Float32(0), Float32(0), Float32(0))
+        buf[i] = RGB(Float32(0))
 
     var cam_verts   = alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var light_verts = alloc[BDPTVertex](_BDPT_MAX_VERTS)
@@ -741,7 +741,7 @@ def bdpt_render(
 
     for pix in range(n_pix):
         var px = pix % fw; var py = pix // fw
-        var acc = RGB(Float32(0), Float32(0), Float32(0))
+        var acc = RGB(Float32(0))
 
         for si in range(n_spp):
             var pcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
@@ -771,7 +771,7 @@ def bdpt_render(
                     var k = ci + li
                     if k < 20: strat_count[k] = strat_count[k] + Int32(1)
 
-            var sum = RGB(Float32(0), Float32(0), Float32(0))
+            var sum = RGB(Float32(0))
             for ci in range(n_cam):
                 if cam_verts[ci].is_delta != Int32(0): continue
                 for li in range(n_light):

@@ -1770,9 +1770,9 @@ def gen_primary_rays_wavefront_gpu(
     )
     paths[ti] = PathState_C(
         ray,
-        RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
-        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+        RGB(Float32(1.0)),
+        RGB(Float32(0.0)),
+        RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
         Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0),
@@ -1977,9 +1977,9 @@ def gen_primary_rays_gpu(
     )
     paths[tid] = PathState_C(
         ray,
-        RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
-        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-        RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+        RGB(Float32(1.0)),
+        RGB(Float32(0.0)),
+        RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
         Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0),
@@ -2983,7 +2983,7 @@ def atrous_filter_gpu(
     var cd_clamped = min(cd, Float32(1e18))
     var cd_sq = max(cd_clamped * cd_clamped, Float32(1e-6))
 
-    var acc = RGB(Float32(0), Float32(0), Float32(0))
+    var acc = RGB(Float32(0))
     var acc_w = Float32(0)
 
     for dy in range(-2, 3):

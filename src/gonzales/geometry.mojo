@@ -32,6 +32,11 @@ struct Point3f(TrivialRegisterPassable):
     var z: Float32
 
     @always_inline
+    def __init__(out self, v: Float32):
+        """Broadcast constructor — Point3f(0) for the origin."""
+        self.x = v; self.y = v; self.z = v
+
+    @always_inline
     def __add__(self, v: Vec3f) -> Point3f:
         return Point3f(self.x + v.x, self.y + v.y, self.z + v.z)
 
@@ -52,6 +57,11 @@ struct Vec3f(TrivialRegisterPassable):
     var x: Float32
     var y: Float32
     var z: Float32
+
+    @always_inline
+    def __init__(out self, v: Float32):
+        """Broadcast constructor — Vec3f(0) for the zero vector."""
+        self.x = v; self.y = v; self.z = v
 
     @always_inline
     def __neg__(self) -> Vec3f:
@@ -126,6 +136,11 @@ struct RGB(TrivialRegisterPassable):
     var r: Float32
     var g: Float32
     var b: Float32
+
+    @always_inline
+    def __init__(out self, v: Float32):
+        """Broadcast constructor — RGB(0) for black, RGB(1) for white."""
+        self.r = v; self.g = v; self.b = v
 
     @always_inline
     def __add__(self, o: RGB) -> RGB:

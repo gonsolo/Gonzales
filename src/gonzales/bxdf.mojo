@@ -124,7 +124,7 @@ def bxdf_sample_conductor(
     var alpha_x = max(mat.roughU, Float32(0.0001))
     var alpha_y = max(mat.roughV, Float32(0.0001))
     var is_rough = mat.roughU > Float32(0.001) or mat.roughV > Float32(0.001)
-    var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+    var white = RGB(Float32(1.0))
 
     if not is_rough:
         var wi = gc.normal * (Float32(2.0) * dot(gc.wo, gc.normal)) - gc.wo
@@ -149,7 +149,7 @@ def bxdf_sample_conductor(
     if wilen > Float32(0.0):
         wi = wi * (Float32(1.0) / sqrt(wilen))
     if dot(wi, gc.normal) <= Float32(0.0):
-        return BxDFSample(wi, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
+        return BxDFSample(wi, RGB(Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
     var cos_wh = max(Float32(0.0), wo_dot_wh)
     var one_m = Float32(1.0) - cos_wh
     var one_m2 = one_m * one_m
@@ -175,7 +175,7 @@ def bxdf_sample_coated_conductor(
     var one_m = Float32(1.0) - cos_theta
     var one_m2 = one_m * one_m
     var f_coat = r0 + (Float32(1.0) - r0) * one_m2 * one_m2 * one_m
-    var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+    var white = RGB(Float32(1.0))
 
     if u_split < f_coat:
         var wi = gc.normal * (Float32(2.0) * dot(gc.wo, gc.normal)) - gc.wo
@@ -200,7 +200,7 @@ def bxdf_sample_coated_conductor(
     if wilen > Float32(0.0):
         wi = wi * (Float32(1.0) / sqrt(wilen))
     if dot(wi, gc.normal) <= Float32(0.0):
-        return BxDFSample(wi, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
+        return BxDFSample(wi, RGB(Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
     var cos_wh = max(Float32(0.0), wo_dot_wh)
     var one_m3 = Float32(1.0) - cos_wh
     var one_m4 = one_m3 * one_m3
@@ -234,7 +234,7 @@ def bxdf_sample_dielectric(
     var tir = sin2_t > Float32(1.0)
     # eta here is η_i/η_t; fr_dielectric wants its reciprocal as the relative IOR.
     var fresnel = fr_dielectric(cos_i, Float32(1.0) / eta)
-    var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+    var white = RGB(Float32(1.0))
 
     if tir or u_reflect < fresnel:
         var refl = ray_dir + normal * (Float32(2.0) * cos_i)
@@ -269,7 +269,7 @@ def bxdf_sample_thin_dielectric(
     var fresnel = r_single
     if r_single < Float32(1.0):
         fresnel = Float32(2.0) * r_single / (Float32(1.0) + r_single)
-    var white = RGB(Float32(1.0), Float32(1.0), Float32(1.0))
+    var white = RGB(Float32(1.0))
 
     if u_reflect < fresnel:
         var refl = ray_dir + normal * (Float32(2.0) * cos_i)
@@ -321,8 +321,8 @@ def bxdf_sample_diffuse_transmit(
     var total = pr + pt
     if total <= Float32(0.0):
         var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-        return (BxDFSample(z, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0), BxDFFlags.diffuse, Int8(0), Int8(0), Int8(0)),
-            normal, RGB(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(0.0), True)
+        return (BxDFSample(z, RGB(Float32(0.0)), Float32(0.0), BxDFFlags.diffuse, Int8(0), Int8(0), Int8(0)),
+            normal, RGB(Float32(0.0)), Float32(0.0), True)
 
     var choose_reflect = u_lobe < pr / total
     var bounce_normal = normal if choose_reflect else -normal

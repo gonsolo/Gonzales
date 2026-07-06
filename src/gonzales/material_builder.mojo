@@ -56,8 +56,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var tex_idx_for_mat = Int32(-1)
     var normal_tex_idx_for_mat = Int32(-1)
     # Procedural checkerboard params, only meaningful when tex_idx_for_mat == -2.
-    var checker_tex1 = RGB(Float32(1), Float32(1), Float32(1))
-    var checker_tex2 = RGB(Float32(0), Float32(0), Float32(0))
+    var checker_tex1 = RGB(Float32(1))
+    var checker_tex2 = RGB(Float32(0))
     var checker_uscale = Float32(1)
     var checker_vscale = Float32(1)
     var mix_name1 = alloc[UInt8](PSC_NAME_MAX)

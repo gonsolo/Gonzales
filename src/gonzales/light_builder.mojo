@@ -14,7 +14,7 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigi
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     s[0].cur_attr.is_alight = True
-    s[0].cur_attr.al_rgb = RGB(Float32(1), Float32(1), Float32(1))
+    s[0].cur_attr.al_rgb = RGB(Float32(1))
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
     var scale = Float32(1.0)  # accumulated separately; applied after loop

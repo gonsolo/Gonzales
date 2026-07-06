@@ -52,7 +52,7 @@ def denoise(
             var d0_clamped = min(d0, Float32(1e18))
             var d0_sq = max(d0_clamped * d0_clamped, Float32(1e-6))
 
-            var acc = RGB(Float32(0), Float32(0), Float32(0))
+            var acc = RGB(Float32(0))
             var acc_w = Float32(0)
 
             for dy in range(-r, r + 1):

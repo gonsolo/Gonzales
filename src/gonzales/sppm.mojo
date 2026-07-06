@@ -243,15 +243,15 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
     var sigma_t = med.sigma_a + med.sigma_s
     var sig_t = sigma_t.r
     if sig_t <= Float32(0.0):
-        return HomogeneousFreeFlight(False, t_surf, sig_t, RGB(Float32(0), Float32(0), Float32(0)), RGB(Float32(1), Float32(1), Float32(1)))
+        return HomogeneousFreeFlight(False, t_surf, sig_t, RGB(Float32(0)), RGB(Float32(1)))
     var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
     if t_free < t_surf:
         var alb_s = med.sigma_s.r / sig_t
         var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0.0) else alb_s
         var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0.0) else alb_s
-        return HomogeneousFreeFlight(True, t_free, sig_t, RGB(alb_s, alb_g_s, alb_b_s), RGB(Float32(1), Float32(1), Float32(1)))
+        return HomogeneousFreeFlight(True, t_free, sig_t, RGB(alb_s, alb_g_s, alb_b_s), RGB(Float32(1)))
     var Tr = RGB(exp(-sigma_t.r * t_surf), exp(-sigma_t.g * t_surf), exp(-sigma_t.b * t_surf))
-    return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0), Float32(0), Float32(0)), Tr)
+    return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr)
 
 
 # ── Uniform area-light sampling ───────────────────────────────────────────────
@@ -313,7 +313,7 @@ def _sppm_update_medium(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mat: Material_C,
     sd: SceneDescriptor2_C,
-    hit: Point3f = Point3f(Float32(0), Float32(0), Float32(0)),
+    hit: Point3f = Point3f(Float32(0)),
 ) -> Int32:
     """Return new current_medium_idx after crossing a surface with MediumInterface."""
     if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
@@ -374,14 +374,14 @@ def _sppm_camera_pass(
         var py = pix // Int(fw)
 
         var vp = SPPMPixel(
-            pos=Point3f(Float32(0), Float32(0), Float32(0)),
+            pos=Point3f(Float32(0)),
             normal=Vec3f(Float32(0), Float32(1), Float32(0)),
-            beta=RGB(Float32(1), Float32(1), Float32(1)),
-            alb=RGB(Float32(0), Float32(0), Float32(0)),
-            tau=RGB(Float32(0), Float32(0), Float32(0)),
+            beta=RGB(Float32(1)),
+            alb=RGB(Float32(0)),
+            tau=RGB(Float32(0)),
             N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
             is_volume=Int32(0),
-            ld=RGB(Float32(0), Float32(0), Float32(0)),
+            ld=RGB(Float32(0)),
         )
 
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
@@ -685,7 +685,7 @@ def _gather_update(
         var r2 = vp.r2
 
         # Accumulate contributions from photons in 3x3x3 neighborhood
-        var phi = RGB(Float32(0), Float32(0), Float32(0))
+        var phi = RGB(Float32(0))
         var M = Float32(0)
 
         var cix = Int(floor(vp.pos.x * inv_cell))
@@ -869,12 +869,12 @@ def sppm_render(
     var out_pixels = alloc[Float32](n_pix * 3)
 
     for i in range(n_pix):
-        var acc = RGB(Float32(0), Float32(0), Float32(0))
+        var acc = RGB(Float32(0))
         for vs in range(_VP_SAMPLES):
             var vp = vps[i * _VP_SAMPLES + vs]
             if vp.valid == Int32(0):
                 continue
-            var vp_l = RGB(Float32(0), Float32(0), Float32(0))
+            var vp_l = RGB(Float32(0))
             if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
                 # L = tau / (pi * r² * n_passes) — tau already has
                 # albedo/pi folded in at gather time

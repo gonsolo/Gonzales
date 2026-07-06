@@ -58,9 +58,9 @@ def render_tile(
                 )
                 paths[idx] = PathState_C(
                     ray,
-                    RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
-                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
-                    RGB(Float32(0.0), Float32(0.0), Float32(0.0)),
+                    RGB(Float32(1.0)),
+                    RGB(Float32(0.0)),
+                    RGB(Float32(0.0)),
                     Int32(0), pcg_state, pcg_inc,
                     Int8(1), Int8(0), Int8(0), Int8(0),
                     Float32(0.0),
@@ -149,7 +149,7 @@ def render_tile(
                         var u_mode = pcg2.next_float()
                         paths[i].pcgState = pcg2.state
                         if u_mode < p_absorb:
-                            paths[i].throughput = RGB(Float32(0), Float32(0), Float32(0))
+                            paths[i].throughput = RGB(Float32(0))
                             paths[i].active = Int8(0)
                         elif u_mode < p_absorb + p_scatter:
                             var pcg3 = PCG32(paths[i].pcgState, paths[i].pcgInc)
@@ -295,8 +295,8 @@ def render_tile(
         for ix in range(tileW):
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
-            var sumL = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
-            var sumA = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+            var sumL = RGB(Float32(0.0))
+            var sumA = RGB(Float32(0.0))
             var sumW = Float32(0.0)
             for _ in range(spp):
                 sumL += paths[idx].estimate

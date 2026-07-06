@@ -134,14 +134,14 @@ def sppm_gen_vp_gpu(
     var py = pix // Int(fw)
 
     var vp = SPPMPixel(
-        pos=Point3f(Float32(0), Float32(0), Float32(0)),
+        pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
-        beta=RGB(Float32(1), Float32(1), Float32(1)),
-        alb=RGB(Float32(0), Float32(0), Float32(0)),
-        tau=RGB(Float32(0), Float32(0), Float32(0)),
+        beta=RGB(Float32(1)),
+        alb=RGB(Float32(0)),
+        tau=RGB(Float32(0)),
         N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=Int32(pix),
         is_volume=Int32(0),
-        ld=RGB(Float32(0), Float32(0), Float32(0)),
+        ld=RGB(Float32(0)),
     )
 
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
@@ -417,7 +417,7 @@ def sppm_gather_gpu(
     var vp = vps[i]
     var r2 = vp.r2
 
-    var phi = RGB(Float32(0), Float32(0), Float32(0))
+    var phi = RGB(Float32(0))
     var M = Float32(0)
 
     var cix = Int(floor(vp.pos.x * inv_cell))
@@ -523,12 +523,12 @@ def sppm_finalize_gpu(
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    var acc = RGB(Float32(0), Float32(0), Float32(0))
+    var acc = RGB(Float32(0))
     for vs in range(vp_samples):
         var vp = vps[i * vp_samples + vs]
         if vp.valid == Int32(0):
             continue
-        var vp_l = RGB(Float32(0), Float32(0), Float32(0))
+        var vp_l = RGB(Float32(0))
         if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
             var denom = PI * vp.r2 * Float32(n_passes)
             vp_l += vp.tau / denom
