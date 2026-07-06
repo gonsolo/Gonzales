@@ -16,7 +16,7 @@ struct BVH2Node(TrivialRegisterPassable):
 def intersect_aabb(
     bmin: Point3f, bmax: Point3f,
     rdir: Vec3f,
-    orgRdir: Vec3f,
+    org: Vec3f,
     nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool,
     tMax: Float32
 ) -> Tuple[Bool, Float32]:
@@ -27,13 +27,23 @@ def intersect_aabb(
     var nearZ = bmin.z if nearZIsMin else bmax.z
     var farZ  = bmax.z if nearZIsMin else bmin.z
 
-    var tNearX = nearX * rdir.x - orgRdir.x
-    var tNearY = nearY * rdir.y - orgRdir.y
-    var tNearZ = nearZ * rdir.z - orgRdir.z
+    # (near - org) * rdir, NOT near*rdir - org*rdir: algebraically identical
+    # for finite rdir, but for an axis-aligned ray (rdir.x = +/-inf) the two
+    # separately-computed infinite products in the old form were routinely
+    # like-signed, so subtracting them produced inf-inf = NaN and a false
+    # miss even for rays that truly passed through the box. Subtracting the
+    # (finite) coordinates FIRST and only then multiplying by the infinite
+    # rdir keeps the arithmetic finite until the last step, so it only
+    # degenerates to 0*inf=NaN in the genuinely ambiguous case of the ray
+    # origin sitting exactly on the box face — same per-node op count either
+    # way (one subtract + one multiply per axis), so this costs nothing.
+    var tNearX = (nearX - org.x) * rdir.x
+    var tNearY = (nearY - org.y) * rdir.y
+    var tNearZ = (nearZ - org.z) * rdir.z
 
-    var tFarX = farX * rdir.x - orgRdir.x
-    var tFarY = farY * rdir.y - orgRdir.y
-    var tFarZ = farZ * rdir.z - orgRdir.z
+    var tFarX = (farX - org.x) * rdir.x
+    var tFarY = (farY - org.y) * rdir.y
+    var tFarZ = (farZ - org.z) * rdir.z
 
     # tNear = max(tNearX, tNearY, tNearZ, 0)
     var tNear = tNearX if tNearX > tNearY else tNearY
@@ -161,7 +171,7 @@ def _traverse_blas_triangles(
     against the shared global `meshes` array); the caller overwrites its
     `instanceIdx` field before use."""
     var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
-    var orgRdir = Vec3f(ray_org[0] * rdir.x, ray_org[1] * rdir.y, ray_org[2] * rdir.z)
+    var org = Vec3f(ray_org[0], ray_org[1], ray_org[2])
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
@@ -213,12 +223,12 @@ def _traverse_blas_triangles(
             var rightNode = blasNodes[rightIdx]
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var leftIsHit = leftHit[0]
@@ -323,7 +333,7 @@ def traverse_bvh2_core(
     # defaults above are never dereferenced since no such leaf will exist.
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
-    var orgRdir = Vec3f(ray.origin.x * rdir.x, ray.origin.y * rdir.y, ray.origin.z * rdir.z)
+    var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
@@ -429,12 +439,12 @@ def traverse_bvh2_core(
 
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
 
@@ -502,7 +512,7 @@ def traverse_bvh2_core_defer_curves(
 ):
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
-    var orgRdir = Vec3f(ray.origin.x * rdir.x, ray.origin.y * rdir.y, ray.origin.z * rdir.z)
+    var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
@@ -613,12 +623,12 @@ def traverse_bvh2_core_defer_curves(
 
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, localTHit
             )
 
@@ -670,7 +680,7 @@ def any_hit_bvh2_core(
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
 ) -> Bool:
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
-    var orgRdir = Vec3f(ray.origin.x * rdir.x, ray.origin.y * rdir.y, ray.origin.z * rdir.z)
+    var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
@@ -728,11 +738,11 @@ def any_hit_bvh2_core(
             var rightNode = bvh2Nodes[rightIdx]
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, tMax)
             var rightHit = intersect_aabb(
                 rightNode.min, rightNode.max,
-                rdir, orgRdir,
+                rdir, org,
                 nearXIsMin, nearYIsMin, nearZIsMin, tMax)
             var leftIsHit = leftHit[0]
             var rightIsHit = rightHit[0]
