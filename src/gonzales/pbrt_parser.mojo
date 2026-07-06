@@ -444,6 +444,8 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         s[0].curves_w0.append(width0 + (width1 - width0) * t0)
         s[0].curves_w1.append(width0 + (width1 - width0) * t1)
         s[0].curves_mat.append(mat_idx)
+        s[0].curves_al.append(s[0].cur_attr.is_alight)
+        s[0].curves_al_rgb.append(s[0].cur_attr.al_rgb)
     xfm4.free()
 
 # ── Medium handlers ───────────────────────────────────────────────────────────
@@ -1335,11 +1337,23 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     # ---- Materials ----
     var n_regular = len(s[0].named_materials)
 
-    var n_al = 0
+    var n_al_mesh = 0
     for i in range(len(s[0].meshes)):
         if s[0].meshes[i].is_area_light:
-            n_al += 1
+            n_al_mesh += 1
 
+    # Curve area lights (see curves_al/curves_al_rgb) get their own synthetic
+    # material slots too, right after the mesh area-light slots — one per
+    # emissive curve *segment* (a `Shape "curve"` directive splits into
+    # several local B-spline segments, see curves_mat; they all share the
+    # same cur_attr.al_rgb at parse time, so this is simply the simplest
+    # correct granularity, not a meaningful dedup opportunity lost).
+    var n_al_curve = 0
+    for i in range(len(s[0].curves_al)):
+        if s[0].curves_al[i]:
+            n_al_curve += 1
+
+    var n_al = n_al_mesh + n_al_curve
     var n_mats = n_regular + n_al
     var mats = alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
@@ -1408,7 +1422,11 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var out_uv_nv = alloc[Int32](max(n_meshes, 1))
     var out_nrm_nv = alloc[Int32](max(n_meshes, 1))
 
-    var al_list  = alloc[AreaLight_C](max(n_al, 1))
+    # al_list (used for NEE light sampling) covers mesh area lights only —
+    # curve area lights self-emit on hit (see the primId.type==5 branch in
+    # shade_nee_core) but aren't explicitly NEE-sampled, so they need no
+    # AreaLight_C entry, just their own material slot below.
+    var al_list  = alloc[AreaLight_C](max(n_al_mesh, 1))
     var al_count = Int32(0)
     var al_mat_base = n_regular
 
@@ -1478,6 +1496,26 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             al_count += 1
+
+    # ---- Curve area lights (self-emitting only, see the note above al_list) ----
+    var curve_al_mat_idx = alloc[Int32](max(len(s[0].curves_al), 1))
+    var curve_al_running = Int32(0)
+    for ci in range(len(s[0].curves_al)):
+        if s[0].curves_al[ci]:
+            var slot = al_mat_base + n_al_mesh + Int(curve_al_running)
+            curve_al_mat_idx[ci] = Int32(slot)
+            var em = s[0].curves_al_rgb[ci]
+            mats[slot].type     = MatKind.area_light
+            mats[slot].albedo   = RGB(Float32(0))
+            mats[slot].emission = em
+            mats[slot].tex_idx  = Int32(-1)
+            mats[slot].roughU   = Float32(0)
+            mats[slot].roughV   = Float32(0)
+            mats[slot].normal_tex_idx = Int32(-1)
+            mats[slot].medium_interface_idx = Int32(-1)
+            curve_al_running += 1
+        else:
+            curve_al_mat_idx[ci] = Int32(-1)
 
     # ---- BVH construction ----
     var n_with_mi = 0
@@ -1807,7 +1845,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             prim_ids_gpu[k].type          = Int8(5)
             prim_ids_gpu[k].id1           = Int64(ci)
             prim_ids_gpu[k].id2           = Int64(group_id2[gidx])
-            prim_ids_gpu[k].materialIndex = Int64(max(Int(s[0].curves_mat[ci]), 0))
+            prim_ids_gpu[k].materialIndex = Int64(curve_al_mat_idx[ci]) if s[0].curves_al[ci] else Int64(max(Int(s[0].curves_mat[ci]), 0))
         prim_ids_gpu[k].instanceIdx = Int32(-1)
         prim_ids_gpu[k]._pad0 = Int8(0); prim_ids_gpu[k]._pad1 = Int8(0); prim_ids_gpu[k]._pad2 = Int8(0)
 
@@ -1834,7 +1872,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             prim_ids[k].type          = Int8(5)
             prim_ids[k].id1           = Int64(ci)
             prim_ids[k].id2           = Int64(group_id2[gidx])
-            prim_ids[k].materialIndex = Int64(max(Int(s[0].curves_mat[ci]), 0))
+            prim_ids[k].materialIndex = Int64(curve_al_mat_idx[ci]) if s[0].curves_al[ci] else Int64(max(Int(s[0].curves_mat[ci]), 0))
         else:
             var inst_idx = orig - Int(total_tris) - Int(total_curve_groups)
             prim_ids[k].type          = Int8(6)
@@ -1850,6 +1888,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         prim_ids[k]._pad2 = Int8(0)
 
     tri_mesh.free(); tri_local.free(); bvh_order.free(); bvh_order_gpu.free(); mesh_al_idx.free()
+    curve_al_mat_idx.free()
     curve_group_base.free(); group_curve_idx.free(); group_id2.free()
 
     # ---- Sampler params ----

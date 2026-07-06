@@ -2813,6 +2813,17 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
+    if inter.primId.type == Int8(5) and mat.type == MatKind.area_light:
+        # Emissive curve (Shape "curve" under an active AreaLightSource,
+        # see finalize_scene's curve_al_mat_idx). No AreaLight_C/NEE entry
+        # exists for these — curves are never explicitly light-sampled by
+        # another strategy — so always add full emission on hit; this is
+        # unbiased (not an approximation) precisely because there's no
+        # second sampling strategy here that would need MIS weighting.
+        path_ptr[].estimate += path_ptr[].throughput * mat.emission
+        path_ptr[].active = 0
+        return
+
     comptime if use_gpu:
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type

@@ -108,6 +108,11 @@ struct SceneParseState(Movable):
     var curves_w0:  List[Float32]
     var curves_w1:  List[Float32]
     var curves_mat: List[Int32]
+    # Per-curve area-light flag/emission — mirrors MeshAccum.is_area_light/
+    # al_rgb (triangles) and spheres_al/spheres_rgb (spheres), set from the
+    # enclosing AttributeBegin/AreaLightSource block the same way.
+    var curves_al:     List[Bool]
+    var curves_al_rgb: List[RGB]
 
     # Non-area lights
     var distant_dirs: List[Float32]   # 3 floats per light
@@ -226,6 +231,8 @@ struct SceneParseState(Movable):
         self.curves_w0  = List[Float32]()
         self.curves_w1  = List[Float32]()
         self.curves_mat = List[Int32]()
+        self.curves_al     = List[Bool]()
+        self.curves_al_rgb = List[RGB]()
 
         self.distant_dirs = List[Float32]()
         self.distant_rgbs = List[Float32]()
