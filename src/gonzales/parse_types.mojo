@@ -2,13 +2,8 @@ from .geometry import RGB
 
 # ── ParsedScene constants ─────────────────────────────────────────────────────
 
-comptime PSC_MAX_MESHES = 1024
-comptime PSC_MAX_NAMED  = 64
-comptime PSC_CTM_DEPTH  = 16
-comptime PSC_ATTR_DEPTH = 8
 comptime PSC_NAME_MAX   = 64
 comptime PSC_FILE_MAX   = 256
-comptime PSC_MAX_TEX    = 64
 
 
 # ── Internal parse state ──────────────────────────────────────────────────────
@@ -152,11 +147,6 @@ struct SceneParseState(Movable):
     var grid_density: List[Float32]  # flattened, grid_density_base[i]..+nx*ny*nz per grid
     var grid_density_base: List[Int32]
 
-    # Medium interfaces
-    var miface_inside:  List[Int32]
-    var miface_outside: List[Int32]
-    var miface_mat:     List[Int32]
-
     # Textures
     var tex_names: List[String]
     var tex_files: List[String]
@@ -269,10 +259,6 @@ struct SceneParseState(Movable):
         self.grid_ctm = List[Float32]()
         self.grid_density = List[Float32]()
         self.grid_density_base = List[Int32]()
-
-        self.miface_inside  = List[Int32]()
-        self.miface_outside = List[Int32]()
-        self.miface_mat     = List[Int32]()
 
         self.tex_names = List[String]()
         self.tex_files = List[String]()

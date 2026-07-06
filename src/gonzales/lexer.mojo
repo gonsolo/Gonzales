@@ -306,21 +306,6 @@ def scan_char(
     cursor[0] = Int32(cur + 1)
     return Int32(1)
 
-def peek_char(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
-    length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    expected: UInt8,
-) -> Int32:
-    var cur = Int(cursor[0])
-    var len = Int(length)
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
-    cursor[0] = Int32(cur)
-    if cur >= len or bytes[cur] != expected:
-        return Int32(0)
-    return Int32(1)
-
 def scan_token(
     bytes: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int32,
@@ -452,11 +437,6 @@ struct PbrtScanner:
 
 
 @always_inline
-def scanner_cursor_ptr(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> UnsafePointer[Int32, MutAnyOrigin]:
-    return UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
-
-
-@always_inline
 def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
@@ -500,19 +480,6 @@ def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[Pbrt
     return handle
 
 
-def scanner_from_bytes(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int32) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
-    var handle = alloc[PbrtScanner](1)
-    var buf = alloc[UInt8](Int(length) + 1)
-    for i in range(Int(length)):
-        buf[i] = bytes[i]
-    buf[Int(length)] = UInt8(0)
-    handle[0].buffer = buf
-    handle[0].total_bytes = length
-    handle[0].cursor = Int32(0)
-    handle[0].is_at_end = Int32(0)
-    return handle
-
-
 def scanner_free(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
     if Int(handle[0].buffer) > 1:
         handle[0].buffer.free()
@@ -521,19 +488,6 @@ def scanner_free(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
 
 def scanner_is_at_end(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
     return handle[0].is_at_end
-
-
-def scanner_location(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
-    return handle[0].cursor
-
-
-def scanner_peek_char(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], expected: UInt8) -> Int32:
-    var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = peek_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
-    handle[0].cursor = cur[0]
-    cur.free()
-    return ret
 
 
 def scanner_scan_char(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], expected: UInt8) -> Int32:
@@ -620,15 +574,6 @@ def scanner_scan_token(
 
 
 # ── String / type utilities (shared by material_builder and light_builder) ────
-
-def psc_strcmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
-    var i = 0
-    while True:
-        var ca = Int32(a[i]); var cb = Int32(b[i])
-        if ca != cb: return ca - cb
-        if ca == Int32(0): return Int32(0)
-        i += 1
-    # unreachable
 
 def _psc_streq(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral) -> Bool:
     var bp = b.unsafe_ptr()
