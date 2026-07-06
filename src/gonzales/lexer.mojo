@@ -722,19 +722,30 @@ def _psc_type_is_str(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
 def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                    type_buf: UnsafePointer[UInt8, MutAnyOrigin],
                    is_array: Int32):
-    var tmp_f = alloc[Float32](65536)
-    var tmp_i = alloc[Int32](16384)
     var tmp_s = alloc[UInt8](1024)
     if _psc_type_is_float(type_buf):
         if is_array:
-            _ = scanner_scan_floats(handle, tmp_f, 65536)
+            # Size to fit exactly — a fixed cap here would silently stop
+            # short and desync the scanner cursor mid-array, same bug as
+            # the mesh/curve scratch buffers (see pbrt_parser.mojo).
+            var cnt = scanner_count_floats(handle)
+            var tmp = alloc[Float32](Int(cnt) if cnt > Int32(0) else 1)
+            _ = scanner_scan_floats(handle, tmp, cnt)
+            tmp.free()
         else:
-            _ = scanner_scan_float(handle, tmp_f)
+            var tmp = alloc[Float32](1)
+            _ = scanner_scan_float(handle, tmp)
+            tmp.free()
     elif _psc_type_is_int(type_buf):
         if is_array:
-            _ = scanner_scan_ints(handle, tmp_i, 16384)
+            var cnt = scanner_count_ints(handle)
+            var tmp = alloc[Int32](Int(cnt) if cnt > Int32(0) else 1)
+            _ = scanner_scan_ints(handle, tmp, cnt)
+            tmp.free()
         else:
-            _ = scanner_scan_int(handle, tmp_i)
+            var tmp = alloc[Int32](1)
+            _ = scanner_scan_int(handle, tmp)
+            tmp.free()
     elif _psc_type_is_str(type_buf):
         _ = scanner_parse_quoted_string(handle, tmp_s, 1024)
         if is_array:
@@ -745,26 +756,61 @@ def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         nl_buf[0] = UInt8(10)
         _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 1024)
         nl_buf.free()
-    tmp_f.free()
-    tmp_i.free()
     tmp_s.free()
 
-def _psc_skip_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
-    var type_buf = alloc[UInt8](64)
-    var name_buf = alloc[UInt8](128)
-    var ia = alloc[Int32](1)
-    ia[0] = Int32(0)
-    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    while found != 0:
-        var is_array = ia[0]
-        _psc_skip_value(handle, type_buf, is_array)
-        if is_array:
+struct ParamScanner(Movable):
+    """Wraps the alloc-buffers / parse-header-loop / free scaffolding shared
+    by every PBRT directive's parameter loop. Construct once per directive,
+    then `while ps.next(handle): ...`; ps.type_buf/ps.name_buf/ps.is_array
+    refresh each call. Unrecognized params: `ps.skip(handle)`."""
+    var type_buf: UnsafePointer[UInt8, MutAnyOrigin]
+    var name_buf: UnsafePointer[UInt8, MutAnyOrigin]
+    var ia: UnsafePointer[Int32, MutAnyOrigin]
+    var type_cap: Int32
+    var name_cap: Int32
+    var is_array: Int32
+
+    def __init__(out self, type_cap: Int32 = Int32(64), name_cap: Int32 = Int32(128)):
+        self.type_cap = type_cap
+        self.name_cap = name_cap
+        self.type_buf = alloc[UInt8](Int(type_cap))
+        self.name_buf = alloc[UInt8](Int(name_cap))
+        self.ia = alloc[Int32](1)
+        self.is_array = Int32(0)
+
+    def next(mut self, handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Bool:
+        self.ia[0] = Int32(0)
+        var found = scanner_parse_param_header(handle, self.type_buf, self.type_cap,
+                                                self.name_buf, self.name_cap, self.ia)
+        self.is_array = self.ia[0]
+        return found != 0
+
+    def name_is(self, n: StringLiteral) -> Bool:
+        return _psc_streq(self.name_buf, n)
+
+    def is_float(self) -> Bool:
+        return _psc_type_is_float(self.type_buf)
+
+    def is_int(self) -> Bool:
+        return _psc_type_is_int(self.type_buf)
+
+    def is_str(self) -> Bool:
+        return _psc_type_is_str(self.type_buf)
+
+    def skip(self, handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
+        _psc_skip_value(handle, self.type_buf, self.is_array)
+        if self.is_array:
             _ = scanner_scan_char(handle, UInt8(93))  # ']'
-        ia[0] = Int32(0)
-        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    ia.free()
-    type_buf.free()
-    name_buf.free()
+
+    def __del__(deinit self):
+        self.type_buf.free()
+        self.name_buf.free()
+        self.ia.free()
+
+def _psc_skip_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
+    var ps = ParamScanner()
+    while ps.next(handle):
+        ps.skip(handle)
 
 def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
     var nl_buf = alloc[UInt8](1)

@@ -1,10 +1,9 @@
 from std.memory import alloc
 from std.math import sqrt
-from .lexer import (PbrtScanner, scanner_parse_quoted_string, scanner_parse_param_header,
-                    scanner_scan_char,
-                    _psc_streq, _psc_type_is_float, _psc_type_is_blackbody, _psc_type_is_str,
-                    _psc_blackbody_to_rgb, _psc_scan_rgb, _psc_scan_one_float,
-                    _psc_skip_value)
+from .lexer import (PbrtScanner, scanner_parse_quoted_string,
+                    scanner_scan_char, ParamScanner,
+                    _psc_streq, _psc_type_is_blackbody,
+                    _psc_blackbody_to_rgb, _psc_scan_rgb, _psc_scan_one_float)
 from .parse_types import SceneParseState, PSC_FILE_MAX
 from .geometry import RGB
 from .transform import transform_points
@@ -18,37 +17,25 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigi
     var rgb = alloc[Float32](3)
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
     var scale = Float32(1.0)  # accumulated separately; applied after loop
-    var type_buf = alloc[UInt8](64)
-    var name_buf = alloc[UInt8](128)
-    var ia = alloc[Int32](1)
-    ia[0] = Int32(0)
-    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    while found != 0:
-        var is_array = ia[0]
-        if _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, rgb, is_array)
-        elif _psc_streq(name_buf, "L") and _psc_type_is_blackbody(type_buf):
-            var temp = _psc_scan_one_float(handle, is_array)
+    var ps = ParamScanner()
+    while ps.next(handle):
+        if ps.name_is("L") and ps.is_float():
+            _psc_scan_rgb(handle, rgb, ps.is_array)
+        elif ps.name_is("L") and _psc_type_is_blackbody(ps.type_buf):
+            var temp = _psc_scan_one_float(handle, ps.is_array)
             _psc_blackbody_to_rgb(temp, rgb)
-        elif _psc_streq(name_buf, "scale") and _psc_type_is_float(type_buf):
-            scale *= _psc_scan_one_float(handle, is_array)
+        elif ps.name_is("scale") and ps.is_float():
+            scale *= _psc_scan_one_float(handle, ps.is_array)
         else:
-            _psc_skip_value(handle, type_buf, is_array)
-            if is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-        ia[0] = Int32(0)
-        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    ia.free()
+            ps.skip(handle)
     rgb[0] *= scale; rgb[1] *= scale; rgb[2] *= scale
     s[0].cur_attr.al_rgb = RGB(rgb[0], rgb[1], rgb[2])
-    sbuf.free(); type_buf.free(); name_buf.free(); rgb.free()
+    sbuf.free(); rgb.free()
 
 def handle_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                              s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var ltype = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, ltype, 64)
-    var type_buf = alloc[UInt8](64)
-    var name_buf = alloc[UInt8](128)
     var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
     str_val[0] = UInt8(0)  # must init: alloc doesn't zero-fill
     var rgb      = alloc[Float32](3)
@@ -56,31 +43,23 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     rgb[0] = Float32(1); rgb[1] = Float32(1); rgb[2] = Float32(1)
     xyz[0] = Float32(0); xyz[1] = Float32(0); xyz[2] = Float32(1000)  # default: from above
     var scale    = Float32(1.0)
-    var ia = alloc[Int32](1)
-    ia[0] = Int32(0)
-    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    while found != 0:
-        var is_array = ia[0]
-        if (_psc_streq(name_buf, "L") or _psc_streq(name_buf, "I")) and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, rgb, is_array)
-        elif (_psc_streq(name_buf, "L") or _psc_streq(name_buf, "I")) and _psc_type_is_blackbody(type_buf):
-            var temp = _psc_scan_one_float(handle, is_array)
+    var ps = ParamScanner()
+    while ps.next(handle):
+        if (ps.name_is("L") or ps.name_is("I")) and ps.is_float():
+            _psc_scan_rgb(handle, rgb, ps.is_array)
+        elif (ps.name_is("L") or ps.name_is("I")) and _psc_type_is_blackbody(ps.type_buf):
+            var temp = _psc_scan_one_float(handle, ps.is_array)
             _psc_blackbody_to_rgb(temp, rgb)
-        elif _psc_streq(name_buf, "scale") and _psc_type_is_float(type_buf):
-            scale = _psc_scan_one_float(handle, is_array)
-        elif _psc_streq(name_buf, "from") and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, xyz, is_array)   # reuse xyz for point-light position
-        elif _psc_streq(name_buf, "filename") and _psc_type_is_str(type_buf):
+        elif ps.name_is("scale") and ps.is_float():
+            scale = _psc_scan_one_float(handle, ps.is_array)
+        elif ps.name_is("from") and ps.is_float():
+            _psc_scan_rgb(handle, xyz, ps.is_array)   # reuse xyz for point-light position
+        elif ps.name_is("filename") and ps.is_str():
             _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
         else:
-            _psc_skip_value(handle, type_buf, is_array)
-            if is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-        ia[0] = Int32(0)
-        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    ia.free()
+            ps.skip(handle)
 
     if _psc_streq(ltype, "distant"):
         # direction = -from (from describes where light comes from)
@@ -120,4 +99,4 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         for ci in range(16):
             s[0].inf_ctm.append(s[0].ctm[ci])
 
-    ltype.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free(); xyz.free()
+    ltype.free(); str_val.free(); rgb.free(); xyz.free()

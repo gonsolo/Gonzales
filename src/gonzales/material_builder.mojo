@@ -1,11 +1,10 @@
 from std.memory import alloc
 from std.math import exp, sqrt
-from .lexer import (PbrtScanner, scanner_parse_quoted_string, scanner_parse_param_header,
-                    scanner_scan_char, scanner_scan_float,
+from .lexer import (PbrtScanner, scanner_parse_quoted_string,
+                    scanner_scan_char, scanner_scan_float, ParamScanner,
                     _psc_streq, _psc_strncpy, _psc_strncmp,
-                    _psc_type_is_float, _psc_type_is_int, _psc_type_is_str,
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
-                    _psc_scan_one_bool, _psc_skip_value)
+                    _psc_scan_one_bool)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
 from .geometry import RGB, MatKind
 
@@ -64,17 +63,12 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
     var mix_amount = Float32(0.5)
     mix_name1[0] = UInt8(0); mix_name2[0] = UInt8(0)
-    var type_buf = alloc[UInt8](64)
-    var name_buf = alloc[UInt8](128)
     var str_val  = alloc[UInt8](64)
-    var ia = alloc[Int32](1)
-    ia[0] = Int32(0)
-    var found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    while found != 0:
-        var is_array = ia[0]
-        if _psc_streq(name_buf, "type") and _psc_type_is_str(type_buf):
+    var ps = ParamScanner()
+    while ps.next(handle):
+        if ps.name_is("type") and ps.is_str():
             _ = scanner_parse_quoted_string(handle, str_val, 64)
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
             if _psc_streq(str_val, "conductor"):
                 mat_type = MatKind.conductor
@@ -96,51 +90,51 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_type = MatKind.interface
             else:
                 mat_type = MatKind.diffuse
-        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
-            if _psc_streq(name_buf, "eta"):
-                _psc_scan_rgb(handle, metal_eta, is_array)
+        elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
+            if ps.name_is("eta"):
+                _psc_scan_rgb(handle, metal_eta, ps.is_array)
             else:
-                _psc_scan_rgb(handle, metal_k, is_array)
+                _psc_scan_rgb(handle, metal_k, ps.is_array)
             has_spectral_conductor = True
-        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "intIOR")) and type_buf[0] == UInt8(102):  # 'f' float IOR for dielectric
+        elif (ps.name_is("eta") or ps.name_is("intIOR")) and ps.type_buf[0] == UInt8(102):  # 'f' float IOR for dielectric
             var tmp = alloc[Float32](1)
             _ = scanner_scan_float(handle, tmp)
             mat_ior = tmp[0]
             tmp.free()
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-        elif (_psc_streq(name_buf, "uroughness") or _psc_streq(name_buf, "roughness")) and _psc_type_is_float(type_buf):
-            mat_roughU = _psc_scan_one_float(handle, is_array)
-            if _psc_streq(name_buf, "roughness"):
+        elif (ps.name_is("uroughness") or ps.name_is("roughness")) and ps.is_float():
+            mat_roughU = _psc_scan_one_float(handle, ps.is_array)
+            if ps.name_is("roughness"):
                 mat_roughV = mat_roughU
-        elif _psc_streq(name_buf, "vroughness") and _psc_type_is_float(type_buf):
-            mat_roughV = _psc_scan_one_float(handle, is_array)
-        elif _psc_streq(name_buf, "remaproughness") and type_buf[0] == UInt8(98):  # 'b' bool
-            mat_remap_roughness = _psc_scan_one_bool(handle, is_array)
-        elif _psc_streq(name_buf, "reflectance") and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, rgb, is_array)
-        elif _psc_streq(name_buf, "transmittance") and _psc_type_is_float(type_buf):
+        elif ps.name_is("vroughness") and ps.is_float():
+            mat_roughV = _psc_scan_one_float(handle, ps.is_array)
+        elif ps.name_is("remaproughness") and ps.type_buf[0] == UInt8(98):  # 'b' bool
+            mat_remap_roughness = _psc_scan_one_bool(handle, ps.is_array)
+        elif ps.name_is("reflectance") and ps.is_float():
+            _psc_scan_rgb(handle, rgb, ps.is_array)
+        elif ps.name_is("transmittance") and ps.is_float():
             # DiffuseTransmission transmittance — stored in trans_rgb, later -> mat.emission
-            _psc_scan_rgb(handle, trans_rgb, is_array)
-        elif _psc_streq(name_buf, "eumelanin") and _psc_type_is_float(type_buf):
+            _psc_scan_rgb(handle, trans_rgb, ps.is_array)
+        elif ps.name_is("eumelanin") and ps.is_float():
             # Hair material: melanin concentration -> stored in rgb[0] (temp)
-            eumelanin = _psc_scan_one_float(handle, is_array)
-        elif _psc_streq(name_buf, "pheomelanin") and _psc_type_is_float(type_buf):
-            pheomelanin = _psc_scan_one_float(handle, is_array)
-        elif _psc_streq(name_buf, "sigma_a") and _psc_type_is_float(type_buf):
+            eumelanin = _psc_scan_one_float(handle, ps.is_array)
+        elif ps.name_is("pheomelanin") and ps.is_float():
+            pheomelanin = _psc_scan_one_float(handle, ps.is_array)
+        elif ps.name_is("sigma_a") and ps.is_float():
             # Hair material: direct absorption coefficients (R,G,B)
-            _psc_scan_rgb(handle, sigma_a_rgb, is_array)
+            _psc_scan_rgb(handle, sigma_a_rgb, ps.is_array)
             has_sigma_a = True
-        elif (_psc_streq(name_buf, "eta") or _psc_streq(name_buf, "k")) and type_buf[0] == UInt8(115):  # 's' = spectrum
+        elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(115):  # 's' = spectrum
             # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
             # Read the metal name string, look up precomputed F0 per channel.
             var mname = alloc[UInt8](64)
             _ = scanner_parse_quoted_string(handle, mname, 64)
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
             # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
             # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
-            if _psc_streq(name_buf, "eta"):
+            if ps.name_is("eta"):
                 if _psc_strncmp(mname, "metal-Ag", 8) == 0:
                     metal_eta[0] = Float32(0.136); metal_eta[1] = Float32(0.130); metal_eta[2] = Float32(0.144)
                 elif _psc_strncmp(mname, "metal-Al", 8) == 0:
@@ -161,9 +155,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                     metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
                 has_spectral_conductor = True
             mname.free()
-        elif _psc_streq(name_buf, "reflectance") and type_buf[0] == UInt8(116):  # 't' = texture
+        elif ps.name_is("reflectance") and ps.type_buf[0] == UInt8(116):  # 't' = texture
             _ = scanner_parse_quoted_string(handle, str_val, 64)
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
             # Look up str_val in tex_names (imagemap) first, then constant
             # textures, then procedural checkerboard textures.
@@ -194,11 +188,11 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                         checker_uscale = s[0].checker_uscale[ki]
                         checker_vscale = s[0].checker_vscale[ki]
                         break
-        elif _psc_streq(name_buf, "L") and _psc_type_is_float(type_buf):
-            _psc_scan_rgb(handle, rgb, is_array)
-        elif (_psc_streq(name_buf, "normalmap") or _psc_streq(name_buf, "bumpmap")) and type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
+        elif ps.name_is("L") and ps.is_float():
+            _psc_scan_rgb(handle, rgb, ps.is_array)
+        elif (ps.name_is("normalmap") or ps.name_is("bumpmap")) and ps.type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
             _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
             # Register the file as an (unnamed) imagemap texture and point the
             # material's normal_tex_idx at it — same path as a texture reference.
@@ -206,9 +200,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             normal_tex_idx_for_mat = Int32(len(s[0].tex_names))
             s[0].tex_names.append(String("__normalmap"))
             s[0].tex_files.append(nm_file)
-        elif _psc_streq(name_buf, "amount") and _psc_type_is_float(type_buf):
-            mix_amount = _psc_scan_one_float(handle, is_array)
-        elif _psc_streq(name_buf, "materials") and _psc_type_is_str(type_buf):
+        elif ps.name_is("amount") and ps.is_float():
+            mix_amount = _psc_scan_one_float(handle, ps.is_array)
+        elif ps.name_is("materials") and ps.is_str():
             # Two quoted material names for mix
             var tmp1 = alloc[UInt8](PSC_NAME_MAX)
             var tmp2 = alloc[UInt8](PSC_NAME_MAX)
@@ -217,15 +211,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             _psc_strncpy(mix_name1, tmp1, PSC_NAME_MAX)
             _psc_strncpy(mix_name2, tmp2, PSC_NAME_MAX)
             tmp1.free(); tmp2.free()
-            if is_array:
+            if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
         else:
-            _psc_skip_value(handle, type_buf, is_array)
-            if is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-        ia[0] = Int32(0)
-        found = scanner_parse_param_header(handle, type_buf, 64, name_buf, 128, ia)
-    ia.free()
+            ps.skip(handle)
 
     # Store into named_materials List
     var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
@@ -277,7 +266,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     nm.mix_amount     = mix_amount
     s[0].named_materials.append(nm^)
 
-    mat_name.free(); type_buf.free(); name_buf.free(); str_val.free(); rgb.free()
+    mat_name.free(); str_val.free(); rgb.free()
     trans_rgb.free(); metal_eta.free(); metal_k.free()
     mix_name1.free(); mix_name2.free()
     sigma_a_rgb.free()
