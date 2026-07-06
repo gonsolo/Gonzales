@@ -689,24 +689,9 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var light_idx_coat = ls_result_coat[0]
             var light_sel_pdf_coat = ls_result_coat[1]
             var al_coat = ctx.lights.area_lights[light_idx_coat]
-            var lmesh_coat = ctx.meshes[Int(al_coat.meshIdx)]
-            var lti_coat = Int(pcg.next_uint() % UInt32(max(Int(al_coat.n_tris), 1)))
-            var lb_coat = lti_coat * 3
-            var lv0c = Int(lmesh_coat.vertexIndices[lb_coat])
-            var lv1c = Int(lmesh_coat.vertexIndices[lb_coat + 1])
-            var lv2c = Int(lmesh_coat.vertexIndices[lb_coat + 2])
-            var lp0c = SIMD[DType.float32, 3](lmesh_coat.points[lv0c*4], lmesh_coat.points[lv0c*4+1], lmesh_coat.points[lv0c*4+2])
-            var lp1c = SIMD[DType.float32, 3](lmesh_coat.points[lv1c*4], lmesh_coat.points[lv1c*4+1], lmesh_coat.points[lv1c*4+2])
-            var lp2c = SIMD[DType.float32, 3](lmesh_coat.points[lv2c*4], lmesh_coat.points[lv2c*4+1], lmesh_coat.points[lv2c*4+2])
             var r1c = pcg.next_float()
             var r2c = pcg.next_float()
-            var sqrt_r1c = sqrt(r1c)
-            var light_point_c = lp0c * (Float32(1.0) - sqrt_r1c) + lp1c * (sqrt_r1c * (Float32(1.0) - r2c)) + lp2c * (sqrt_r1c * r2c)
-            var lcross_c = cross(lp1c - lp0c, lp2c - lp0c)
-            var light_normal_c = lcross_c
-            var lcross_len_c = dot(lcross_c, lcross_c)
-            if lcross_len_c > Float32(0.0):
-                light_normal_c = lcross_c * (Float32(1.0) / sqrt(lcross_len_c))
+            var (light_point_c, light_normal_c, _, _) = _sample_light_point_and_normal(ctx, al_coat, r1c, r2c, pcg)
             var to_light_c = light_point_c - hit_point
             var dist_sq_c = dot(to_light_c, to_light_c)
             var dist_c = sqrt(dist_sq_c)
@@ -817,24 +802,9 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var light_idx = ls_result_cd[0]
             var light_sel_pdf_cd = ls_result_cd[1]
             var al = ctx.lights.area_lights[light_idx]
-            var lmesh = ctx.meshes[Int(al.meshIdx)]
-            var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-            var lb = lti * 3
-            var lv0 = Int(lmesh.vertexIndices[lb])
-            var lv1 = Int(lmesh.vertexIndices[lb + 1])
-            var lv2 = Int(lmesh.vertexIndices[lb + 2])
-            var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-            var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-            var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
             var r1 = pcg.next_float()
             var r2 = pcg.next_float()
-            var sqrt_r1 = sqrt(r1)
-            var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
-            var lcross = cross(lp1 - lp0, lp2 - lp0)
-            var light_normal = lcross
-            var lcross_len = dot(lcross, lcross)
-            if lcross_len > Float32(0.0):
-                light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+            var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
             var to_light = light_point - hit_point
             var dist_sq = dot(to_light, to_light)
             var dist = sqrt(dist_sq)
@@ -2161,6 +2131,56 @@ def _nee_infinite_light[enqueue_shadow: Bool](
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
 
 @always_inline
+def _sample_light_point_and_normal(
+    ctx: ShadeContext, al: AreaLight_C, u1: Float32, u2: Float32, mut pcg: PCG32,
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    """Point + outward normal on an area light's surface for NEE, plus the
+    surface's own (dp_du, dp_dv) tangent basis (used only by
+    _nee_area_lights' MNEE glass-refraction focusing — meaningless for a
+    curve's round tube, always zero for kind==1 since MNEE is gated off
+    there): a random triangle on a mesh light (kind==0, u1/u2 = barycentric
+    coords), or a random point on a curve's swept tube (kind==1, u1 =
+    position along the picked piece, u2 = angle around the tube). Which
+    triangle/piece is picked is its own uniform draw from pcg, independent
+    of (u1, u2) — mirrors the pre-existing mesh-light behaviour of picking
+    a uniform random triangle rather than area-weighting by triangle."""
+    if al.kind == Int8(1):
+        var curve = ctx.curves[Int(al.meshIdx)]
+        var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))
+        var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
+        var axis = q1 - q0
+        var axis_len = sqrt(dot(axis, axis))
+        var axis_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+        if axis_len > Float32(1e-8):
+            axis_dir = axis * (Float32(1.0) / axis_len)
+        var r = r0 + (r1 - r0) * u1
+        var u_perp = _curve_perp_axis(axis_dir)
+        var v_perp = cross(axis_dir, u_perp)
+        var theta = u2 * TWO_PI
+        var radial = u_perp * cos(theta) + v_perp * sin(theta)
+        var point = q0 + axis_dir * (axis_len * u1) + radial * r
+        var zero3 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        return (point, radial, zero3, zero3)
+    else:
+        var lmesh = ctx.meshes[Int(al.meshIdx)]
+        var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+        var lb = lti * 3
+        var lv0 = Int(lmesh.vertexIndices[lb])
+        var lv1 = Int(lmesh.vertexIndices[lb + 1])
+        var lv2 = Int(lmesh.vertexIndices[lb + 2])
+        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+        var sqrt_r1 = sqrt(u1)
+        var point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - u2)) + lp2 * (sqrt_r1 * u2)
+        var lcross = cross(lp1 - lp0, lp2 - lp0)
+        var normal = lcross
+        var lcross_len = dot(lcross, lcross)
+        if lcross_len > Float32(0.0):
+            normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+        return (point, normal, lp1 - lp0, lp2 - lp0)
+
+@always_inline
 def _nee_area_lights[enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -2184,24 +2204,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
     var light_idx = ls_result_nee[0]
     var light_sel_pdf_nee = ls_result_nee[1]
     var al = ctx.lights.area_lights[light_idx]
-    var lmesh = ctx.meshes[Int(al.meshIdx)]
-    var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-    var lb = lti * 3
-    var lv0 = Int(lmesh.vertexIndices[lb])
-    var lv1 = Int(lmesh.vertexIndices[lb + 1])
-    var lv2 = Int(lmesh.vertexIndices[lb + 2])
-    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-    var r1 = u_bary1
-    var r2 = u_bary2
-    var sqrt_r1 = sqrt(r1)
-    var light_point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - r2)) + lp2 * (sqrt_r1 * r2)
-    var lcross = cross(lp1 - lp0, lp2 - lp0)
-    var light_normal = lcross
-    var lcross_len = dot(lcross, lcross)
-    if lcross_len > Float32(0.0):
-        light_normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, u_bary1, u_bary2, pcg)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     var dist = sqrt(dist_sq)
@@ -2230,7 +2233,11 @@ def _nee_area_lights[enqueue_shadow: Bool](
                                ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
             var probe_inter = probe_store[0]
             var used_mnee = False
-            if probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
+            # MNEE's glass-refraction focusing needs the light's own surface
+            # tangents (ldp_du_v/ldp_dv_v below) — well-defined for a flat
+            # mesh triangle, not for a curve's swept tube. Curve lights fall
+            # back to plain (non-MNEE) shadow-ray NEE through glass.
+            if al.kind == Int8(0) and probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
                 var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
                 if probe_mat.type == MatKind.dielectric or probe_mat.type == MatKind.thin_dielectric:
                     # --- Extract x1 geometry ---
@@ -2266,7 +2273,6 @@ def _nee_area_lights[enqueue_shadow: Bool](
                             traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
                             probe2_inter = probe2_store[0]
-                        var ldp_du_v = lp1 - lp0; var ldp_dv_v = lp2 - lp0
                         if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
                             var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
                             if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
@@ -2814,13 +2820,55 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     if inter.primId.type == Int8(5) and mat.type == MatKind.area_light:
-        # Emissive curve (Shape "curve" under an active AreaLightSource,
-        # see finalize_scene's curve_al_mat_idx). No AreaLight_C/NEE entry
-        # exists for these — curves are never explicitly light-sampled by
-        # another strategy — so always add full emission on hit; this is
-        # unbiased (not an approximation) precisely because there's no
-        # second sampling strategy here that would need MIS weighting.
-        path_ptr[].estimate += path_ptr[].throughput * mat.emission
+        # Emissive curve hit directly by the camera/bounce ray. Curves are
+        # now explicitly NEE-sampled too (AreaLight_C.kind==1, see al_list
+        # in finalize_scene) — symmetric with the type==3 triangle case
+        # above, this MIS-weights against the curve's own selection pdf
+        # instead of always crediting full emission (which would double-
+        # count against the NEE strategy now that one exists).
+        var emission = mat.emission
+        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+            path_ptr[].estimate += path_ptr[].throughput * emission
+        else:
+            var pdf_bsdf = path_ptr[].lastBsdfPdf
+            if pdf_bsdf > Float32(0.0):
+                var curve_idx = Int(inter.primId.id1)
+                # Curve lights are rare (a handful of emissive strands at
+                # most), so a linear scan for this curve's al_list slot is
+                # cheap — no reverse index is threaded through PrimId_C.
+                var al_idx = -1
+                for li in range(ctx.lights.area_light_count):
+                    var cand = ctx.lights.area_lights[li]
+                    if cand.kind == Int8(1) and Int(cand.meshIdx) == curve_idx:
+                        al_idx = li
+                        break
+                if al_idx >= 0:
+                    var al = ctx.lights.area_lights[al_idx]
+                    if al.total_area > Float32(0.0):
+                        # Reconstruct the outward radial normal at the actual
+                        # hit point from (u, v) — same formula shade_hair uses.
+                        var curve = ctx.curves[curve_idx]
+                        var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
+                        var v_global = inter.v
+                        var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
+                        var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+                        var seg_axis = q1 - q0
+                        var seg_len = sqrt(dot(seg_axis, seg_axis))
+                        var tangent = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+                        if seg_len > Float32(1e-8):
+                            tangent = seg_axis * (Float32(1.0) / seg_len)
+                        var n_perp = _curve_perp_axis(tangent)
+                        var b_perp0 = cross(tangent, n_perp)
+                        var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+                        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                        var cos_l = -dot(geo_normal, ray_dir)
+                        var dist2 = inter.tHit * inter.tHit
+                        if cos_l > Float32(0.0):
+                            var ls = ctx.lights.light_sampler
+                            var al_sel_pdf = ls.cdf[al_idx + 1] - ls.cdf[al_idx]
+                            var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
+                            var w = power_heuristic(pdf_bsdf, pdf_light)
+                            path_ptr[].estimate += path_ptr[].throughput * emission * w
         path_ptr[].active = 0
         return
 

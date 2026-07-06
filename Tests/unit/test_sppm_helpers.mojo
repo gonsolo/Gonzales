@@ -197,7 +197,7 @@ def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() r
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
 
-    var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(3.0))
+    var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(3.0), Int8(0), Int8(0), Int8(0), Int8(0))
     var lights = alloc[AreaLight_C](1)
     lights[0] = al
 
@@ -230,7 +230,7 @@ def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shadi
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
-    var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5))
+    var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
     var lights = alloc[AreaLight_C](1)
     lights[0] = al
 

@@ -13,7 +13,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
-                        Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
+                        Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
                         LightSampler_C, Instance_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
@@ -1422,11 +1422,11 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     var out_uv_nv = alloc[Int32](max(n_meshes, 1))
     var out_nrm_nv = alloc[Int32](max(n_meshes, 1))
 
-    # al_list (used for NEE light sampling) covers mesh area lights only —
-    # curve area lights self-emit on hit (see the primId.type==5 branch in
-    # shade_nee_core) but aren't explicitly NEE-sampled, so they need no
-    # AreaLight_C entry, just their own material slot below.
-    var al_list  = alloc[AreaLight_C](max(n_al_mesh, 1))
+    # al_list (used for NEE light sampling) covers mesh area lights (kind=0,
+    # filled below) AND curve area lights (kind=1, appended once curve_buf
+    # is built further down in "Native curves") — sized for both up front
+    # since it's one contiguous allocation.
+    var al_list  = alloc[AreaLight_C](max(n_al_mesh + n_al_curve, 1))
     var al_count = Int32(0)
     var al_mat_base = n_regular
 
@@ -1487,6 +1487,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             al_list[al_idx].n_tris     = Int32(nt)
             al_list[al_idx].emission   = em
             al_list[al_idx].total_area = t_area
+            al_list[al_idx].kind       = Int8(0)
             mats[al_mat_base + al_idx].type     = Int8(2)
             mats[al_mat_base + al_idx].albedo   = RGB(Float32(0))
             mats[al_mat_base + al_idx].emission = em
@@ -1497,7 +1498,12 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             al_count += 1
 
-    # ---- Curve area lights (self-emitting only, see the note above al_list) ----
+    # ---- Curve area light material slots ----
+    # Each emissive curve segment gets its own synthetic material slot here
+    # (used by the direct-hit path in shade_nee_core), same as before. Their
+    # AreaLight_C/NEE entries (al_list[n_al_mesh:]) are appended further down
+    # in "Native curves" once curve_buf/curve_n_pieces exist — total_area
+    # needs the curve's actual piece tessellation (curve_light_tube_area).
     var curve_al_mat_idx = alloc[Int32](max(len(s[0].curves_al), 1))
     var curve_al_running = Int32(0)
     for ci in range(len(s[0].curves_al)):
@@ -2145,6 +2151,21 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         psc[0].curves = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling()
     psc[0].curve_count = Int32(nc)
     curve_n_pieces.free()
+
+    # ---- Curve area light NEE entries (al_list[n_al_mesh:]) ----
+    # Mirrors the mesh area-light loop above, but needs curve_buf/n_pieces
+    # (curve_light_tube_area), which only exist from this point on.
+    var cl_running = Int32(0)
+    for i in range(nc):
+        if s[0].curves_al[i]:
+            var idx = n_al_mesh + Int(cl_running)
+            al_list[idx].meshIdx    = Int32(i)
+            al_list[idx].n_tris     = Int32(0)
+            al_list[idx].emission   = s[0].curves_al_rgb[i]
+            al_list[idx].total_area = curve_light_tube_area(psc[0].curves[i])
+            al_list[idx].kind       = Int8(1)
+            cl_running += 1
+    psc[0].area_light_count = Int32(n_al_mesh) + cl_running
 
     # ---- Heterogeneous density grids ("uniformgrid" media) ----
     var ng = len(s[0].grid_nx)

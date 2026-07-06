@@ -7,6 +7,7 @@ from .geometry import (
     RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI,
+    Curve_C, curve_piece_endpoints, _curve_perp_axis,
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .transform import transform_normal_by_instance
@@ -272,14 +273,34 @@ def sample_area_light_uniform(
     meshes:     UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     n_lights:   Int,
     mut pcg:    PCG32,
+    curves:     UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
 ) -> AreaLightSample:
-    """Uniformly picks one area light, one triangle on it, and a barycentric
-    point + geometric normal on that triangle — using the mesh's per-vertex
-    shading normals when present (needed for e.g. ceiling lights whose
-    winding gives an upward geometric normal but whose scene-specified
-    normals point down into the room)."""
+    """Uniformly picks one area light, then a point + geometric normal on
+    it: a random triangle + barycentric point on a mesh light (kind==0,
+    using the mesh's per-vertex shading normals when present — needed for
+    e.g. ceiling lights whose winding gives an upward geometric normal but
+    whose scene-specified normals point down into the room), or a random
+    piece + point on a curve's swept tube (kind==1, `curves` must be a real
+    pointer whenever any curve lights exist)."""
     var li = Int(pcg.next_uint() % UInt32(n_lights))
     var al = areaLights[li]
+    if al.kind == Int8(1):
+        var curve = curves[Int(al.meshIdx)]
+        var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))
+        var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
+        var axis = q1 - q0
+        var axis_len = sqrt(dot(axis, axis))
+        var axis_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+        if axis_len > Float32(1e-8):
+            axis_dir = axis * (Float32(1.0) / axis_len)
+        var ru1 = pcg.next_float(); var ru2 = pcg.next_float()
+        var r = r0 + (r1 - r0) * ru1
+        var u_perp = _curve_perp_axis(axis_dir)
+        var v_perp = cross(axis_dir, u_perp)
+        var theta = ru2 * (Float32(2.0) * PI)
+        var radial = u_perp * cos(theta) + v_perp * sin(theta)
+        var point = q0 + axis_dir * (axis_len * ru1) + radial * r
+        return AreaLightSample(al, point, radial)
     var lmesh = meshes[Int(al.meshIdx)]
     var n_tris = Int(max(Int(al.n_tris), 1))
     var ti = Int(pcg.next_uint() % UInt32(n_tris))
@@ -520,7 +541,7 @@ def _sppm_photon_pass(
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
 
         # Pick a random area light + triangle + barycentric point on it.
-        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg)
+        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg, sd.curves)
         var al = light_sample.light
         var lp = light_sample.point
         var ln = light_sample.normal
@@ -750,7 +771,7 @@ def _sppm_nee_update(
 
         # Pick a random area light + triangle + point on it (same scheme as
         # _sppm_photon_pass's emission sampling).
-        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg)
+        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg, sd.curves)
         var al = light_sample.light
         var lp = light_sample.point
         var ln = light_sample.normal

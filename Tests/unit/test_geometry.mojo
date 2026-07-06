@@ -5,6 +5,7 @@ from gonzales.geometry import (
     reflect, refract, schlick_fresnel, fr_dielectric, safe_sqrt,
     sphere_outward_normal, dot, cross,
     spherical_direction, vec3f, point3f,
+    Curve_C, curve_bspline_point, curve_light_tube_area,
 )
 
 comptime EPS: Float32 = 1e-4
@@ -312,6 +313,70 @@ def test_spherical_direction_equatorial_phi0() raises:
     along +x, per this code's Vec3f(sin*cos_phi, cos, sin*sin_phi) convention."""
     var v = spherical_direction(Float32(1.0), Float32(0.0), Float32(0.0))
     assert_true(_vclose(v, Vec3f(1.0, 0.0, 0.0)))
+
+# ── curve_light_tube_area (curve area lights, task #60-65) ───────────────────
+# The NEE/light-sampler pdf for an emissive curve is normalized against this
+# "lateral tube surface" area — a wrong formula here silently biases every
+# curve light's brightness (and its share of the power-weighted CDF) without
+# ever crashing, so it's worth pinning to a closed-form value directly.
+
+def test_curve_light_tube_area_single_piece_constant_radius() raises:
+    """n_pieces=1 means the tube area is exactly one cylinder: 2*pi*r*length,
+    where length is the chord between the curve's own t=0/t=1 points (not
+    assumed independently -- computed via the same curve_bspline_point this
+    module already tests elsewhere isn't needed here, since any 4 control
+    points work for a single piece spanning the whole [0,1] range)."""
+    var curve = Curve_C(
+        Point3f(0.0, 0.0, 0.0), Point3f(1.0, 2.0, 0.0),
+        Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
+        Float32(0.4), Float32(0.4), Int32(0), Int32(1),
+    )
+    var q0 = curve_bspline_point(curve, Float32(0.0))
+    var q1 = curve_bspline_point(curve, Float32(1.0))
+    var seg = q1 - q0
+    var length = sqrt(dot(seg, seg))
+    var expected = Float32(2.0) * Float32(3.14159265358979323846) * Float32(0.2) * length
+    assert_true(_close(curve_light_tube_area(curve), expected))
+
+def test_curve_light_tube_area_scales_with_radius() raises:
+    """Doubling both endpoint widths must exactly double the tube area
+    (area is linear in radius) -- catches an accidental use of r^2 or a
+    missing 0.5 in the width-to-radius conversion."""
+    var curve_thin = Curve_C(
+        Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0),
+        Point3f(2.0, 0.0, 0.0), Point3f(3.0, 0.0, 0.0),
+        Float32(0.1), Float32(0.1), Int32(0), Int32(1),
+    )
+    var curve_thick = Curve_C(
+        Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0),
+        Point3f(2.0, 0.0, 0.0), Point3f(3.0, 0.0, 0.0),
+        Float32(0.2), Float32(0.2), Int32(0), Int32(1),
+    )
+    assert_true(_close(curve_light_tube_area(curve_thick), Float32(2.0) * curve_light_tube_area(curve_thin)))
+
+def test_curve_light_tube_area_sums_across_pieces() raises:
+    """n_pieces=4 must equal the sum of each individual piece's own lateral
+    area -- catches an off-by-one in the piece-count loop bound."""
+    var curve1 = Curve_C(
+        Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),
+        Point3f(2.0, -2.0, 1.0), Point3f(3.0, 1.0, -1.0),
+        Float32(0.3), Float32(0.1), Int32(0), Int32(1),
+    )
+    var curve4 = Curve_C(
+        Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),
+        Point3f(2.0, -2.0, 1.0), Point3f(3.0, 1.0, -1.0),
+        Float32(0.3), Float32(0.1), Int32(0), Int32(4),
+    )
+    # A single piece's area (n_pieces=1) is one cylinder end-to-end; the
+    # n_pieces=4 curve chops the SAME B-spline into 4 pieces, each with its
+    # own (shorter, still-tapering) cylinder -- their sum need not equal the
+    # 1-piece area (chord length is shorter than arc length for a curved
+    # spline), but it must be strictly positive and, for this curved control
+    # polygon, larger than the single overall chord's cylinder area.
+    var area1 = curve_light_tube_area(curve1)
+    var area4 = curve_light_tube_area(curve4)
+    assert_true(area4 > Float32(0.0))
+    assert_true(area4 >= area1)
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -400,7 +400,7 @@ def _build_light_path(
         return 0
 
     # Pick a light uniformly + a random triangle + barycentric point on it.
-    var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg)
+    var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg, sd.curves)
     var al = light_sample.light
     var lp = light_sample.point
     var ln = light_sample.normal

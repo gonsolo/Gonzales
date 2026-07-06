@@ -330,10 +330,22 @@ struct PathState_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct AreaLight_C(TrivialRegisterPassable):
+    """A sampleable area light. kind==0: a triangle mesh (meshIdx indexes
+    TriangleMesh_C, n_tris triangles, total_area = mesh surface area).
+    kind==1: a native curve (meshIdx reused as the curve's index into the
+    scene's Curve_C array; n_tris unused; total_area = the curve's tube
+    lateral surface area, see curve_light_tube_area). Both kinds are sampled
+    uniformly-by-primitive (random triangle, or random curve piece) rather
+    than area-weighted — see sample_area_light_uniform (sppm.mojo) and
+    shading.mojo's NEE area-light sampling."""
     var meshIdx: Int32
-    var n_tris: Int32       # number of triangles in this light mesh
+    var n_tris: Int32       # number of triangles in this light mesh (kind==0 only)
     var emission: SampledSpectrum
-    var total_area: Float32 # total surface area of this light mesh
+    var total_area: Float32 # total surface area of this light mesh or curve tube
+    var kind: Int8          # 0 = mesh triangle light, 1 = curve light
+    var _pad0: Int8
+    var _pad1: Int8
+    var _pad2: Int8
 
 @fieldwise_init
 struct Sphere_C(TrivialRegisterPassable):
@@ -532,6 +544,25 @@ def curve_piece_bounds(curve: Curve_C, piece: Int) -> Tuple[Float32, Float32, Fl
     var ymax = max(q0[1], q1[1]) + r
     var zmax = max(q0[2], q1[2]) + r
     return (xmin, ymin, zmin, xmax, ymax, zmax)
+
+@always_inline
+def curve_light_tube_area(curve: Curve_C) -> Float32:
+    """Approximate lateral (side) surface area of a curve treated as a thin
+    tube light: sum over each locally-linear piece of its lateral cylinder
+    area (2*pi*avg_radius*piece_length). Used only to normalize NEE/light-
+    sampler PDFs for emissive curves (AreaLight_C.kind==1) against the
+    uniform-random-piece sampling used at runtime — see
+    sample_area_light_uniform (sppm.mojo) and shading.mojo's curve NEE
+    branch, which both pick pieces uniformly rather than area-weighted
+    (mirroring the pre-existing mesh-light approximation of picking a
+    uniform random triangle rather than area-weighting by triangle)."""
+    var area = Float32(0.0)
+    for piece in range(Int(curve.n_pieces)):
+        var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
+        var seg = q1 - q0
+        var seg_len = sqrt(dot(seg, seg))
+        area += Float32(2.0) * Float32(3.14159265358979323846) * ((r0 + r1) * Float32(0.5)) * seg_len
+    return area
 
 
 # ── Homogeneous / heterogeneous media ─────────────────────────────────────────

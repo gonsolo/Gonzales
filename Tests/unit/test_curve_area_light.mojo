@@ -1,10 +1,11 @@
-from std.math import abs
+from std.math import abs, sqrt
 from std.memory import alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import (
     Point3f, Vec3f, RGB, Ray_C, Intersection_C, PrimId_C, PathState_C,
     Material_C, MatKind, Curve_C, TriangleMesh_C, AreaLight_C,
     DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, LightSampler_C,
+    curve_bspline_point, curve_light_tube_area, _curve_perp_axis, dot, cross,
 )
 from gonzales.bvh import BVH2Node
 from gonzales.shading import shade_core_cpu_nee
@@ -92,6 +93,98 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0),
     )
     assert_true(materials[0].type != MatKind.area_light)
+
+# ── Curve lights are now explicitly NEE-sampled too (task #60-65) ───────────
+# Once an emissive curve has its own AreaLight_C entry (kind==1) in the
+# light-sampler CDF, a camera/bounce ray that hits it directly must MIS-
+# weight against that light's own selection pdf instead of always crediting
+# full emission (the old self-emission-only behaviour exercised above) --
+# otherwise the direct-hit case and the new NEE case would double-count.
+# This pins the exact MIS-weighted formula shade_nee_core's new primId.type
+# == 5 branch computes, against an independently-computed expected value.
+
+def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raises:
+    var curve = Curve_C(
+        Point3f(0.0, 0.0, 0.0), Point3f(1.0, 2.0, 0.0),
+        Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
+        Float32(0.2), Float32(0.2), Int32(0), Int32(1),
+    )
+    var curves = alloc[Curve_C](1)
+    curves[0] = curve
+
+    # Reconstruct the same geometric normal shade_nee_core's new branch
+    # computes from (u=h, v) at h=0 -- geo_normal reduces to exactly b_perp0.
+    var q0 = curve_bspline_point(curve, Float32(0.0))
+    var q1 = curve_bspline_point(curve, Float32(1.0))
+    var seg = q1 - q0
+    var tangent = seg * (Float32(1.0) / sqrt(dot(seg, seg)))
+    var n_perp = _curve_perp_axis(tangent)
+    var b_perp0 = cross(tangent, n_perp)
+    var ray_dir = -b_perp0  # cos_l = -dot(geo_normal, ray_dir) = 1 (straight-on hit)
+
+    var materials = alloc[Material_C](1)
+    materials[0] = Material_C(
+        MatKind.area_light, Int8(0), Int8(0), Int8(0),
+        RGB(Float32(0.0)), RGB(Float32(200.0), Float32(80.0), Float32(20.0)),
+        Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1),
+        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0),
+    )
+
+    var total_area = curve_light_tube_area(curve)
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(0), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), total_area, Int8(1), Int8(0), Int8(0), Int8(0))
+
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var light_sampler = LightSampler_C(cdf, Int32(1), Int32(0))
+
+    var t_hit: Float32 = 5.0
+    var pdf_bsdf: Float32 = 0.4
+    var ray = Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(ray_dir[0], ray_dir[1], ray_dir[2]))
+    var inter = Intersection_C(
+        PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
+        t_hit, Float32(0.0), Float32(0.5), Int8(1), Int8(0), Int8(0), Int8(0),
+    )
+
+    var paths = alloc[PathState_C](1)
+    var intersections = alloc[Intersection_C](1)
+    paths[0] = PathState_C(
+        ray, RGB(Float32(0.5)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut
+        UInt64(1), UInt64(1), Int8(1), Int8(0),  # specularBounce = 0
+        Int8(0), Int8(0), pdf_bsdf, Int32(-1), Int32(0), UInt64(0),
+    )
+    intersections[0] = inter
+
+    shade_core_cpu_nee(
+        paths, intersections,
+        UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
+        curves,
+        materials,
+        area_lights, 1,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        0,
+        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), 0,
+        light_sampler,
+        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
+        null_guide(),
+    )
+
+    # Expected value computed independently (Python, replicating
+    # curve_bspline_point/curve_light_tube_area/power_heuristic exactly):
+    # total_area = 2*pi*0.1*|q1-q0| = 1.1327173, dist2 = t_hit^2 = 25,
+    # cos_l = 1 (straight-on hit), al_sel_pdf = 1 (single-light CDF),
+    # pdf_light = 25 / 1.1327173 = 22.070820, w = pdf_bsdf^2/(pdf_bsdf^2+pdf_light^2)
+    # = 0.4^2/(0.4^2+22.070820^2) = 0.00032835258, estimate.r = 0.5*200*w =
+    # 0.0328353 -- strictly less than the full-credit 100.0 this replaced.
+    assert_true(_close(paths[0].estimate.r, Float32(0.0328353)))
+    paths.free(); intersections.free(); materials.free()
+    curves.free(); area_lights.free(); cdf.free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

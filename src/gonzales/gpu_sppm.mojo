@@ -267,7 +267,7 @@ def sppm_emit_photons_gpu(
 
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
 
-    var light_sample = sample_area_light_uniform(areaLights, meshes, Int(n_lights), pcg)
+    var light_sample = sample_area_light_uniform(areaLights, meshes, Int(n_lights), pcg, curves)
     var al = light_sample.light
     var lp = light_sample.point
     var ln = light_sample.normal
@@ -476,7 +476,7 @@ def sppm_nee_gpu(
 
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
 
-    var light_sample = sample_area_light_uniform(areaLights, meshes, Int(n_lights), pcg)
+    var light_sample = sample_area_light_uniform(areaLights, meshes, Int(n_lights), pcg, curves)
     var al = light_sample.light
     var lp = light_sample.point
     var ln = light_sample.normal
