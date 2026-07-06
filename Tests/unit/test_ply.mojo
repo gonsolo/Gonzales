@@ -10,11 +10,10 @@ def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
 # ── byte-packing helpers ────────────────────────────────────────────────────
-# load_ply's vertex/face data section is always decoded as raw binary (see
-# the "IMPORTANT FINDING" note below `test_ascii_format_line_is_not_actually_
-# text_parsed`) — these helpers append the little/big-endian byte
-# representation of a value to a growable buffer, exactly the way a real
-# binary PLY exporter would.
+# For the binary_little_endian/binary_big_endian format tests below — these
+# helpers append the little/big-endian byte representation of a value to a
+# growable buffer, exactly the way a real binary PLY exporter would. (ASCII
+# format tests further down just append plain decimal text instead.)
 
 def _append_str(mut data: List[UInt8], s: String):
     var bytes = s.as_bytes()
@@ -125,18 +124,105 @@ def _cleanup(path: String):
     except:
         pass
 
-# ── IMPORTANT FINDING ────────────────────────────────────────────────────────
-# load_ply's header parser only distinguishes "binary_big_endian" from
-# everything else (ply.mojo:199-201): any other `format` line — including
-# `format ascii 1.0` — is treated as little-endian *binary*. The vertex/face
-# data section is then always decoded with the raw-byte helpers
-# (_ply_f32_le/_ply_i32_le/etc, ply.mojo:264-320); there is no textual
-# number-parsing path anywhere in this file. So a real human-readable ASCII
-# PLY (newline/space-separated decimal text) is NOT supported today — it
-# would be silently misinterpreted as binary garbage. Per the task's
-# "adapt based on what you learn" guidance, every test below builds actual
-# binary payloads (the only format the loader implements); there is no
-# ASCII-payload test since one would not exercise a real code path.
+# ── ascii format ─────────────────────────────────────────────────────────────
+# FIXED: load_ply's header parser used to only distinguish "binary_big_endian"
+# from everything else, silently treating `format ascii 1.0` as little-endian
+# binary (no textual number-parsing path existed at all). Now `is_ascii` is
+# detected at the format line and the vertex/face data section is parsed as
+# whitespace-separated decimal text via _ply_word_to_float/_ply_word_to_int,
+# reusing the same per-property role/order logic as the binary path.
+
+def test_ascii_triangle() raises:
+    var path = String("/tmp/gonzales_test_ascii_triangle.ply")
+    var data = List[UInt8]()
+    _append_str(data, String(
+        "ply\nformat ascii 1.0\n"
+        + "element vertex 3\nproperty float x\nproperty float y\nproperty float z\n"
+        + "element face 1\nproperty list uchar int vertex_indices\n"
+        + "end_header\n"
+        + "0.0 0.0 0.0\n"
+        + "1.0 0.0 0.0\n"
+        + "0.0 1.0 0.0\n"
+        + "3 0 1 2\n"
+    ))
+    _write_file(path, data)
+
+    var r = _alloc_ply_result()
+    var ok = _load(path, r)
+    assert_true(ok == Int32(1))
+    assert_true(r.n_verts[0] == Int32(3))
+    assert_true(r.n_tris[0] == Int32(1))
+    var pts = r.pts[0]
+    assert_true(_close(pts[0], Float32(0.0)) and _close(pts[1], Float32(0.0)) and _close(pts[2], Float32(0.0)))
+    assert_true(_close(pts[3], Float32(1.0)) and _close(pts[4], Float32(0.0)) and _close(pts[5], Float32(0.0)))
+    assert_true(_close(pts[6], Float32(0.0)) and _close(pts[7], Float32(1.0)) and _close(pts[8], Float32(0.0)))
+    var idx = r.idx[0]
+    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
+
+    pts.free(); idx.free()
+    _free(r)
+    _cleanup(path)
+
+def test_ascii_negative_and_exponent_values() raises:
+    """Exercises _ply_word_to_float's sign/fraction/exponent parsing on
+    values a real exporter would plausibly emit."""
+    var path = String("/tmp/gonzales_test_ascii_signs.ply")
+    var data = List[UInt8]()
+    _append_str(data, String(
+        "ply\nformat ascii 1.0\n"
+        + "element vertex 3\nproperty float x\nproperty float y\nproperty float z\n"
+        + "element face 1\nproperty list uchar int vertex_indices\n"
+        + "end_header\n"
+        + "-1.5 2.25 0.0\n"
+        + "1.0e2 -3.5e-1 0.0\n"
+        + "0.0 0.0 -0.001\n"
+        + "3 0 1 2\n"
+    ))
+    _write_file(path, data)
+
+    var r = _alloc_ply_result()
+    var ok = _load(path, r)
+    assert_true(ok == Int32(1))
+    var pts = r.pts[0]
+    assert_true(_close(pts[0], Float32(-1.5)) and _close(pts[1], Float32(2.25)))
+    assert_true(_close(pts[3], Float32(100.0)) and _close(pts[4], Float32(-0.35)))
+    assert_true(_close(pts[8], Float32(-0.001)))
+
+    pts.free(); r.idx[0].free()
+    _free(r)
+    _cleanup(path)
+
+def test_ascii_quad_face_triangulated_into_fan() raises:
+    """Same fan-triangulation convention as the binary quad test, but via
+    the ASCII face-list path (count token followed by `count` index tokens
+    on one line)."""
+    var path = String("/tmp/gonzales_test_ascii_quad.ply")
+    var data = List[UInt8]()
+    _append_str(data, String(
+        "ply\nformat ascii 1.0\n"
+        + "element vertex 4\nproperty float x\nproperty float y\nproperty float z\n"
+        + "element face 1\nproperty list uchar int vertex_indices\n"
+        + "end_header\n"
+        + "0.0 0.0 0.0\n"
+        + "1.0 0.0 0.0\n"
+        + "1.0 1.0 0.0\n"
+        + "0.0 1.0 0.0\n"
+        + "4 0 1 2 3\n"
+    ))
+    _write_file(path, data)
+
+    var r = _alloc_ply_result()
+    var ok = _load(path, r)
+    assert_true(ok == Int32(1))
+    assert_true(r.n_verts[0] == Int32(4))
+    assert_true(r.n_tris[0] == Int32(2))
+    var idx = r.idx[0]
+    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
+    assert_true(idx[3] == Int32(0) and idx[4] == Int32(2) and idx[5] == Int32(3))
+
+    r.pts[0].free(); idx.free()
+    _free(r)
+    _cleanup(path)
 
 # ── binary_little_endian: minimal triangle ──────────────────────────────────
 

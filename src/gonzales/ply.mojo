@@ -69,6 +69,51 @@ def _ply_word_to_int(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Int:
         i += 1
     return v
 
+# Parses the n-th whitespace-separated token on an ASCII PLY vertex/face
+# line as a float (sign, integer part, optional fraction, optional exponent).
+# Self-contained (no lexer.mojo dependency) to match this file's existing
+# hand-rolled word-parsing style.
+def _ply_word_to_float(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Float32:
+    var si = _ply_word_start(line, n)
+    if si < 0:
+        return Float32(0.0)
+    var i = si
+    var neg = False
+    if line[i] == UInt8(45):  # '-'
+        neg = True
+        i += 1
+    var int_part = Float64(0)
+    while line[i] >= UInt8(48) and line[i] <= UInt8(57):
+        int_part = int_part * 10 + Float64(Int(line[i]) - 48)
+        i += 1
+    var v = int_part
+    if line[i] == UInt8(46):  # '.'
+        i += 1
+        var scale = Float64(0.1)
+        while line[i] >= UInt8(48) and line[i] <= UInt8(57):
+            v += Float64(Int(line[i]) - 48) * scale
+            scale *= 0.1
+            i += 1
+    if line[i] == UInt8(101) or line[i] == UInt8(69):  # 'e' / 'E'
+        i += 1
+        var exp_neg = False
+        if line[i] == UInt8(45):
+            exp_neg = True
+            i += 1
+        elif line[i] == UInt8(43):  # '+'
+            i += 1
+        var exp_val = 0
+        while line[i] >= UInt8(48) and line[i] <= UInt8(57):
+            exp_val = exp_val * 10 + Int(line[i]) - 48
+            i += 1
+        var factor = Float64(1.0)
+        for _ in range(exp_val):
+            factor *= 10.0
+        v = (v / factor) if exp_neg else (v * factor)
+    if neg:
+        v = -v
+    return Float32(v)
+
 # Returns byte size of a PLY scalar type name (e.g. "float", "double", "uchar", "int").
 # Returns 4 for unknown types (safe default for float/int).
 def _ply_type_size(line: UnsafePointer[UInt8, MutAnyOrigin], word_n: Int) -> Int:
@@ -179,6 +224,7 @@ def load_ply(
         return Int32(0)
 
     var is_le = True       # little-endian
+    var is_ascii = False
     var n_verts = 0
     var n_faces = 0
 
@@ -199,6 +245,8 @@ def load_ply(
         if _ply_word_eq(line_buf, 0, "format"):
             if _ply_word_eq(line_buf, 1, "binary_big_endian"):
                 is_le = False
+            elif _ply_word_eq(line_buf, 1, "ascii"):
+                is_ascii = True
         elif _ply_word_eq(line_buf, 0, "element"):
             if _ply_word_eq(line_buf, 1, "vertex"):
                 n_verts = _ply_word_to_int(line_buf, 2)
@@ -265,13 +313,17 @@ def load_ply(
         var vx = Float32(0); var vy = Float32(0); var vz = Float32(0)
         var vu = Float32(0); var vv = Float32(0)
         var vnx = Float32(0); var vny = Float32(0); var vnz = Float32(0)
+        if is_ascii:
+            pos = _ply_read_line(file_buf, file_size, pos, line_buf, 512)
         for pi in range(n_props):
             var sz   = Int(prop_sizes[pi])
             var role = Int(prop_roles[pi])
             var is_d = Int(prop_is_double[pi]) == 1
             if role != PLY_SKIP:
                 var val: Float32
-                if is_d:
+                if is_ascii:
+                    val = _ply_word_to_float(line_buf, pi)
+                elif is_d:
                     val = _ply_f64_le(file_buf, pos) if is_le else _ply_f64_be(file_buf, pos)
                 else:
                     val = _ply_f32_le(file_buf, pos) if is_le else _ply_f32_be(file_buf, pos)
@@ -291,26 +343,36 @@ def load_ply(
                     vny = val
                 elif role == PLY_NZ:
                     vnz = val
-            pos += sz
+            if not is_ascii:
+                pos += sz
         pts[v*3+0] = vx; pts[v*3+1] = vy; pts[v*3+2] = vz
         uvs_buf[v*2+0] = vu; uvs_buf[v*2+1] = vv
         nrm_buf[v*3+0] = vnx; nrm_buf[v*3+1] = vny; nrm_buf[v*3+2] = vnz
 
     for _ in range(n_faces):
-        var cnt = _ply_read_count(file_buf, pos, face_count_size, is_le)
-        pos += face_count_size
-        if cnt < 3 or pos + cnt * face_idx_size > file_size:
-            pos += cnt * face_idx_size
+        var cnt: Int
+        if is_ascii:
+            pos = _ply_read_line(file_buf, file_size, pos, line_buf, 512)
+            cnt = _ply_word_to_int(line_buf, 0)
+        else:
+            cnt = _ply_read_count(file_buf, pos, face_count_size, is_le)
+            pos += face_count_size
+        if cnt < 3 or (not is_ascii and pos + cnt * face_idx_size > file_size):
+            if not is_ascii:
+                pos += cnt * face_idx_size
             continue
         var face_idx = alloc[Int32](cnt)
         for fi in range(cnt):
-            if face_idx_size == 4:
+            if is_ascii:
+                face_idx[fi] = Int32(_ply_word_to_int(line_buf, fi + 1))
+            elif face_idx_size == 4:
                 face_idx[fi] = _ply_i32_le(file_buf, pos) if is_le else _ply_i32_be(file_buf, pos)
             elif face_idx_size == 2:
                 face_idx[fi] = Int32((file_buf + pos).bitcast[Int16]()[0]) if is_le else Int32(Int16(file_buf[pos]) << 8 | Int16(file_buf[pos+1]))
             else:
                 face_idx[fi] = Int32(file_buf[pos])
-            pos += face_idx_size
+            if not is_ascii:
+                pos += face_idx_size
         for ti in range(cnt - 2):
             if n_tris * 3 + 2 < max_idx:
                 idx_buf[n_tris*3+0] = face_idx[0]
