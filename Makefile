@@ -160,7 +160,7 @@ test_release: release
 # Unit tests (std.testing.TestSuite) for pure functions — separate from the
 # scene-render smoke tests above. Each file under Tests/unit/ is its own
 # `mojo run` invocation (TestSuite.discover_tests[__functions_in_module()]).
-UNIT_TEST_SRCS := $(wildcard Tests/unit/*.mojo)
+UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
 ut: unittest
 unittest:
 	@for f in $(UNIT_TEST_SRCS); do \
