@@ -331,6 +331,15 @@ struct Sphere_C(TrivialRegisterPassable):
     var _pad2: Int8
     var emission: SampledSpectrum
 
+@always_inline
+def sphere_outward_normal(hit: Point3f, center: Point3f) -> Vec3f:
+    """Normalized outward normal at a point on an analytic sphere's surface
+    (normalize(hit - center)). Degenerate (hit == center) returns the zero
+    vector, same fallback as every inline call site this replaces."""
+    var n = hit - center
+    var nl = n.length()
+    return (n / nl) if nl > Float32(0.0) else n
+
 
 # ── Native curve (hair/fur) primitive ──────────────────────────────────────────
 # A single local cubic B-spline segment: 4 control points already windowed to

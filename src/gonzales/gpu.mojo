@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc
-from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, dot, cross, INV_PI, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, dot, cross, INV_PI, INV_FOUR_PI
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from .transform import transform_normal_by_instance
@@ -1332,8 +1332,7 @@ def update_medium_gpu(
         var sph = spheres[Int(inter.primId.id1)]
         var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
         var hit_pt = ray_org + inter.tHit * ray_dir
-        var center = SIMD[DType.float32, 3](sph.center.x, sph.center.y, sph.center.z)
-        geom_n = hit_pt - center
+        geom_n = sphere_outward_normal(point3f(hit_pt), sph.center).to_simd()
     else:
         var mi: Int
         var bv: Int
@@ -2051,10 +2050,7 @@ def gen_aux_buffers_gpu(
         var typ = Int(isects_tmp[tid].primId.type)
         if typ == 4:
             var si = Int(isects_tmp[tid].primId.id1)
-            var sc = spheres[si].center
-            var h = (org + dir*d) - Point3f(sc.x, sc.y, sc.z)
-            var hl = h.length()
-            if hl > Float32(0): normal = h / hl
+            normal = sphere_outward_normal(org + dir*d, spheres[si].center)
         elif typ == 5:
             # Approximate outward normal for the denoiser G-buffer: h alone
             # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,

@@ -8,13 +8,13 @@ from std.memory import alloc
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
-    dot, cross, fr_dielectric, PI, INV_FOUR_PI, INV_PI,
+    dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, INV_PI,
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium
+from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform
 from .bxdf import GeomContext, bxdf_sample_conductor, bxdf_is_delta, ggx_D, ggx_G2
 
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
@@ -77,9 +77,7 @@ def _bdpt_medium_update(
         # Analytic sphere: outward normal = normalize(hit - center)
         var si = Int(inter.primId.id1)
         var sph = sd.spheres[si]
-        n = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
-        var nl = n.length()
-        if nl > Float32(0): n = n / nl
+        n = sphere_outward_normal(hit, sph.center)
     else:
         var mi: Int; var bv: Int
         if inter.primId.type == 0:
@@ -163,10 +161,7 @@ def _visible_transmittance(
             if inter.primId.type == Int8(4):
                 var si = Int(inter.primId.id1)
                 var sph = sd.spheres[si]
-                var sn = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
-                var snl = sn.length()
-                if snl > Float32(0): sn = sn / snl
-                gn = sn.to_simd()
+                gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
             var facing = dot(dir, gn) < Float32(0)
@@ -270,40 +265,32 @@ def _build_camera_path(
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var sigma_t = med.sigma_a + med.sigma_s
-            var sig_t = sigma_t.r
-            if sig_t > Float32(0):
-                var u = pcg.next_float()
-                var t_free = -log(max(u, Float32(1e-7))) / sig_t
-                if t_free < t_hit:
-                    # Volume scatter vertex
-                    var sp = ro + rd*t_free
-                    var alb_s = med.sigma_s.r / sig_t
-                    var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0) else alb_s
-                    var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0) else alb_s
-                    var alb_med = RGB(alb_s, alb_g_s, alb_b_s)
-                    # BDPT vertex beta: Tr/pdf_free × phase/pdf_phase = 1/sig_t × sig_s = alb_s
-                    # (exp(-sig_t×t) cancels between Tr numerator and pdf denominator)
-                    var v = _null_vertex()
-                    v.pos = sp
-                    v.beta = beta * alb_med
-                    v.alb = alb_med
-                    v.is_surface = Int32(0); v.is_delta = Int32(0)
-                    v.pdf_fwd = sig_t * exp(-sig_t * t_free)
-                    v.med_idx = cur_med_idx
-                    verts[n_verts] = v; n_verts += 1
-                    # Continuation beta = prev × alb_s (same as stored vertex beta)
-                    beta *= alb_med
-                    var u1 = pcg.next_float(); var u2 = pcg.next_float()
-                    var cosT = Float32(2)*u1 - Float32(1)
-                    var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
-                    var phi  = Float32(2)*PI*u2
-                    rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
-                    ro = sp + rd*Float32(0.0002)
-                    continue
-                else:
-                    # Beer-Lambert through full segment to surface
-                    beta *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
+            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            if ff.collided:
+                # Volume scatter vertex
+                var sp = ro + rd*ff.t_free
+                # BDPT vertex beta: Tr/pdf_free × phase/pdf_phase = 1/sig_t × sig_s = alb_s
+                # (exp(-sig_t×t) cancels between Tr numerator and pdf denominator)
+                var v = _null_vertex()
+                v.pos = sp
+                v.beta = beta * ff.albedo
+                v.alb = ff.albedo
+                v.is_surface = Int32(0); v.is_delta = Int32(0)
+                v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
+                v.med_idx = cur_med_idx
+                verts[n_verts] = v; n_verts += 1
+                # Continuation beta = prev × alb_s (same as stored vertex beta)
+                beta *= ff.albedo
+                var u1 = pcg.next_float(); var u2 = pcg.next_float()
+                var cosT = Float32(2)*u1 - Float32(1)
+                var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
+                var phi  = Float32(2)*PI*u2
+                rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                ro = sp + rd*Float32(0.0002)
+                continue
+            else:
+                # Beer-Lambert through full segment to surface
+                beta *= ff.transmittance
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -326,22 +313,7 @@ def _build_camera_path(
             verts[n_verts] = v; n_verts += 1
             # Cosine-weighted scatter direction
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
-            var r_samp = sqrt(u1); var phi = Float32(2)*PI*u2
-            var lx = r_samp*cos(phi); var lz_loc = r_samp*sin(phi)
-            var ly = sqrt(max(Float32(0), Float32(1)-u1))
-            var gn_n = gn
-            var sgn = Float32(1) if gn_n[2] >= Float32(0) else Float32(-1)
-            var a_tf = Float32(-1) / (sgn + gn_n[2])
-            var b_tf = gn_n[0]*gn_n[1]*a_tf
-            var tx = Float32(1)+sgn*gn_n[0]*gn_n[0]*a_tf; var ty = sgn*b_tf; var tz = -sgn*gn_n[0]
-            var bx_v = b_tf; var by_v = sgn+gn_n[1]*gn_n[1]*a_tf; var bz_v = -gn_n[1]
-            rd = Vec3f(
-                tx*lx + bx_v*lz_loc + gn_n[0]*ly,
-                ty*lx + by_v*lz_loc + gn_n[1]*ly,
-                tz*lx + bz_v*lz_loc + gn_n[2]*ly,
-            )
-            var nd = rd.length()
-            if nd > Float32(0): rd = rd / nd
+            rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
             ro = hit + rd*Float32(0.0002)
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
             beta *= mat.albedo
@@ -351,10 +323,7 @@ def _build_camera_path(
             if inter.primId.type == Int8(4):
                 var si_c = Int(inter.primId.id1)
                 var sph_c = sd.spheres[si_c]
-                var cn = hit - Point3f(sph_c.center.x, sph_c.center.y, sph_c.center.z)
-                var cnl = cn.length()
-                if cnl > Float32(0): cn = cn / cnl
-                gn_c = cn.to_simd()
+                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
             else:
                 gn_c = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
@@ -391,10 +360,7 @@ def _build_camera_path(
             if inter.primId.type == Int8(4):
                 var si = Int(inter.primId.id1)
                 var sph = sd.spheres[si]
-                var sn = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
-                var snl = sn.length()
-                if snl > Float32(0): sn = sn / snl
-                gn = sn.to_simd()
+                gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
             var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg)
@@ -433,45 +399,16 @@ def _build_light_path(
     if n_lights == 0:
         return 0
 
-    # Pick a light uniformly
-    var li = Int(pcg.next_uint() % UInt32(n_lights))
-    var al = sd.areaLights[li]
-    var lmesh = sd.meshes[Int(al.meshIdx)]
-    var n_tris = Int(max(Int(al.n_tris), 1))
-    var ti = Int(pcg.next_uint() % UInt32(n_tris))
-    var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[lb]); var lv1 = Int(lmesh.vertexIndices[lb+1]); var lv2 = Int(lmesh.vertexIndices[lb+2])
-    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-    var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
-    var lp  = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
-    var ln  = cross(lp1-lp0, lp2-lp0)
-    var lnl = sqrt(dot(ln,ln))
-    if lnl > Float32(0): ln = ln*(Float32(1)/lnl)
-    # Use shading normals when provided — they give the correct emission hemisphere
-    # (e.g. ceiling lights with winding that produces an upward geometric normal but
-    # scene-specified normals pointing downward into the room).
-    if Int(lmesh.normals) > 4:
-        var sn0 = Vec3f(lmesh.normals[lv0*3], lmesh.normals[lv0*3+1], lmesh.normals[lv0*3+2])
-        var sn1 = Vec3f(lmesh.normals[lv1*3], lmesh.normals[lv1*3+1], lmesh.normals[lv1*3+2])
-        var sn2 = Vec3f(lmesh.normals[lv2*3], lmesh.normals[lv2*3+1], lmesh.normals[lv2*3+2])
-        var sn_avg = (sn0 + sn1 + sn2) / Float32(3)
-        var snl = sn_avg.length()
-        if snl > Float32(0): ln = (sn_avg / snl).to_simd()
+    # Pick a light uniformly + a random triangle + barycentric point on it.
+    var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg)
+    var al = light_sample.light
+    var lp = light_sample.point
+    var ln = light_sample.normal
 
     # Cosine-weighted emission direction
     var du1 = pcg.next_float(); var du2 = pcg.next_float()
-    var r_s = sqrt(du1); var theta = Float32(2)*PI*du2
-    var lx = r_s*cos(theta); var lz_l = r_s*sin(theta)
-    var ly = sqrt(max(Float32(0), Float32(1)-du1))
-    var sgn = Float32(1) if ln[2] >= Float32(0) else Float32(-1)
-    var a_tf = Float32(-1)/(sgn+ln[2]); var b_tf = ln[0]*ln[1]*a_tf
-    var tx = Float32(1)+sgn*ln[0]*ln[0]*a_tf; var ty = sgn*b_tf; var tz = -sgn*ln[0]
-    var bx_v = b_tf; var by_v = sgn+ln[1]*ln[1]*a_tf; var bz_v = -ln[1]
-    var pdir = SIMD[DType.float32, 3](tx*lx+bx_v*lz_l+ln[0]*ly, ty*lx+by_v*lz_l+ln[1]*ly, tz*lx+bz_v*lz_l+ln[2]*ly)
-    var pdl = sqrt(dot(pdir,pdir))
-    if pdl > Float32(0): pdir = pdir*(Float32(1)/pdl)
+    var pdir = _cosine_hemisphere_sample(ln, du1, du2)
+    var ly = sqrt(max(Float32(0), Float32(1)-du1))  # cos_theta_emitted, reused below
 
     # Light vertex (the emission point, s=1 strategy connects here directly).
     # beta = 1/p_A = area × n_lights (area sampling PDF correction only).
@@ -516,37 +453,29 @@ def _build_light_path(
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var sigma_t = med.sigma_a + med.sigma_s
-            var sig_t = sigma_t.r
-            if sig_t > Float32(0):
-                var u = pcg.next_float()
-                var t_free = -log(max(u, Float32(1e-7))) / sig_t
-                if t_free < t_hit:
-                    var sp = ro + rd*t_free
-                    var alb_s = med.sigma_s.r / sig_t
-                    var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0) else alb_s
-                    var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0) else alb_s
-                    var alb_med = RGB(alb_s, alb_g_s, alb_b_s)
-                    # BDPT vertex beta: exp(-sig_t×t)/pdf_free × alb_s = 1/sig_t × alb_s = alb_s (for sig_t=1)
-                    var v = _null_vertex()
-                    v.pos = sp
-                    v.beta = flux * alb_med
-                    v.alb = alb_med
-                    v.is_surface = Int32(0); v.is_delta = Int32(0)
-                    v.pdf_fwd = sig_t * exp(-sig_t * t_free)
-                    v.med_idx = cur_med_idx
-                    verts[n_verts] = v; n_verts += 1
-                    # Continuation: flux = prev × alb_s (same as stored vertex beta)
-                    flux *= alb_med
-                    var u1 = pcg.next_float(); var u2 = pcg.next_float()
-                    var cosT = Float32(2)*u1 - Float32(1)
-                    var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
-                    var phi  = Float32(2)*PI*u2
-                    rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
-                    ro = sp + rd*Float32(0.0002)
-                    continue
-                else:
-                    flux *= RGB(exp(-sigma_t.r*t_hit), exp(-sigma_t.g*t_hit), exp(-sigma_t.b*t_hit))
+            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            if ff.collided:
+                var sp = ro + rd*ff.t_free
+                # BDPT vertex beta: exp(-sig_t×t)/pdf_free × alb_s = 1/sig_t × alb_s = alb_s (for sig_t=1)
+                var v = _null_vertex()
+                v.pos = sp
+                v.beta = flux * ff.albedo
+                v.alb = ff.albedo
+                v.is_surface = Int32(0); v.is_delta = Int32(0)
+                v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
+                v.med_idx = cur_med_idx
+                verts[n_verts] = v; n_verts += 1
+                # Continuation: flux = prev × alb_s (same as stored vertex beta)
+                flux *= ff.albedo
+                var u1 = pcg.next_float(); var u2 = pcg.next_float()
+                var cosT = Float32(2)*u1 - Float32(1)
+                var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
+                var phi  = Float32(2)*PI*u2
+                rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
+                ro = sp + rd*Float32(0.0002)
+                continue
+            else:
+                flux *= ff.transmittance
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -565,20 +494,7 @@ def _build_light_path(
             verts[n_verts] = v; n_verts += 1
             # Scatter
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
-            var r_s2 = sqrt(u1); var phi = Float32(2)*PI*u2
-            var lx2 = r_s2*cos(phi); var lz_l2 = r_s2*sin(phi); var ly2 = sqrt(max(Float32(0),Float32(1)-u1))
-            var sgn2 = Float32(1) if gn[2] >= Float32(0) else Float32(-1)
-            var a_tf2 = Float32(-1)/(sgn2+gn[2]); var b_tf2 = gn[0]*gn[1]*a_tf2
-            var tx2 = Float32(1)+sgn2*gn[0]*gn[0]*a_tf2; var ty2 = sgn2*b_tf2; var tz2 = -sgn2*gn[0]
-            var bx_v2 = b_tf2; var by_v2 = sgn2+gn[1]*gn[1]*a_tf2; var bz_v2 = -gn[1]
-            rd = Vec3f(
-                tx2*lx2+bx_v2*lz_l2+gn[0]*ly2,
-                ty2*lx2+by_v2*lz_l2+gn[1]*ly2,
-                tz2*lx2+bz_v2*lz_l2+gn[2]*ly2,
-            )
-            var nd = rd.length()
-            if nd > Float32(0):
-                rd = rd / nd
+            rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
             ro = hit + rd*Float32(0.0002)
             flux *= mat.albedo
 
@@ -587,10 +503,7 @@ def _build_light_path(
             if inter.primId.type == Int8(4):
                 var si_c = Int(inter.primId.id1)
                 var sph_c = sd.spheres[si_c]
-                var cn = hit - Point3f(sph_c.center.x, sph_c.center.y, sph_c.center.z)
-                var cnl = cn.length()
-                if cnl > Float32(0): cn = cn / cnl
-                gn_c = cn.to_simd()
+                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
             else:
                 gn_c = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
@@ -627,10 +540,7 @@ def _build_light_path(
             if inter.primId.type == Int8(4):
                 var si = Int(inter.primId.id1)
                 var sph = sd.spheres[si]
-                var sn = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
-                var snl = sn.length()
-                if snl > Float32(0): sn = sn / snl
-                gn = sn.to_simd()
+                gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
             var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg)

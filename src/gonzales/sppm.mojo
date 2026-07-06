@@ -6,7 +6,7 @@ from std.memory import alloc
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
-    Instance_C, dot, cross, fr_dielectric, PI, INV_FOUR_PI,
+    Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI,
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .transform import transform_normal_by_instance
@@ -220,6 +220,90 @@ def _dielectric_bounce(
         return (refr, hit_point - normal * Float32(0.0001))
 
 
+# ── Homogeneous-medium free-flight sampling ───────────────────────────────────
+# Shared by BDPT and SPPM (CPU + GPU), which only ever deal with homogeneous
+# media (glass-of-water / volumetric-caustic scenes) — no delta-tracking
+# needed. The main wavefront path tracer (rendering.mojo / gpu.mojo) has its
+# own richer version that also handles heterogeneous "uniformgrid" media.
+
+@fieldwise_init
+struct HomogeneousFreeFlight(TrivialRegisterPassable):
+    """Result of sampling a free-flight distance through a homogeneous medium
+    by its red/hero-wavelength extinction coefficient (the same "sample by
+    one channel, let the rest cancel analytically" convention used
+    throughout gonzales's spectral MIS)."""
+    var collided: Bool
+    var t_free: Float32     # sampled distance (meaningful either way)
+    var sig_t:   Float32    # red-channel extinction sigma_a.r + sigma_s.r
+    var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
+    var transmittance: RGB  # Beer-Lambert factor over the full segment (only if NOT collided)
+
+@always_inline
+def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> HomogeneousFreeFlight:
+    var sigma_t = med.sigma_a + med.sigma_s
+    var sig_t = sigma_t.r
+    if sig_t <= Float32(0.0):
+        return HomogeneousFreeFlight(False, t_surf, sig_t, RGB(Float32(0), Float32(0), Float32(0)), RGB(Float32(1), Float32(1), Float32(1)))
+    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
+    if t_free < t_surf:
+        var alb_s = med.sigma_s.r / sig_t
+        var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0.0) else alb_s
+        var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0.0) else alb_s
+        return HomogeneousFreeFlight(True, t_free, sig_t, RGB(alb_s, alb_g_s, alb_b_s), RGB(Float32(1), Float32(1), Float32(1)))
+    var Tr = RGB(exp(-sigma_t.r * t_surf), exp(-sigma_t.g * t_surf), exp(-sigma_t.b * t_surf))
+    return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0), Float32(0), Float32(0)), Tr)
+
+
+# ── Uniform area-light sampling ───────────────────────────────────────────────
+# Shared by BDPT's light-subpath emission and SPPM's photon emission + NEE
+# (CPU + GPU) — all three use the same "uniform over all lights, uniform over
+# triangles, uniform barycentric point" scheme (as opposed to shading.mojo's
+# power-weighted light_sampler_sample used by the main path tracer's NEE).
+
+@fieldwise_init
+struct AreaLightSample(TrivialRegisterPassable):
+    var light:  AreaLight_C
+    var point:  SIMD[DType.float32, 3]
+    var normal: SIMD[DType.float32, 3]
+
+@always_inline
+def sample_area_light_uniform(
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    meshes:     UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    n_lights:   Int,
+    mut pcg:    PCG32,
+) -> AreaLightSample:
+    """Uniformly picks one area light, one triangle on it, and a barycentric
+    point + geometric normal on that triangle — using the mesh's per-vertex
+    shading normals when present (needed for e.g. ceiling lights whose
+    winding gives an upward geometric normal but whose scene-specified
+    normals point down into the room)."""
+    var li = Int(pcg.next_uint() % UInt32(n_lights))
+    var al = areaLights[li]
+    var lmesh = meshes[Int(al.meshIdx)]
+    var n_tris = Int(max(Int(al.n_tris), 1))
+    var ti = Int(pcg.next_uint() % UInt32(n_tris))
+    var lb = ti * 3
+    var lv0 = Int(lmesh.vertexIndices[lb]); var lv1 = Int(lmesh.vertexIndices[lb+1]); var lv2 = Int(lmesh.vertexIndices[lb+2])
+    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
+    var lp  = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
+    var ln  = cross(lp1-lp0, lp2-lp0)
+    var lnl = dot(ln, ln)
+    if lnl > Float32(0): ln = ln*(Float32(1)/sqrt(lnl))
+    # Use shading normals when provided — they give the correct emission hemisphere.
+    if Int(lmesh.normals) > 4:
+        var sn0 = Vec3f(lmesh.normals[lv0*3], lmesh.normals[lv0*3+1], lmesh.normals[lv0*3+2])
+        var sn1 = Vec3f(lmesh.normals[lv1*3], lmesh.normals[lv1*3+1], lmesh.normals[lv1*3+2])
+        var sn2 = Vec3f(lmesh.normals[lv2*3], lmesh.normals[lv2*3+1], lmesh.normals[lv2*3+2])
+        var sn_avg = (sn0 + sn1 + sn2) / Float32(3)
+        var snl = sn_avg.length()
+        if snl > Float32(0): ln = (sn_avg / snl).to_simd()
+    return AreaLightSample(al, lp, ln)
+
+
 # ── Camera pass ───────────────────────────────────────────────────────────────
 
 @always_inline
@@ -240,9 +324,7 @@ def _sppm_update_medium(
         # Analytic sphere: outward normal = normalize(hit - center)
         var si = Int(inter.primId.id1)
         var sph = sd.spheres[si]
-        n = hit - Point3f(sph.center.x, sph.center.y, sph.center.z)
-        var nl = n.length()
-        if nl > Float32(0): n = n / nl
+        n = sphere_outward_normal(hit, sph.center)
     else:
         var mi: Int; var bv: Int
         if inter.primId.type == 0:
@@ -343,22 +425,18 @@ def _sppm_camera_pass(
             # ── Volume free-flight ────────────────────────────────────────────
             if has_media and Int(cur_med_idx) >= 0:
                 var med = sd.mediums[Int(cur_med_idx)]
-                var sigma_t = med.sigma_a + med.sigma_s
-                var sig_t = sigma_t.r
-                if sig_t > Float32(0):
-                    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
-                    if t_free < t_hit:
-                        # Volume scatter — store VP here
-                        var alb_s = med.sigma_s.r / sig_t  # single-scatter albedo
-                        vp.pos = ro + rd * t_free
-                        vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
-                        vp.alb = RGB(alb_s, alb_s, alb_s)
-                        vp.is_volume = Int32(1)
-                        vp.valid = Int32(1)
-                        break
-                    else:
-                        # Transmittance through full segment to surface
-                        vp.beta *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
+                var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+                if ff.collided:
+                    # Volume scatter — store VP here
+                    vp.pos = ro + rd * ff.t_free
+                    vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
+                    vp.alb = ff.albedo
+                    vp.is_volume = Int32(1)
+                    vp.valid = Int32(1)
+                    break
+                else:
+                    # Transmittance through full segment to surface
+                    vp.beta *= ff.transmittance
 
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
@@ -441,50 +519,17 @@ def _sppm_photon_pass(
     for k in range(n_emit):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
 
-        # Pick a random area light (uniform)
-        var li = Int(pcg.next_uint() % UInt32(n_lights))
-        var al = sd.areaLights[li]
-        var lmesh = sd.meshes[Int(al.meshIdx)]
-        var n_tris = Int(max(Int(al.n_tris), 1))
+        # Pick a random area light + triangle + barycentric point on it.
+        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg)
+        var al = light_sample.light
+        var lp = light_sample.point
+        var ln = light_sample.normal
 
-        # Pick a random triangle on the light
-        var ti = Int(pcg.next_uint() % UInt32(n_tris))
-        var lb = ti * 3
-        var lv0 = Int(lmesh.vertexIndices[lb])
-        var lv1 = Int(lmesh.vertexIndices[lb + 1])
-        var lv2 = Int(lmesh.vertexIndices[lb + 2])
-        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-
-        # Sample point on triangle
-        var ru1 = pcg.next_float()
-        var ru2 = pcg.next_float()
-        var sr1 = sqrt(ru1)
-        var lp = lp0 * (Float32(1.0) - sr1) + lp1 * (sr1 * (Float32(1.0) - ru2)) + lp2 * (sr1 * ru2)
-
-        # Compute light normal (geometric)
-        var ln = cross(lp1 - lp0, lp2 - lp0)
-        var lnl = dot(ln, ln)
-        if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
-
-        # Sample cosine-weighted direction from light hemisphere
+        # Sample cosine-weighted emission direction from the light hemisphere
+        # (same Frisvad-frame construction as _cosine_hemisphere_sample).
         var du1 = pcg.next_float()
         var du2 = pcg.next_float()
-        var r_samp = sqrt(du1)
-        var theta = Float32(2.0) * PI * du2
-        var lx = r_samp * cos(theta)
-        var lz_loc = r_samp * sin(theta)
-        var ly = sqrt(max(Float32(0.0), Float32(1.0) - du1))
-        # Build tangent frame around light normal (Frisvad method)
-        var sgn = Float32(1.0) if ln[2] >= Float32(0.0) else Float32(-1.0)
-        var a_tf = Float32(-1.0) / (sgn + ln[2])
-        var b_tf = ln[0] * ln[1] * a_tf
-        var tangent  = SIMD[DType.float32, 3](Float32(1.0) + sgn*ln[0]*ln[0]*a_tf, sgn*b_tf, -sgn*ln[0])
-        var bitangent = SIMD[DType.float32, 3](b_tf, sgn + ln[1]*ln[1]*a_tf, -ln[1])
-        var pdir = tangent * lx + bitangent * lz_loc + ln * ly
-        var pdl = dot(pdir, pdir)
-        if pdl > Float32(0.0): pdir = pdir * (Float32(1.0) / sqrt(pdl))
+        var pdir = _cosine_hemisphere_sample(ln, du1, du2)
 
         # Photon flux: total_light_power / n_emit
         # total_power = emission * pi * total_area * n_lights (uniform light selection)
@@ -510,41 +555,37 @@ def _sppm_photon_pass(
             # ── Volume free-flight ────────────────────────────────────────────
             if has_media and Int(cur_med_idx) >= 0:
                 var med = sd.mediums[Int(cur_med_idx)]
-                var sigma_t = med.sigma_a + med.sigma_s
-                var sig_t = sigma_t.r
-                if sig_t > Float32(0):
-                    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
-                    if t_free < t_hit:
-                        # Volume scatter — store photon and sample new direction
-                        var sp = ro + rd * t_free
-                        # bounce > 0: skip storing at the light's own first
-                        # segment — that direct contribution is now covered
-                        # by _sppm_nee_update instead (matches pbrt's own
-                        # SPPM, which skips photon-grid gathering at depth 0
-                        # specifically to avoid double-counting with its NEE
-                        # term).
-                        if bounce > 0 and n_stored < max_photons:
-                            photons[n_stored] = SPPMPhoton(
-                                pos=sp,
-                                flux=flux,
-                                nxt=Int32(-1), is_volume=Int32(1),
-                            )
-                            n_stored += 1
-                        # Scatter: isotropic phase function, modulate by albedo
-                        var alb_s = med.sigma_s.r / sig_t
-                        flux *= alb_s
-                        # Sample new isotropic direction (uniform sphere)
-                        var usp1 = pcg.next_float()
-                        var usp2 = pcg.next_float()
-                        var cosT = Float32(2.0) * usp1 - Float32(1.0)
-                        var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
-                        var phiS = Float32(2.0) * PI * usp2
-                        rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
-                        ro = sp + rd * Float32(0.0001)
-                        continue
-                    else:
-                        # Apply Beer-Lambert transmittance through segment
-                        flux *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
+                var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+                if ff.collided:
+                    # Volume scatter — store photon and sample new direction
+                    var sp = ro + rd * ff.t_free
+                    # bounce > 0: skip storing at the light's own first
+                    # segment — that direct contribution is now covered
+                    # by _sppm_nee_update instead (matches pbrt's own
+                    # SPPM, which skips photon-grid gathering at depth 0
+                    # specifically to avoid double-counting with its NEE
+                    # term).
+                    if bounce > 0 and n_stored < max_photons:
+                        photons[n_stored] = SPPMPhoton(
+                            pos=sp,
+                            flux=flux,
+                            nxt=Int32(-1), is_volume=Int32(1),
+                        )
+                        n_stored += 1
+                    # Scatter: isotropic phase function, modulate by albedo
+                    flux *= ff.albedo
+                    # Sample new isotropic direction (uniform sphere)
+                    var usp1 = pcg.next_float()
+                    var usp2 = pcg.next_float()
+                    var cosT = Float32(2.0) * usp1 - Float32(1.0)
+                    var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
+                    var phiS = Float32(2.0) * PI * usp2
+                    rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
+                    ro = sp + rd * Float32(0.0001)
+                    continue
+                else:
+                    # Apply Beer-Lambert transmittance through segment
+                    flux *= ff.transmittance
 
             var mat_idx = Int(inter.primId.materialIndex)
             var mat = sd.materials[mat_idx]
@@ -709,25 +750,10 @@ def _sppm_nee_update(
 
         # Pick a random area light + triangle + point on it (same scheme as
         # _sppm_photon_pass's emission sampling).
-        var li = Int(pcg.next_uint() % UInt32(n_lights))
-        var al = sd.areaLights[li]
-        var lmesh = sd.meshes[Int(al.meshIdx)]
-        var n_tris = Int(max(Int(al.n_tris), 1))
-        var ti = Int(pcg.next_uint() % UInt32(n_tris))
-        var lb = ti * 3
-        var lv0 = Int(lmesh.vertexIndices[lb])
-        var lv1 = Int(lmesh.vertexIndices[lb + 1])
-        var lv2 = Int(lmesh.vertexIndices[lb + 2])
-        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-        var ru1 = pcg.next_float()
-        var ru2 = pcg.next_float()
-        var sr1 = sqrt(ru1)
-        var lp = lp0 * (Float32(1.0) - sr1) + lp1 * (sr1 * (Float32(1.0) - ru2)) + lp2 * (sr1 * ru2)
-        var ln = cross(lp1 - lp0, lp2 - lp0)
-        var lnl = dot(ln, ln)
-        if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
+        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg)
+        var al = light_sample.light
+        var lp = light_sample.point
+        var ln = light_sample.normal
 
         var vpos = vp.pos.to_simd()
         var vn   = vp.normal.to_simd()

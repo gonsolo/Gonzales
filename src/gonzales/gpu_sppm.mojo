@@ -23,7 +23,7 @@ from .geometry import (
 )
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core
 from .rng import PCG32
-from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _shading_normal_at, _dielectric_bounce, _sppm_update_medium, _hash_cell, _cosine_hemisphere_sample, _ALPHA, _MAX_B, _HSIZE, _VP_SAMPLES
+from .sppm import SPPMPixel, SPPMPhoton, _geom_normal, _shading_normal_at, _dielectric_bounce, _sppm_update_medium, _hash_cell, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, _ALPHA, _MAX_B, _HSIZE, _VP_SAMPLES
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .gpu import GpuSceneHandle
@@ -182,20 +182,16 @@ def sppm_gen_vp_gpu(
 
         if has_media and Int(cur_med_idx) >= 0:
             var med = mediums[Int(cur_med_idx)]
-            var sigma_t = med.sigma_a + med.sigma_s
-            var sig_t = sigma_t.r
-            if sig_t > Float32(0):
-                var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
-                if t_free < t_hit:
-                    var alb_s = med.sigma_s.r / sig_t
-                    vp.pos = ro + rd * t_free
-                    vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
-                    vp.alb = RGB(alb_s, alb_s, alb_s)
-                    vp.is_volume = Int32(1)
-                    vp.valid = Int32(1)
-                    break
-                else:
-                    vp.beta *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
+            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            if ff.collided:
+                vp.pos = ro + rd * ff.t_free
+                vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
+                vp.alb = ff.albedo
+                vp.is_volume = Int32(1)
+                vp.valid = Int32(1)
+                break
+            else:
+                vp.beta *= ff.transmittance
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = materials[mat_idx]
@@ -271,44 +267,14 @@ def sppm_emit_photons_gpu(
 
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
 
-    var li = Int(pcg.next_uint() % UInt32(n_lights))
-    var al = areaLights[li]
-    var lmesh = meshes[Int(al.meshIdx)]
-    var n_tris = Int(max(Int(al.n_tris), 1))
-
-    var ti = Int(pcg.next_uint() % UInt32(n_tris))
-    var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[lb])
-    var lv1 = Int(lmesh.vertexIndices[lb + 1])
-    var lv2 = Int(lmesh.vertexIndices[lb + 2])
-    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-
-    var ru1 = pcg.next_float()
-    var ru2 = pcg.next_float()
-    var sr1 = sqrt(ru1)
-    var lp = lp0 * (Float32(1.0) - sr1) + lp1 * (sr1 * (Float32(1.0) - ru2)) + lp2 * (sr1 * ru2)
-
-    var ln = cross(lp1 - lp0, lp2 - lp0)
-    var lnl = dot(ln, ln)
-    if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
+    var light_sample = sample_area_light_uniform(areaLights, meshes, Int(n_lights), pcg)
+    var al = light_sample.light
+    var lp = light_sample.point
+    var ln = light_sample.normal
 
     var du1 = pcg.next_float()
     var du2 = pcg.next_float()
-    var r_samp = sqrt(du1)
-    var theta = Float32(2.0) * PI * du2
-    var lx = r_samp * cos(theta)
-    var lz_loc = r_samp * sin(theta)
-    var ly = sqrt(max(Float32(0.0), Float32(1.0) - du1))
-    var sgn = Float32(1.0) if ln[2] >= Float32(0.0) else Float32(-1.0)
-    var a_tf = Float32(-1.0) / (sgn + ln[2])
-    var b_tf = ln[0] * ln[1] * a_tf
-    var tangent  = SIMD[DType.float32, 3](Float32(1.0) + sgn*ln[0]*ln[0]*a_tf, sgn*b_tf, -sgn*ln[0])
-    var bitangent = SIMD[DType.float32, 3](b_tf, sgn + ln[1]*ln[1]*a_tf, -ln[1])
-    var pdir = tangent * lx + bitangent * lz_loc + ln * ly
-    var pdl = dot(pdir, pdir)
-    if pdl > Float32(0.0): pdir = pdir * (Float32(1.0) / sqrt(pdl))
+    var pdir = _cosine_hemisphere_sample(ln, du1, du2)
 
     var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
     var flux = al.emission * scale
@@ -332,35 +298,31 @@ def sppm_emit_photons_gpu(
 
         if has_media and Int(cur_med_idx) >= 0:
             var med = mediums[Int(cur_med_idx)]
-            var sigma_t = med.sigma_a + med.sigma_s
-            var sig_t = sigma_t.r
-            if sig_t > Float32(0):
-                var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
-                if t_free < t_hit:
-                    var sp = ro + rd * t_free
-                    # bounce > 0: skip storing at the light's own first
-                    # segment — covered by sppm_nee_gpu instead (matches
-                    # pbrt's own SPPM depth>0 gather skip).
-                    if bounce > 0:
-                        var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
-                        if slot < max_photons:
-                            photons[slot] = SPPMPhoton(
-                                pos=sp,
-                                flux=flux,
-                                nxt=Int32(-1), is_volume=Int32(1),
-                            )
-                    var alb_s = med.sigma_s.r / sig_t
-                    flux *= alb_s
-                    var usp1 = pcg.next_float()
-                    var usp2 = pcg.next_float()
-                    var cosT = Float32(2.0) * usp1 - Float32(1.0)
-                    var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
-                    var phiS = Float32(2.0) * PI * usp2
-                    rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
-                    ro = sp + rd * Float32(0.0001)
-                    continue
-                else:
-                    flux *= RGB(exp(-sigma_t.r * t_hit), exp(-sigma_t.g * t_hit), exp(-sigma_t.b * t_hit))
+            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            if ff.collided:
+                var sp = ro + rd * ff.t_free
+                # bounce > 0: skip storing at the light's own first
+                # segment — covered by sppm_nee_gpu instead (matches
+                # pbrt's own SPPM depth>0 gather skip).
+                if bounce > 0:
+                    var slot = Int(Atomic.fetch_add(stored_counter, Int32(1)))
+                    if slot < max_photons:
+                        photons[slot] = SPPMPhoton(
+                            pos=sp,
+                            flux=flux,
+                            nxt=Int32(-1), is_volume=Int32(1),
+                        )
+                flux *= ff.albedo
+                var usp1 = pcg.next_float()
+                var usp2 = pcg.next_float()
+                var cosT = Float32(2.0) * usp1 - Float32(1.0)
+                var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
+                var phiS = Float32(2.0) * PI * usp2
+                rd = Vec3f(sinT * cos(phiS), sinT * sin(phiS), cosT)
+                ro = sp + rd * Float32(0.0001)
+                continue
+            else:
+                flux *= ff.transmittance
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = materials[mat_idx]
@@ -514,25 +476,10 @@ def sppm_nee_gpu(
 
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
 
-    var li = Int(pcg.next_uint() % UInt32(n_lights))
-    var al = areaLights[li]
-    var lmesh = meshes[Int(al.meshIdx)]
-    var n_tris = Int(max(Int(al.n_tris), 1))
-    var ti = Int(pcg.next_uint() % UInt32(n_tris))
-    var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[lb])
-    var lv1 = Int(lmesh.vertexIndices[lb + 1])
-    var lv2 = Int(lmesh.vertexIndices[lb + 2])
-    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-    var ru1 = pcg.next_float()
-    var ru2 = pcg.next_float()
-    var sr1 = sqrt(ru1)
-    var lp = lp0 * (Float32(1.0) - sr1) + lp1 * (sr1 * (Float32(1.0) - ru2)) + lp2 * (sr1 * ru2)
-    var ln = cross(lp1 - lp0, lp2 - lp0)
-    var lnl = dot(ln, ln)
-    if lnl > Float32(0.0): ln = ln * (Float32(1.0) / sqrt(lnl))
+    var light_sample = sample_area_light_uniform(areaLights, meshes, Int(n_lights), pcg)
+    var al = light_sample.light
+    var lp = light_sample.point
+    var ln = light_sample.normal
 
     var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()

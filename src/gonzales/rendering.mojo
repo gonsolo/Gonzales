@@ -2,7 +2,7 @@ from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
 from std.algorithm import parallelize
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee
 from .rng import PCG32
@@ -263,7 +263,7 @@ def render_tile(
                 # case matters even though spheres rarely carry real shading.
                 var mi_sph = scene.spheres[Int(intersections[i].primId.id1)]
                 var mi_hit = paths[i].ray.origin + paths[i].ray.direction * intersections[i].tHit
-                mi_n = mi_hit - Point3f(mi_sph.center.x, mi_sph.center.y, mi_sph.center.z)
+                mi_n = sphere_outward_normal(mi_hit, mi_sph.center)
             else:
                 var mi_mesh_idx: Int
                 var mi_base_vidx: Int
@@ -477,10 +477,7 @@ def render_aux_buffers(
             if typ == 4:
                 # Sphere: normal = normalize(hit_point - center)
                 var si  = Int(isects[i].primId.id1)
-                var sc  = sd.spheres[si].center
-                var h   = (org + dir*d) - Point3f(sc.x, sc.y, sc.z)
-                var hl  = h.length()
-                if hl > Float32(0): normal = h / hl
+                normal = sphere_outward_normal(org + dir*d, sd.spheres[si].center)
             else:
                 # Triangle (types 0, 1, 2, 3): geometric normal from edge cross product
                 var mesh_idx: Int
