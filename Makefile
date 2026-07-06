@@ -84,7 +84,7 @@ PFM = $(IMAGE:.exr=.pfm)
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test \
-	test_debug test_release v view wc book book-html book-watch
+	test_debug test_release v view wc book book-html book-watch ut unittest
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -156,6 +156,17 @@ test_debug: debug
 tr: test_release
 test_release: release
 	@$(RUN_RELEASE)
+
+# Unit tests (std.testing.TestSuite) for pure functions — separate from the
+# scene-render smoke tests above. Each file under Tests/unit/ is its own
+# `mojo run` invocation (TestSuite.discover_tests[__functions_in_module()]).
+UNIT_TEST_SRCS := $(wildcard Tests/unit/*.mojo)
+ut: unittest
+unittest:
+	@for f in $(UNIT_TEST_SRCS); do \
+		echo "=== $$f ==="; \
+		uv run mojo run -I src $$f || exit 1; \
+	done
 
 # GPU profiling with Nsight Compute (needs nsight-compute + admin perf-counter
 # access). `sudo -E` preserves the env so the Mojo runtime libs load. Profiles
