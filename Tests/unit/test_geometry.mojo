@@ -1,9 +1,10 @@
 from std.math import abs, sqrt
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import (
-    Vec3f, Point3f, Frame,
+    Vec3f, Point3f, Frame, RGB,
     reflect, refract, schlick_fresnel, fr_dielectric, safe_sqrt,
     sphere_outward_normal, dot, cross,
+    spherical_direction, vec3f, point3f,
 )
 
 comptime EPS: Float32 = 1e-4
@@ -181,6 +182,135 @@ def test_cross_simd_right_handed() raises:
     var y = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
     var z = cross(x, y)
     assert_true(_close(z[0], Float32(0.0)) and _close(z[1], Float32(0.0)) and _close(z[2], Float32(1.0)))
+
+# ── Point3f / Vec3f arithmetic ──────────────────────────────────────────────
+
+def test_point3f_plus_vec3f() raises:
+    var p = Point3f(1.0, 2.0, 3.0)
+    var v = Vec3f(0.5, -1.0, 2.0)
+    var r = p + v
+    assert_true(_close(r.x, Float32(1.5)) and _close(r.y, Float32(1.0)) and _close(r.z, Float32(5.0)))
+
+def test_point3f_minus_point3f() raises:
+    """Point minus point yields a displacement vector."""
+    var a = Point3f(4.0, 5.0, 6.0)
+    var b = Point3f(1.0, 2.0, 3.0)
+    assert_true(_vclose(a - b, Vec3f(3.0, 3.0, 3.0)))
+
+def test_vec3f_add() raises:
+    assert_true(_vclose(Vec3f(1.0, 2.0, 3.0) + Vec3f(4.0, 5.0, 6.0), Vec3f(5.0, 7.0, 9.0)))
+
+def test_vec3f_sub() raises:
+    assert_true(_vclose(Vec3f(4.0, 5.0, 6.0) - Vec3f(1.0, 2.0, 3.0), Vec3f(3.0, 3.0, 3.0)))
+
+def test_vec3f_neg() raises:
+    assert_true(_vclose(-Vec3f(1.0, -2.0, 3.0), Vec3f(-1.0, 2.0, -3.0)))
+
+def test_vec3f_mul_scalar() raises:
+    assert_true(_vclose(Vec3f(1.0, 2.0, 3.0) * Float32(2.0), Vec3f(2.0, 4.0, 6.0)))
+
+def test_vec3f_div_scalar() raises:
+    assert_true(_vclose(Vec3f(2.0, 4.0, 6.0) / Float32(2.0), Vec3f(1.0, 2.0, 3.0)))
+
+def test_vec3f_length_345_triangle() raises:
+    """Classic 3-4-5 right triangle — exact closed-form length."""
+    assert_true(_close(Vec3f(3.0, 4.0, 0.0).length(), Float32(5.0)))
+
+def test_vec3f_length_sq() raises:
+    assert_true(_close(Vec3f(3.0, 4.0, 0.0).length_sq(), Float32(25.0)))
+
+def test_vec3f_simd_round_trip() raises:
+    var s = SIMD[DType.float32, 3](1.5, -2.5, 3.5)
+    var v = vec3f(s)
+    assert_true(_vclose(v, Vec3f(1.5, -2.5, 3.5)))
+    var back = v.to_simd()
+    assert_true(_close(back[0], s[0]) and _close(back[1], s[1]) and _close(back[2], s[2]))
+
+def test_point3f_simd_round_trip() raises:
+    var s = SIMD[DType.float32, 3](1.5, -2.5, 3.5)
+    var p = point3f(s)
+    var back = p.to_simd()
+    assert_true(_close(back[0], s[0]) and _close(back[1], s[1]) and _close(back[2], s[2]))
+
+# ── RGB arithmetic ───────────────────────────────────────────────────────────
+
+def _rgb_close(a: RGB, b: RGB) -> Bool:
+    return _close(a.r, b.r) and _close(a.g, b.g) and _close(a.b, b.b)
+
+def test_rgb_add() raises:
+    assert_true(_rgb_close(RGB(1.0, 2.0, 3.0) + RGB(4.0, 5.0, 6.0), RGB(5.0, 7.0, 9.0)))
+
+def test_rgb_sub() raises:
+    assert_true(_rgb_close(RGB(4.0, 5.0, 6.0) - RGB(1.0, 2.0, 3.0), RGB(3.0, 3.0, 3.0)))
+
+def test_rgb_mul_rgb() raises:
+    """RGB*RGB is componentwise (used for e.g. albedo * incoming radiance)."""
+    assert_true(_rgb_close(RGB(2.0, 3.0, 4.0) * RGB(1.0, 2.0, 0.5), RGB(2.0, 6.0, 2.0)))
+
+def test_rgb_mul_scalar() raises:
+    assert_true(_rgb_close(RGB(1.0, 2.0, 3.0) * Float32(2.0), RGB(2.0, 4.0, 6.0)))
+
+def test_rgb_truediv() raises:
+    assert_true(_rgb_close(RGB(2.0, 4.0, 6.0) / Float32(2.0), RGB(1.0, 2.0, 3.0)))
+
+def test_rgb_imul_rgb() raises:
+    var c = RGB(2.0, 3.0, 4.0)
+    c *= RGB(1.0, 2.0, 0.5)
+    assert_true(_rgb_close(c, RGB(2.0, 6.0, 2.0)))
+
+def test_rgb_imul_scalar() raises:
+    var c = RGB(1.0, 2.0, 3.0)
+    c *= Float32(2.0)
+    assert_true(_rgb_close(c, RGB(2.0, 4.0, 6.0)))
+
+def test_rgb_iadd() raises:
+    var c = RGB(1.0, 2.0, 3.0)
+    c += RGB(4.0, 5.0, 6.0)
+    assert_true(_rgb_close(c, RGB(5.0, 7.0, 9.0)))
+
+def test_rgb_sum() raises:
+    assert_true(_close(RGB(1.0, 2.0, 3.0).sum(), Float32(6.0)))
+
+def test_rgb_is_black_true_for_zero_and_negative() raises:
+    """Is_black is defined as ALL channels <= 0, including the negative case."""
+    assert_true(RGB(0.0, 0.0, 0.0).is_black())
+    assert_true(RGB(-1.0, -2.0, 0.0).is_black())
+
+def test_rgb_is_black_false_when_any_channel_positive() raises:
+    assert_false(RGB(0.0, 0.001, 0.0).is_black())
+
+# NOTE: RGB.clamp() is not tested here — it is dead code (unreferenced
+# anywhere in src/) whose body uses a deprecated `fn(...)` inline-lambda
+# syntax that fails to parse under the current Mojo toolchain. Exercising it
+# forces that syntax error into this file's compile. Fixing geometry.mojo is
+# out of scope for this test-only change, so it's left alone and flagged
+# here instead.
+
+# ── spherical_direction ─────────────────────────────────────────────────────
+
+def test_spherical_direction_is_unit_length() raises:
+    for theta_pair in [
+        (Float32(0.0), Float32(1.0)),
+        (Float32(1.0), Float32(0.0)),
+        (Float32(0.6), Float32(0.8)),
+        (Float32(0.8660254), Float32(-0.5)),
+    ]:
+        var (sin_t, cos_t) = theta_pair
+        for phi in [Float32(0.0), Float32(1.0), Float32(3.0), Float32(5.5)]:
+            var v = spherical_direction(sin_t, cos_t, phi)
+            assert_true(_close(v.length(), Float32(1.0)))
+
+def test_spherical_direction_straight_up() raises:
+    """Sin_theta=0, cos_theta=1 (the pole) must land on the up axis
+    regardless of phi, per this code's y-up convention."""
+    assert_true(_vclose(spherical_direction(Float32(0.0), Float32(1.0), Float32(0.0)), Vec3f(0.0, 1.0, 0.0)))
+    assert_true(_vclose(spherical_direction(Float32(0.0), Float32(1.0), Float32(2.3)), Vec3f(0.0, 1.0, 0.0)))
+
+def test_spherical_direction_equatorial_phi0() raises:
+    """Sin_theta=1, cos_theta=0, phi=0 lands in the equatorial plane (y=0)
+    along +x, per this code's Vec3f(sin*cos_phi, cos, sin*sin_phi) convention."""
+    var v = spherical_direction(Float32(1.0), Float32(0.0), Float32(0.0))
+    assert_true(_vclose(v, Vec3f(1.0, 0.0, 0.0)))
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

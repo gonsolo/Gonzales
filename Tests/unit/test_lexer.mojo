@@ -4,6 +4,10 @@ from std.testing import assert_true, assert_false, assert_equal, TestSuite
 from gonzales.lexer import (
     scan_int, scan_float, scan_floats, scan_ints, count_floats, count_ints,
     scan_char, scan_token, parse_quoted_string,
+    _psc_streq, _psc_strncmp, _psc_strncpy,
+    _psc_type_is_float, _psc_type_is_int, _psc_type_is_str, _psc_type_is_blackbody,
+    _psc_blackbody_to_rgb,
+    PbrtScanner, scanner_free, ParamScanner,
 )
 
 comptime EPS: Float32 = 1e-5
@@ -21,6 +25,34 @@ def _buf(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
     for i in range(n):
         b[i] = s.as_bytes()[i]
     return b
+
+def _buf0(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
+    """Like _buf, but null-terminated — needed by the _psc_streq/_psc_strncpy/
+    _psc_type_is_* helpers, which (unlike scan_int/scan_float/...) take no
+    explicit length and instead scan/index until a 0 byte or a fixed offset."""
+    var n = s.byte_length()
+    var b = alloc[UInt8](n + 1)
+    for i in range(n):
+        b[i] = s.as_bytes()[i]
+    b[n] = UInt8(0)
+    return b
+
+def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
+    """Builds a PbrtScanner directly over an in-memory buffer, mirroring the
+    helper of the same name in test_parser_integration.mojo — needed to drive
+    ParamScanner, which is only ever handed a PbrtScanner handle, never raw
+    bytes."""
+    var n = s.byte_length()
+    var buf = alloc[UInt8](n + 1)
+    for i in range(n):
+        buf[i] = s.as_bytes()[i]
+    buf[n] = UInt8(0)
+    var handle = alloc[PbrtScanner](1)
+    handle[0].buffer = buf
+    handle[0].total_bytes = Int32(n)
+    handle[0].cursor = Int32(0)
+    handle[0].is_at_end = Int32(0)
+    return handle
 
 # ── scan_int ─────────────────────────────────────────────────────────────
 
@@ -231,6 +263,164 @@ def test_parse_quoted_string_truncates_at_max_buf() raises:
     assert_true(n == Int32(6))  # reports the true length...
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("abc"))  # ...but out is capped
     buf.free(); cur.free(); out.free()
+
+# ── _psc_streq ───────────────────────────────────────────────────────────
+
+def test_psc_streq_equal_strings_match() raises:
+    var buf = _buf0("hello")
+    assert_true(_psc_streq(buf, "hello"))
+    buf.free()
+
+def test_psc_streq_different_strings_do_not_match() raises:
+    var buf = _buf0("hello")
+    assert_false(_psc_streq(buf, "world"))
+    buf.free()
+
+def test_psc_streq_stops_at_null_terminator() raises:
+    """_psc_streq must stop comparing as soon as it hits the buffer's null
+    terminator rather than reading (or caring about) whatever garbage bytes
+    follow it — build a buffer where the bytes past the logical string
+    spell something else entirely and confirm the match still succeeds."""
+    var buf = alloc[UInt8](6)
+    buf[0] = UInt8(104)  # 'h'
+    buf[1] = UInt8(105)  # 'i'
+    buf[2] = UInt8(0)    # terminator
+    buf[3] = UInt8(88)   # 'X' — garbage past the logical string
+    buf[4] = UInt8(88)   # 'X'
+    buf[5] = UInt8(0)
+    assert_true(_psc_streq(buf, "hi"))
+    buf.free()
+
+# ── _psc_strncmp ─────────────────────────────────────────────────────────
+
+def test_psc_strncmp_zero_when_first_n_bytes_match() raises:
+    """Returns 0 (equal) when only the first n bytes are compared, even
+    though a's full string continues on past what the literal describes."""
+    var buf = _buf0("hello world")
+    assert_true(_psc_strncmp(buf, "hello", 5) == 0)
+    buf.free()
+
+def test_psc_strncmp_nonzero_when_bytes_differ_within_n() raises:
+    var buf = _buf0("hexlo")
+    assert_true(_psc_strncmp(buf, "hello", 5) != 0)
+    buf.free()
+
+# ── _psc_strncpy ─────────────────────────────────────────────────────────
+
+def test_psc_strncpy_truncates_and_null_terminates() raises:
+    """Bounded copy: at most n-1 source bytes are copied, and the destination
+    is always null-terminated within the n-byte capacity."""
+    var src = _buf0("hello")
+    var dst = alloc[UInt8](3)
+    _psc_strncpy(dst, src, Int32(3))
+    assert_true(dst[0] == UInt8(104))  # 'h'
+    assert_true(dst[1] == UInt8(101))  # 'e'
+    assert_true(dst[2] == UInt8(0))
+    src.free(); dst.free()
+
+def test_psc_strncpy_full_copy_when_capacity_suffices() raises:
+    var src = _buf0("hi")
+    var dst = alloc[UInt8](8)
+    _psc_strncpy(dst, src, Int32(8))
+    assert_true(dst[0] == UInt8(104))  # 'h'
+    assert_true(dst[1] == UInt8(105))  # 'i'
+    assert_true(dst[2] == UInt8(0))
+    src.free(); dst.free()
+
+# ── _psc_type_is_* ───────────────────────────────────────────────────────
+
+def test_psc_type_is_float_recognizes_float_like_tags() raises:
+    """Every one of these tags names a param type stored as 3 floats (or 1,
+    for plain 'float'); 'sp' is the 2-byte prefix of 'spectrum'."""
+    var b_f = _buf0("float"); assert_true(_psc_type_is_float(b_f)); b_f.free()
+    var b_r = _buf0("rgb"); assert_true(_psc_type_is_float(b_r)); b_r.free()
+    var b_c = _buf0("color"); assert_true(_psc_type_is_float(b_c)); b_c.free()
+    var b_n = _buf0("normal"); assert_true(_psc_type_is_float(b_n)); b_n.free()
+    var b_p = _buf0("point3"); assert_true(_psc_type_is_float(b_p)); b_p.free()
+    var b_v = _buf0("vector3"); assert_true(_psc_type_is_float(b_v)); b_v.free()
+    var b_sp = _buf0("spectrum"); assert_true(_psc_type_is_float(b_sp)); b_sp.free()
+
+def test_psc_type_is_float_rejects_unrelated_tags() raises:
+    """'blackbody' is intentionally excluded (1 float, not 3) per the inline
+    NOTE in lexer.mojo, as are 'integer' and 'string'."""
+    var b_i = _buf0("integer"); assert_false(_psc_type_is_float(b_i)); b_i.free()
+    var b_s = _buf0("string"); assert_false(_psc_type_is_float(b_s)); b_s.free()
+    var b_bb = _buf0("blackbody"); assert_false(_psc_type_is_float(b_bb)); b_bb.free()
+
+def test_psc_type_is_int_recognizes_integer_tag() raises:
+    var buf = _buf0("integer")
+    assert_true(_psc_type_is_int(buf))
+    buf.free()
+
+def test_psc_type_is_int_rejects_unrelated_tags() raises:
+    var b_f = _buf0("float"); assert_false(_psc_type_is_int(b_f)); b_f.free()
+    var b_s = _buf0("string"); assert_false(_psc_type_is_int(b_s)); b_s.free()
+
+def test_psc_type_is_str_recognizes_string_and_texture_tags() raises:
+    var b_s = _buf0("string"); assert_true(_psc_type_is_str(b_s)); b_s.free()
+    var b_t = _buf0("texture"); assert_true(_psc_type_is_str(b_t)); b_t.free()
+
+def test_psc_type_is_str_rejects_unrelated_tags() raises:
+    var b_f = _buf0("float"); assert_false(_psc_type_is_str(b_f)); b_f.free()
+    var b_i = _buf0("integer"); assert_false(_psc_type_is_str(b_i)); b_i.free()
+
+def test_psc_type_is_blackbody_recognizes_tag() raises:
+    var buf = _buf0("blackbody")
+    assert_true(_psc_type_is_blackbody(buf))
+    buf.free()
+
+def test_psc_type_is_blackbody_rejects_unrelated_tags() raises:
+    var b_f = _buf0("float"); assert_false(_psc_type_is_blackbody(b_f)); b_f.free()
+    var b_s = _buf0("string"); assert_false(_psc_type_is_blackbody(b_s)); b_s.free()
+
+# ── _psc_blackbody_to_rgb ────────────────────────────────────────────────
+
+def test_psc_blackbody_to_rgb_low_temp_is_red_dominant() raises:
+    """~1000K (candlelight) sits at the warm end of the Planckian locus; the
+    Mitchell-Charity approximation should give a clearly red-dominant color
+    (and in fact zero blue, per the temp <= 1900 branch)."""
+    var rgb = alloc[Float32](3)
+    _psc_blackbody_to_rgb(Float32(1000.0), rgb)
+    assert_true(rgb[0] > rgb[2])
+    rgb.free()
+
+def test_psc_blackbody_to_rgb_high_temp_is_blue_dominant() raises:
+    """~10000K+ sits at the cool end; unlike the low-temp case, blue should
+    now equal-or-exceed red — a directional sanity check on the empirical
+    fit, not an exact numeric match (no simple closed form exists)."""
+    var rgb = alloc[Float32](3)
+    _psc_blackbody_to_rgb(Float32(12000.0), rgb)
+    assert_true(rgb[2] >= rgb[0])
+    rgb.free()
+
+# ── ParamScanner ─────────────────────────────────────────────────────────
+
+def test_param_scanner_walks_typed_params_then_reports_exhausted() raises:
+    """Mirrors the `"typename" [ value ]` loop every PBRT directive parses
+    via ParamScanner (added this session to dedupe that boilerplate);
+    confirms next() walks header-by-header reporting the right name/type/
+    is_array, and returns False once the params run out."""
+    var body = String('"integer maxdepth" [ 4 ] "float radius" [ 2.5 ]')
+    var handle = _scanner_from_string(body)
+    var ps = ParamScanner()
+
+    assert_true(ps.next(handle))
+    assert_true(ps.name_is("maxdepth"))
+    assert_true(ps.is_int())
+    assert_false(ps.is_float())
+    assert_true(ps.is_array != Int32(0))
+    ps.skip(handle)
+
+    assert_true(ps.next(handle))
+    assert_true(ps.name_is("radius"))
+    assert_true(ps.is_float())
+    assert_false(ps.is_int())
+    assert_true(ps.is_array != Int32(0))
+    ps.skip(handle)
+
+    assert_false(ps.next(handle))
+
+    scanner_free(handle)
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
