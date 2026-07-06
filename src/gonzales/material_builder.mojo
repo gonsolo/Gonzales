@@ -63,7 +63,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
     var mix_amount = Float32(0.5)
     mix_name1[0] = UInt8(0); mix_name2[0] = UInt8(0)
-    var str_val  = alloc[UInt8](64)
+    # Sized for the normalmap/bumpmap filename branch below (scans up to
+    # PSC_FILE_MAX * 2 bytes) — a 64-byte buffer here was a real overflow
+    # for any normal-map path longer than 64 bytes.
+    var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
     var ps = ParamScanner()
     while ps.next(handle):
         if ps.name_is("type") and ps.is_str():
