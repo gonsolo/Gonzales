@@ -279,12 +279,13 @@ def test_rgb_is_black_true_for_zero_and_negative() raises:
 def test_rgb_is_black_false_when_any_channel_positive() raises:
     assert_false(RGB(0.0, 0.001, 0.0).is_black())
 
-# NOTE: RGB.clamp() is not tested here — it is dead code (unreferenced
-# anywhere in src/) whose body uses a deprecated `fn(...)` inline-lambda
-# syntax that fails to parse under the current Mojo toolchain. Exercising it
-# forces that syntax error into this file's compile. Fixing geometry.mojo is
-# out of scope for this test-only change, so it's left alone and flagged
-# here instead.
+def test_rgb_clamp_leaves_in_range_values_unchanged() raises:
+    var c = RGB(0.2, 0.5, 0.8).clamp(Float32(0.0), Float32(1.0))
+    assert_true(_close(c.r, Float32(0.2)) and _close(c.g, Float32(0.5)) and _close(c.b, Float32(0.8)))
+
+def test_rgb_clamp_clips_out_of_range_values() raises:
+    var c = RGB(-1.0, 0.5, 3.0).clamp(Float32(0.0), Float32(1.0))
+    assert_true(_close(c.r, Float32(0.0)) and _close(c.g, Float32(0.5)) and _close(c.b, Float32(1.0)))
 
 # ── spherical_direction ─────────────────────────────────────────────────────
 

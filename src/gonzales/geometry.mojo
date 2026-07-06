@@ -194,8 +194,11 @@ struct RGB(TrivialRegisterPassable):
     def clamp(self, lo: Float32, hi: Float32) -> RGB:
         """Per-channel clamp — useful for tonemapping guard values."""
 # <</listing>>
-        var clamp_f = fn(v: Float32) -> Float32: return lo if v < lo else (hi if v > hi else v)
-        return RGB(clamp_f(self.r), clamp_f(self.g), clamp_f(self.b))
+        return RGB(
+            max(lo, min(hi, self.r)),
+            max(lo, min(hi, self.g)),
+            max(lo, min(hi, self.b)),
+        )
 
 comptime SampledSpectrum = RGB
 # <<listing: SampledSpectrum>>
