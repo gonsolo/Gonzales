@@ -405,11 +405,9 @@ def shade_core(
         var z = sqrt(z2 if z2 > 0.0 else Float32(0.0))
 
         # Build tangent basis
-        var sign = Float32(1.0) if normal[2] >= 0.0 else Float32(-1.0)
-        var a = Float32(-1.0) / (sign + normal[2])
-        var b = normal[0] * normal[1] * a
-        var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
-        var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+        var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+        var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+        var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
 
         var dir = tangent * x + bitangent * y + normal * z
         var dlen = dot(dir, dir)
@@ -647,11 +645,9 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
 
     # Tangent frame (Frisvad) around the shading normal for hemisphere sampling.
-    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-    var a = Float32(-1.0) / (sign + normal[2])
-    var b = normal[0] * normal[1] * a
-    var tangent = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a, sign * b, -sign * normal[0])
-    var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
 
     # Microfacet normal at the coat's air interface: the surface normal when
     # smooth, else a GGX visible-normal sample (Heitz VNDF). Fresnel is taken
@@ -1153,17 +1149,13 @@ def shade_conductor(
             var blen = dot(bitangent, bitangent)
             if blen > Float32(0.0): bitangent = bitangent * (Float32(1.0) / sqrt(blen))
         else:
-            var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-            var an = Float32(-1.0) / (sign_n + normal[2])
-            var bn = normal[0] * normal[1] * an
-            tangent = SIMD[DType.float32, 3](Float32(1.0) + sign_n*normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
-            bitangent = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+            var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+            tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+            bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
     else:
-        var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-        var an = Float32(-1.0) / (sign_n + normal[2])
-        var bn = normal[0] * normal[1] * an
-        tangent = SIMD[DType.float32, 3](Float32(1.0) + sign_n*normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
-        bitangent = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+        var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+        tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+        bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
 
     var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
     var gc = GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
@@ -1200,11 +1192,9 @@ def shade_coated_conductor(
     var ior = mat.emission.r if mat.emission.r > Float32(1.0) else Float32(1.5)
     var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
     # Frisvad frame — isotropic GGX only (single alpha), no anisotropy alignment needed.
-    var sign_n = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-    var an = Float32(-1.0) / (sign_n + normal[2])
-    var bn = normal[0] * normal[1] * an
-    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign_n*normal[0]*normal[0]*an, sign_n*bn, -sign_n*normal[0])
-    var bitangent = SIMD[DType.float32, 3](bn, sign_n + normal[1]*normal[1]*an, -normal[1])
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var tangent   = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
     var gc = GeomContext(normal, normal, hit_point, wo, tangent, bitangent,
         RGB(Float32(0.0)), Float32(0.0))
 
@@ -1355,11 +1345,9 @@ def _build_geom_context_full[use_gpu: Bool](
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
     var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
-    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-    var fa = Float32(-1.0) / (sign + normal[2])
-    var fb = normal[0] * normal[1] * fa
-    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * fa, sign * fb, -sign * normal[0])
-    var bitangent = SIMD[DType.float32, 3](fb, sign + normal[1] * normal[1] * fa, -normal[1])
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var tangent   = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
     return (GeomContext(normal, ng_ff, hit_point, wo, tangent, bitangent, alb, pixel_uv), True)
 
 # Extract 8 consecutive Sobol dimensions for one non-delta bounce and advance

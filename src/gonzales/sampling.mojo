@@ -1,6 +1,6 @@
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory import alloc
-from .geometry import Vec3f, Ray_C, Point3f, dot, PI, TWO_PI, INV_PI
+from .geometry import Vec3f, Ray_C, Point3f, dot, Frame, PI, TWO_PI, INV_PI
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────
 # See: docs/04_sampling.md — Multiple Importance Sampling
@@ -59,11 +59,9 @@ def sample_cosine_hemisphere_world(
     var pdf = z / PI  # cos(θ)/π — coupled, cannot diverge from the sampled direction
 
     # Duff et al. 2017 orthonormal frame
-    var sign = Float32(1.0) if normal[2] >= Float32(0.0) else Float32(-1.0)
-    var a = Float32(-1.0) / (sign + normal[2])
-    var b = normal[0] * normal[1] * a
-    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sign * normal[0] * normal[0] * a,  sign * b, -sign * normal[0])
-    var bitangent = SIMD[DType.float32, 3](b, sign + normal[1] * normal[1] * a, -normal[1])
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var tangent   = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
 
     var dir  = tangent * x + bitangent * y + normal * z
     var dlen = dot(dir, dir)
@@ -94,11 +92,9 @@ def sample_ggx_vndf(
     var vh = wos * (Float32(1.0) / wos_len) if wos_len > Float32(0.0) else Vec3f(0.0, 0.0, 1.0)
 
     # 2. Orthonormal basis around the stretched half-vector (Duff et al. 2017)
-    var sign_vh = Float32(1.0) if vh.z >= Float32(0.0) else Float32(-1.0)
-    var av = Float32(-1.0) / (sign_vh + vh.z)
-    var bv = vh.x * vh.y * av
-    var bt1 = Vec3f(Float32(1.0) + sign_vh * vh.x * vh.x * av, sign_vh * bv, -sign_vh * vh.x)
-    var bt2 = Vec3f(bv, sign_vh + vh.y * vh.y * av, -vh.y)
+    var vh_frame = Frame.from_z(vh)
+    var bt1 = vh_frame.x
+    var bt2 = vh_frame.y
 
     # 3. Sample point on visible hemisphere disk
     var r_disk = sqrt(u1)
