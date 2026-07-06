@@ -6,6 +6,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_token, scanner_parse_quoted_string, scanner_parse_param_header,
                     scanner_scan_char, scanner_scan_float, scanner_scan_floats,
                     scanner_scan_int, scanner_scan_ints,
+                    scanner_count_floats, scanner_count_ints,
                     _psc_streq, _psc_type_is_float, _psc_type_is_int, _psc_type_is_str,
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
                     _psc_skip_value, _psc_skip_params, _psc_skip_line)
@@ -440,8 +441,8 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     """PBRT `Shape "curve"`: stored natively (no tessellation) as one Curve_C
     per local cubic B-spline segment, CTM-transformed at parse time. See
     Curve_C / intersect_curve in geometry.mojo for the BVH-time intersection."""
-    var MAX_CP = 512
-    var cp_buf = alloc[Float32](MAX_CP * 3)
+    var cp_cap = Int32(512)
+    var cp_buf = alloc[Float32](Int(cp_cap) * 3)
     var n_cp = Int32(0)
     var width0 = Float32(0.002)
     var width1 = Float32(-1.0)   # sentinel: not given -> falls back to width0
@@ -453,7 +454,12 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     while found != 0:
         var is_array = ia[0]
         if _psc_type_is_float(type_buf) and _psc_streq(name_buf, "P"):
-            var n_f = scanner_scan_floats(handle, cp_buf, Int32(MAX_CP * 3))
+            var cp_needed = scanner_count_floats(handle) / Int32(3)
+            if cp_needed > cp_cap:
+                cp_buf.free()
+                cp_cap = cp_needed
+                cp_buf = alloc[Float32](Int(cp_cap) * 3)
+            var n_f = scanner_scan_floats(handle, cp_buf, cp_cap * Int32(3))
             n_cp = n_f / Int32(3)
             if is_array: _ = scanner_scan_char(handle, UInt8(93))
         elif _psc_type_is_float(type_buf) and (_psc_streq(name_buf, "width") or _psc_streq(name_buf, "width0")):
@@ -872,9 +878,12 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
         return
 
-    var tmp_f = alloc[Float32](65536)
-    var tmp_i = alloc[Int32](16384)
-    var tmp_uv = alloc[Float32](65536)
+    var tmp_f_cap = Int32(65536)
+    var tmp_i_cap = Int32(16384)
+    var tmp_uv_cap = Int32(65536)
+    var tmp_f = alloc[Float32](Int(tmp_f_cap))
+    var tmp_i = alloc[Int32](Int(tmp_i_cap))
+    var tmp_uv = alloc[Float32](Int(tmp_uv_cap))
     var n_pts  = Int32(0)
     var n_idx  = Int32(0)
     var n_uv   = Int32(0)
@@ -892,21 +901,36 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
         if is_P:
             if is_array:
-                n_pts = scanner_scan_floats(handle, tmp_f, 65536)
+                var p_needed = scanner_count_floats(handle)
+                if p_needed > tmp_f_cap:
+                    tmp_f.free()
+                    tmp_f_cap = p_needed
+                    tmp_f = alloc[Float32](Int(tmp_f_cap))
+                n_pts = scanner_scan_floats(handle, tmp_f, tmp_f_cap)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
                 _ = scanner_scan_float(handle, tmp_f)
                 n_pts = Int32(3)
         elif is_I:
             if is_array:
-                n_idx = scanner_scan_ints(handle, tmp_i, 16384)
+                var i_needed = scanner_count_ints(handle)
+                if i_needed > tmp_i_cap:
+                    tmp_i.free()
+                    tmp_i_cap = i_needed
+                    tmp_i = alloc[Int32](Int(tmp_i_cap))
+                n_idx = scanner_scan_ints(handle, tmp_i, tmp_i_cap)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
                 _ = scanner_scan_int(handle, tmp_i)
                 n_idx = Int32(1)
         elif is_UV:
             if is_array:
-                n_uv = scanner_scan_floats(handle, tmp_uv, 65536)
+                var uv_needed = scanner_count_floats(handle)
+                if uv_needed > tmp_uv_cap:
+                    tmp_uv.free()
+                    tmp_uv_cap = uv_needed
+                    tmp_uv = alloc[Float32](Int(tmp_uv_cap))
+                n_uv = scanner_scan_floats(handle, tmp_uv, tmp_uv_cap)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
                 _ = scanner_scan_float(handle, tmp_uv)
