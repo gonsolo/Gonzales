@@ -1,6 +1,6 @@
 from std.memory import alloc
-from std.math import sqrt
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Vec3f, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C
+from std.math import sqrt, cos, sin, max, min
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -123,6 +123,10 @@ def _mk_sd_full(
     blasCount: Int64,
     instances: UnsafePointer[Instance_C, MutAnyOrigin],
     instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin] = UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(),
+    distantLightCount: Int64 = Int64(0),
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin] = UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(),
+    infiniteLightCount: Int64 = Int64(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -135,10 +139,14 @@ def _mk_sd_full(
     home neither of them owns; this is that home, next to
     SceneDescriptor2_C itself. Only the fields bdpt.mojo/sppm.mojo's shared
     functions actually dereference are filled from real device buffers;
-    textures, distant/point/infinite lights, grids, and the light sampler
-    CDF are never touched by either module's code paths, so they stay
-    dangling/zero-count, same convention traverse_bvh2_core's own optional
-    instancing args already use."""
+    textures, point lights, grids, and the light sampler CDF are never
+    touched by either module's code paths, so they stay dangling/zero-count,
+    same convention traverse_bvh2_core's own optional instancing args
+    already use. distant/infinite lights default to the same dangling
+    convention for backward compatibility, but callers that need
+    infinite/distant-light NEE or light-path emission (both bdpt.mojo and
+    sppm.mojo now do, see [[project_priority_backlog]] item 1) should pass
+    the real device buffers/counts explicitly."""
     return SceneDescriptor2_C(
         bvh2Nodes=bvh2Nodes, primIds=primIds,
         meshes=meshes, meshCount=meshCount,
@@ -146,12 +154,12 @@ def _mk_sd_full(
         areaLights=areaLights, areaLightCount=areaLightCount,
         textures=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textureCount=Int64(0),
-        distantLights=UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(),
-        distantLightCount=Int64(0),
+        distantLights=distantLights,
+        distantLightCount=distantLightCount,
         pointLights=UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
         pointLightCount=Int64(0),
-        infiniteLights=UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(),
-        infiniteLightCount=Int64(0),
+        infiniteLights=infiniteLights,
+        infiniteLightCount=infiniteLightCount,
         spheres=spheres, sphereCount=sphereCount,
         curves=curves, curveCount=curveCount,
         mediums=mediums, mediumCount=mediumCount,
@@ -162,6 +170,222 @@ def _mk_sd_full(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,
     )
+
+# ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
+#    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:
+#    shading.mojo already imports helpers FROM sppm.mojo, so sppm.mojo can't
+#    import back from shading.mojo. guide.mojo hit this exact same
+#    constraint earlier and solved it by duplicating the two small equal-
+#    area-mapping helpers below rather than sharing them — same approach
+#    here.) ────────────────────────────────────────────────────────────────
+
+@always_inline
+def _scene_bounding_sphere(sd: SceneDescriptor2_C) -> Tuple[Point3f, Float32]:
+    """Scene bounding sphere derived from the top-level BVH's root AABB.
+    Infinite/distant lights have no position of their own — emitting a
+    light-path/photon from one requires an arbitrary point outside the
+    scene to start from; a disk of this radius (see
+    _sample_disk_perpendicular) centered on the scene gives every emitted
+    ray a chance to actually enter the scene, same technique pbrt uses
+    (DistantLight::SampleLe / ImageInfiniteLight::SampleLe)."""
+    var root = sd.bvh2Nodes[0]
+    var diag = root.max - root.min
+    var center = root.min + diag * Float32(0.5)
+    var radius = diag.length() * Float32(0.5)
+    if radius < Float32(1e-4):
+        radius = Float32(1.0)
+    return (center, radius)
+
+@always_inline
+def _sample_disk_perpendicular(
+    dir: Vec3f,   # the ray's travel direction
+    center: Point3f, radius: Float32,
+    u: Point2f,
+) -> Point3f:
+    """Uniform point on a disk of `radius` centered at `center - dir*radius`
+    (i.e. on the near side of the bounding sphere, facing back along `dir`)
+    and oriented perpendicular to `dir` — so a ray started here travelling
+    along `dir` is guaranteed to cross the whole bounding sphere."""
+    var frame = Frame.from_z(dir)
+    var r = radius * sqrt(u.x)
+    var theta = Float32(2) * PI * u.y
+    var dx = r * cos(theta)
+    var dy = r * sin(theta)
+    var disk_center = center + dir * (-radius)
+    return disk_center + (frame.x * dx + frame.y * dy)
+
+@always_inline
+def _equal_area_square_to_sphere_bvh(uv: Point2f) -> Vec3f:
+    """Duplicate of shading.mojo's _equal_area_square_to_sphere (PBRT v4's
+    equal-area octahedral mapping, Clarberg 2008) — see this section's
+    docstring for why it's duplicated rather than imported."""
+    var uu = Float32(2) * uv.x - Float32(1)
+    var vv = Float32(2) * uv.y - Float32(1)
+    var up = uu if uu >= Float32(0) else -uu
+    var vp = vv if vv >= Float32(0) else -vv
+    var signed_dist = Float32(1) - (up + vp)
+    var d = signed_dist if signed_dist >= Float32(0) else -signed_dist
+    var r = Float32(1) - d
+    var phi: Float32
+    if r == Float32(0):
+        phi = Float32(0)
+    elif up >= vp:
+        phi = (vp / r) * PI / Float32(4)
+    else:
+        phi = ((vp - up) / r + Float32(1)) * PI / Float32(4)
+    var r2 = r * r
+    var z = Float32(1) - r2
+    if signed_dist < Float32(0): z = -z
+    var cp = cos(phi)
+    var sp = sin(phi)
+    if uu < Float32(0): cp = -cp
+    if vv < Float32(0): sp = -sp
+    var xy_scale = r * sqrt(max(Float32(0), Float32(2) - r2))
+    return Vec3f(cp * xy_scale, sp * xy_scale, z)
+
+@always_inline
+def _lower_bound_bvh(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
+    """Duplicate of shading.mojo's _lower_bound: first index i in [lo, hi)
+    s.t. arr[i] >= val; returns hi if all < val."""
+    var l = lo; var h = hi
+    while l < h:
+        var mid = (l + h) // 2
+        if arr[mid] < val:
+            l = mid + 1
+        else:
+            h = mid
+    return l
+
+@always_inline
+def _sample_infinite_light_dir(
+    ilight: InfiniteLight_C,
+    u: Point2f,
+) -> Tuple[Vec3f, RGB, Float32]:
+    """Sample an emission direction from an environment (infinite) light,
+    returning (world-space direction, radiance there, solid-angle pdf).
+    Used for BOTH light-path/photon emission (bdpt.mojo/sppm.mojo) and NEE
+    toward the light (same distribution works for both — the only
+    difference is which end of the ray you start from). Mirrors
+    shading.mojo's _nee_infinite_light CDF-importance-sampling block."""
+    var w2l = ilight.world_to_light
+    if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+        var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+        var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x)
+        row_idx = min(row_idx, ih - 1)
+        var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+        var cond_base = (ih + 1) + row_idx * (iw + 1)
+        var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base
+        col_idx = min(col_idx, iw - 1)
+        var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+
+        var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+        var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+        var local_d = _equal_area_square_to_sphere_bvh(Point2f(sample_u, sample_v))
+
+        var env_dir = Vec3f(
+            w2l[0]*local_d.x + w2l[1]*local_d.y + w2l[2]*local_d.z,
+            w2l[4]*local_d.x + w2l[5]*local_d.y + w2l[6]*local_d.z,
+            w2l[8]*local_d.x + w2l[9]*local_d.y + w2l[10]*local_d.z,
+        )
+
+        var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+        var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+        var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+        var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+        var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+        var env_rgb = RGB(pr, pg, pb) * ilight.scale
+
+        var pdf_light: Float32
+        if dp_row > Float32(0) and dp_col > Float32(0):
+            pdf_light = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
+        else:
+            pdf_light = Float32(1) / (Float32(4) * PI)
+        return (env_dir, env_rgb, pdf_light)
+    else:
+        # No texture: uniform sphere sampling, constant radiance.
+        var cosT = Float32(2) * u.x - Float32(1)
+        var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
+        var phi = Float32(2) * PI * u.y
+        var dir = Vec3f(sinT * cos(phi), sinT * sin(phi), cosT)
+        return (dir, ilight.scale, Float32(1) / (Float32(4) * PI))
+
+@always_inline
+def _equal_area_sphere_to_square_bvh(dir: Vec3f) -> Point2f:
+    """Duplicate of shading.mojo's _equal_area_sphere_to_square (inverse of
+    _equal_area_square_to_sphere_bvh) — see this section's docstring for why
+    it's duplicated rather than imported."""
+    var x = dir.x if dir.x >= Float32(0) else -dir.x
+    var y = dir.y if dir.y >= Float32(0) else -dir.y
+    var z = dir.z if dir.z >= Float32(0) else -dir.z
+    var r = sqrt(max(Float32(0), Float32(1) - z))
+    var a = max(x, y)
+    var b: Float32
+    if a == Float32(0):
+        b = Float32(0)
+    else:
+        b = min(x, y) / a
+    var t1 = Float32(0.406758566246788489601959989e-5)
+    var t2 = Float32(0.636226545274016134946890922156)
+    var t3 = Float32(0.61572017898280213493197203466e-2)
+    var t4 = Float32(-0.247333733281268944196501420480)
+    var t5 = Float32(0.881770664775316294736387951347e-1)
+    var t6 = Float32(0.419038818029165735901852432784e-1)
+    var t7 = Float32(-0.251390972343483509333252996350e-1)
+    var phi = t1 + b*(t2 + b*(t3 + b*(t4 + b*(t5 + b*(t6 + b*t7)))))
+    if x < y:
+        phi = Float32(1) - phi
+    var v = phi * r
+    var u = r - v
+    if dir.z < Float32(0):
+        var tmp = u
+        u = Float32(1) - v
+        v = Float32(1) - tmp
+    if dir.x < Float32(0): u = -u
+    if dir.y < Float32(0): v = -v
+    u = Float32(0.5) * (u + Float32(1))
+    v = Float32(0.5) * (v + Float32(1))
+    return Point2f(u, v)
+
+@always_inline
+def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> Tuple[RGB, Float32]:
+    """Radiance AND solid-angle sampling pdf an infinite (environment) light
+    contributes along a ray travelling in `dir_world` — used for the
+    camera-ray miss case (bdpt.mojo/sppm.mojo don't otherwise add any
+    infinite-light contribution when a traced ray leaves the scene, unlike
+    the ordinary unidirectional path tracer's own miss handler in
+    shading.mojo, which this mirrors with a nearest-texel lookup instead of
+    shading.mojo's bilinear one — consistent with _sample_infinite_light_dir's
+    own nearest-texel sampling above, and a fine approximation for a single
+    miss-ray sample). The pdf is needed to MIS-weight this escape strategy
+    against NEE sampling the same light from the previous vertex — see
+    bdpt.mojo's `last_bsdf_pdf` bookkeeping for why (getting this wrong
+    double-counts unoccluded env light, the exact bug documented in
+    [[project_infinite_light_shadows]])."""
+    if ilight.tex_idx < Int32(0) or Int(ilight.pixels_ptr) <= 1 or ilight.cdf_w <= Int32(0):
+        return (ilight.scale, Float32(1) / (Float32(4) * PI))
+    var w2l = ilight.world_to_light
+    var local_dir = Vec3f(
+        w2l[0]*dir_world.x + w2l[4]*dir_world.y + w2l[8]*dir_world.z,
+        w2l[1]*dir_world.x + w2l[5]*dir_world.y + w2l[9]*dir_world.z,
+        w2l[2]*dir_world.x + w2l[6]*dir_world.y + w2l[10]*dir_world.z,
+    )
+    var uv = _equal_area_sphere_to_square_bvh(local_dir)
+    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+    var px = min(iw - 1, max(0, Int(uv.x * Float32(iw))))
+    var py = min(ih - 1, max(0, Int(uv.y * Float32(ih))))
+    var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+    var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+    var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+    var radiance = RGB(pr, pg, pb) * ilight.scale
+    var dp_row = ilight.cdf_ptr[py + 1] - ilight.cdf_ptr[py]
+    var cond_base = (ih + 1) + py * (iw + 1)
+    var dp_col = ilight.cdf_ptr[cond_base + px + 1] - ilight.cdf_ptr[cond_base + px]
+    var pdf: Float32
+    if dp_row > Float32(0) and dp_col > Float32(0):
+        pdf = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
+    else:
+        pdf = Float32(1) / (Float32(4) * PI)
+    return (radiance, pdf)
 
 # ── Analytical sphere intersection ────────────────────────────────────────────
 

@@ -119,6 +119,19 @@ def point3f(s: SIMD[DType.float32, 3]) -> Point3f:
 # <</listing>>
 
 @fieldwise_init
+struct Point2f(TrivialRegisterPassable):
+    """A 2D point: texture UV coordinates, or a [0,1]^2 sample-space pair
+    (e.g. two independent random numbers used together for a disk/hemisphere/
+    CDF sample). Matches pbrt-v4 naming convention."""
+    var x: Float32
+    var y: Float32
+
+    @always_inline
+    def __init__(out self, v: Float32):
+        """Broadcast constructor — Point2f(0) for the origin."""
+        self.x = v; self.y = v
+
+@fieldwise_init
 struct Bounds3f(TrivialRegisterPassable):
     """An axis-aligned bounding box (world space)."""
     var min: Point3f

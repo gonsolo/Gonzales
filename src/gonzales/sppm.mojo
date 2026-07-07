@@ -12,12 +12,16 @@ from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
+    RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI,
-    Curve_C, curve_piece_endpoints, _curve_perp_axis,
+    Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C,
 )
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full
+from .bvh import (
+    BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
+    _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
+)
+from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
@@ -66,6 +70,13 @@ struct SPPMPixel(TrivialRegisterPassable):
     # volume scatter point would need a phase-function-weighted variant,
     # not implemented).
     var ld: RGB
+    # Infinite-light radiance for a VP sample whose traced ray escaped the
+    # scene entirely (valid stays 0 — there's no surface to gather photons
+    # at or run NEE from) instead of hitting a diffuse/volume scatterer.
+    # Already beta-weighted at trace time (see _sppm_trace_visible_point's
+    # miss branch), so _sppm_finalize_one_pixel adds it directly rather than
+    # multiplying by vp.beta again like the tau/ld terms.
+    var env: RGB
 
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
@@ -400,6 +411,7 @@ def _sppm_trace_visible_point(
         N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=pidx,
         is_volume=Int32(0),
         ld=RGB(Float32(0)),
+        env=RGB(Float32(0)),
     )
 
     # Sub-pixel jitter — diversifies which point on a dielectric-obscured
@@ -432,6 +444,10 @@ def _sppm_trace_visible_point(
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         if scratch[0].hit == Int8(0):
+            for inf_i in range(Int(sd.infiniteLightCount)):
+                var ilight = sd.infiniteLights[inf_i]
+                var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd)
+                vp.env += vp.beta * Le
             break
 
         var inter = scratch[0]
@@ -457,6 +473,17 @@ def _sppm_trace_visible_point(
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
         var hit = ro + rd * t_hit
+
+        # Mix material: stochastically resolve to one of two sub-materials
+        # (mirrors shading.mojo's shade_mix / bdpt.mojo's own resolution).
+        if mat.type == MatKind.mix:
+            var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
+            var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
+            var mix_amount = mat.roughU
+            var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
+            mat = sd.materials[mix_chosen]
+            if mat.type == MatKind.mix:
+                mat.type = MatKind.diffuse
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
@@ -568,39 +595,81 @@ def _sppm_trace_photon[use_gpu: Bool](
     counter:          UnsafePointer[Int32, MutAnyOrigin],
     default_emit_med: Int32,
 ):
-    """Emit one photon path from a random area light, trace through
-    glass/media, storing at diffuse/volume hits via _sppm_store_photon.
-    n_emit is the number of emitted photon PATHS (drives the
-    flux-per-photon scale factor); max_photons is the storage buffer's
+    """Emit one photon path from a random light (area, distant, or
+    infinite), trace through glass/media, storing at diffuse/volume hits via
+    _sppm_store_photon. n_emit is the number of emitted photon PATHS (drives
+    the flux-per-photon scale factor); max_photons is the storage buffer's
     capacity, which can be smaller than the number of storage attempts
     since the Russian-roulette diffuse-diffuse continuation (see the
     diffuse-hit branch below) means one emitted path can generate several
     storage attempts, not just one. Shared verbatim between the CPU driver
     (_sppm_photon_pass, one reused `scratch`/plain counter) and the GPU
     kernel (sppm_emit_photons_gpu, one scratch slot + atomic counter per
-    thread) — only _sppm_store_photon's comptime branch differs."""
+    thread) — only _sppm_store_photon's comptime branch differs.
+
+    Lights are chosen uniformly across ALL light types (area + distant +
+    infinite) — `n_lights` below is this combined total. Distant/infinite
+    lights have no finite position, so unlike an area light's surface point
+    there's nothing meaningful to store as a "direct" photon at the light
+    itself (SPPM never did that anyway — only diffuse/volume hits ever get
+    stored); a disk-sampled point on the scene's bounding sphere (see
+    bvh.mojo's _scene_bounding_sphere/_sample_disk_perpendicular) just seeds
+    where this photon's path starts. Direct illumination from these lights
+    is provided separately by _sppm_nee_one's own distant/infinite sampling."""
     var has_media = Int(sd.mediumCount) > 0
-    var n_lights = Int(sd.areaLightCount)
+    var n_area = Int(sd.areaLightCount)
+    var n_distant = Int(sd.distantLightCount)
+    var n_infinite = Int(sd.infiniteLightCount)
+    var n_lights = n_area + n_distant + n_infinite
+    if n_lights == 0:
+        return
 
-    # Pick a random area light + triangle + barycentric point on it.
-    var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg, sd.curves)
-    var al = light_sample.light
-    var lp = light_sample.point
-    var ln = light_sample.normal
+    var ro: Point3f
+    var rd: Vec3f
+    var flux: RGB
 
-    # Sample cosine-weighted emission direction from the light hemisphere
-    # (same Frisvad-frame construction as _cosine_hemisphere_sample).
-    var du1 = pcg.next_float()
-    var du2 = pcg.next_float()
-    var pdir = _cosine_hemisphere_sample(ln, du1, du2)
+    var light_pick = Int(pcg.next_uint() % UInt32(n_lights))
+    if light_pick < n_area:
+        # Pick a random area light + triangle + barycentric point on it.
+        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_area, pcg, sd.curves)
+        var al = light_sample.light
+        var lp = light_sample.point
+        var ln = light_sample.normal
 
-    # Photon flux: total_light_power / n_emit
-    # total_power = emission * pi * total_area * n_lights (uniform light selection)
-    var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
-    var flux = al.emission * scale
+        # Sample cosine-weighted emission direction from the light hemisphere
+        # (same Frisvad-frame construction as _cosine_hemisphere_sample).
+        var du1 = pcg.next_float()
+        var du2 = pcg.next_float()
+        var pdir = _cosine_hemisphere_sample(ln, du1, du2)
 
-    var ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
-    var rd = vec3f(pdir)
+        # Photon flux: total_light_power / n_emit
+        # total_power = emission * pi * total_area * n_lights (uniform light selection)
+        var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
+        flux = al.emission * scale
+        ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
+        rd = vec3f(pdir)
+    elif light_pick < n_area + n_distant:
+        var dl = sd.distantLights[light_pick - n_area]
+        var (center, radius) = _scene_bounding_sphere(sd)
+        var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
+        var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
+        flux = dl.emission * (Float32(n_lights) * PI * radius * radius) / Float32(n_emit)
+        ro = disk_pt
+        rd = dir
+    else:
+        var il = sd.infiniteLights[light_pick - n_area - n_distant]
+        var (center, radius) = _scene_bounding_sphere(sd)
+        # _sample_infinite_light_dir returns env_dir in the NEE convention
+        # ("direction FROM a shading point TOWARD the light"). A photon
+        # leaving the light travels the opposite way — negate for emission.
+        var (env_dir, env_rgb, pdf_dir) = _sample_infinite_light_dir(il, Point2f(pcg.next_float(), pcg.next_float()))
+        if pdf_dir <= Float32(0):
+            return
+        var emit_dir = -env_dir
+        var disk_pt = _sample_disk_perpendicular(emit_dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
+        flux = env_rgb * (Float32(n_lights) * PI * radius * radius / pdf_dir) / Float32(n_emit)
+        ro = disk_pt
+        rd = emit_dir
     var cur_med_idx = default_emit_med  # start in medium if light is above one
 
     for bounce in range(_MAX_B):
@@ -650,6 +719,15 @@ def _sppm_trace_photon[use_gpu: Bool](
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
         var hit = ro + rd * t_hit
+
+        if mat.type == MatKind.mix:
+            var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
+            var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
+            var mix_amount = mat.roughU
+            var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
+            mat = sd.materials[mix_chosen]
+            if mat.type == MatKind.mix:
+                mat.type = MatKind.diffuse
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             # bounce > 0: skip storing a photon at a surface directly hit
@@ -712,7 +790,7 @@ def _sppm_photon_pass(
 ) -> Int:
     """CPU driver: emit n_emit photon paths, returning the number actually
     stored (clamped to max_photons)."""
-    var n_lights = Int(sd.areaLightCount)
+    var n_lights = Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount)
     if n_lights == 0:
         return 0
 
@@ -887,49 +965,72 @@ def _sppm_nee_one(
     """Direct (NEE) lighting update for visible point `i`. Shared verbatim
     between the CPU driver (_sppm_nee_update, one call per VP in a loop) and
     the GPU kernel (sppm_nee_gpu, one call per thread) — no divergence, each
-    call only ever touches its own vps[i]."""
-    var n_lights = Int(sd.areaLightCount)
-    if n_lights == 0:
-        return
+    call only ever touches its own vps[i]. Samples area lights (one random
+    CDF-uniform pick), distant lights, and infinite lights (all of the
+    latter two — few and typically dominant, matching shading.mojo's own
+    NEE asymmetry rationale) — no MIS weighting needed for infinite lights
+    here, unlike bdpt.mojo's camera-path NEE: a VP is only ever `valid` when
+    its ONE traced ray hit a real surface, and _sppm_trace_visible_point's
+    own miss-escape env contribution (vp.env) only fires when it didn't —
+    mutually exclusive per sample, so there's no competing strategy to
+    double-count against."""
     var vp = vps[i]
     if vp.valid == Int32(0) or vp.is_volume == Int32(1):
         return
-
-    # Pick a random area light + triangle + point on it (same scheme as
-    # _sppm_trace_photon's emission sampling).
-    var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_lights, pcg, sd.curves)
-    var al = light_sample.light
-    var lp = light_sample.point
-    var ln = light_sample.normal
-
     var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()
-    var to_light = lp - vpos
-    var dist2 = dot(to_light, to_light)
-    var dist = sqrt(dist2)
-    if dist <= Float32(0.0):
-        return
-    var wi = to_light * (Float32(1.0) / dist)
 
-    var cos_surface = dot(vn, wi)
-    var cos_light = -dot(ln, wi)
-    if cos_surface <= Float32(0.0) or cos_light <= Float32(0.0):
-        return
+    var n_area = Int(sd.areaLightCount)
+    if n_area > 0:
+        # Pick a random area light + triangle + point on it (same scheme as
+        # _sppm_trace_photon's emission sampling).
+        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_area, pcg, sd.curves)
+        var al = light_sample.light
+        var lp = light_sample.point
+        var ln = light_sample.normal
 
-    # Shadow ray, offset from both ends to avoid self-intersection.
-    var shadow_org = vp.pos + vp.normal * Float32(0.0001)
-    var shadow_ray = Ray_C(shadow_org, vec3f(wi))
-    var t_max = dist * Float32(0.999)
-    if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
-                          sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-        return
+        var to_light = lp - vpos
+        var dist2 = dot(to_light, to_light)
+        var dist = sqrt(dist2)
+        if dist > Float32(0.0):
+            var wi = to_light * (Float32(1.0) / dist)
+            var cos_surface = dot(vn, wi)
+            var cos_light = -dot(ln, wi)
+            if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
+                # Shadow ray, offset from both ends to avoid self-intersection.
+                var shadow_org = vp.pos + vp.normal * Float32(0.0001)
+                var shadow_ray = Ray_C(shadow_org, vec3f(wi))
+                var t_max = dist * Float32(0.999)
+                if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
+                                      sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                    # pdf_area = 1/(n_area * total_area) — uniform-over-all-lights
+                    # assumption, same as the emission-sampling flux scale factor.
+                    var inv_pdf_area = Float32(n_area) * al.total_area
+                    var geom = cos_surface * cos_light / dist2 * inv_pdf_area
+                    var brdf = vp.alb / PI
+                    vps[i].ld += (brdf * al.emission) * geom
 
-    # pdf_area = 1/(n_lights * total_area) — uniform-over-all-lights
-    # assumption, same as the emission-sampling flux scale factor.
-    var inv_pdf_area = Float32(n_lights) * al.total_area
-    var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-    var brdf = vp.alb / PI
-    vps[i].ld += (brdf * al.emission) * geom
+    for dl_i in range(Int(sd.distantLightCount)):
+        var dl = sd.distantLights[dl_i]
+        var to_light_d = Vec3f(-dl.direction.x, -dl.direction.y, -dl.direction.z)
+        var cos_s = dot(vn, to_light_d.to_simd())
+        if cos_s > Float32(0.0):
+            var shadow_org_d = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_ray_d = Ray_C(shadow_org_d, to_light_d)
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, Float32(2000),
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                vps[i].ld += (vp.alb / PI) * dl.emission * cos_s
+
+    for inf_i in range(Int(sd.infiniteLightCount)):
+        var ilight = sd.infiniteLights[inf_i]
+        var (env_dir, env_rgb, pdf_env) = _sample_infinite_light_dir(ilight, Point2f(pcg.next_float(), pcg.next_float()))
+        var cos_env = dot(vn, env_dir.to_simd())
+        if cos_env > Float32(0.0) and pdf_env > Float32(0.0):
+            var shadow_org_e = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_ray_e = Ray_C(shadow_org_e, env_dir)
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, Float32(2000),
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                vps[i].ld += (vp.alb / PI) * env_rgb * (cos_env / pdf_env)
 
 
 def _sppm_nee_update(
@@ -939,7 +1040,7 @@ def _sppm_nee_update(
     seed:    UInt64,
     pass_idx: Int,
 ):
-    var n_lights = Int(sd.areaLightCount)
+    var n_lights = Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount)
     if n_lights == 0:
         return
 
@@ -970,6 +1071,11 @@ def _sppm_finalize_one_pixel(
     for vs in range(vp_samples):
         var vp = vps[i * vp_samples + vs]
         if vp.valid == Int32(0):
+            # No surface hit — either a dead sample, or the traced ray
+            # escaped the scene into an infinite (environment) light, whose
+            # already beta-weighted radiance _sppm_trace_visible_point
+            # stored directly in vp.env (0 if neither happened).
+            acc += vp.env
             continue
         var vp_l = RGB(Float32(0))
         if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
@@ -1016,8 +1122,8 @@ def sppm_render(
     var iso_scale = psc[0].film_iso / Float32(100)
     var max_comp = psc[0].film_max_comp
 
-    if Int(sd.areaLightCount) == 0:
-        print("SPPM: no area lights in scene, cannot emit photons")
+    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) == 0:
+        print("SPPM: no lights in scene, cannot emit photons")
         return Int32(-1)
 
     print("SPPM: " + String(fw) + "x" + String(fh)
@@ -1143,6 +1249,10 @@ def sppm_gen_vp_gpu(
     blasCount: Int64,
     instances: UnsafePointer[Instance_C, MutAnyOrigin],
     instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
 ):
     """One thread per (pixel, vp_sample). Calls the SAME
     _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls."""
@@ -1157,6 +1267,7 @@ def sppm_gen_vp_gpu(
         areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
         mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
     )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
     vps[combined] = _sppm_trace_visible_point(sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined)
@@ -1190,19 +1301,24 @@ def sppm_emit_photons_gpu(
     blasCount: Int64,
     instances: UnsafePointer[Instance_C, MutAnyOrigin],
     instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
     _sppm_store_photon reserves its slot via an atomic fetch-add (CPU uses a
     plain counter increment instead — no other difference)."""
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if k >= n_emit or areaLightCount == Int64(0):
+    if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0) and infiniteLightCount == Int64(0)):
         return
     var sd = _mk_sd_full(
         bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
         areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
         mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med)
@@ -1264,6 +1380,10 @@ def sppm_nee_gpu(
     blasCount: Int64,
     instances: UnsafePointer[Instance_C, MutAnyOrigin],
     instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
     driver (_sppm_nee_update) calls."""
@@ -1275,6 +1395,7 @@ def sppm_nee_gpu(
         areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
         mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
     _sppm_nee_one(vps, i, sd, pcg)
@@ -1318,8 +1439,8 @@ def sppm_render_gpu(
     photon pass, atomic-exchange hash-grid build (classic parallel linked-list
     insertion). Mirrors bdpt_render_gpu's per-pass reset-counter -> emit ->
     sync+readback+clamp -> consume shape."""
-    if Int(sd.areaLightCount) == 0:
-        print("SPPM: no area lights in scene, cannot emit photons")
+    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) == 0:
+        print("SPPM: no lights in scene, cannot emit photons")
         return Int32(-1)
 
     var fw = Int(psc[0].film_w)
@@ -1399,11 +1520,15 @@ def sppm_render_gpu(
             var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
             var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
             var areaLights = handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C]()
+            var distantLights = handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C]()
+            var infiniteLights = handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C]()
             var n_mediums = Int64(handle[].n_mediums)
             var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
             var n_spheres = Int64(handle[].n_spheres)
             var n_curves = Int64(handle[].n_curves)
             var n_area_lights = Int64(handle[].n_area_lights)
+            var n_distant_lights = Int64(handle[].n_distant_lights)
+            var n_infinite_lights = Int64(handle[].n_infinite_lights)
             var n_blas = Int64(handle[].n_blas)
             var n_instances = Int64(handle[].n_instances)
 
@@ -1423,6 +1548,7 @@ def sppm_render_gpu(
                 areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                 mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
                 blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                 grid_dim=grid_vps, block_dim=block_size)
 
             for pass_idx in range(n_passes):
@@ -1438,6 +1564,7 @@ def sppm_render_gpu(
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
                     blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     grid_dim=grid_emit, block_dim=block_size)
 
                 handle[].ctx.synchronize()
@@ -1465,6 +1592,7 @@ def sppm_render_gpu(
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
                     blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     grid_dim=grid_vps, block_dim=block_size)
 
                 if verbose or (pass_idx + 1) % 10 == 0:
