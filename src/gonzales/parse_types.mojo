@@ -173,6 +173,13 @@ struct SceneParseState(Movable):
     var film_iso:         Float32
     var film_max_comp:    Float32
     var film_filename:    String
+    # Film "float cropwindow" [x0 x1 y0 y1] — normalized fractional bounds
+    # (0..1) of film_w/film_h to actually render/output, pbrt's own
+    # convention. Defaults to the full frame (0,1,0,1) when unspecified.
+    var crop_x0: Float32
+    var crop_x1: Float32
+    var crop_y0: Float32
+    var crop_y1: Float32
     var filter_sigma:     Float32
     var filter_support_x: Float32
     var filter_support_y: Float32
@@ -282,6 +289,10 @@ struct SceneParseState(Movable):
         self.film_iso         = Float32(100)
         self.film_max_comp    = Float32(0)
         self.film_filename    = String("gonzales.exr")
+        self.crop_x0 = Float32(0.0)
+        self.crop_x1 = Float32(1.0)
+        self.crop_y0 = Float32(0.0)
+        self.crop_y1 = Float32(1.0)
         self.filter_sigma     = Float32(0.5)
         self.filter_support_x = Float32(1.5)
         self.filter_support_y = Float32(1.5)

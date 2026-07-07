@@ -1,11 +1,11 @@
 from std.memory import alloc, OwnedPointer
 from std.collections import List
-from std.math import sqrt, tan
+from std.math import sqrt, tan, ceil
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, render_aux_buffers, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot
-from .postprocess import denoise, write_image
+from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
 from .sppm import sppm_render, sppm_render_gpu
@@ -222,9 +222,8 @@ def debug_trace_pixel(
     """Trace the centre ray of one pixel and print the path bounce-by-bounce
     (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
-    from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core
+    from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
     from .geometry import Intersection_C, Material_C, cross, fr_dielectric
-    from .shading import _equal_area_sphere_to_square
 
     var psc = mojo_parse_scene(path)
     if Int(psc) == 0:
@@ -483,6 +482,19 @@ def parse_and_render(
     var n_pixels = Int(fw) * Int(fh)
     var results = List[TileResult_C](capacity=n_pixels)
 
+    # Film "float cropwindow" [x0 x1 y0 y1] pixel bounds — ceil() on both
+    # ends matches pbrt's own Film pixel-bounds computation exactly (verified
+    # against a real cropwindow scene's reference render). Only applied at
+    # image-write time (see write_image_cropped below) for the plain
+    # CPU/GPU-wavefront path tracer — --sppm/--bdpt don't honor cropwindow
+    # yet (their own render+write call sites are in sppm.mojo/bdpt.mojo).
+    var crop_x0px = Int32(ceil(psc[0].crop_x0 * Float32(fw)))
+    var crop_y0px = Int32(ceil(psc[0].crop_y0 * Float32(fh)))
+    var crop_x1px = Int32(ceil(psc[0].crop_x1 * Float32(fw)))
+    var crop_y1px = Int32(ceil(psc[0].crop_y1 * Float32(fh)))
+    var crop_w = crop_x1px - crop_x0px
+    var crop_h = crop_y1px - crop_y0px
+
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
@@ -558,13 +570,15 @@ def parse_and_render(
         for i in range(n_pixels * 3):
             albedo_gpu[i] *= inv_spp
         gpu_free_scene(handle)
-        _ = write_image(denoised_gpu.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
+        _ = write_image_cropped(denoised_gpu.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
+                                 psc[0].film_filename, Int32(32), Int32(32))
         var albedo_name_buf = List[UInt8](capacity=11)
         var albedo_name_str = "albedo.exr"
         var anp = albedo_name_str.unsafe_ptr()
         for i in range(10): albedo_name_buf.append(anp[i])
         albedo_name_buf.append(UInt8(0))
-        _ = write_image(albedo_gpu.unsafe_ptr(), fw, fh, albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
+        _ = write_image_cropped(albedo_gpu.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
+                                 albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
         # albedo_name_buf freed automatically
         # denoised_gpu, albedo_gpu, and results freed automatically
         mojo_parsed_free(psc)
@@ -761,13 +775,15 @@ def parse_and_render(
                     normals.unsafe_ptr(), dept.unsafe_ptr(),
                     fw, fh, denoised.unsafe_ptr(),
                     Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
-        _ = write_image(denoised.unsafe_ptr(), fw, fh, psc[0].film_filename, Int32(32), Int32(32))
+        _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
+                                 psc[0].film_filename, Int32(32), Int32(32))
         var albedo_name_buf = List[UInt8](capacity=11)
         var albedo_name_str = "albedo.exr"
         var anp2 = albedo_name_str.unsafe_ptr()
         for i in range(10): albedo_name_buf.append(anp2[i])
         albedo_name_buf.append(UInt8(0))
-        _ = write_image(albedo.unsafe_ptr(), fw, fh, albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
+        _ = write_image_cropped(albedo.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
+                                 albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
         # albedo_name_buf, beauty, albedo, denoised, normals, dept freed automatically
     mojo_parsed_free(psc)
     return Int32(0)

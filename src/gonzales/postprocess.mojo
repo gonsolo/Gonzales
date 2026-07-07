@@ -1,5 +1,6 @@
 from std.ffi import external_call
 from std.math import exp
+from std.memory import alloc
 from std.collections import List
 from .geometry import RGB
 
@@ -101,3 +102,57 @@ def write_image(
         UnsafePointer[Float32, MutAnyOrigin],
         Int32, Int32, Int32, Int32,
     ](filename, pixels, width, height, tile_w, tile_h)
+
+# Same as write_image, but tags the output with an OpenEXR dataWindow/
+# displayWindow pair: `pixels` holds only the (width x height) data-window
+# pixels, offset at (x, y) within a (full_width x full_height) display
+# window starting at (0, 0) — matching pbrt's own Film "float cropwindow"
+# output convention (verified against a real pbrt-v4 cropped render: same
+# ceil()-based pixel bounds, same dataWindow/displayWindow split). PNG/JPG/
+# etc. have no data/display-window concept, so the C++ bridge only applies
+# the windowing for EXR/HDR output.
+def write_image_windowed(
+    pixels: UnsafePointer[Float32, MutAnyOrigin],
+    width: Int32, height: Int32,
+    full_width: Int32, full_height: Int32,
+    x: Int32, y: Int32,
+    filename: UnsafePointer[UInt8, MutAnyOrigin],
+    tile_w: Int32, tile_h: Int32,
+) -> Int32:
+    return external_call["write_image_rgb_windowed", Int32,
+        UnsafePointer[UInt8, MutAnyOrigin],
+        UnsafePointer[Float32, MutAnyOrigin],
+        Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32,
+    ](filename, pixels, width, height, full_width, full_height, x, y, tile_w, tile_h)
+
+# Film "float cropwindow" support: writes `pixels` (a full_w×full_h RGB float
+# buffer) restricted to the [crop_x0, crop_x0+crop_w) x [crop_y0, crop_y0+
+# crop_h) sub-rectangle, tagged with the full frame as an OpenEXR display
+# window (see write_image_windowed) — matching pbrt's own cropped output
+# convention exactly. No-op passthrough (zero extra allocation, no windowing
+# metadata) when the crop rectangle is the full frame — the overwhelmingly
+# common case (scenes without a cropwindow).
+def write_image_cropped(
+    pixels: UnsafePointer[Float32, MutAnyOrigin],
+    full_w: Int32, full_h: Int32,
+    crop_x0: Int32, crop_y0: Int32, crop_w: Int32, crop_h: Int32,
+    filename: UnsafePointer[UInt8, MutAnyOrigin],
+    tile_w: Int32, tile_h: Int32,
+) -> Int32:
+    if crop_x0 == Int32(0) and crop_y0 == Int32(0) and crop_w == full_w and crop_h == full_h:
+        return write_image(pixels, full_w, full_h, filename, tile_w, tile_h)
+    var n = Int(crop_w) * Int(crop_h) * 3
+    var cropped = alloc[Float32](n)
+    for row in range(Int(crop_h)):
+        var src_row_off = (Int(crop_y0) + row) * Int(full_w) + Int(crop_x0)
+        var dst_row_off = row * Int(crop_w)
+        for col in range(Int(crop_w)):
+            var s = (src_row_off + col) * 3
+            var d = (dst_row_off + col) * 3
+            cropped[d + 0] = pixels[s + 0]
+            cropped[d + 1] = pixels[s + 1]
+            cropped[d + 2] = pixels[s + 2]
+    var ret = write_image_windowed(cropped, crop_w, crop_h, full_w, full_h, crop_x0, crop_y0,
+                                    filename, tile_w, tile_h)
+    cropped.free()
+    return ret

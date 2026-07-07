@@ -32,6 +32,17 @@ void closeImageOutput(void *out);
 int write_image_rgb(const char *filename, const float *rgb, int width, int height,
                     int tile_w, int tile_h);
 
+// Same as write_image_rgb, but tags the file with an OpenEXR dataWindow/
+// displayWindow pair: `rgb` holds only the (width x height) data-window
+// pixels, offset at (x, y) within a (full_width x full_height) display
+// window starting at (0, 0) — matching pbrt's own Film "float cropwindow"
+// output convention. PNG/JPG/etc. have no data/display-window concept, so
+// the windowing is only applied for EXR/HDR output; other formats just
+// write the (width x height) buffer as-is, identical to write_image_rgb.
+int write_image_rgb_windowed(const char *filename, const float *rgb, int width, int height,
+                             int full_width, int full_height, int x, int y,
+                             int tile_w, int tile_h);
+
 #ifdef __cplusplus
 }
 #endif

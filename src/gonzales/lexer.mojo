@@ -818,3 +818,13 @@ def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     _ = scanner_scan_float(handle, rgb + 2)
     if is_array:
         _ = scanner_scan_char(handle, UInt8(93))  # ']'
+
+def _psc_scan_float4(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                    dst: UnsafePointer[Float32, MutAnyOrigin],
+                    is_array: Int32):
+    _ = scanner_scan_float(handle, dst + 0)
+    _ = scanner_scan_float(handle, dst + 1)
+    _ = scanner_scan_float(handle, dst + 2)
+    _ = scanner_scan_float(handle, dst + 3)
+    if is_array:
+        _ = scanner_scan_char(handle, UInt8(93))  # ']'

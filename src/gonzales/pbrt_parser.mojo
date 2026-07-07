@@ -8,7 +8,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_int, scanner_scan_ints,
                     scanner_count_floats, scanner_count_ints, ParamScanner,
                     _psc_streq,
-                    _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
+                    _psc_scan_rgb, _psc_scan_float4, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
@@ -57,6 +57,13 @@ struct ParsedScene_Mojo:
     var prim_count_cpu:     Int32
     var film_w:           Int32
     var film_h:           Int32
+    # Film "float cropwindow" [x0 x1 y0 y1] — normalized fractional bounds
+    # of film_w/film_h to actually render/output. Defaults to (0,1,0,1),
+    # the full frame, when the scene doesn't specify one.
+    var crop_x0: Float32
+    var crop_x1: Float32
+    var crop_y0: Float32
+    var crop_y1: Float32
     var camera_fov:       Float32
     var film_iso:         Float32
     var film_max_comp:    Float32
@@ -297,6 +304,12 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             s[0].film_iso = _psc_scan_one_float(handle, ps.is_array)
         elif ps.name_is("maxcomponentvalue") and ps.is_float():
             s[0].film_max_comp = _psc_scan_one_float(handle, ps.is_array)
+        elif ps.name_is("cropwindow") and ps.is_float():
+            var cw = alloc[Float32](4)
+            _psc_scan_float4(handle, cw, ps.is_array)
+            s[0].crop_x0 = cw[0]; s[0].crop_x1 = cw[1]
+            s[0].crop_y0 = cw[2]; s[0].crop_y1 = cw[3]
+            cw.free()
         else:
             ps.skip(handle)
     sbuf.free()
@@ -1970,6 +1983,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].instance_count   = total_instances
     psc[0].film_w           = s[0].film_w
     psc[0].film_h           = s[0].film_h
+    psc[0].crop_x0          = s[0].crop_x0
+    psc[0].crop_x1          = s[0].crop_x1
+    psc[0].crop_y0          = s[0].crop_y0
+    psc[0].crop_y1          = s[0].crop_y1
     psc[0].camera_fov       = s[0].camera_fov
     psc[0].film_iso         = s[0].film_iso
     psc[0].film_max_comp    = s[0].film_max_comp

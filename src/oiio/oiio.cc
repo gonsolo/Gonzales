@@ -191,6 +191,40 @@ int write_image_rgb(const char *filename, const float *rgb, int width, int heigh
         return 1;
 }
 
+// See oiio.h for the dataWindow/displayWindow contract.
+int write_image_rgb_windowed(const char *filename, const float *rgb, int width, int height,
+                             int full_width, int full_height, int x, int y,
+                             int tile_w, int tile_h) {
+        auto out = OIIO::ImageOutput::create(filename);
+        if (!out) {
+                std::cerr << "write_image_rgb_windowed: cannot create writer for " << filename << std::endl;
+                return 0;
+        }
+        if (is_hdr_ext(filename)) {
+                OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::FLOAT);
+                spec.tile_width = tile_w;
+                spec.tile_height = tile_h;
+                spec.full_x = 0;
+                spec.full_y = 0;
+                spec.full_width = full_width;
+                spec.full_height = full_height;
+                spec.x = x;
+                spec.y = y;
+                if (!out->open(filename, spec)) return 0;
+                out->write_image(OIIO::TypeDesc::FLOAT, rgb);
+        } else {
+                int n = width * height;
+                std::vector<uint8_t> ldr(n * 3);
+                for (int i = 0; i < n; ++i)
+                        RGB::from(rgb + i * 3).reinhard().to_srgb().store_u8(ldr.data() + i * 3);
+                OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::UINT8);
+                if (!out->open(filename, spec)) return 0;
+                out->write_image(OIIO::TypeDesc::UINT8, ldr.data());
+        }
+        out->close();
+        return 1;
+}
+
 #ifdef __cplusplus
 }
 #endif
