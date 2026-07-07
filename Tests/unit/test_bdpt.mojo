@@ -43,6 +43,35 @@ def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=is_surface, is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
+    )
+
+def _dummy_sd() -> SceneDescriptor2_C:
+    """A minimal (geometrically irrelevant) SceneDescriptor2_C for
+    _eval_vertex calls that never exercise mat_kind=2 (hair) -- that's the
+    only branch that dereferences sd.materials/sd.curves, so any valid
+    SceneDescriptor2_C works for the Lambertian/conductor/volume tests below."""
+    var fixture = make_triangle_scene([
+        Point3f(100.0, 100.0, 100.0), Point3f(101.0, 100.0, 100.0), Point3f(100.0, 101.0, 100.0),
+    ])
+    return SceneDescriptor2_C(
+        fixture.bvh_nodes, fixture.prim_ids, fixture.meshes, Int64(1),
+        fixture.materials, Int64(1),
+        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        fixture.curves, Int64(0),
+        UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        Int64(0),
+        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -100,8 +129,9 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(1), is_delta=Int32(1), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
-    var result = _eval_vertex(v, SIMD[DType.float32, 3](0.0, 0.0, 1.0))
+    var result = _eval_vertex(v, SIMD[DType.float32, 3](0.0, 0.0, 1.0), _dummy_sd())
     assert_true(_simd_close(result, SIMD[DType.float32, 3](0.0, 0.0, 0.0)))
 
 def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
@@ -113,9 +143,10 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
     var dir = SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784)  # arbitrary; ignored by volume path
-    var result = _eval_vertex(v, dir)
+    var result = _eval_vertex(v, dir, _dummy_sd())
     assert_true(_simd_close(result, SIMD[DType.float32, 3](
         Float32(0.3) * INV_FOUR_PI, Float32(0.4) * INV_FOUR_PI, Float32(0.5) * INV_FOUR_PI)))
 
@@ -127,9 +158,10 @@ def test_eval_vertex_lambertian_matches_closed_form() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
     var dir = SIMD[DType.float32, 3](0.7071068, 0.0, 0.7071068)  # 45 degrees off the normal
-    var result = _eval_vertex(v, dir)
+    var result = _eval_vertex(v, dir, _dummy_sd())
     var cos_o = Float32(0.7071068)
     assert_true(_simd_close(result, SIMD[DType.float32, 3](
         Float32(0.2) * INV_PI * cos_o, Float32(0.4) * INV_PI * cos_o, Float32(0.6) * INV_PI * cos_o)))
@@ -151,9 +183,10 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
         pdf_fwd=Float32(0), pdf_bwd=alpha,
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(1), wo=Vec3f(0.0, 0.0, 1.0),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
     var expected = _eval_conductor_ggx(n, wo, wi, alpha, f0)
-    var result = _eval_vertex(v, wi)
+    var result = _eval_vertex(v, wi, _dummy_sd())
     assert_true(_simd_close(result, expected))
 
 # ── _eval_conductor_ggx ───────────────────────────────────────────────────────
@@ -259,6 +292,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
     var lv = BDPTVertex(
         pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0),
@@ -266,6 +300,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(1),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
     var lvc = alloc[BDPTVertex](1)
     lvc[0] = lv
@@ -278,7 +313,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
     # Independently compute the single-connection value _connect would
     # produce, then verify the k-sum-and-scale wrapper against it directly.
     var dir_to_light = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var f_cam = _eval_vertex(cv, dir_to_light)  # Lambertian: alb/pi * cos
+    var f_cam = _eval_vertex(cv, dir_to_light, sd)  # Lambertian: alb/pi * cos
     var f_lgt = SIMD[DType.float32, 3](lv.alb.r, lv.alb.g, lv.alb.b)  # is_light: Le, no cosine
     var g = _geom_term(cv, lv)  # 1*1/10^2
     var beta_prod = Float32(3.0) * Float32(2.0)

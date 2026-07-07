@@ -20,6 +20,7 @@ from .geometry import (
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
+    HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
 )
 from .sampling import power_heuristic
 from .rng import PCG32
@@ -66,11 +67,22 @@ struct BDPTVertex(TrivialRegisterPassable):
     var is_delta:   Int32  # 1 = specular (mirror conductor / dielectric) — cannot be connected
     var is_light:   Int32  # 1 = this is a light-source vertex (s=0 in BDPT notation)
     var med_idx:    Int32  # medium index AFTER this vertex (-1 = vacuum)
-    var mat_kind:   Int32  # 0 = Lambertian (diffuse/volume), 1 = rough conductor (GGX)
+    var mat_kind:   Int32  # 0 = Lambertian (diffuse/volume), 1 = rough conductor (GGX), 2 = hair (Marschner 3-lobe)
     # Direction back toward this vertex's own predecessor on its subpath
-    # (-incoming ray direction). Only populated for mat_kind=1 (GGX needs both
-    # directions around the half-vector); Lambertian/volume don't need it.
+    # (-incoming ray direction). Populated for mat_kind=1 (GGX needs both
+    # directions around the half-vector) and mat_kind=2 (hair's wo, needed to
+    # recompute HairLobeConstants via _hair_precompute at eval time).
     var wo: Vec3f
+    # mat_kind=2 (hair) only: material index (to re-fetch eta/sigma_a/betaM/
+    # betaN from sd.materials) + curve hit info (to re-derive the fiber frame
+    # via _hair_precompute) — NOT stored inline as the full ~30-field
+    # HairLobeConstants, to keep this struct small for every OTHER vertex
+    # kind; recomputing per connection is the same cost class as
+    # _eval_conductor_ggx's own per-call GGX evaluation.
+    var mat_idx: Int32
+    var hair_curve_idx: Int32
+    var hair_h: Float32
+    var hair_v: Float32
 
 @always_inline
 def _null_vertex() -> BDPTVertex:
@@ -83,6 +95,7 @@ def _null_vertex() -> BDPTVertex:
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0),
         wo=Vec3f(Float32(0)),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -452,6 +465,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
             mat = sd.materials[mix_chosen]
+            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at connect time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
@@ -562,6 +576,37 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = Float32(-1)  # conductor/coated_conductor: no infinite-light NEE done here
+
+        elif mat.type == MatKind.hair:
+            # Marschner 3-lobe hair BSDF — no delta lobe, so always store a
+            # connectible vertex (unlike conductor's mirror-vs-rough split)
+            # and always importance-sample a continuation direction, mirroring
+            # shading.mojo's own shade_hair (via the shared bvh.mojo helpers).
+            var curve_idx_h = Int(inter.primId.id1)
+            var wo_h = (-rd).to_simd()
+            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
+            var v_h = _null_vertex()
+            v_h.pos = hit
+            v_h.normal = vec3f(hc.geo_normal)
+            v_h.beta = beta
+            v_h.alb = mat.albedo
+            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = Int32(2)
+            v_h.wo = vec3f(wo_h)
+            v_h.mat_idx = Int32(mat_idx)
+            v_h.hair_curve_idx = Int32(curve_idx_h)
+            v_h.hair_h = inter.u
+            v_h.hair_v = inter.v
+            v_h.pdf_fwd = Float32(1)
+            v_h.med_idx = cur_med_idx
+            n_verts += 1
+            if lvc_count > 0:
+                total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+            var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
+            beta *= f_hs / pdf_hs
+            rd = vec3f(wi_hs)
+            var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
+            ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
+            last_bsdf_pdf = Float32(-1)  # hair: no infinite-light NEE done here (matches conductor's own choice)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
@@ -760,6 +805,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
             mat = sd.materials[mix_chosen]
+            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at connect time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
@@ -824,6 +870,31 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             flux *= bs_c.f
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
+
+        elif mat.type == MatKind.hair:
+            var curve_idx_h = Int(inter.primId.id1)
+            var wo_h = (-rd).to_simd()
+            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
+            var v_h = _null_vertex()
+            v_h.pos = hit
+            v_h.normal = vec3f(hc.geo_normal)
+            v_h.beta = flux
+            v_h.alb = mat.albedo
+            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = Int32(2)
+            v_h.wo = vec3f(wo_h)
+            v_h.mat_idx = Int32(mat_idx)
+            v_h.hair_curve_idx = Int32(curve_idx_h)
+            v_h.hair_h = inter.u
+            v_h.hair_v = inter.v
+            v_h.pdf_fwd = Float32(1)
+            v_h.med_idx = cur_med_idx
+            n_verts += 1
+            _bdpt_store_lvc_vertex[use_gpu](v_h, lvc, lvc_cap, lvc_counter)
+            var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
+            flux *= f_hs / pdf_hs
+            rd = vec3f(wi_hs)
+            var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
+            ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
@@ -891,8 +962,12 @@ def _eval_conductor_ggx(
 def _eval_vertex(
     v:   BDPTVertex,
     dir_to_other:  SIMD[DType.float32, 3],   # direction from v toward the other connected vertex
+    sd:  SceneDescriptor2_C,
 ) -> SIMD[DType.float32, 3]:
-    """Evaluate BSDF (or phase) × cos at vertex v toward dir_to_other."""
+    """Evaluate BSDF (or phase) × cos at vertex v toward dir_to_other. Takes
+    `sd` only for mat_kind=2 (hair), to re-fetch the material + curve data
+    _hair_precompute needs (v itself only carries small indices, not the
+    full precomputed HairLobeConstants — see BDPTVertex's docstring)."""
     if v.is_delta != Int32(0):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     if v.is_surface == Int32(0):
@@ -902,6 +977,17 @@ def _eval_vertex(
     if v.mat_kind == Int32(1):
         var vwo = v.wo.to_simd()
         return _eval_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd, v.alb)
+    if v.mat_kind == Int32(2):
+        var mat = sd.materials[Int(v.mat_idx)]
+        var hc = _hair_precompute(mat, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
+        var (cos_ti, f_val, _) = _hair_eval_lobes(
+            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+            hc.dphi0, hc.dphi1, hc.dphi2,
+            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+        )
+        return SIMD[DType.float32, 3](f_val.r*cos_ti, f_val.g*cos_ti, f_val.b*cos_ti)
     # Surface: Lambertian f = alb/π × |cos(wo,n)|
     var cos_o = dot(dir_to_other, vn)
     if cos_o < Float32(0): cos_o = -cos_o
@@ -966,7 +1052,7 @@ def _connect(
     var neg_dir = -dir
 
     # BSDF at camera vertex (toward light)
-    var f_cam = _eval_vertex(cv, dir)
+    var f_cam = _eval_vertex(cv, dir, sd)
     # BSDF at light vertex (toward camera)
     var f_lgt: SIMD[DType.float32, 3]
     if lv.is_light == Int32(1):
@@ -978,7 +1064,7 @@ def _connect(
             return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
         f_lgt = SIMD[DType.float32, 3](lv.alb.r, lv.alb.g, lv.alb.b)
     else:
-        f_lgt = _eval_vertex(lv, neg_dir)
+        f_lgt = _eval_vertex(lv, neg_dir, sd)
 
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)

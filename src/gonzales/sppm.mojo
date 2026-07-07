@@ -14,13 +14,15 @@ from std.atomic import Atomic
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
-    Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI,
+    Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C,
 )
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
+    HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
 )
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -77,14 +79,46 @@ struct SPPMPixel(TrivialRegisterPassable):
     # miss branch), so _sppm_finalize_one_pixel adds it directly rather than
     # multiplying by vp.beta again like the tau/ld terms.
     var env: RGB
+    # Material dispatch for gather/NEE BRDF evaluation: 0 = Lambertian
+    # (diffuse/coated_diffuse/diffuse_transmit — f_r = alb/π, angle-
+    # independent), 1 = rough conductor/coated_conductor (GGX — f_r depends
+    # on both wo and wi, evaluated via bxdf_eval_conductor_ggx), 2 = hair
+    # (Marschner 3-lobe, evaluated via bvh.mojo's _hair_precompute/
+    # _hair_eval_lobes). Volume VPs (is_volume=1) ignore this and always use
+    # the isotropic phase function.
+    var mat_kind: Int32
+    # Outgoing direction (toward the camera) at this VP — only populated/used
+    # when mat_kind=1 or 2, since both GGX and hair evaluation need both
+    # directions unlike Lambertian's angle-independent f_r.
+    var wo: Vec3f
+    # GGX roughness (max(roughU, roughV), matching bdpt.mojo's BDPTVertex
+    # convention) — only meaningful when mat_kind=1. alb doubles as F0 for
+    # conductor VPs, same repurposing bdpt.mojo's BDPTVertex.alb already uses.
+    var alpha: Float32
+    # mat_kind=2 (hair) only: material index (to re-fetch eta/sigma_a/betaM/
+    # betaN from sd.materials) + curve hit info (to re-derive the fiber frame
+    # via _hair_precompute) — NOT the full ~30-field HairLobeConstants, to
+    # keep this struct small for every other VP kind; mirrors bdpt.mojo's
+    # BDPTVertex's own mat_idx/hair_curve_idx/hair_h/hair_v fields exactly.
+    var mat_idx: Int32
+    var hair_curve_idx: Int32
+    var hair_h: Float32
+    var hair_v: Float32
 
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
-    """Photon stored at a scatter event (surface diffuse or volume)."""
+    """Photon stored at a scatter event (surface diffuse, conductor, or
+    volume)."""
     var pos: Point3f
     var flux: RGB  # flux at stored position
     var nxt:       Int32  # chained-list link in hash grid (-1 = end)
-    var is_volume: Int32  # 1 = volume scatter photon; 0 = surface diffuse
+    var is_volume: Int32  # 1 = volume scatter photon; 0 = surface
+    # Direction the photon was travelling when it was stored (i.e. the ray
+    # direction, NOT negated) — needed at gather time to reconstruct wi
+    # (= -dir_in) for a conductor VP's GGX evaluation. Lambertian/volume
+    # gather ignores this (f_r is angle-independent), so it's set but unused
+    # for those photon kinds.
+    var dir_in: Vec3f
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -412,6 +446,10 @@ def _sppm_trace_visible_point(
         is_volume=Int32(0),
         ld=RGB(Float32(0)),
         env=RGB(Float32(0)),
+        mat_kind=Int32(0),
+        wo=Vec3f(Float32(0)),
+        alpha=Float32(0),
+        mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
     )
 
     # Sub-pixel jitter — diversifies which point on a dielectric-obscured
@@ -482,6 +520,7 @@ def _sppm_trace_visible_point(
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
             mat = sd.materials[mix_chosen]
+            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at gather/NEE time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
@@ -507,6 +546,76 @@ def _sppm_trace_visible_point(
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
+        elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
+            # Rough conductor/coated_conductor: store as a gatherable VP
+            # (mirrors bdpt.mojo's connectible-vertex treatment) unless the
+            # sampled lobe is a perfect-mirror delta, in which case there's
+            # nothing to gather against and the ray must continue to find a
+            # real (non-delta) VP downstream — same reasoning dielectric
+            # bounces already use.
+            var gn_c: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var sph_c = sd.spheres[Int(inter.primId.id1)]
+                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
+            else:
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn_c, ray_dir) > Float32(0.0):
+                gn_c = gn_c * Float32(-1.0)
+            var wo_c = (-rd).to_simd()
+            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
+            var gc_c = GeomContext(
+                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
+                tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
+                bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
+                alb=mat.albedo, pixel_uv=Float32(0),
+            )
+            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
+            var bs_c: BxDFSample
+            if mat.type == MatKind.conductor:
+                bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
+            else:
+                # Approximation (matches bdpt.mojo's own coated_conductor
+                # handling): reuse conductor's GGX eval/F0, ignoring the
+                # coat's own attenuation/luma-Fresnel blend.
+                var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
+                var usplit_c = pcg.next_float()
+                bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            if bs_c.is_valid == Int8(0):
+                break
+            if not bxdf_is_delta(bs_c.flags):
+                vp.pos = hit
+                vp.normal = vec3f(gn_c)
+                vp.alb = mat.albedo
+                vp.mat_kind = Int32(1)
+                vp.wo = vec3f(wo_c)
+                vp.alpha = max(mat.roughU, mat.roughV)
+                vp.is_volume = Int32(0)
+                vp.valid = Int32(1)
+                break
+            vp.beta *= bs_c.f
+            rd = vec3f(bs_c.wi)
+            ro = hit + rd * Float32(0.0002)
+
+        elif mat.type == MatKind.hair:
+            # Marschner 3-lobe hair BSDF has no delta lobe, so (unlike
+            # conductor) the VP always stores here and stops — same
+            # single-terminal-surface convention as diffuse.
+            var curve_idx_h = Int(inter.primId.id1)
+            var wo_h = (-rd).to_simd()
+            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
+            vp.pos = hit
+            vp.normal = vec3f(hc.geo_normal)
+            vp.alb = mat.albedo
+            vp.mat_kind = Int32(2)
+            vp.wo = vec3f(wo_h)
+            vp.mat_idx = Int32(mat_idx)
+            vp.hair_curve_idx = Int32(curve_idx_h)
+            vp.hair_h = inter.u
+            vp.hair_v = inter.v
+            vp.is_volume = Int32(0)
+            vp.valid = Int32(1)
+            break
+
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
@@ -516,7 +625,7 @@ def _sppm_trace_visible_point(
             ro = hit + rd * Float32(0.0002)
 
         else:
-            break  # area_light, conductor, etc.
+            break  # area_light, etc.
 
     return vp
 
@@ -699,7 +808,7 @@ def _sppm_trace_photon[use_gpu: Bool](
                 # term).
                 if bounce > 0:
                     _sppm_store_photon[use_gpu](
-                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1)),
+                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
                 flux *= ff.albedo
@@ -726,6 +835,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
             mat = sd.materials[mix_chosen]
+            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at gather/NEE time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
@@ -738,7 +848,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             # once via NEE and again via an unfiltered photon density).
             if bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0)),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd),
                     photons, max_photons, counter)
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — without this, photons always
@@ -768,6 +878,62 @@ def _sppm_trace_photon[use_gpu: Bool](
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
+        elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
+            # Rough conductor/coated_conductor: store a gatherable photon
+            # (same bounce > 0 depth-0 double-count guard as diffuse) unless
+            # the sampled lobe is a perfect-mirror delta, which just
+            # continues the path — mirrors bdpt.mojo's light-path treatment.
+            var gn_c: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var sph_c = sd.spheres[Int(inter.primId.id1)]
+                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
+            else:
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn_c, ray_dir) > Float32(0.0):
+                gn_c = gn_c * Float32(-1.0)
+            var wo_c = (-rd).to_simd()
+            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
+            var gc_c = GeomContext(
+                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
+                tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
+                bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
+                alb=mat.albedo, pixel_uv=Float32(0),
+            )
+            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
+            var bs_c: BxDFSample
+            if mat.type == MatKind.conductor:
+                bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
+            else:
+                var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
+                var usplit_c = pcg.next_float()
+                bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            if bs_c.is_valid == Int8(0):
+                break
+            if not bxdf_is_delta(bs_c.flags) and bounce > 0:
+                _sppm_store_photon[use_gpu](
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd),
+                    photons, max_photons, counter)
+            flux *= bs_c.f
+            rd = vec3f(bs_c.wi)
+            ro = hit + rd * Float32(0.0002)
+
+        elif mat.type == MatKind.hair:
+            # No delta lobe, so always store (subject to the same depth-0
+            # guard) and always importance-sample a continuation direction —
+            # mirrors bdpt.mojo's light-path hair treatment.
+            var curve_idx_h = Int(inter.primId.id1)
+            var wo_h = (-rd).to_simd()
+            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
+            if bounce > 0:
+                _sppm_store_photon[use_gpu](
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd),
+                    photons, max_photons, counter)
+            var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
+            flux *= f_hs / pdf_hs
+            rd = vec3f(wi_hs)
+            var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
+            ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
+
         elif mat.type == MatKind.interface:
             if has_media:
                 var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
@@ -776,7 +942,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             ro = hit + rd * Float32(0.0002)
 
         else:
-            # area_light self-hit, conductor, etc.: absorb
+            # area_light self-hit, etc.: absorb
             break
 
 
@@ -885,12 +1051,15 @@ def _sppm_gather_one(
     photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
     heads:    UnsafePointer[Int32, MutAnyOrigin],
     inv_cell: Float32,
+    sd:       SceneDescriptor2_C,
 ):
     """Gather nearby photons into visible point `i` and apply the SPPM
     radius/flux update. Shared verbatim between the CPU driver
     (_gather_update, one call per pixel in a loop) and the GPU kernel
     (sppm_gather_gpu, one call per thread) — no divergence, each call only
-    ever touches its own vps[i]."""
+    ever touches its own vps[i]. `sd` is only dereferenced for a mat_kind=2
+    (hair) VP, to re-fetch the material + curve data _hair_precompute needs
+    (see SPPMPixel's docstring for why that's not stored inline)."""
     if vps[i].valid == Int32(0):
         return
     var vp = vps[i]
@@ -913,13 +1082,35 @@ def _sppm_gather_one(
                     var e = ph.pos - vp.pos
                     var dist2 = e.length_sq()
                     if dist2 <= r2 and ph.is_volume == vp.is_volume:
-                        # Surface VP: Lambertian f=alb/π; Volume VP: isotropic phase f=alb/(4π)
-                        var f: Float32
+                        # Volume VP: isotropic phase f=alb/(4π). Surface VP:
+                        # Lambertian f=alb/π (angle-independent, pulled out
+                        # of the sum) or, for a conductor VP, the raw GGX
+                        # BRDF evaluated per-photon (wi reconstructed from
+                        # the photon's stored incoming travel direction) —
+                        # NOT multiplied by any extra cosine, since the
+                        # photon's flux already encodes the appropriate
+                        # cosine-weighted density (same convention the
+                        # Lambertian/phase branches already rely on).
                         if vp.is_volume == Int32(1):
-                            f = INV_FOUR_PI
+                            phi += (vp.alb * INV_FOUR_PI) * ph.flux
+                        elif vp.mat_kind == Int32(1):
+                            var wi_c = (-ph.dir_in).to_simd()
+                            var f_c = bxdf_eval_conductor_ggx(vp.normal.to_simd(), vp.wo.to_simd(), wi_c, vp.alpha, vp.alb)
+                            phi += f_c * ph.flux
+                        elif vp.mat_kind == Int32(2):
+                            var mat_h = sd.materials[Int(vp.mat_idx)]
+                            var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
+                            var wi_h = (-ph.dir_in).to_simd()
+                            var (_, f_h, _) = _hair_eval_lobes(
+                                wi_h, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+                                hc.dphi0, hc.dphi1, hc.dphi2,
+                                hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+                                hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+                                hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+                            )
+                            phi += f_h * ph.flux
                         else:
-                            f = Float32(1.0) / PI
-                        phi += (vp.alb * f) * ph.flux
+                            phi += (vp.alb * (Float32(1.0) / PI)) * ph.flux
                         M += Float32(1.0)
                     k = Int(ph.nxt)
 
@@ -938,10 +1129,11 @@ def _gather_update(
     photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
     heads:    UnsafePointer[Int32, MutAnyOrigin],
     inv_cell: Float32,
+    sd:       SceneDescriptor2_C,
 ):
     @parameter
     def gather_one(i: Int):
-        _sppm_gather_one(vps, i, photons, heads, inv_cell)
+        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd)
 
     parallelize[gather_one](n_pix)
 
@@ -955,6 +1147,32 @@ def _gather_update(
 # why its SPPM output is much smoother/less "blotchy" for the same pass
 # count. Surface VPs only (is_volume == 0); this scene has no participating
 # media, so a phase-function-weighted variant for volume VPs isn't needed.
+
+@always_inline
+def _sppm_vp_brdf(
+    vp: SPPMPixel,
+    sd: SceneDescriptor2_C,
+    vn: SIMD[DType.float32, 3],
+    wi: SIMD[DType.float32, 3],
+) -> RGB:
+    """Raw f_r(wo,wi) at a surface VP for NEE — dispatches on mat_kind, same
+    "raw BRDF, cosine supplied externally via the caller's geom/cos_s/
+    cos_env factor" convention as _sppm_gather_one. Lambertian is
+    angle-independent (alb/π); conductor/hair both need the actual wi."""
+    if vp.mat_kind == Int32(1):
+        return bxdf_eval_conductor_ggx(vn, vp.wo.to_simd(), wi, vp.alpha, vp.alb)
+    if vp.mat_kind == Int32(2):
+        var mat_h = sd.materials[Int(vp.mat_idx)]
+        var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
+        var (_, f_h, _) = _hair_eval_lobes(
+            wi, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+            hc.dphi0, hc.dphi1, hc.dphi2,
+            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+        )
+        return f_h
+    return vp.alb / PI
 
 def _sppm_nee_one(
     vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
@@ -1007,7 +1225,7 @@ def _sppm_nee_one(
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-                    var brdf = vp.alb / PI
+                    var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
                     vps[i].ld += (brdf * al.emission) * geom
 
     for dl_i in range(Int(sd.distantLightCount)):
@@ -1019,7 +1237,8 @@ def _sppm_nee_one(
             var shadow_ray_d = Ray_C(shadow_org_d, to_light_d)
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, Float32(2000),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-                vps[i].ld += (vp.alb / PI) * dl.emission * cos_s
+                var brdf_d = _sppm_vp_brdf(vp, sd, vn, to_light_d.to_simd())
+                vps[i].ld += brdf_d * dl.emission * cos_s
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ilight = sd.infiniteLights[inf_i]
@@ -1030,7 +1249,8 @@ def _sppm_nee_one(
             var shadow_ray_e = Ray_C(shadow_org_e, env_dir)
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, Float32(2000),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-                vps[i].ld += (vp.alb / PI) * env_rgb * (cos_env / pdf_env)
+                var brdf_e = _sppm_vp_brdf(vp, sd, vn, env_dir.to_simd())
+                vps[i].ld += brdf_e * env_rgb * (cos_env / pdf_env)
 
 
 def _sppm_nee_update(
@@ -1167,7 +1387,7 @@ def sppm_render(
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx)
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
-            _gather_update(vps, n_vps, photons, heads, inv_cell)
+            _gather_update(vps, n_vps, photons, heads, inv_cell, sd)
         var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
         if verbose or (pass_idx + 1) % 10 == 0:
@@ -1349,11 +1569,35 @@ def sppm_gather_gpu(
     photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
     heads:    UnsafePointer[Int32, MutAnyOrigin],
     inv_cell: Float32,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
 ):
+    """One thread per visible point. `sd` here only needs to be complete
+    enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) — the
+    other SceneDescriptor2_C fields it builds are unused by gather, so are
+    zeroed/dangling exactly like sppm_nee_gpu's own _mk_sd_full call."""
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    _sppm_gather_one(vps, i, photons, heads, inv_cell)
+    var sd = _mk_sd_full(
+        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
+        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), Int64(0), curves, curveCount,
+        UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), Int64(0),
+        instances, instanceCount,
+        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+    )
+    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd)
 
 
 def sppm_nee_gpu(
@@ -1583,6 +1827,7 @@ def sppm_render_gpu(
                         grid_dim=grid_ins, block_dim=block_size)
                     handle[].ctx.enqueue_function[sppm_gather_gpu](
                         vps_ptr, n_vps, photons_ptr, heads_ptr, inv_cell,
+                        bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
                         grid_dim=grid_vps, block_dim=block_size)
 
                 var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)

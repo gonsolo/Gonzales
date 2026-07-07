@@ -47,6 +47,43 @@ def ggx_vndf_pdf(cos_o: Float32, cos_wm: Float32, d: Float32, alpha: Float32) ->
     var pdf_wm = ggx_G1(cos_o, alpha) * d * cos_wm / cos_o
     return pdf_wm / (Float32(4.0) * cos_wm)
 
+@always_inline
+def bxdf_eval_conductor_ggx(
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],
+    wi:    SIMD[DType.float32, 3],
+    alpha: Float32,
+    f0:    RGB,
+) -> RGB:
+    """Isotropic GGX (Trowbridge-Reitz) conductor f_r(wo,wi) — the raw BRDF
+    value for an arbitrary (not self-sampled) direction pair, NOT multiplied
+    by any cosine. Used by sppm.mojo's photon-density gather (whose stored
+    photon flux already encodes the appropriate cosine-weighted density) and
+    NEE (whose caller applies its own cos_surface factor externally) — unlike
+    bdpt.mojo's own connection-formula variant, which folds cos_i in for its
+    path-throughput weighting. Schlick Fresnel at the half-vector,
+    height-correlated Smith G2."""
+    var cos_o = dot(wo, n)
+    var cos_i = dot(wi, n)
+    if cos_o <= Float32(0) or cos_i <= Float32(0):
+        return RGB(Float32(0))
+    var wh = wo + wi
+    var whl = dot(wh, wh)
+    if whl <= Float32(0):
+        return RGB(Float32(0))
+    wh = wh * (Float32(1) / sqrt(whl))
+    var cos_h = dot(wh, n)
+    var cos_wo_h = dot(wo, wh)
+    if cos_wo_h < Float32(0): cos_wo_h = -cos_wo_h
+    var d = ggx_D(cos_h, alpha)
+    var g = ggx_G2(cos_o, cos_i, alpha)
+    var one_m = Float32(1) - cos_wo_h
+    var one_m2 = one_m * one_m
+    var schlick = one_m2 * one_m2 * one_m
+    var fr = f0 + (RGB(Float32(1)) - f0) * schlick
+    var k = d * g / (Float32(4) * cos_o * cos_i)
+    return RGB(k * fr.r, k * fr.g, k * fr.b)
+
 # ── BxDF flags ────────────────────────────────────────────────────────────────
 struct BxDFFlags:
     comptime delta    = Int8(1)   # Dirac delta (perfect mirror / glass)

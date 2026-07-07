@@ -4,7 +4,7 @@ from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf
 from .rng import PCG32
-from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core
+from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
@@ -1342,120 +1342,12 @@ def _draw_sobol_8(
     return SobolSamples8(u_light, u_bary1, u_bary2, u_env1, u_env2, u_scat1, u_scat2, u_rr)
 
 # ── Hair BSDF helpers ────────────────────────────────────────────────────────
-
-@always_inline
-def _hair_wrap(x: Float32) -> Float32:
-    """Wrap angle to [-PI, PI] — GPU-safe, no unbounded loops."""
-    return x - TWO_PI * floor((x + PI) / TWO_PI)
-
-@always_inline
-def _hair_asin(x: Float32) -> Float32:
-    """Polynomial asin(x) for x in [-1,1] — avoids std.math asin which may not link on GPU.
-    Uses sqrt-reflection for |x|>0.5 for accuracy; max error ~5e-6."""
-    var ax = abs(x)
-    var result: Float32
-    if ax > Float32(0.5):
-        var t = Float32(1.0) - ax
-        var r = sqrt(Float32(2.0) * t)
-        result = Float32(1.5707963) - r * (Float32(1.0) + t * (Float32(0.16666667) + t * (Float32(0.075) + t * Float32(0.04464286))))
-    else:
-        var x2 = ax * ax
-        result = ax * (Float32(1.0) + x2 * (Float32(0.16666667) + x2 * (Float32(0.075) + x2 * Float32(0.04464286))))
-    return -result if x < Float32(0.0) else result
-
-@always_inline
-def _hair_logistic(x: Float32, s: Float32) -> Float32:
-    """Logistic distribution PDF centered at 0: exp(-|x|/s) / (s*(1+exp(-|x|/s))^2).
-    Numerically stable via |x| form."""
-    var e = exp(-abs(x) / s)
-    return e / (s * (Float32(1.0) + e) * (Float32(1.0) + e))
-
-@always_inline
-def _hair_I0_poly(t: Float32) -> Float32:
-    """9-term Taylor series for I0(x) where t = x*x/4. Accurate to 0.15% for t≤16 (x≤8)."""
-    var t2 = t * t; var t3 = t2 * t; var t4 = t2 * t2; var t5 = t4 * t
-    var t6 = t5 * t; var t7 = t6 * t; var t8 = t7 * t
-    return Float32(1.0) + t + t2*Float32(0.25) + t3*Float32(0.027778) + t4*Float32(0.001736) + t5*Float32(6.944e-5) + t6*Float32(1.929e-6) + t7*Float32(3.930e-8) + t8*Float32(6.151e-10)
-
-@always_inline
-def _hair_Mp(cos_ti: Float32, cos_to: Float32, sin_ti: Float32, sin_to: Float32, inv_v: Float32, mp_c: Float32) -> Float32:
-    """von Mises-Fisher Mp with precomputed constant mp_c = exp(-inv_v)/(2/inv_v) for v≤0.1,
-    or 1/(sinh(inv_v)*2/inv_v) for v>0.1. inv_v = 1/v."""
-    var a = cos_ti * cos_to * inv_v
-    var b = sin_ti * sin_to * inv_v
-    if a > Float32(8.0):
-        # Asymptotic: I0(a) ≈ exp(a)/sqrt(2πa), so Mp ≈ mp_c * exp(a-b)/sqrt(2πa)
-        return mp_c * exp(a - b) / sqrt(Float32(2.0) * PI * a)
-    return mp_c * _hair_I0_poly(a * a * Float32(0.25)) * exp(-b)
-
-@always_inline
-def _atan2f(y: Float32, x: Float32) -> Float32:
-    """atan2 via minimax polynomial — avoids the unresolved libdevice extern on GPU."""
-    var ax = abs(x); var ay = abs(y)
-    var mn = min(ax, ay)
-    var mx = max(ax, ay)
-    var a = mn / (mx if mx > Float32(1e-10) else Float32(1e-10))
-    var s = a * a
-    var r = (Float32(-0.0464964749) * s + Float32(0.15931422)) * s
-    r = (r - Float32(0.327622764)) * s * a + a
-    if ay > ax: r = Float32(1.5707963267948966) - r
-    if x < Float32(0.0): r = Float32(3.14159265358979323846) - r
-    if y < Float32(0.0): r = -r
-    return r
-
-@always_inline
-def _hair_eval_lobes(
-    wi: SIMD[DType.float32, 3],
-    tangent: SIMD[DType.float32, 3],
-    b_perp: SIMD[DType.float32, 3],
-    n_perp: SIMD[DType.float32, 3],
-    phi_o: Float32,
-    dphi0: Float32, dphi1: Float32, dphi2: Float32,
-    cos_tp0_o: Float32, sin_tp0_o: Float32,
-    cos_tp1_o: Float32, sin_tp1_o: Float32,
-    cos_tp2_o: Float32, sin_tp2_o: Float32,
-    cos_theta_o: Float32, sin_theta_o: Float32,
-    inv_vm0: Float32, inv_vm1: Float32, inv_vm2: Float32,
-    mp_c0: Float32, mp_c1: Float32, mp_c2: Float32,
-    s: Float32,
-    A0: RGB, A1: RGB, A2: RGB, A3: RGB,
-    lum0: Float32, lum1: Float32, lum2: Float32, lum3: Float32, total_lum: Float32,
-) -> Tuple[Float32, RGB, Float32]:
-    """Shared Marschner 3-lobe (R/TT/TRT) evaluation at an arbitrary direction
-    wi — factored out of shade_hair's three near-identical call sites (env-light
-    NEE, distant-light NEE, indirect-sample eval) for readability/dedup.
-    shade_hair profiled at 143 registers/thread (occupancy hard-capped to 1
-    block/SM). Measured @no_inline here: registers went UP (143→148), not down
-    — the ~35 precomputed per-lobe constants (vm/mp_c/inv_vm ×3, dphi ×3,
-    cos_tp/sin_tp ×3, A0-3, lum0-3) have to stay live across shade_hair's whole
-    body regardless of how this eval logic is organized, since all 3 call sites
-    need them; extraction doesn't shrink the caller's peak liveness, it only adds
-    call/argument-marshaling overhead for ~30 params on top. Stays @always_inline
-    — same negative-result pattern as intersect_curve's failed @no_inline
-    experiment. A real fix needs fewer simultaneously-live precomputed values,
-    not a different inlining choice.
-    Returns (cos_ti, f, pdf_over_cos); pdf_over_cos is the lum-weighted M*N sum
-    (already has the /cos_ti baked into M — multiply by cos_ti for the
-    solid-angle PDF, as both NEE call sites and the indirect sampler do)."""
-    var sin_ti = dot(wi, tangent)
-    var cos_ti = max(safe_sqrt(Float32(1.0) - sin_ti * sin_ti), Float32(1e-5))
-    var wi_perp = wi - sin_ti * tangent
-    var phi_i = _atan2f(dot(wi_perp, b_perp), dot(wi_perp, n_perp))
-    var dphi_i = phi_i - phi_o
-    var x0 = _hair_wrap(dphi_i - dphi0)
-    var x1 = _hair_wrap(dphi_i - dphi1)
-    var x2 = _hair_wrap(dphi_i - dphi2)
-    var M0 = _hair_Mp(cos_ti, cos_tp0_o, sin_ti, sin_tp0_o, inv_vm0, mp_c0) / cos_ti
-    var M1 = _hair_Mp(cos_ti, cos_tp1_o, sin_ti, sin_tp1_o, inv_vm1, mp_c1) / cos_ti
-    var M2 = _hair_Mp(cos_ti, cos_tp2_o, sin_ti, sin_tp2_o, inv_vm2, mp_c2) / cos_ti
-    var M3 = _hair_Mp(cos_ti, cos_theta_o, sin_ti, sin_theta_o, inv_vm2, mp_c2) / cos_ti
-    var N0 = _hair_logistic(x0, s)
-    var N1 = _hair_logistic(x1, s)
-    var N2 = _hair_logistic(x2, s)
-    var N3 = Float32(0.5) * INV_PI
-    var f = A0*(M0*N0) + A1*(M1*N1) + A2*(M2*N2) + A3*(M3*N3)
-    var pdf_over_cos = (lum0*M0*N0 + lum1*M1*N1 + lum2*M2*N2 + lum3*M3*N3) / total_lum
-    return (cos_ti, f, pdf_over_cos)
+# Live in bvh.mojo, not here — sppm.mojo/bdpt.mojo need them too (for
+# connectible-vertex/gather/NEE evaluation of a stored hair vertex), and
+# shading.mojo already imports FROM sppm.mojo, so sppm.mojo can't import back
+# from shading.mojo (same import-cycle constraint _mk_sd_full's own move
+# documented). See bvh.mojo's _hair_precompute/_hair_eval_lobes/
+# _hair_sample_dir/HairLobeConstants.
 
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
@@ -1470,142 +1362,37 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 
-    # ── Steps 1-4: Get geometry from the native curve hit ────────────────────
+    # ── Steps 1-10: geometry + optical + per-lobe precompute ─────────────────
     # h and v_global come straight from intersect_curve (geometry.mojo) via
     # Intersection_C.u/.v — no tessellated mesh, no barycentric interpolation.
+    # Delegated to bvh.mojo's _hair_precompute (shared with bdpt.mojo/
+    # sppm.mojo's connectible-vertex/gather/NEE evaluation of a stored hair
+    # vertex) — same formulas as before this was extracted, just relocated.
     if inter.primId.type != 5:
         path_ptr[].active = 0
         return
-    var curve = ctx.curves[Int(inter.primId.id1)]
+    var curve_idx = Int(inter.primId.id1)
     var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
     var v_global = inter.v
-    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
-    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
-    var seg_axis = q1 - q0
-    var seg_len = sqrt(dot(seg_axis, seg_axis))
-    var tangent: SIMD[DType.float32, 3]
-    if seg_len > Float32(1e-8):
-        tangent = seg_axis * (Float32(1.0) / seg_len)
-    else:
-        tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
-    # n_perp is the same deterministic (tangent-only) construction used by
-    # intersect_curve to define h — reproduced here so shading agrees exactly
-    # with the intersection that produced it.
-    var n_perp = _curve_perp_axis(tangent)
     var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    # Approximate outward radial direction at the hit point (reconstructed
-    # from h; the azimuthal sign beyond h is not stored, so this picks one
-    # consistent side — used only to offset shadow-ray origins off the fiber).
-    var b_perp0 = cross(tangent, n_perp)
-    var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
-
-    # ── Step 5: wo = -ray_direction ──────────────────────────────────────────
     var wo = -ray_dir
-
-    # ── Step 6: Compute wo angles in fiber frame ──────────────────────────────
-    var sin_theta_o = dot(wo, tangent)
-    var cos_theta_o = safe_sqrt(Float32(1.0) - sin_theta_o * sin_theta_o)
-    cos_theta_o = max(cos_theta_o, Float32(1e-5))
-
-    # ── Step 7: Complete azimuthal frame (n_perp from UV gradient, b_perp from cross product)
-    var b_perp = cross(tangent, n_perp)
-
-    var wo_perp = wo - sin_theta_o * tangent
-    var phi_o = _atan2f(dot(wo_perp, b_perp), dot(wo_perp, n_perp))
-
-    # ── Step 8: Optical quantities ────────────────────────────────────────────
-    var eta = mat.emission.r           # IOR (1.55 for hair)
-    var sigma_a = mat.albedo           # absorption coefficient per channel
-    var betaM = mat.roughU             # longitudinal roughness
-    var betaN = mat.roughV             # azimuthal roughness
-
-    var h_clamped = max(Float32(-1.0) + Float32(1e-5), min(Float32(1.0) - Float32(1e-5), h))
-    var gamma_o = _hair_asin(h_clamped)
-
-    var eta_sq = eta * eta
-    var sin_to_sq = sin_theta_o * sin_theta_o
-    var eta_perp_num = max(Float32(0.0), eta_sq - sin_to_sq)
-    var eta_perp = safe_sqrt(eta_perp_num) / cos_theta_o
-
-    var sin_gamma_t_raw = sin(gamma_o) / max(eta_perp, Float32(1.0))
-    var sin_gamma_t = max(Float32(-1.0) + Float32(1e-5), min(Float32(1.0) - Float32(1e-5), sin_gamma_t_raw))
-    var gamma_t = _hair_asin(sin_gamma_t)
-    var cos_gamma_t = safe_sqrt(Float32(1.0) - sin_gamma_t * sin_gamma_t)
-
-    # Transmittance through fiber (Beer-Lambert along chord 2*cos_gamma_t)
-    var T = RGB(
-        exp(-sigma_a.r * Float32(2.0) * cos_gamma_t),
-        exp(-sigma_a.g * Float32(2.0) * cos_gamma_t),
-        exp(-sigma_a.b * Float32(2.0) * cos_gamma_t),
-    )
-
-    # PBRT evaluates Fresnel at the local surface angle cos(theta_o)*cos(gamma_o)
-    var cos_gamma_o = safe_sqrt(Float32(1.0) - h_clamped * h_clamped)
-    var fr = fr_dielectric(cos_theta_o * cos_gamma_o, eta)
-    var omfr = Float32(1.0) - fr
-
-    # Per-lobe attenuation
-    var A0 = RGB(fr, fr, fr)               # R: one reflection
-    var A1 = T * (omfr * omfr)            # TT: two refractions
-    var A2 = T * T * (omfr * omfr * fr)   # TRT: two refractions + one internal reflection
-    # Remainder lobe (p≥3): geometric series A3 = A2 * f*T / (1 - f*T)
-    var A3 = RGB(
-        A2.r * fr * T.r / max(Float32(1e-6), Float32(1.0) - fr * T.r),
-        A2.g * fr * T.g / max(Float32(1e-6), Float32(1.0) - fr * T.g),
-        A2.b * fr * T.b / max(Float32(1e-6), Float32(1.0) - fr * T.b),
-    )
-
-    # Cuticle scale tilt α=2°: per-lobe longitudinal peak shift
-    # Doubled-angle table: index 0=α, 1=2α, 2=4α
-    var sin2k_0 = Float32(0.034899)   # sin(2°)
-    var cos2k_0 = Float32(0.999391)   # cos(2°)
-    var sin2k_1 = Float32(2.0) * cos2k_0 * sin2k_0
-    var cos2k_1 = cos2k_0 * cos2k_0 - sin2k_0 * sin2k_0
-    var sin2k_2 = Float32(2.0) * cos2k_1 * sin2k_1
-    var cos2k_2 = cos2k_1 * cos2k_1 - sin2k_1 * sin2k_1
-    # R (p=0): -2α;  TT (p=1): +α;  TRT (p=2): +4α
-    var sin_tp0_o = sin_theta_o * cos2k_1 - cos_theta_o * sin2k_1
-    var cos_tp0_o = cos_theta_o * cos2k_1 + sin_theta_o * sin2k_1
-    var sin_tp1_o = sin_theta_o * cos2k_0 + cos_theta_o * sin2k_0
-    var cos_tp1_o = cos_theta_o * cos2k_0 - sin_theta_o * sin2k_0
-    var sin_tp2_o = sin_theta_o * cos2k_2 + cos_theta_o * sin2k_2
-    var cos_tp2_o = cos_theta_o * cos2k_2 - sin_theta_o * sin2k_2
-
-    # ── Step 9: Longitudinal variance per lobe ────────────────────────────────
-    # PBRT formula: v[0] = (0.726β + 0.812β² + 3.7β^20)²
-    var bm2 = betaM * betaM
-    var bm4 = bm2 * bm2; var bm8 = bm4 * bm4; var bm16 = bm8 * bm8
-    var bm20 = bm16 * bm4
-    var tmp_v = Float32(0.726) * betaM + Float32(0.812) * bm2 + Float32(3.7) * bm20
-    var vm0 = max(tmp_v * tmp_v, Float32(0.0001))
-    var vm1 = max(vm0 * Float32(0.25), Float32(0.0001))   # TT: v/4
-    var vm2 = max(vm0 * Float32(4.0), Float32(0.0001))    # TRT: 4*v
-    # Precompute per-lobe Mp constants (one exp/sinh per lobe, not per eval)
-    # For v≤0.1: mp_c = exp(-1/v)/(2v); for v>0.1: mp_c = 1/(sinh(1/v)*2v)
-    var inv_vm0 = Float32(1.0) / vm0; var inv_vm1 = Float32(1.0) / vm1; var inv_vm2 = Float32(1.0) / vm2
-    var mp_c0 = exp(-inv_vm0) / (Float32(2.0) * vm0)
-    var mp_c1 = exp(-inv_vm1) / (Float32(2.0) * vm1)
-    var sinh_inv2 = (exp(inv_vm2) - exp(-inv_vm2)) * Float32(0.5)
-    var mp_c2 = Float32(1.0) / (sinh_inv2 * Float32(2.0) * vm2)
-    # Sampling: precompute exp(-2/v) for vMF inverse CDF per lobe
-    var e2vm0 = exp(-Float32(2.0) * inv_vm0)
-    var e2vm1 = exp(-Float32(2.0) * inv_vm1)
-    var e2vm2 = exp(-Float32(2.0) * inv_vm2)
-
-    # ── Step 10: Azimuthal peak angles per lobe ───────────────────────────────
-    # PBRT formula: Phi(p) = 2*p*gammaT - 2*gammaO + p*PI
-    var dphi0 = -Float32(2.0) * gamma_o                          # R (p=0): -2*gammaO
-    var dphi1 = -PI + Float32(2.0) * (gamma_t - gamma_o)        # TT (p=1): same ±2π
-    var dphi2 = Float32(4.0) * gamma_t - Float32(2.0) * gamma_o # TRT (p=2)
-
-    var s = betaN  # azimuthal logistic scale
-
-    # Lobe luminances (needed for NEE MIS and indirect sampling)
-    var lum0 = A0.luma() + Float32(1e-6)
-    var lum1 = A1.luma() + Float32(1e-6)
-    var lum2 = A2.luma() + Float32(1e-6)
-    var lum3 = A3.luma() + Float32(1e-6)
-    var total_lum = lum0 + lum1 + lum2 + lum3
+    var hc = _hair_precompute(mat, ctx.curves, curve_idx, v_global, h, wo)
+    var tangent = hc.tangent
+    var b_perp = hc.b_perp
+    var n_perp = hc.n_perp
+    var geo_normal = hc.geo_normal
+    var phi_o = hc.phi_o
+    var dphi0 = hc.dphi0; var dphi1 = hc.dphi1; var dphi2 = hc.dphi2
+    var cos_tp0_o = hc.cos_tp0_o; var sin_tp0_o = hc.sin_tp0_o
+    var cos_tp1_o = hc.cos_tp1_o; var sin_tp1_o = hc.sin_tp1_o
+    var cos_tp2_o = hc.cos_tp2_o; var sin_tp2_o = hc.sin_tp2_o
+    var cos_theta_o = hc.cos_theta_o; var sin_theta_o = hc.sin_theta_o
+    var inv_vm0 = hc.inv_vm0; var inv_vm1 = hc.inv_vm1; var inv_vm2 = hc.inv_vm2
+    var mp_c0 = hc.mp_c0; var mp_c1 = hc.mp_c1; var mp_c2 = hc.mp_c2
+    var s = hc.s
+    var A0 = hc.A0; var A1 = hc.A1; var A2 = hc.A2; var A3 = hc.A3
+    var lum0 = hc.lum0; var lum1 = hc.lum1; var lum2 = hc.lum2; var lum3 = hc.lum3
+    var total_lum = hc.total_lum
 
     # ── Hit point for shadow rays (always offset toward incoming side) ────────
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
@@ -1697,70 +1484,13 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, dorg, wi, t_max, contrib)
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
-    # Pick lobe proportional to luminance; carry tilted angles for selected lobe
-    var r_lobe = pcg.next_float() * total_lum
-    var vm_p: Float32
-    var e2vm_p: Float32
-    var dphi_p: Float32
-    var sin_tp_o_s: Float32
-    var cos_tp_o_s: Float32
-    var uniform_phi_s = False
-    if r_lobe < lum0:
-        vm_p = vm0; e2vm_p = e2vm0; dphi_p = dphi0
-        sin_tp_o_s = sin_tp0_o; cos_tp_o_s = cos_tp0_o
-    elif r_lobe < lum0 + lum1:
-        vm_p = vm1; e2vm_p = e2vm1; dphi_p = dphi1
-        sin_tp_o_s = sin_tp1_o; cos_tp_o_s = cos_tp1_o
-    elif r_lobe < lum0 + lum1 + lum2:
-        vm_p = vm2; e2vm_p = e2vm2; dphi_p = dphi2
-        sin_tp_o_s = sin_tp2_o; cos_tp_o_s = cos_tp2_o
-    else:
-        # Remainder lobe: same vm as TRT, uniform azimuthal
-        vm_p = vm2; e2vm_p = e2vm2; dphi_p = Float32(0.0)
-        sin_tp_o_s = sin_theta_o; cos_tp_o_s = cos_theta_o
-        uniform_phi_s = True
-
-    # Sample theta from vMF inverse CDF (PBRT formula)
-    var u_th = max(pcg.next_float(), Float32(1e-6))
-    var u_phi_v = pcg.next_float()
-    var cos_th = Float32(1.0) + vm_p * log(u_th + (Float32(1.0) - u_th) * e2vm_p)
-    cos_th = max(Float32(-1.0), min(Float32(1.0), cos_th))
-    var sin_th = safe_sqrt(Float32(1.0) - cos_th * cos_th)
-    var cos_phi_v = cos(TWO_PI * u_phi_v)
-    # PBRT: sinTheta_i = -cosTheta * sinThetap_o + sinTheta * cosPhi * cosThetap_o
-    var sin_ti_s = max(Float32(-1.0), min(Float32(1.0), -cos_th * sin_tp_o_s + sin_th * cos_phi_v * cos_tp_o_s))
-    var cos_ti_s = safe_sqrt(Float32(1.0) - sin_ti_s * sin_ti_s)
-    cos_ti_s = max(cos_ti_s, Float32(1e-5))
-
-    # Sample phi: logistic inverse CDF for lobes 0-2, uniform for remainder
-    var u3 = max(pcg.next_float(), Float32(1e-6))
-    var phi_i_s: Float32
-    if uniform_phi_s:
-        phi_i_s = phi_o + TWO_PI * u3 - PI
-    else:
-        phi_i_s = phi_o + dphi_p + s * log(u3 / max(Float32(1.0) - u3, Float32(1e-6)))
-
-    # Reconstruct wi from (sin_ti_s, cos_ti_s, phi_i_s)
-    var wi_s = sin_ti_s * tangent + cos(phi_i_s) * cos_ti_s * n_perp + sin(phi_i_s) * cos_ti_s * b_perp
-    var wi_len = dot(wi_s, wi_s)
-    if wi_len > Float32(0.0):
-        wi_s = wi_s * (Float32(1.0) / sqrt(wi_len))
-
-    # Evaluate BSDF for sampled direction
-    var (cos_ti_s2, f_s, pdf_over_cos_s) = _hair_eval_lobes(
-        wi_s, tangent, b_perp, n_perp, phi_o,
-        dphi0, dphi1, dphi2,
-        cos_tp0_o, sin_tp0_o, cos_tp1_o, sin_tp1_o, cos_tp2_o, sin_tp2_o,
-        cos_theta_o, sin_theta_o, inv_vm0, inv_vm1, inv_vm2, mp_c0, mp_c1, mp_c2, s,
-        A0, A1, A2, A3, lum0, lum1, lum2, lum3, total_lum,
-    )
+    # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
+    # sampling as before this was extracted, identical RNG draw order) —
+    # shared with bdpt.mojo/sppm.mojo's own hair-vertex bounce continuation.
+    var (wi_s, f_s, pdf, cos_ti_s2) = _hair_sample_dir(hc, pcg)
     var frs = f_s.r; var fgs = f_s.g; var fbs = f_s.b
 
-    # Compute sampling PDF — same M * N factors as BSDF (including /cos_ti_s) so
-    # f/pdf cancels the divergence at grazing angles.
-    var pdf = max(pdf_over_cos_s, Float32(1e-6))
     # Solid-angle PDF (remove the embedded /cos_ti_s) — used for MIS when indirect path hits env.
-    # M0s = _hair_Mp / cos_ti_s, so pdf already includes 1/cos_ti_s; multiply back to get solid angle.
     var pdf_solid_angle = pdf * cos_ti_s2
 
     # Update path state
