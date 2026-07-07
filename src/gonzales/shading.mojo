@@ -2361,6 +2361,15 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     env_rgb = ilight.scale
             miss_albedo += env_rgb
             var mis_weight = Float32(1.0)
+            # env_rgb_contrib defaults to the bilinear-filtered env_rgb (smooth
+            # sky appearance for direct/specular escapes, where mis_weight stays
+            # 1.0 and no pdf is involved). For MIS-weighted indirect escapes
+            # (bounce>0, non-specular) with a CDF-textured light, it's
+            # overridden below to the SAME nearest-texel value the pdf is
+            # computed from — bilinear-blending the radiance while reading the
+            # pdf from one sharp texel is a radiance/pdf registration mismatch
+            # that biases (and adds fireflies to) this MIS term specifically.
+            var env_rgb_contrib = env_rgb
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
                 # Uniform env: NEE cosine-hemisphere samples it, so the light pdf
@@ -2382,8 +2391,13 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var dp_col = ilight.cdf_ptr[dp_col_base + 1] - ilight.cdf_ptr[dp_col_base]
                         if dp_row > Float32(0.0):
                             pdf_light = dp_row * dp_col * Float32(iw) * Float32(ih) * INV_FOUR_PI
+                        if Int(ilight.pixels_ptr) > 1:
+                            var nr = ilight.pixels_ptr[(py*iw+px)*3+0]
+                            var ng = ilight.pixels_ptr[(py*iw+px)*3+1]
+                            var nb = ilight.pixels_ptr[(py*iw+px)*3+2]
+                            env_rgb_contrib = RGB(nr, ng, nb) * ilight.scale
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
-            path_ptr[].estimate += path_ptr[].throughput * env_rgb * mis_weight
+            path_ptr[].estimate += path_ptr[].throughput * env_rgb_contrib * mis_weight
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = miss_albedo
         path_ptr[].active = 0
