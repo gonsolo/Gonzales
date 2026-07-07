@@ -8,8 +8,7 @@ from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, 
 from .postprocess import denoise, write_image
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C
-from .sppm import sppm_render
-from .gpu_sppm import sppm_render_gpu
+from .sppm import sppm_render, sppm_render_gpu
 from .bdpt import bdpt_render, bdpt_render_gpu
 from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene

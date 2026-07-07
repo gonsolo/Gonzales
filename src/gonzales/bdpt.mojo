@@ -13,18 +13,16 @@ from std.atomic import Atomic
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
-    Sphere_C, Curve_C, PrimId_C, Instance_C, LightSampler_C,
-    DistantLight_C, PointLight_C, InfiniteLight_C, Grid_C,
+    Sphere_C, Curve_C, PrimId_C, Instance_C,
     dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, INV_PI,
 )
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform
+from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu
 from .bxdf import GeomContext, bxdf_sample_conductor, bxdf_is_delta, ggx_D, ggx_G2
 from .gpu import GpuSceneHandle
-from .gpu_sppm import sppm_reset_i32_gpu
 
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
                                 # non-stored delta/dielectric bounces — glass-of-water's
@@ -246,7 +244,7 @@ def _bdpt_store_lvc_vertex[use_gpu: Bool](
 ):
     """Reserve a slot in the shared cache and store `v`, dropping the write
     if the cache is already full — same cap-and-drop convention as
-    sppm_emit_photons_gpu's photon buffer (gpu_sppm.mojo). The ONLY line
+    sppm.mojo's _sppm_store_photon. The ONLY line
     that differs between CPU and GPU: concurrent GPU threads need an atomic
     fetch-add to reserve a slot; the CPU driver traces light paths
     sequentially (bdpt_render's `for lp_idx in range(...)` loop), so a plain
@@ -944,72 +942,21 @@ def bdpt_render(
 # ── GPU port ───────────────────────────────────────────────────────────────
 # Everything below reuses _bdpt_trace_light_path[True]/_bdpt_trace_camera_
 # and_connect[True] verbatim — the SAME functions bdpt_render (CPU) calls
-# with [False] above. This is deliberately unlike gpu_sppm.mojo's GPU port
-# of sppm.mojo (a full line-by-line reimplementation of every bounce loop,
-# noted in its own header comment) — the whole point of doing BDPT's port
-# this way first is to prove the zero-duplication comptime[use_gpu] pattern
+# with [False] above. This is deliberately unlike the OLD gpu_sppm.mojo's
+# GPU port of sppm.mojo (a full line-by-line reimplementation of every
+# bounce loop) — sppm.mojo has since been retrofitted to the same
+# comptime[use_gpu] pattern and gpu_sppm.mojo deleted (see
+# project_unified_renderer_roadmap in memory) — the whole point of doing
+# BDPT's port this way first is to prove the zero-duplication comptime[use_gpu] pattern
 # (already used for the wavefront path tracer's shade_nee_core) scales to a
 # full renderer, as a template for eventually retrofitting SPPM the same way.
 
-@always_inline
-def _mk_sd_full(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    meshCount: Int64,
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    materialCount: Int64,
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
-    sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
-    curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
-    blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
-    instanceCount: Int64,
-) -> SceneDescriptor2_C:
-    """Builds a complete SceneDescriptor2_C from raw device pointers so the
-    SAME `sd.field`-based traversal code _bdpt_trace_light_path/
-    _bdpt_trace_camera_and_connect already use on CPU works unmodified on
-    GPU (SceneDescriptor2_C is TrivialRegisterPassable — cheap to construct
-    per-thread, no allocation). Only the fields BDPT's shared functions
-    actually dereference are filled from real device buffers; textures,
-    distant/point/infinite lights, grids, and the light sampler CDF are
-    never touched by bdpt.mojo's code paths (confirmed by grep) so they
-    stay dangling/zero-count, same convention traverse_bvh2_core's own
-    optional instancing args already use."""
-    return SceneDescriptor2_C(
-        bvh2Nodes=bvh2Nodes, primIds=primIds,
-        meshes=meshes, meshCount=meshCount,
-        materials=materials, materialCount=materialCount,
-        areaLights=areaLights, areaLightCount=areaLightCount,
-        textures=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        textureCount=Int64(0),
-        distantLights=UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(),
-        distantLightCount=Int64(0),
-        pointLights=UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
-        pointLightCount=Int64(0),
-        infiniteLights=UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(),
-        infiniteLightCount=Int64(0),
-        spheres=spheres, sphereCount=sphereCount,
-        curves=curves, curveCount=curveCount,
-        mediums=mediums, mediumCount=mediumCount,
-        mediumInterfaces=mediumInterfaces, mediumIfaceCount=mediumIfaceCount,
-        grids=UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(),
-        gridCount=Int64(0),
-        lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
-        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
-        instances=instances, instanceCount=instanceCount,
-    )
-
 # ── Kernels ───────────────────────────────────────────────────────────────
+# _mk_sd_full (builds a complete SceneDescriptor2_C from raw GPU device
+# pointers) now lives in bvh.mojo, next to SceneDescriptor2_C itself, since
+# sppm.mojo's own GPU kernels need the exact same helper and importing it
+# from here would create an import cycle (bdpt.mojo already imports shared
+# helpers from .sppm).
 
 def _bdpt_emit_light_paths_gpu(
     lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
@@ -1134,7 +1081,7 @@ def bdpt_render_gpu(
     bdpt_render (CPU), same shared _bdpt_trace_light_path/
     _bdpt_trace_camera_and_connect functions, parallelized: one thread per
     light path for the light pass, one thread per pixel for the camera+
-    connect pass. Mirrors sppm_render_gpu's (gpu_sppm.mojo) per-pass
+    connect pass. Mirrors sppm.mojo's sppm_render_gpu per-pass
     reset-counter -> emit -> sync+readback+clamp -> consume shape."""
     var fw = Int(psc[0].film_w)
     var fh = Int(psc[0].film_h)

@@ -1,5 +1,5 @@
 # Unit tests for the device-portable helper functions extracted from
-# sppm.mojo (and shared with bdpt.mojo / gpu_sppm.mojo): normal computation,
+# sppm.mojo (also shared with bdpt.mojo): normal computation,
 # cosine-hemisphere sampling, homogeneous free-flight sampling, uniform
 # area-light sampling, the photon-grid spatial hash, and the dielectric
 # bounce helper.

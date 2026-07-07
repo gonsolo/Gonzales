@@ -13,7 +13,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 # coverage — the full node-stack traversal + triangle intersection + the
 # real BVH-build pipeline (build_bvh2, the same function finalize_scene
 # calls) had none. This is the fixture other test files (render_tile,
-# sppm/bdpt render loops, gpu_sppm kernels) can reuse via _scene_fixture.
+# sppm/bdpt CPU render loops and GPU kernels) can reuse via _scene_fixture.
 
 def test_single_triangle_hit_through_center() raises:
     var fx = make_triangle_scene([

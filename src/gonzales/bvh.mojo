@@ -100,6 +100,69 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
     var instanceCount:  Int64
 
+@always_inline
+def _mk_sd_full(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    meshCount: Int64,
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    materialCount: Int64,
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediumCount: Int64,
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    mediumIfaceCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
+) -> SceneDescriptor2_C:
+    """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
+    the SAME `sd.field`-based traversal code a CPU-side function already
+    uses works unmodified on GPU (SceneDescriptor2_C is
+    TrivialRegisterPassable — cheap to construct per-thread, no allocation).
+    Lives here (not in bdpt.mojo, where it originated, or sppm.mojo, which
+    also needs it) specifically to avoid an import cycle — both of those
+    modules import shared helpers from each other already, but neither
+    imports from the other, so a shared GPU-scene-builder helper needs a
+    home neither of them owns; this is that home, next to
+    SceneDescriptor2_C itself. Only the fields bdpt.mojo/sppm.mojo's shared
+    functions actually dereference are filled from real device buffers;
+    textures, distant/point/infinite lights, grids, and the light sampler
+    CDF are never touched by either module's code paths, so they stay
+    dangling/zero-count, same convention traverse_bvh2_core's own optional
+    instancing args already use."""
+    return SceneDescriptor2_C(
+        bvh2Nodes=bvh2Nodes, primIds=primIds,
+        meshes=meshes, meshCount=meshCount,
+        materials=materials, materialCount=materialCount,
+        areaLights=areaLights, areaLightCount=areaLightCount,
+        textures=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textureCount=Int64(0),
+        distantLights=UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(),
+        distantLightCount=Int64(0),
+        pointLights=UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
+        pointLightCount=Int64(0),
+        infiniteLights=UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(),
+        infiniteLightCount=Int64(0),
+        spheres=spheres, sphereCount=sphereCount,
+        curves=curves, curveCount=curveCount,
+        mediums=mediums, mediumCount=mediumCount,
+        mediumInterfaces=mediumInterfaces, mediumIfaceCount=mediumIfaceCount,
+        grids=UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(),
+        gridCount=Int64(0),
+        lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
+        instances=instances, instanceCount=instanceCount,
+    )
+
 # ── Analytical sphere intersection ────────────────────────────────────────────
 
 @always_inline
