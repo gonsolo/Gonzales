@@ -1203,9 +1203,31 @@ def shade_mix_gpu(
 def shade_conductor_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    n_distant_lights: Int,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    n_point_lights: Int,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    n_light_sampler: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    n_infinite_lights: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
+    px_scale: Float32,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1216,7 +1238,21 @@ def shade_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
-    shade_conductor(path_ptr, inter, meshes, mat)
+    var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+    var ctx = ShadeContext(
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
+    shade_conductor[True, False](path_ptr, inter, ctx, mat)
 
 
 def shade_dielectric_gpu(
@@ -1260,9 +1296,31 @@ def shade_thin_dielectric_gpu(
 def shade_coated_conductor_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    n_distant_lights: Int,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    n_point_lights: Int,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    n_light_sampler: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    n_infinite_lights: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
+    px_scale: Float32,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1273,7 +1331,21 @@ def shade_coated_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
-    shade_coated_conductor(path_ptr, inter, meshes, mat)
+    var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+    var ctx = ShadeContext(
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
+    shade_coated_conductor[True, False](path_ptr, inter, ctx, mat)
 
 
 def shade_interface_gpu(
@@ -2401,9 +2473,30 @@ def gpu_render_sample(
                 handle[].ctx.enqueue_function[shade_conductor_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-                    n_int,
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_int, px_scale,
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
@@ -2425,9 +2518,30 @@ def gpu_render_sample(
                 handle[].ctx.enqueue_function[shade_coated_conductor_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-                    n_int,
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_int, px_scale,
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_interface_gpu](
@@ -2745,9 +2859,30 @@ def gpu_render_wavefront(
                 handle[].ctx.enqueue_function[shade_conductor_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-                    n_total,
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_total, px_scale,
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
@@ -2769,9 +2904,30 @@ def gpu_render_wavefront(
                 handle[].ctx.enqueue_function[shade_coated_conductor_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
                     handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                     handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-                    n_total,
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_total, px_scale,
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_interface_gpu](

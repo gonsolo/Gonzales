@@ -14,7 +14,7 @@ from std.atomic import Atomic
 from .geometry import (
     RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
-    Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C,
+    Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, INV_PI,
 )
 from .bvh import (
@@ -27,7 +27,7 @@ from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx
 from .gpu import GpuSceneHandle
 
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
@@ -456,6 +456,34 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         var mat = sd.materials[mat_idx]
         var hit = ro + rd*t_hit
 
+        # Direct hit on an emissive analytic sphere — checked BEFORE material
+        # dispatch since the sphere's own material is often an inert
+        # placeholder (e.g. pbrt's "Null" material on AreaLightSource
+        # spheres), so mat.type never reflects that this primitive emits;
+        # Sphere_C.isAreaLight is the only way to know. MIS-weighted against
+        # last_bsdf_pdf — same bookkeeping already used for infinite-light
+        # miss-escape, since a competing NEE strategy toward this SAME
+        # sphere may have already been taken at the PREVIOUS vertex (see
+        # this function's own sphere-light NEE blocks). No facing check —
+        # an analytic sphere is only ever hit from outside, always the
+        # front (emitting) face, unlike a one-sided triangle area light.
+        if inter.primId.type == Int8(4):
+            var sph_hit = sd.spheres[Int(inter.primId.id1)]
+            if sph_hit.isAreaLight != Int8(0):
+                var mis_w_sph_hit = Float32(1)
+                if last_bsdf_pdf >= Float32(0):
+                    var to_c_hit = sph_hit.center - hit
+                    var dc_sq_hit = to_c_hit.length_sq()
+                    var sin2_max_hit = sph_hit.radius * sph_hit.radius / dc_sq_hit
+                    if sin2_max_hit < Float32(1):
+                        var cos_max_hit = sqrt(Float32(1) - sin2_max_hit)
+                        var solid_angle_hit = Float32(2) * PI * (Float32(1) - cos_max_hit)
+                        var n_sph_hit = Float32(max(Int(sd.sphereCount), 1))
+                        var pdf_light_hit = Float32(1) / (solid_angle_hit * n_sph_hit)
+                        mis_w_sph_hit = power_heuristic(last_bsdf_pdf, pdf_light_hit)
+                total += beta * sph_hit.emission * mis_w_sph_hit
+                break
+
         # Mix material: stochastically resolve to one of two sub-materials
         # (mirrors shading.mojo's shade_mix) before any type dispatch below —
         # packing/guard-against-mix-of-mix convention identical to shade_mix.
@@ -470,7 +498,22 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 mat.type = MatKind.diffuse
 
         if mat.type == MatKind.area_light:
-            break  # camera hits light directly → handled by unidirectional contribution
+            # Direct hit on a triangle/curve area light — same MIS-against-
+            # last_bsdf_pdf treatment as the sphere case above. id1 is the
+            # AreaLight_C index directly for a type==3 (area-light-triangle)
+            # hit, per pbrt_parser.mojo's own PrimId_C encoding.
+            var al_hit = sd.areaLights[Int(inter.primId.id1)]
+            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances)
+            var cos_l_hit = -dot(gn_al_hit, ray_dir)
+            if cos_l_hit > Float32(0):
+                var mis_w_al_hit = Float32(1)
+                if last_bsdf_pdf >= Float32(0):
+                    var dist2_hit = t_hit * t_hit
+                    var n_area_hit = Float32(max(Int(sd.areaLightCount), 1))
+                    var pdf_light_al = dist2_hit / (cos_l_hit * n_area_hit * al_hit.total_area)
+                    mis_w_al_hit = power_heuristic(last_bsdf_pdf, pdf_light_al)
+                total += beta * al_hit.emission * mis_w_al_hit
+            break
 
         elif mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
@@ -501,6 +544,67 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                     var Tr_d = _visible_transmittance(shadow_org, shadow_org + to_light*Float32(2000), cur_med_idx, sd, scratch)
                     if Tr_d[0] > Float32(0) or Tr_d[1] > Float32(0) or Tr_d[2] > Float32(0):
                         total += beta * bxdf_eval_diffuse(mat.albedo) * dl.emission * cos_s * RGB(Tr_d[0], Tr_d[1], Tr_d[2])
+            for pl_i in range(Int(sd.pointLightCount)):
+                var pl = sd.pointLights[pl_i]
+                var to_light_p = pl.position - hit
+                var dist_sq_p = to_light_p.length_sq()
+                var dist_p = sqrt(dist_sq_p)
+                if dist_p > Float32(0.0001):
+                    var wi_p = to_light_p * (Float32(1) / dist_p)
+                    var cos_s_p = dot(gn, wi_p.to_simd())
+                    if cos_s_p > Float32(0):
+                        var shadow_org_p = hit + vec3f(gn)*Float32(0.0001)
+                        var Tr_p = _visible_transmittance(shadow_org_p, shadow_org_p + wi_p*(dist_p*Float32(0.9999)), cur_med_idx, sd, scratch)
+                        if Tr_p[0] > Float32(0) or Tr_p[1] > Float32(0) or Tr_p[2] > Float32(0):
+                            total += beta * bxdf_eval_diffuse(mat.albedo) * pl.intensity * (cos_s_p / dist_sq_p) * RGB(Tr_p[0], Tr_p[1], Tr_p[2])
+
+            # Sphere-light NEE (solid-angle cone sampling) — mirrors
+            # shading.mojo's _shade_diffuse_nee exactly (same cone-sampling
+            # formula/MIS). Loops ALL analytic spheres (skipping non-emissive
+            # ones inline) since sd.spheres/sphereCount is the raw geometric
+            # array, not a pre-filtered lights-only one like every other
+            # light type — same convention shading.mojo already uses.
+            for sph_i in range(Int(sd.sphereCount)):
+                var sph = sd.spheres[sph_i]
+                if sph.isAreaLight == Int8(0):
+                    continue
+                var to_cx = sph.center.x - hit.x
+                var to_cy = sph.center.y - hit.y
+                var to_cz = sph.center.z - hit.z
+                var dc_sq = to_cx*to_cx + to_cy*to_cy + to_cz*to_cz
+                var dc = sqrt(dc_sq)
+                if dc < sph.radius or dc_sq == Float32(0):
+                    continue
+                var sin2_max = sph.radius * sph.radius / dc_sq
+                if sin2_max >= Float32(1):
+                    continue
+                var cos_max = sqrt(Float32(1) - sin2_max)
+                var zc = SIMD[DType.float32, 3](to_cx / dc, to_cy / dc, to_cz / dc)
+                var xc: SIMD[DType.float32, 3]
+                if (zc[0] if zc[0] >= Float32(0) else -zc[0]) < Float32(0.9):
+                    xc = cross(zc, SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0)))
+                else:
+                    xc = cross(zc, SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)))
+                var xlen = dot(xc, xc)
+                if xlen > Float32(0): xc = xc * (Float32(1) / sqrt(xlen))
+                var yc = cross(zc, xc)
+                var r1s = pcg.next_float(); var r2s = pcg.next_float()
+                var cos_th = Float32(1) - r1s * (Float32(1) - cos_max)
+                var sin_th = sqrt(max(Float32(0), Float32(1) - cos_th * cos_th))
+                var phis = Float32(2) * PI * r2s
+                var shadow_dir = xc * (sin_th * cos(phis)) + yc * (sin_th * sin(phis)) + zc * cos_th
+                var sdlen = dot(shadow_dir, shadow_dir)
+                if sdlen > Float32(0): shadow_dir = shadow_dir * (Float32(1) / sqrt(sdlen))
+                var cos_s_sph = dot(gn, shadow_dir)
+                if cos_s_sph > Float32(0):
+                    var solid_angle = Float32(2) * PI * (Float32(1) - cos_max)
+                    var n_sph = Float32(max(Int(sd.sphereCount), 1))
+                    var pdf_light_sph = Float32(1) / (solid_angle * n_sph)
+                    var shadow_org_sph = hit + vec3f(gn)*Float32(0.0001)
+                    var Tr_sph = _visible_transmittance(shadow_org_sph, shadow_org_sph + Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2])*(dc*Float32(0.9999)), cur_med_idx, sd, scratch)
+                    if Tr_sph[0] > Float32(0) or Tr_sph[1] > Float32(0) or Tr_sph[2] > Float32(0):
+                        total += beta * bxdf_eval_diffuse(mat.albedo) * sph.emission * (cos_s_sph / pdf_light_sph) * RGB(Tr_sph[0], Tr_sph[1], Tr_sph[2])
+
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight_nee = sd.infiniteLights[inf_i]
                 var (env_dir, env_rgb, pdf_env) = _sample_infinite_light_dir(ilight_nee, Point2f(pcg.next_float(), pcg.next_float()))
@@ -558,6 +662,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             if bs_c.is_valid == Int8(0):
                 break
+            var alpha_c = max(mat.roughU, mat.roughV)
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
                 v.pos = hit
@@ -565,17 +670,110 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 v.beta = beta
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
-                v.pdf_bwd = max(mat.roughU, mat.roughV)
+                v.pdf_bwd = alpha_c
                 v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 n_verts += 1
                 if lvc_count > 0:
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+
+                # Distant + infinite NEE (rough lobe only — a mirror bounce
+                # has ~zero probability of reflecting any finite/delta light
+                # except along the exact mirror direction). Mirrors
+                # shading.mojo's _shade_conductor_nee: distant needs no MIS
+                # (delta direction, no competing BSDF-sampling probability);
+                # infinite needs MIS against bxdf_pdf_conductor_ggx since a
+                # later bounce could independently reach the same direction.
+                for dl_ic in range(Int(sd.distantLightCount)):
+                    var dl_c = sd.distantLights[dl_ic]
+                    var to_light_c = Vec3f(-dl_c.direction.x, -dl_c.direction.y, -dl_c.direction.z)
+                    var f_cos_dc = bxdf_eval_conductor_ggx(gn_c, wo_c, to_light_c.to_simd(), alpha_c, mat.albedo)
+                    if f_cos_dc.r > Float32(0) or f_cos_dc.g > Float32(0) or f_cos_dc.b > Float32(0):
+                        var shadow_org_c = hit + vec3f(gn_c)*Float32(0.0001)
+                        var Tr_dc = _visible_transmittance(shadow_org_c, shadow_org_c + to_light_c*Float32(2000), cur_med_idx, sd, scratch)
+                        if Tr_dc[0] > Float32(0) or Tr_dc[1] > Float32(0) or Tr_dc[2] > Float32(0):
+                            var cos_s_c = dot(gn_c, to_light_c.to_simd())
+                            total += beta * f_cos_dc * dl_c.emission * cos_s_c * RGB(Tr_dc[0], Tr_dc[1], Tr_dc[2])
+                for pl_ic in range(Int(sd.pointLightCount)):
+                    var pl_c = sd.pointLights[pl_ic]
+                    var to_light_pc = pl_c.position - hit
+                    var dist_sq_pc = to_light_pc.length_sq()
+                    var dist_pc = sqrt(dist_sq_pc)
+                    if dist_pc > Float32(0.0001):
+                        var wi_pc = to_light_pc * (Float32(1) / dist_pc)
+                        var f_cos_pc = bxdf_eval_conductor_ggx(gn_c, wo_c, wi_pc.to_simd(), alpha_c, mat.albedo)
+                        if f_cos_pc.r > Float32(0) or f_cos_pc.g > Float32(0) or f_cos_pc.b > Float32(0):
+                            var shadow_org_pc = hit + vec3f(gn_c)*Float32(0.0001)
+                            var Tr_pc = _visible_transmittance(shadow_org_pc, shadow_org_pc + wi_pc*(dist_pc*Float32(0.9999)), cur_med_idx, sd, scratch)
+                            if Tr_pc[0] > Float32(0) or Tr_pc[1] > Float32(0) or Tr_pc[2] > Float32(0):
+                                var cos_s_pc = dot(gn_c, wi_pc.to_simd())
+                                total += beta * f_cos_pc * pl_c.intensity * (cos_s_pc / dist_sq_pc) * RGB(Tr_pc[0], Tr_pc[1], Tr_pc[2])
+
+                # Sphere-light NEE (solid-angle cone sampling) — same
+                # formula as the diffuse branch's own sphere-light NEE
+                # above, evaluated via the conductor GGX BRDF instead.
+                for sph_ic in range(Int(sd.sphereCount)):
+                    var sph_c = sd.spheres[sph_ic]
+                    if sph_c.isAreaLight == Int8(0):
+                        continue
+                    var to_cx_c = sph_c.center.x - hit.x
+                    var to_cy_c = sph_c.center.y - hit.y
+                    var to_cz_c = sph_c.center.z - hit.z
+                    var dc_sq_c = to_cx_c*to_cx_c + to_cy_c*to_cy_c + to_cz_c*to_cz_c
+                    var dc_c = sqrt(dc_sq_c)
+                    if dc_c < sph_c.radius or dc_sq_c == Float32(0):
+                        continue
+                    var sin2_max_c = sph_c.radius * sph_c.radius / dc_sq_c
+                    if sin2_max_c >= Float32(1):
+                        continue
+                    var cos_max_c = sqrt(Float32(1) - sin2_max_c)
+                    var zc_c = SIMD[DType.float32, 3](to_cx_c / dc_c, to_cy_c / dc_c, to_cz_c / dc_c)
+                    var xc_c: SIMD[DType.float32, 3]
+                    if (zc_c[0] if zc_c[0] >= Float32(0) else -zc_c[0]) < Float32(0.9):
+                        xc_c = cross(zc_c, SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0)))
+                    else:
+                        xc_c = cross(zc_c, SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)))
+                    var xlen_c = dot(xc_c, xc_c)
+                    if xlen_c > Float32(0): xc_c = xc_c * (Float32(1) / sqrt(xlen_c))
+                    var yc_c = cross(zc_c, xc_c)
+                    var r1s_c = pcg.next_float(); var r2s_c = pcg.next_float()
+                    var cos_th_c = Float32(1) - r1s_c * (Float32(1) - cos_max_c)
+                    var sin_th_c = sqrt(max(Float32(0), Float32(1) - cos_th_c * cos_th_c))
+                    var phis_c = Float32(2) * PI * r2s_c
+                    var shadow_dir_c = xc_c * (sin_th_c * cos(phis_c)) + yc_c * (sin_th_c * sin(phis_c)) + zc_c * cos_th_c
+                    var sdlen_c = dot(shadow_dir_c, shadow_dir_c)
+                    if sdlen_c > Float32(0): shadow_dir_c = shadow_dir_c * (Float32(1) / sqrt(sdlen_c))
+                    var f_cos_sph_c = bxdf_eval_conductor_ggx(gn_c, wo_c, shadow_dir_c, alpha_c, mat.albedo)
+                    if f_cos_sph_c.r > Float32(0) or f_cos_sph_c.g > Float32(0) or f_cos_sph_c.b > Float32(0):
+                        var solid_angle_c = Float32(2) * PI * (Float32(1) - cos_max_c)
+                        var n_sph_c = Float32(max(Int(sd.sphereCount), 1))
+                        var pdf_light_sph_c = Float32(1) / (solid_angle_c * n_sph_c)
+                        var shadow_org_sph_c = hit + vec3f(gn_c)*Float32(0.0001)
+                        var Tr_sph_c = _visible_transmittance(shadow_org_sph_c, shadow_org_sph_c + Vec3f(shadow_dir_c[0], shadow_dir_c[1], shadow_dir_c[2])*(dc_c*Float32(0.9999)), cur_med_idx, sd, scratch)
+                        if Tr_sph_c[0] > Float32(0) or Tr_sph_c[1] > Float32(0) or Tr_sph_c[2] > Float32(0):
+                            total += beta * f_cos_sph_c * sph_c.emission * (Float32(1) / pdf_light_sph_c) * RGB(Tr_sph_c[0], Tr_sph_c[1], Tr_sph_c[2])
+
+                for inf_ic in range(Int(sd.infiniteLightCount)):
+                    var ilight_c2 = sd.infiniteLights[inf_ic]
+                    var (env_dir_c2, env_rgb_c2, pdf_env_c2) = _sample_infinite_light_dir(ilight_c2, Point2f(pcg.next_float(), pcg.next_float()))
+                    var f_cos_ec = bxdf_eval_conductor_ggx(gn_c, wo_c, env_dir_c2.to_simd(), alpha_c, mat.albedo)
+                    if pdf_env_c2 > Float32(0) and (f_cos_ec.r > Float32(0) or f_cos_ec.g > Float32(0) or f_cos_ec.b > Float32(0)):
+                        var cos_env_c2 = dot(gn_c, env_dir_c2.to_simd())
+                        var pdf_bsdf_env_c2 = bxdf_pdf_conductor_ggx(gn_c, wo_c, env_dir_c2.to_simd(), alpha_c)
+                        var mis_env_c2 = power_heuristic(pdf_env_c2, pdf_bsdf_env_c2)
+                        var shadow_org_ec = hit + vec3f(gn_c)*Float32(0.0001)
+                        var Tr_ec = _visible_transmittance(shadow_org_ec, shadow_org_ec + env_dir_c2*Float32(2000), cur_med_idx, sd, scratch)
+                        if Tr_ec[0] > Float32(0) or Tr_ec[1] > Float32(0) or Tr_ec[2] > Float32(0):
+                            total += beta * f_cos_ec * env_rgb_c2 * (cos_env_c2 / pdf_env_c2) * mis_env_c2 * RGB(Tr_ec[0], Tr_ec[1], Tr_ec[2])
+
             beta *= bs_c.f
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
-            last_bsdf_pdf = Float32(-1)  # conductor/coated_conductor: no infinite-light NEE done here
+            if bxdf_is_delta(bs_c.flags):
+                last_bsdf_pdf = Float32(-1)  # mirror bounce: no infinite-light NEE done at this vertex
+            else:
+                last_bsdf_pdf = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
 
         elif mat.type == MatKind.hair:
             # Marschner 3-lobe hair BSDF — no delta lobe, so always store a
@@ -601,12 +799,65 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             n_verts += 1
             if lvc_count > 0:
                 total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
-            var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
+
+            # Distant + infinite NEE — mirrors shading.mojo's shade_hair NEE
+            # exactly (hair has no delta lobe, so this always applies).
+            for dl_ih in range(Int(sd.distantLightCount)):
+                var dl_h = sd.distantLights[dl_ih]
+                var to_light_h = Vec3f(-dl_h.direction.x, -dl_h.direction.y, -dl_h.direction.z)
+                var (cos_ti_dh, f_dh, _) = _hair_eval_lobes(
+                    to_light_h.to_simd(), hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+                    hc.dphi0, hc.dphi1, hc.dphi2,
+                    hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+                    hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+                    hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+                )
+                var shadow_org_h = hit + vec3f(hc.geo_normal)*Float32(0.0001)
+                var Tr_dh = _visible_transmittance(shadow_org_h, shadow_org_h + to_light_h*Float32(2000), cur_med_idx, sd, scratch)
+                if Tr_dh[0] > Float32(0) or Tr_dh[1] > Float32(0) or Tr_dh[2] > Float32(0):
+                    total += beta * cos_ti_dh * f_dh * dl_h.emission * RGB(Tr_dh[0], Tr_dh[1], Tr_dh[2])
+            for pl_ih in range(Int(sd.pointLightCount)):
+                var pl_h = sd.pointLights[pl_ih]
+                var to_light_ph = pl_h.position - hit
+                var dist_sq_ph = to_light_ph.length_sq()
+                var dist_ph = sqrt(dist_sq_ph)
+                if dist_ph > Float32(0.0001):
+                    var wi_ph = to_light_ph * (Float32(1) / dist_ph)
+                    var (cos_ti_ph, f_ph, _) = _hair_eval_lobes(
+                        wi_ph.to_simd(), hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+                        hc.dphi0, hc.dphi1, hc.dphi2,
+                        hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+                        hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+                        hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+                    )
+                    var shadow_org_ph = hit + vec3f(hc.geo_normal)*Float32(0.0001)
+                    var Tr_ph = _visible_transmittance(shadow_org_ph, shadow_org_ph + wi_ph*(dist_ph*Float32(0.9999)), cur_med_idx, sd, scratch)
+                    if Tr_ph[0] > Float32(0) or Tr_ph[1] > Float32(0) or Tr_ph[2] > Float32(0):
+                        total += beta * cos_ti_ph * f_ph * pl_h.intensity * (Float32(1) / dist_sq_ph) * RGB(Tr_ph[0], Tr_ph[1], Tr_ph[2])
+            for inf_ih in range(Int(sd.infiniteLightCount)):
+                var ilight_h = sd.infiniteLights[inf_ih]
+                var (env_dir_h, env_rgb_h, pdf_env_h) = _sample_infinite_light_dir(ilight_h, Point2f(pcg.next_float(), pcg.next_float()))
+                var (cos_ti_eh, f_eh, pdf_over_cos_eh) = _hair_eval_lobes(
+                    env_dir_h.to_simd(), hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+                    hc.dphi0, hc.dphi1, hc.dphi2,
+                    hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+                    hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+                    hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+                )
+                if pdf_env_h > Float32(0):
+                    var pdf_bsdf_env_h = max(cos_ti_eh * pdf_over_cos_eh, Float32(1e-6))
+                    var mis_env_h = power_heuristic(pdf_env_h, pdf_bsdf_env_h)
+                    var shadow_org_eh = hit + vec3f(hc.geo_normal)*Float32(0.0001)
+                    var Tr_eh = _visible_transmittance(shadow_org_eh, shadow_org_eh + env_dir_h*Float32(2000), cur_med_idx, sd, scratch)
+                    if Tr_eh[0] > Float32(0) or Tr_eh[1] > Float32(0) or Tr_eh[2] > Float32(0):
+                        total += beta * cos_ti_eh * f_eh * env_rgb_h * (mis_env_h / pdf_env_h) * RGB(Tr_eh[0], Tr_eh[1], Tr_eh[2])
+
+            var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
             beta *= f_hs / pdf_hs
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
-            last_bsdf_pdf = Float32(-1)  # hair: no infinite-light NEE done here (matches conductor's own choice)
+            last_bsdf_pdf = pdf_hs * cos_ti_hs2  # solid-angle pdf (pdf_hs already has /cos_ti baked in)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
@@ -675,7 +926,8 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var n_area = Int(sd.areaLightCount)
     var n_distant = Int(sd.distantLightCount)
     var n_infinite = Int(sd.infiniteLightCount)
-    var n_lights = n_area + n_distant + n_infinite
+    var n_point = Int(sd.pointLightCount)
+    var n_lights = n_area + n_distant + n_infinite + n_point
     if n_lights == 0:
         return
 
@@ -731,7 +983,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         ro = disk_pt
         rd = dir
         n_verts = 0  # no finite light point to store as a cache vertex
-    else:
+    elif light_pick < n_area + n_distant + n_infinite:
         var il = sd.infiniteLights[light_pick - n_area - n_distant]
         var (center, radius) = _scene_bounding_sphere(sd)
         # _sample_infinite_light_dir returns env_dir in the NEE convention
@@ -749,6 +1001,24 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         flux = env_rgb * (Float32(n_lights) * PI * radius * radius / pdf_dir)
         ro = disk_pt
         rd = emit_dir
+        n_verts = 0
+    else:
+        # Point light: a real finite position (unlike distant/infinite), but
+        # still no NEE-equivalent cache vertex — see this function's own
+        # docstring for why (same reasoning as distant/infinite: direct
+        # illumination comes from _bdpt_trace_camera_and_connect's own
+        # per-vertex point-light NEE instead). Emits uniformly over the
+        # sphere (isotropic point light); pdf_dir = 1/(4π), so
+        # flux = intensity × 4π × n_lights (pdf_dir cancels).
+        var pll = sd.pointLights[light_pick - n_area - n_distant - n_infinite]
+        var u1p = pcg.next_float(); var u2p = pcg.next_float()
+        var cos_p = Float32(1) - Float32(2) * u1p
+        var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
+        var phi_p = Float32(2) * PI * u2p
+        var pdir_p = Vec3f(sin_p * cos(phi_p), sin_p * sin(phi_p), cos_p)
+        flux = pll.intensity * (Float32(4) * PI * Float32(n_lights))
+        ro = pll.position
+        rd = pdir_p
         n_verts = 0
 
     var cur_med_idx = default_emit_med
@@ -1249,6 +1519,8 @@ def _bdpt_emit_light_paths_gpu(
     distantLightCount: Int64,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int64,
 ):
     """One thread per light path. Thin wrapper: build sd, seed this thread's
     own PCG32, call the SAME _bdpt_trace_light_path bdpt_render's CPU driver
@@ -1264,6 +1536,7 @@ def _bdpt_emit_light_paths_gpu(
         mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
@@ -1305,6 +1578,8 @@ def _bdpt_camera_connect_gpu(
     distantLightCount: Int64,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int64,
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula bdpt_render's CPU driver uses, keyed by pixel
@@ -1323,6 +1598,7 @@ def _bdpt_camera_connect_gpu(
         mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
     )
     var has_med = mediumCount > Int64(0)
     var px = pix % fw
@@ -1424,6 +1700,7 @@ def bdpt_render_gpu(
             var areaLights = handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C]()
             var distantLights = handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C]()
             var infiniteLights = handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C]()
+            var pointLights = handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C]()
             var n_mediums = Int64(handle[].n_mediums)
             var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
             var n_spheres = Int64(handle[].n_spheres)
@@ -1431,6 +1708,7 @@ def bdpt_render_gpu(
             var n_area_lights = Int64(handle[].n_area_lights)
             var n_distant_lights = Int64(handle[].n_distant_lights)
             var n_infinite_lights = Int64(handle[].n_infinite_lights)
+            var n_point_lights = Int64(handle[].n_point_lights)
             var n_blas = Int64(handle[].n_blas)
             var n_instances = Int64(handle[].n_instances)
 
@@ -1450,6 +1728,7 @@ def bdpt_render_gpu(
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
                     blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                    pointLights, n_point_lights,
                     grid_dim=grid_light, block_dim=block_size)
 
                 handle[].ctx.synchronize()
@@ -1467,6 +1746,7 @@ def bdpt_render_gpu(
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
                     blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                    pointLights, n_point_lights,
                     grid_dim=grid_pix, block_dim=block_size)
 
                 if verbose:

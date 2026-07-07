@@ -84,6 +84,33 @@ def bxdf_eval_conductor_ggx(
     var k = d * g / (Float32(4) * cos_o * cos_i)
     return RGB(k * fr.r, k * fr.g, k * fr.b)
 
+@always_inline
+def bxdf_pdf_conductor_ggx(
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],
+    wi:    SIMD[DType.float32, 3],
+    alpha: Float32,
+) -> Float32:
+    """Solid-angle PDF of VNDF-sampled GGX reflection landing at an arbitrary
+    wi (isotropic approximation — see bxdf_eval_conductor_ggx's own docstring
+    for why this is a reasoned simplification for anisotropic materials).
+    This is the competing-strategy density for MIS against NEE: it matches
+    the sampling density bxdf_sample_conductor's glossy branch itself uses
+    (Heitz 2018 VNDF sampling), just evaluated at a caller-chosen direction
+    instead of the self-sampled one."""
+    var cos_o = dot(wo, n)
+    var cos_i = dot(wi, n)
+    if cos_o <= Float32(0) or cos_i <= Float32(0):
+        return Float32(0)
+    var wh = wo + wi
+    var whl = dot(wh, wh)
+    if whl <= Float32(0):
+        return Float32(0)
+    wh = wh * (Float32(1) / sqrt(whl))
+    var cos_wm = dot(wh, n)
+    var d = ggx_D(cos_wm, alpha)
+    return ggx_vndf_pdf(cos_o, cos_wm, d, alpha)
+
 # ── BxDF flags ────────────────────────────────────────────────────────────────
 struct BxDFFlags:
     comptime delta    = Int8(1)   # Dirac delta (perfect mirror / glass)

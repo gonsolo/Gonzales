@@ -128,6 +128,8 @@ def _mk_sd_full(
     distantLightCount: Int64 = Int64(0),
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin] = UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(),
     infiniteLightCount: Int64 = Int64(0),
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin] = UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
+    pointLightCount: Int64 = Int64(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -140,14 +142,14 @@ def _mk_sd_full(
     home neither of them owns; this is that home, next to
     SceneDescriptor2_C itself. Only the fields bdpt.mojo/sppm.mojo's shared
     functions actually dereference are filled from real device buffers;
-    textures, point lights, grids, and the light sampler CDF are never
-    touched by either module's code paths, so they stay dangling/zero-count,
-    same convention traverse_bvh2_core's own optional instancing args
-    already use. distant/infinite lights default to the same dangling
-    convention for backward compatibility, but callers that need
-    infinite/distant-light NEE or light-path emission (both bdpt.mojo and
-    sppm.mojo now do, see [[project_priority_backlog]] item 1) should pass
-    the real device buffers/counts explicitly."""
+    textures, grids, and the light sampler CDF are never touched by either
+    module's code paths, so they stay dangling/zero-count, same convention
+    traverse_bvh2_core's own optional instancing args already use.
+    distant/infinite/point lights default to the same dangling convention
+    for backward compatibility, but callers that need distant/infinite/
+    point-light NEE or light-path emission (both bdpt.mojo and sppm.mojo now
+    do, see [[project_priority_backlog]] item 1) should pass the real device
+    buffers/counts explicitly."""
     return SceneDescriptor2_C(
         bvh2Nodes=bvh2Nodes, primIds=primIds,
         meshes=meshes, meshCount=meshCount,
@@ -157,8 +159,8 @@ def _mk_sd_full(
         textureCount=Int64(0),
         distantLights=distantLights,
         distantLightCount=distantLightCount,
-        pointLights=UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
-        pointLightCount=Int64(0),
+        pointLights=pointLights,
+        pointLightCount=pointLightCount,
         infiniteLights=infiniteLights,
         infiniteLightCount=infiniteLightCount,
         spheres=spheres, sphereCount=sphereCount,

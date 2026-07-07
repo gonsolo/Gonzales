@@ -2,7 +2,7 @@ from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
-from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf
+from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
@@ -1073,14 +1073,116 @@ def shade_thin_dielectric(
 
 
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
+
 @always_inline
-def shade_conductor(
+def _shade_conductor_nee[enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    ctx: ShadeContext,
+    n: SIMD[DType.float32, 3],
+    wo: SIMD[DType.float32, 3],
+    hit_point: SIMD[DType.float32, 3],
+    f0: RGB,
+    alpha: Float32,
+    mut pcg: PCG32,
+):
+    """Distant + point + infinite-light NEE for a ROUGH (non-delta) conductor
+    bounce — isotropic GGX approximation (alpha = max(roughU,roughV), same
+    simplification bdpt.mojo/sppm.mojo's own conductor connection/gather use
+    for anisotropic materials; see bxdf_eval_conductor_ggx's docstring).
+    Only called when bxdf_is_delta(bs.flags) is False — a true mirror bounce
+    has zero probability of reflecting any finite-solid-angle/delta light
+    except along the exact mirror direction, so NEE is skipped entirely for
+    those (matches _finish_delta_bounce's existing behavior).
+
+    Distant/point lights need no MIS (delta position/direction — a BSDF-
+    sampled continuation ray has zero probability of ever landing exactly on
+    one, so there's no competing strategy to weight against). Infinite lights
+    DO need MIS: a later BSDF-sampled bounce could independently reach the
+    same env-light direction, so this must be weighted against
+    bxdf_pdf_conductor_ggx via the power heuristic — exactly like
+    shade_diffuse/shade_hair's own infinite-light NEE."""
+    for dl_i in range(ctx.lights.distant_count):
+        var dl = ctx.lights.distant_lights[dl_i]
+        var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
+        var f_cos = bxdf_eval_conductor_ggx(n, wo, to_light, alpha, f0)
+        if f_cos.r > Float32(0) or f_cos.g > Float32(0) or f_cos.b > Float32(0):
+            var cos_s = dot(n, to_light)
+            var contrib = path_ptr[].throughput * f_cos * dl.emission * cos_s
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, Float32(2000.0), contrib)
+
+    for pl_i in range(ctx.lights.point_count):
+        var pl = ctx.lights.point_lights[pl_i]
+        var lpos = SIMD[DType.float32, 3](pl.position.x, pl.position.y, pl.position.z)
+        var to_light_p = lpos - hit_point
+        var dist_sq = dot(to_light_p, to_light_p)
+        var dist = sqrt(dist_sq)
+        if dist > Float32(0.0001):
+            var ldir = to_light_p * (Float32(1.0) / dist)
+            var f_cos_p = bxdf_eval_conductor_ggx(n, wo, ldir, alpha, f0)
+            if f_cos_p.r > Float32(0) or f_cos_p.g > Float32(0) or f_cos_p.b > Float32(0):
+                var cos_s_p = dot(n, ldir)
+                var contrib_p = path_ptr[].throughput * f_cos_p * pl.intensity * (cos_s_p / dist_sq)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ldir, dist * Float32(0.9999), contrib_p)
+
+    for inf_i in range(ctx.lights.infinite_count):
+        var ilight = ctx.lights.infinite_lights[inf_i]
+        var env_dir: SIMD[DType.float32, 3]
+        var env_rgb: RGB
+        var pdf_light: Float32
+        if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+            var w2l = ilight.world_to_light
+            var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+            var u1_env = pcg.next_float(); var u2_env = pcg.next_float()
+            var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
+            row_idx = min(row_idx, ih - 1)
+            var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+            var cond_base = (ih + 1) + row_idx * (iw + 1)
+            var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
+            col_idx = min(col_idx, iw - 1)
+            var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+            var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+            var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+            var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
+            var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
+            var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
+            var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
+            env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
+            var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+            var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+            var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+            var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+            var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+            env_rgb = RGB(pr, pg, pb) * ilight.scale
+            if dp_row > Float32(0) and dp_col > Float32(0):
+                pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
+            else:
+                pdf_light = INV_FOUR_PI
+        else:
+            var u1_env2 = pcg.next_float(); var u2_env2 = pcg.next_float()
+            var cos_e = Float32(1.0) - Float32(2.0) * u1_env2
+            var sin_e = safe_sqrt(Float32(1.0) - cos_e * cos_e)
+            var phi_e = TWO_PI * u2_env2
+            env_dir = SIMD[DType.float32, 3](sin_e * cos(phi_e), sin_e * sin(phi_e), cos_e)
+            env_rgb = ilight.scale
+            pdf_light = INV_FOUR_PI
+
+        var f_cos_e = bxdf_eval_conductor_ggx(n, wo, env_dir, alpha, f0)
+        if pdf_light > Float32(0) and (f_cos_e.r > Float32(0) or f_cos_e.g > Float32(0) or f_cos_e.b > Float32(0)):
+            var cos_env = dot(n, env_dir)
+            var pdf_bsdf_env = bxdf_pdf_conductor_ggx(n, wo, env_dir, alpha)
+            var mis_env = power_heuristic(pdf_light, pdf_bsdf_env)
+            var contrib_e = path_ptr[].throughput * f_cos_e * env_rgb * (cos_env / pdf_light) * mis_env
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, Float32(100000.0), contrib_e)
+
+
+@always_inline
+def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    ctx: ShadeContext,
     mat: Material_C,
 ):
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1133,7 +1235,27 @@ def shade_conductor(
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_conductor(gc, mat, pcg.next_float(), pcg.next_float())
-    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
+    if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
+        var alpha_iso = max(alpha_x, alpha_y)
+        _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat.albedo, alpha_iso, pcg)
+        path_ptr[].pcgState = pcg.state
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+            path_ptr[].albedo = mat.albedo
+        path_ptr[].throughput *= bs.f
+        path_ptr[].specularBounce = Int8(0)
+        path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_iso)
+        path_ptr[].bounce += 1
+        if path_ptr[].bounce > 1:
+            var lum = path_ptr[].throughput.luma()
+            var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+            if pcg.next_float() < q:
+                path_ptr[].active = 0
+            else:
+                path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+        path_ptr[].pcgState = pcg.state
+    else:
+        _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.
@@ -1141,13 +1263,13 @@ def shade_conductor(
 # selects between coat specular reflection (F) and conducting GGX layer (1-F).
 # This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
 @always_inline
-def shade_coated_conductor(
+def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    ctx: ShadeContext,
     mat: Material_C,
 ):
-    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1170,7 +1292,32 @@ def shade_coated_conductor(
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_coated_conductor(gc, mat, ior, pcg.next_float(), pcg.next_float(), pcg.next_float())
-    _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
+    if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
+        # Approximation (matches bdpt.mojo/sppm.mojo's own coated_conductor
+        # connection/gather treatment): NEE reuses conductor's own GGX eval/
+        # F0, ignoring the coat's own (1-f_coat) attenuation and its separate
+        # luma-Fresnel blend. alpha = (roughU+roughV)/2, matching
+        # bxdf_sample_coated_conductor's own internal averaging.
+        var alpha_cc = (max(mat.roughU, Float32(0.0001)) + max(mat.roughV, Float32(0.0001))) * Float32(0.5)
+        _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat.albedo, alpha_cc, pcg)
+        path_ptr[].pcgState = pcg.state
+        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+        if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+            path_ptr[].albedo = mat.albedo
+        path_ptr[].throughput *= bs.f
+        path_ptr[].specularBounce = Int8(0)
+        path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_cc)
+        path_ptr[].bounce += 1
+        if path_ptr[].bounce > 1:
+            var lum = path_ptr[].throughput.luma()
+            var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+            if pcg.next_float() < q:
+                path_ptr[].active = 0
+            else:
+                path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+        path_ptr[].pcgState = pcg.state
+    else:
+        _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
 
 
 # Mix material: randomly select one of two sub-materials using amount as probability.
@@ -1482,6 +1629,27 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var dsign = Float32(1.0) if dot(wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
         var dorg = hit_base + geo_normal * Float32(0.0001) * dsign
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, dorg, wi, t_max, contrib)
+
+    # ── Step 14b: NEE for point lights (delta light: MIS weight = 1) ─────────
+    for pl_i in range(ctx.lights.point_count):
+        var pl = ctx.lights.point_lights[pl_i]
+        var lpos = SIMD[DType.float32, 3](pl.position.x, pl.position.y, pl.position.z)
+        var to_light_p = lpos - hit_base
+        var dist_sq_p = dot(to_light_p, to_light_p)
+        var dist_p = sqrt(dist_sq_p)
+        if dist_p > Float32(0.0001):
+            var wi_p = to_light_p * (Float32(1.0) / dist_p)
+            var (cos_ti_p, f_val_p, _) = _hair_eval_lobes(
+                wi_p, tangent, b_perp, n_perp, phi_o,
+                dphi0, dphi1, dphi2,
+                cos_tp0_o, sin_tp0_o, cos_tp1_o, sin_tp1_o, cos_tp2_o, sin_tp2_o,
+                cos_theta_o, sin_theta_o, inv_vm0, inv_vm1, inv_vm2, mp_c0, mp_c1, mp_c2, s,
+                A0, A1, A2, A3, lum0, lum1, lum2, lum3, total_lum,
+            )
+            var contrib_p = path_ptr[].throughput * cos_ti_p * f_val_p * pl.intensity * (Float32(1.0) / dist_sq_p)
+            var psign = Float32(1.0) if dot(wi_p, geo_normal) >= Float32(0.0) else Float32(-1.0)
+            var porg = hit_base + geo_normal * Float32(0.0001) * psign
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, porg, wi_p, dist_p * Float32(0.9999), contrib_p)
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
     # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
@@ -2365,10 +2533,13 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     if mat.type == MatKind.diffuse:
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write)
-    # Delta BSDFs need only triangle geometry — no NEE, textures, or Sobol.
-    # Passing ctx.meshes directly keeps GPU kernel argument counts minimal.
+    # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
+    # textures, or Sobol. Passing ctx.meshes directly keeps GPU kernel
+    # argument counts minimal. Conductor/coated_conductor CAN be rough (not
+    # delta), so they now take full ctx for NEE — see shade_conductor's
+    # own docstring/_shade_conductor_nee.
     elif mat.type == MatKind.conductor:
-        shade_conductor(path_ptr, inter, ctx.meshes, mat)
+        shade_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.dielectric:
         shade_dielectric(path_ptr, inter, ctx.meshes, mat)
     elif mat.type == MatKind.coated_diffuse:
@@ -2376,7 +2547,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.diffuse_transmit:
         shade_diffuse_transmission[use_gpu, enqueue_shadow](path_ptr, inter, ctx)
     elif mat.type == MatKind.coated_conductor:
-        shade_coated_conductor(path_ptr, inter, ctx.meshes, mat)
+        shade_coated_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.mix:
         shade_mix[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.thin_dielectric:
