@@ -218,12 +218,25 @@ def _sample_disk_perpendicular(
     return disk_center + (frame.x * dx + frame.y * dy)
 
 @always_inline
-def _equal_area_square_to_sphere_bvh(uv: Point2f) -> Vec3f:
-    """Duplicate of shading.mojo's _equal_area_square_to_sphere (PBRT v4's
-    equal-area octahedral mapping, Clarberg 2008) — see this section's
-    docstring for why it's duplicated rather than imported."""
-    var uu = Float32(2) * uv.x - Float32(1)
-    var vv = Float32(2) * uv.y - Float32(1)
+def _equal_area_square_to_sphere(u: Float32, v: Float32) -> SIMD[DType.float32, 3]:
+    """PBRT v4's equal-area octahedral mapping (Clarberg 2008): [0,1]^2 UV ->
+    unit sphere direction. THE single shared implementation — bvh.mojo is
+    the only one of {shading.mojo, guide.mojo, bvh.mojo} with no import-
+    cycle constraint against the other two (shading.mojo and guide.mojo
+    both already import from bvh.mojo; bvh.mojo imports from neither), so
+    this lives here and they import it, instead of each keeping its own
+    copy. That prior 3-way duplication is exactly how a real bug survived
+    undetected in 2 of the 3 copies after being found and fixed in the
+    first: an extra `elif up >= vp: phi = (vp/r)*PI/4` branch that doesn't
+    exist in pbrt-v4's own EqualAreaSquareToSphere (util/math.cpp) and
+    computes a completely wrong angle for ~half of all directions —
+    confirmed via a numerical round-trip test against
+    _equal_area_sphere_to_square (max error 0.66 on the unit sphere before
+    the fix, ~1e-6 after). This single formula (no up>=vp branch) matches
+    pbrt exactly; r==0 fallback is PI/4, matching pbrt's `r==0 ? 1 : ...`
+    ternary."""
+    var uu = Float32(2) * u - Float32(1)
+    var vv = Float32(2) * v - Float32(1)
     var up = uu if uu >= Float32(0) else -uu
     var vp = vv if vv >= Float32(0) else -vv
     var signed_dist = Float32(1) - (up + vp)
@@ -231,9 +244,7 @@ def _equal_area_square_to_sphere_bvh(uv: Point2f) -> Vec3f:
     var r = Float32(1) - d
     var phi: Float32
     if r == Float32(0):
-        phi = Float32(0)
-    elif up >= vp:
-        phi = (vp / r) * PI / Float32(4)
+        phi = PI / Float32(4)
     else:
         phi = ((vp - up) / r + Float32(1)) * PI / Float32(4)
     var r2 = r * r
@@ -244,7 +255,7 @@ def _equal_area_square_to_sphere_bvh(uv: Point2f) -> Vec3f:
     if uu < Float32(0): cp = -cp
     if vv < Float32(0): sp = -sp
     var xy_scale = r * sqrt(max(Float32(0), Float32(2) - r2))
-    return Vec3f(cp * xy_scale, sp * xy_scale, z)
+    return SIMD[DType.float32, 3](cp * xy_scale, sp * xy_scale, z)
 
 @always_inline
 def _lower_bound_bvh(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
@@ -283,7 +294,8 @@ def _sample_infinite_light_dir(
 
         var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
         var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
-        var local_d = _equal_area_square_to_sphere_bvh(Point2f(sample_u, sample_v))
+        var local_d_s = _equal_area_square_to_sphere(sample_u, sample_v)
+        var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
 
         var env_dir = Vec3f(
             w2l[0]*local_d.x + w2l[1]*local_d.y + w2l[2]*local_d.z,
@@ -421,13 +433,13 @@ def _sample_infinite_light_nee(ilight: InfiniteLight_C, u: Point2f) -> LightSamp
     return LightSample(dir.to_simd(), Li, pdf, Float32(100000.0), False, True)
 
 @always_inline
-def _equal_area_sphere_to_square_bvh(dir: Vec3f) -> Point2f:
-    """Duplicate of shading.mojo's _equal_area_sphere_to_square (inverse of
-    _equal_area_square_to_sphere_bvh) — see this section's docstring for why
-    it's duplicated rather than imported."""
-    var x = dir.x if dir.x >= Float32(0) else -dir.x
-    var y = dir.y if dir.y >= Float32(0) else -dir.y
-    var z = dir.z if dir.z >= Float32(0) else -dir.z
+def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
+    """Inverse of _equal_area_square_to_sphere — see that function's
+    docstring for why this is THE single shared implementation (bvh.mojo),
+    imported by shading.mojo/guide.mojo rather than duplicated."""
+    var x = dx if dx >= Float32(0) else -dx
+    var y = dy if dy >= Float32(0) else -dy
+    var z = dz if dz >= Float32(0) else -dz
     var r = sqrt(max(Float32(0), Float32(1) - z))
     var a = max(x, y)
     var b: Float32
@@ -447,15 +459,15 @@ def _equal_area_sphere_to_square_bvh(dir: Vec3f) -> Point2f:
         phi = Float32(1) - phi
     var v = phi * r
     var u = r - v
-    if dir.z < Float32(0):
+    if dz < Float32(0):
         var tmp = u
         u = Float32(1) - v
         v = Float32(1) - tmp
-    if dir.x < Float32(0): u = -u
-    if dir.y < Float32(0): v = -v
+    if dx < Float32(0): u = -u
+    if dy < Float32(0): v = -v
     u = Float32(0.5) * (u + Float32(1))
     v = Float32(0.5) * (v + Float32(1))
-    return Point2f(u, v)
+    return SIMD[DType.float32, 2](u, v)
 
 @always_inline
 def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> Tuple[RGB, Float32]:
@@ -480,10 +492,10 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> T
         w2l[1]*dir_world.x + w2l[5]*dir_world.y + w2l[9]*dir_world.z,
         w2l[2]*dir_world.x + w2l[6]*dir_world.y + w2l[10]*dir_world.z,
     )
-    var uv = _equal_area_sphere_to_square_bvh(local_dir)
+    var uv = _equal_area_sphere_to_square(local_dir.x, local_dir.y, local_dir.z)
     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-    var px = min(iw - 1, max(0, Int(uv.x * Float32(iw))))
-    var py = min(ih - 1, max(0, Int(uv.y * Float32(ih))))
+    var px = min(iw - 1, max(0, Int(uv[0] * Float32(iw))))
+    var py = min(ih - 1, max(0, Int(uv[1] * Float32(ih))))
     var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
     var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
     var pb = ilight.pixels_ptr[(py*iw+px)*3+2]

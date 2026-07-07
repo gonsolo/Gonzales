@@ -4,7 +4,7 @@ from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair
 from .rng import PCG32
-from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee
+from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
@@ -88,77 +88,6 @@ def _shading_normal(
     if dot(sn, geo_normal) < Float32(0.0):
         sn = -sn
     return sn
-
-@always_inline
-def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
-    """Convert a unit direction vector to [0,1]^2 UV using PBRT v4's equal-area
-    octahedral mapping (Clarberg 2008)."""
-    var x = dx if dx >= Float32(0) else -dx
-    var y = dy if dy >= Float32(0) else -dy
-    var z = dz if dz >= Float32(0) else -dz
-    # Compute radius r = sqrt(1 - |z|)
-    var r = sqrt(max(Float32(0), Float32(1) - z))
-    # Compute atan(b/a)*2/pi via polynomial approximation
-    var a = max(x, y)
-    var b: Float32
-    if a == Float32(0):
-        b = Float32(0)
-    else:
-        b = min(x, y) / a
-    # Minimax polynomial for atan(b)*2/pi
-    var t1 = Float32(0.406758566246788489601959989e-5)
-    var t2 = Float32(0.636226545274016134946890922156)
-    var t3 = Float32(0.61572017898280213493197203466e-2)
-    var t4 = Float32(-0.247333733281268944196501420480)
-    var t5 = Float32(0.881770664775316294736387951347e-1)
-    var t6 = Float32(0.419038818029165735901852432784e-1)
-    var t7 = Float32(-0.251390972343483509333252996350e-1)
-    var phi = t1 + b*(t2 + b*(t3 + b*(t4 + b*(t5 + b*(t6 + b*t7)))))
-    # If x < y, we're in the 45-90 degree range
-    if x < y:
-        phi = Float32(1) - phi
-    # Find (u, v) from (r, phi)
-    var v = phi * r
-    var u = r - v
-    # Southern hemisphere: mirror
-    if dz < Float32(0):
-        var tmp = u
-        u = Float32(1) - v
-        v = Float32(1) - tmp
-    # Apply sign from original (x, y)
-    if dx < Float32(0): u = -u
-    if dy < Float32(0): v = -v
-    # Transform from [-1,1] to [0,1]
-    u = Float32(0.5) * (u + Float32(1))
-    v = Float32(0.5) * (v + Float32(1))
-    return SIMD[DType.float32, 2](u, v)
-
-@always_inline
-def _equal_area_square_to_sphere(u: Float32, v: Float32) -> SIMD[DType.float32, 3]:
-    """Inverse of _equal_area_sphere_to_square: [0,1]^2 UV -> unit sphere direction."""
-    var uu = Float32(2) * u - Float32(1)
-    var vv = Float32(2) * v - Float32(1)
-    var up = uu if uu >= Float32(0) else -uu
-    var vp = vv if vv >= Float32(0) else -vv
-    var signed_dist = Float32(1) - (up + vp)
-    var d = signed_dist if signed_dist >= Float32(0) else -signed_dist
-    var r = Float32(1) - d
-    var phi: Float32
-    if r == Float32(0):
-        phi = Float32(0)
-    elif up >= vp:
-        phi = (vp / r) * PI / Float32(4)
-    else:
-        phi = ((vp - up) / r + Float32(1)) * PI / Float32(4)
-    var r2 = r * r
-    var z = Float32(1) - r2
-    if signed_dist < Float32(0): z = -z
-    var cp = cos(phi)
-    var sp = sin(phi)
-    if uu < Float32(0): cp = -cp
-    if vv < Float32(0): sp = -sp
-    var xy_scale = r * sqrt(max(Float32(0), Float32(2) - r2))
-    return SIMD[DType.float32, 3](cp * xy_scale, sp * xy_scale, z)
 
 @always_inline
 def _lower_bound(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
@@ -568,6 +497,43 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # the chosen lobe's normal/albedo and its selection-weight compensation.
     _nee_area_lights[enqueue_shadow](path_ptr, ctx, bounce_normal, hit_point, lobe_alb,
         pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg, null_guide(), lobe_w)
+
+    # ── Distant/point/sphere/infinite NEE, via the shared Light interface +
+    # BxDF interface (_nee_weight_simple, mat_kind=0=diffuse — this lobe's
+    # BRDF is Lambertian) ────────────────────────────────────────────────────
+    # This material previously had NO direct lighting from these light types
+    # at all (only area lights, above) — a severe gap for infinite-light-only
+    # scenes with diffusetransmission-heavy foliage (e.g. sanmiguel-courtyard:
+    # every transmissive leaf/vine surface relied purely on noisy BSDF-escape
+    # rays to ever see the env map's sun, producing systematic under-lighting
+    # — darker, blue-sky-dominated average — plus severe fireflies from the
+    # rare lucky hits). lobe_w compensates for the stochastic reflect/
+    # transmit lobe selection, same as _nee_area_lights above.
+    var wo_dt = -ray_dir
+    for dl_i in range(ctx.lights.distant_count):
+        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
+        var w_d = _nee_weight_simple(ls_d, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        if not w_d.is_black():
+            var contrib_d = path_ptr[].throughput * w_d
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d)
+    for pl_i in range(ctx.lights.point_count):
+        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
+        var w_p = _nee_weight_simple(ls_p, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        if not w_p.is_black():
+            var contrib_p = path_ptr[].throughput * w_p
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
+    for sph_i in range(ctx.lights.sphere_count):
+        var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
+        var w_sph = _nee_weight_simple(ls_sph, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        if not w_sph.is_black():
+            var contrib_sph = path_ptr[].throughput * w_sph
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
+    for inf_i in range(ctx.lights.infinite_count):
+        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var w_e = _nee_weight_simple(ls_e, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        if not w_e.is_black():
+            var contrib_e = path_ptr[].throughput * w_e
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
 
     # ── BSDF scatter ───────────────────────────────────────────────────────────
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))

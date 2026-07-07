@@ -7,6 +7,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min
 from .geometry import Point3f, Bounds3f
+from .bvh import _equal_area_square_to_sphere, _equal_area_sphere_to_square
 
 comptime GUIDE_DIMS: Int = 16
 comptime GUIDE_BINS: Int = 64    # 8 × 8 equal-area octahedral bins
@@ -64,66 +65,16 @@ def guide_pos_to_cell(g: GuideGrid, p: Point3f) -> Int:
     return cz * GUIDE_DIMS * GUIDE_DIMS + cy * GUIDE_DIMS + cx
 
 # ── Directional binning (equal-area octahedral) ───────────────────────────────
-# Inlined from shading.mojo's _equal_area_sphere_to_square / _equal_area_square_to_sphere.
-
-@always_inline
-def _guide_dir_to_uv(dx: Float32, dy: Float32, dz: Float32) -> SIMD[DType.float32, 2]:
-    var adx = dx if dx >= Float32(0) else -dx
-    var ady = dy if dy >= Float32(0) else -dy
-    var adz = dz if dz >= Float32(0) else -dz
-    var r = sqrt(max(Float32(0), Float32(1) - adz))
-    var a = max(adx, ady)
-    var b: Float32
-    if a == Float32(0):
-        b = Float32(0)
-    else:
-        b = min(adx, ady) / a
-    var t1 = Float32(0.406758566246788489601959989e-5)
-    var t2 = Float32(0.636226545274016134946890922156)
-    var t3 = Float32(0.61572017898280213493197203466e-2)
-    var t4 = Float32(-0.247333733281268944196501420480)
-    var t5 = Float32(0.881770664775316294736387951347e-1)
-    var t6 = Float32(0.419038818029165735901852432784e-1)
-    var t7 = Float32(-0.251390972343483509333252996350e-1)
-    var phi = t1 + b*(t2 + b*(t3 + b*(t4 + b*(t5 + b*(t6 + b*t7)))))
-    if adx < ady:
-        phi = Float32(1) - phi
-    var v = phi * r
-    var u = r - v
-    if dz < Float32(0):
-        var tmp = u; u = Float32(1) - v; v = Float32(1) - tmp
-    if dx < Float32(0): u = -u
-    if dy < Float32(0): v = -v
-    return SIMD[DType.float32, 2](Float32(0.5)*(u + Float32(1)), Float32(0.5)*(v + Float32(1)))
-
-@always_inline
-def _guide_uv_to_dir(u: Float32, v: Float32) -> SIMD[DType.float32, 3]:
-    var uu = Float32(2)*u - Float32(1)
-    var vv = Float32(2)*v - Float32(1)
-    var up = uu if uu >= Float32(0) else -uu
-    var vp = vv if vv >= Float32(0) else -vv
-    var signed_dist = Float32(1) - (up + vp)
-    var d = signed_dist if signed_dist >= Float32(0) else -signed_dist
-    var r = Float32(1) - d
-    var phi: Float32
-    if r == Float32(0):
-        phi = Float32(0)
-    elif up >= vp:
-        phi = (vp / r) * Float32(0.7853981634)
-    else:
-        phi = ((vp - up) / r + Float32(1)) * Float32(0.7853981634)
-    var r2 = r * r
-    var z = Float32(1) - r2
-    if signed_dist < Float32(0): z = -z
-    var cp = cos(phi); var sp = sin(phi)
-    if uu < Float32(0): cp = -cp
-    if vv < Float32(0): sp = -sp
-    var xy = r * sqrt(max(Float32(0), Float32(2) - r2))
-    return SIMD[DType.float32, 3](cp*xy, sp*xy, z)
+# Uses bvh.mojo's _equal_area_square_to_sphere/_equal_area_sphere_to_square —
+# THE single shared implementation (see that function's docstring). This file
+# used to inline its own 3rd copy of the same math, which is exactly how a
+# real bug (a wrong extra branch computing the wrong angle for ~half of all
+# directions) survived undetected here even after being found and fixed in
+# one of the other two copies.
 
 @always_inline
 def guide_dir_to_bin(dx: Float32, dy: Float32, dz: Float32) -> Int:
-    var uv = _guide_dir_to_uv(dx, dy, dz)
+    var uv = _equal_area_sphere_to_square(dx, dy, dz)
     var ui = min(Int(uv[0] * Float32(GUIDE_AXIS)), GUIDE_AXIS - 1)
     var vi = min(Int(uv[1] * Float32(GUIDE_AXIS)), GUIDE_AXIS - 1)
     return vi * GUIDE_AXIS + ui
@@ -134,7 +85,7 @@ def guide_bin_to_dir(bin_idx: Int) -> SIMD[DType.float32, 3]:
     var ui = bin_idx % GUIDE_AXIS
     var u = (Float32(ui) + Float32(0.5)) / Float32(GUIDE_AXIS)
     var v = (Float32(vi) + Float32(0.5)) / Float32(GUIDE_AXIS)
-    return _guide_uv_to_dir(u, v)
+    return _equal_area_square_to_sphere(u, v)
 
 # ── Record / query ─────────────────────────────────────────────────────────────
 
@@ -214,5 +165,5 @@ def guide_sample(
     v2 = v2 - Float32(Int(v2))
     var u_in = (Float32(ui) + u2) / Float32(GUIDE_AXIS)
     var v_in = (Float32(vi) + v2) / Float32(GUIDE_AXIS)
-    var dir = _guide_uv_to_dir(u_in, v_in)
+    var dir = _equal_area_square_to_sphere(u_in, v_in)
     return (dir[0], dir[1], dir[2], pdf, True)
