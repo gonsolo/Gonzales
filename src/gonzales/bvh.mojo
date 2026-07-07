@@ -312,6 +312,114 @@ def _sample_infinite_light_dir(
         var dir = Vec3f(sinT * cos(phi), sinT * sin(phi), cosT)
         return (dir, ilight.scale, Float32(1) / (Float32(4) * PI))
 
+@fieldwise_init
+struct LightSample(Copyable, Movable):
+    """Uniform result of sampling ONE non-area light toward a shading point,
+    for NEE — the "Light interface" this codebase's distant/point/sphere/
+    infinite lights all present, so a single generic NEE-weight function
+    (bxdf.mojo's _nee_weight_simple/_nee_weight_hair) can consume any of
+    them. `valid=False` means "skip this sample" (degenerate distance,
+    light behind the visible horizon, etc). `is_delta=True` (distant/point)
+    means no competing BSDF-sampling strategy exists, so the caller applies
+    MIS weight 1; `is_delta=False` (sphere/infinite) means the caller must
+    weight against the material's own pdf via the power heuristic. Area
+    lights are NOT covered here — their NEE is entangled with MNEE glass-
+    refraction probing (see shading.mojo's _nee_area_lights) and stays a
+    separate, diffuse-specific path."""
+    var wi:       SIMD[DType.float32, 3]
+    var Li:       RGB
+    var pdf:      Float32
+    var dist:     Float32
+    var is_delta: Bool
+    var valid:    Bool
+
+@always_inline
+def _invalid_light_sample() -> LightSample:
+    return LightSample(SIMD[DType.float32, 3](0, 0, 0), RGB(0.0), Float32(1.0), Float32(0.0), True, False)
+
+@always_inline
+def _sample_distant_light_nee(dl: DistantLight_C) -> LightSample:
+    """Distant (directional) light: delta position AND direction, same (wi,
+    Li) everywhere in the scene. pdf=1 by convention (is_delta=True tells
+    the caller to skip MIS entirely, so the value of pdf itself never
+    matters beyond being nonzero)."""
+    var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)
+    var wi = -ldir
+    return LightSample(wi, dl.emission, Float32(1.0), Float32(2000.0), True, True)
+
+@always_inline
+def _sample_point_light_nee(
+    pl: PointLight_C,
+    hit_point: SIMD[DType.float32, 3],
+) -> LightSample:
+    """Point light: delta position, 1/dist² falloff folded into Li so
+    callers never need dist² separately."""
+    var lpos = SIMD[DType.float32, 3](pl.position.x, pl.position.y, pl.position.z)
+    var to_light = lpos - hit_point
+    var dist_sq = dot(to_light, to_light)
+    var dist = sqrt(dist_sq)
+    if dist <= Float32(0.0001):
+        return _invalid_light_sample()
+    var wi = to_light * (Float32(1.0) / dist)
+    var Li = pl.intensity * (Float32(1.0) / dist_sq)
+    return LightSample(wi, Li, Float32(1.0), dist, True, True)
+
+@always_inline
+def _sample_sphere_light_nee(
+    sph: Sphere_C,
+    n_sphere_lights: Int,
+    hit_point: SIMD[DType.float32, 3],
+    mut pcg: PCG32,
+) -> LightSample:
+    """Analytic sphere area light: uniform cone sampling over the visible
+    solid angle (pbrt's Sphere::Sample(refPoint) technique). Ported verbatim
+    from shading.mojo's/sppm.mojo's own (formerly duplicated 3x) sphere-
+    light NEE block — a real (non-delta) pdf, caller must apply MIS."""
+    if sph.isAreaLight == Int8(0):
+        return _invalid_light_sample()
+    var to_cx = sph.center.x - hit_point[0]
+    var to_cy = sph.center.y - hit_point[1]
+    var to_cz = sph.center.z - hit_point[2]
+    var dc_sq = to_cx*to_cx + to_cy*to_cy + to_cz*to_cz
+    var dc = sqrt(dc_sq)
+    if dc < sph.radius or dc_sq == Float32(0.0):
+        return _invalid_light_sample()
+    var sin2_max = sph.radius * sph.radius / dc_sq
+    if sin2_max >= Float32(1.0):
+        return _invalid_light_sample()
+    var cos_max = sqrt(Float32(1.0) - sin2_max)
+    var zc = SIMD[DType.float32, 3](to_cx / dc, to_cy / dc, to_cz / dc)
+    var xc: SIMD[DType.float32, 3]
+    if (zc[0] if zc[0] >= Float32(0.0) else -zc[0]) < Float32(0.9):
+        xc = cross(zc, SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0)))
+    else:
+        xc = cross(zc, SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)))
+    var xlen = dot(xc, xc)
+    if xlen > Float32(0.0):
+        xc = xc * (Float32(1.0) / sqrt(xlen))
+    var yc = cross(zc, xc)
+    var r1s = pcg.next_float()
+    var r2s = pcg.next_float()
+    var cos_th = Float32(1.0) - r1s * (Float32(1.0) - cos_max)
+    var sin_th = sqrt(max(Float32(0.0), Float32(1.0) - cos_th * cos_th))
+    var phis = TWO_PI * r2s
+    var wi = xc * (sin_th * cos(phis)) + yc * (sin_th * sin(phis)) + zc * cos_th
+    var wlen = dot(wi, wi)
+    if wlen > Float32(0.0):
+        wi = wi * (Float32(1.0) / sqrt(wlen))
+    var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
+    var n_sph = Float32(max(n_sphere_lights, 1))
+    var pdf_light = Float32(1.0) / (solid_angle * n_sph)
+    return LightSample(wi, sph.emission, pdf_light, dc, False, True)
+
+@always_inline
+def _sample_infinite_light_nee(ilight: InfiniteLight_C, u: Point2f) -> LightSample:
+    """Thin LightSample-shaped wrapper over the existing shared
+    _sample_infinite_light_dir, so infinite lights present the same
+    interface as the other 3 non-area light types above."""
+    var (dir, Li, pdf) = _sample_infinite_light_dir(ilight, u)
+    return LightSample(dir.to_simd(), Li, pdf, Float32(100000.0), False, True)
+
 @always_inline
 def _equal_area_sphere_to_square_bvh(dir: Vec3f) -> Point2f:
     """Duplicate of shading.mojo's _equal_area_sphere_to_square (inverse of

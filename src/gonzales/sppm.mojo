@@ -21,8 +21,9 @@ from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
+    LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
 )
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -1236,6 +1237,29 @@ def _sppm_vp_brdf(
         return f_h
     return vp.alb / PI
 
+@always_inline
+def _sppm_nee_weight(
+    vp: SPPMPixel,
+    sd: SceneDescriptor2_C,
+    vn: SIMD[DType.float32, 3],
+    wo: SIMD[DType.float32, 3],
+    ls: LightSample,
+) -> RGB:
+    """Dispatches one LightSample (bvh.mojo's shared distant/point/sphere/
+    infinite sampler output — see that struct's docstring) to the right
+    per-material NEE weight function for a stored SPPM visible point, via
+    bxdf.mojo's _nee_weight_simple/_nee_weight_hair — the shared "BxDF
+    interface" half of the Light/BxDF refactor. Supersedes hand-deriving
+    direction/pdf/MIS math once per light type inside _sppm_nee_one; area
+    lights still go through _sppm_vp_brdf directly (see that function's own
+    docstring for why area-light NEE isn't part of this shared interface)."""
+    if vp.mat_kind == Int32(2):
+        var mat_h = sd.materials[Int(vp.mat_idx)]
+        var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
+        return _nee_weight_hair(ls, hc)
+    var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
+    return _nee_weight_simple(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo)
+
 def _sppm_nee_one(
     vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
     i:       Int,
@@ -1259,6 +1283,7 @@ def _sppm_nee_one(
         return
     var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()
+    var wo   = vp.wo.to_simd()
 
     var n_area = Int(sd.areaLightCount)
     if n_area > 0:
@@ -1290,93 +1315,54 @@ def _sppm_nee_one(
                     var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
                     vps[i].ld += (brdf * al.emission) * geom
 
+    # Distant/point/sphere/infinite NEE — via the shared Light interface
+    # (bvh.mojo's LightSample samplers) + BxDF interface (_sppm_nee_weight
+    # above), replacing 4 formerly hand-inlined per-light-type blocks. Area
+    # lights are handled separately above (still via _sppm_vp_brdf directly
+    # — see that function's docstring).
     for dl_i in range(Int(sd.distantLightCount)):
-        var dl = sd.distantLights[dl_i]
-        var to_light_d = Vec3f(-dl.direction.x, -dl.direction.y, -dl.direction.z)
-        var cos_s = dot(vn, to_light_d.to_simd())
-        if cos_s > Float32(0.0):
+        var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
+        var w_d = _sppm_nee_weight(vp, sd, vn, wo, ls_d)
+        if not w_d.is_black():
             var shadow_org_d = vp.pos + vp.normal * Float32(0.0001)
-            var shadow_ray_d = Ray_C(shadow_org_d, to_light_d)
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, Float32(2000),
+            var shadow_ray_d = Ray_C(shadow_org_d, vec3f(ls_d.wi))
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, ls_d.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-                var brdf_d = _sppm_vp_brdf(vp, sd, vn, to_light_d.to_simd())
-                vps[i].ld += brdf_d * dl.emission * cos_s
+                vps[i].ld += w_d
 
     for pl_i in range(Int(sd.pointLightCount)):
-        var pl = sd.pointLights[pl_i]
-        var to_light_p = pl.position - vp.pos
-        var dist_sq_p = to_light_p.length_sq()
-        var dist_p = sqrt(dist_sq_p)
-        if dist_p > Float32(0.0001):
-            var wi_p = to_light_p * (Float32(1.0) / dist_p)
-            var cos_s_p = dot(vn, wi_p.to_simd())
-            if cos_s_p > Float32(0.0):
-                var shadow_org_p = vp.pos + vp.normal * Float32(0.0001)
-                var shadow_ray_p = Ray_C(shadow_org_p, wi_p)
-                if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_p, dist_p * Float32(0.9999),
-                                      sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-                    var brdf_p = _sppm_vp_brdf(vp, sd, vn, wi_p.to_simd())
-                    vps[i].ld += brdf_p * pl.intensity * (cos_s_p / dist_sq_p)
-
-    # Sphere-light NEE (solid-angle cone sampling) — mirrors shading.mojo's
-    # own sphere-light NEE / bdpt.mojo's own new sphere-light block (same
-    # formula). Loops ALL analytic spheres (skipping non-emissive ones
-    # inline), since sd.spheres/sphereCount is the raw geometric array, not
-    # a pre-filtered lights-only one like every other light type.
-    for sph_i in range(Int(sd.sphereCount)):
-        var sph = sd.spheres[sph_i]
-        if sph.isAreaLight == Int8(0):
-            continue
-        var to_cx = sph.center.x - vp.pos.x
-        var to_cy = sph.center.y - vp.pos.y
-        var to_cz = sph.center.z - vp.pos.z
-        var dc_sq = to_cx*to_cx + to_cy*to_cy + to_cz*to_cz
-        var dc = sqrt(dc_sq)
-        if dc < sph.radius or dc_sq == Float32(0):
-            continue
-        var sin2_max = sph.radius * sph.radius / dc_sq
-        if sin2_max >= Float32(1):
-            continue
-        var cos_max = sqrt(Float32(1) - sin2_max)
-        var zc = SIMD[DType.float32, 3](to_cx / dc, to_cy / dc, to_cz / dc)
-        var xc: SIMD[DType.float32, 3]
-        if (zc[0] if zc[0] >= Float32(0) else -zc[0]) < Float32(0.9):
-            xc = cross(zc, SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0)))
-        else:
-            xc = cross(zc, SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)))
-        var xlen = dot(xc, xc)
-        if xlen > Float32(0): xc = xc * (Float32(1) / sqrt(xlen))
-        var yc = cross(zc, xc)
-        var r1s = pcg.next_float(); var r2s = pcg.next_float()
-        var cos_th = Float32(1) - r1s * (Float32(1) - cos_max)
-        var sin_th = sqrt(max(Float32(0), Float32(1) - cos_th * cos_th))
-        var phis = Float32(2) * PI * r2s
-        var shadow_dir = xc * (sin_th * cos(phis)) + yc * (sin_th * sin(phis)) + zc * cos_th
-        var sdlen = dot(shadow_dir, shadow_dir)
-        if sdlen > Float32(0): shadow_dir = shadow_dir * (Float32(1) / sqrt(sdlen))
-        var cos_s_sph = dot(vn, shadow_dir)
-        if cos_s_sph > Float32(0):
-            var solid_angle = Float32(2) * PI * (Float32(1) - cos_max)
-            var n_sph = Float32(max(Int(sd.sphereCount), 1))
-            var pdf_light_sph = Float32(1) / (solid_angle * n_sph)
-            var shadow_org_sph = vp.pos + vp.normal * Float32(0.0001)
-            var shadow_ray_sph = Ray_C(shadow_org_sph, Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_sph, dc * Float32(0.9999),
+        var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], vpos)
+        var w_p = _sppm_nee_weight(vp, sd, vn, wo, ls_p)
+        if not w_p.is_black():
+            var shadow_org_p = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_ray_p = Ray_C(shadow_org_p, vec3f(ls_p.wi))
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_p, ls_p.dist * Float32(0.9999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-                var brdf_sph = _sppm_vp_brdf(vp, sd, vn, shadow_dir)
-                vps[i].ld += brdf_sph * sph.emission * (cos_s_sph / pdf_light_sph)
+                vps[i].ld += w_p
+
+    # Sphere-light NEE (solid-angle cone sampling). Loops ALL analytic
+    # spheres (the sampler itself skips non-emissive ones), since
+    # sd.spheres/sphereCount is the raw geometric array, not a pre-filtered
+    # lights-only one like every other light type.
+    for sph_i in range(Int(sd.sphereCount)):
+        var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), vpos, pcg)
+        var w_sph = _sppm_nee_weight(vp, sd, vn, wo, ls_sph)
+        if not w_sph.is_black():
+            var shadow_org_sph = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_ray_sph = Ray_C(shadow_org_sph, vec3f(ls_sph.wi))
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_sph, ls_sph.dist * Float32(0.9999),
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                vps[i].ld += w_sph
 
     for inf_i in range(Int(sd.infiniteLightCount)):
-        var ilight = sd.infiniteLights[inf_i]
-        var (env_dir, env_rgb, pdf_env) = _sample_infinite_light_dir(ilight, Point2f(pcg.next_float(), pcg.next_float()))
-        var cos_env = dot(vn, env_dir.to_simd())
-        if cos_env > Float32(0.0) and pdf_env > Float32(0.0):
+        var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
+        if not w_e.is_black():
             var shadow_org_e = vp.pos + vp.normal * Float32(0.0001)
-            var shadow_ray_e = Ray_C(shadow_org_e, env_dir)
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, Float32(2000),
+            var shadow_ray_e = Ray_C(shadow_org_e, vec3f(ls_e.wi))
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
-                var brdf_e = _sppm_vp_brdf(vp, sd, vn, env_dir.to_simd())
-                vps[i].ld += brdf_e * env_rgb * (cos_env / pdf_env)
+                vps[i].ld += w_e
 
 
 def _sppm_nee_update(

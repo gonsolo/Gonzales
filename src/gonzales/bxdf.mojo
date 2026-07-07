@@ -1,6 +1,7 @@
 from std.math import sqrt
 from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric
-from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world
+from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
+from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -400,3 +401,82 @@ def bxdf_sample_diffuse_transmit(
     var f = lobe_alb * INV_PI * lobe_w
     return (BxDFSample(wi, f, pdf, BxDFFlags.diffuse | BxDFFlags.transmit, is_valid, Int8(0), Int8(0)),
         bounce_normal, lobe_alb, lobe_w, choose_reflect)
+
+# ── Generic BxDF interface (the "materials" half of the Light/BxDF interface
+# refactor — see bvh.mojo's LightSample for the "lights" half) ───────────────
+# One dispatch point mirroring sppm.mojo's own (now superseded) private
+# _sppm_vp_brdf, promoted to a shared function so shading.mojo/bdpt.mojo/
+# sppm.mojo can all evaluate "this material's raw f(wo,wi) + its matching
+# sampling pdf" through a single call instead of each re-deriving the
+# per-material formula inline. mat_kind: 0 = diffuse (default/else branch),
+# 1 = conductor/coated_conductor (isotropic GGX approximation — same
+# simplification bxdf_eval_conductor_ggx's own docstring already documents).
+# Hair is NOT dispatched here: it needs a whole precomputed HairLobeConstants
+# (built once per hit, not per light sample) rather than a flat (alb, alpha)
+# pair — see bxdf_eval_any_hair below, which takes that struct directly.
+@always_inline
+def bxdf_eval_any(
+    mat_kind: Int32,
+    alb:      RGB,             # diffuse albedo, or conductor f0
+    alpha:    Float32,         # conductor GGX roughness; unused for diffuse
+    n:        SIMD[DType.float32, 3],
+    wo:       SIMD[DType.float32, 3],
+    wi:       SIMD[DType.float32, 3],
+) -> Tuple[RGB, Float32]:
+    if mat_kind == Int32(1):
+        return (bxdf_eval_conductor_ggx(n, wo, wi, alpha, alb), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
+    var cos_wi = dot(n, wi)
+    return (bxdf_eval_diffuse(alb), bxdf_pdf_diffuse(cos_wi))
+
+@always_inline
+def _nee_weight_simple(
+    ls:    LightSample,
+    mat_kind: Int32,
+    alb:   RGB,
+    alpha: Float32,
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],
+) -> RGB:
+    """NEE contribution weight (throughput NOT yet applied — caller does
+    `throughput * result`) for one LightSample against a diffuse or
+    conductor/coated_conductor surface, via the generic bxdf_eval_any
+    dispatch above. Delta lights (ls.is_delta) get MIS weight 1; real-pdf
+    lights (sphere/infinite) are weighted via the power heuristic against
+    this material's own sampling pdf at wi — exactly the formula every
+    per-material NEE function in shading.mojo/bdpt.mojo/sppm.mojo already
+    used, just written once instead of once per (material, light-type)
+    pair."""
+    if not ls.valid:
+        return RGB(Float32(0.0))
+    var cos_s = dot(n, ls.wi)
+    if cos_s <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var (f, pdf_bsdf) = bxdf_eval_any(mat_kind, alb, alpha, n, wo, ls.wi)
+    if f.r <= Float32(0.0) and f.g <= Float32(0.0) and f.b <= Float32(0.0):
+        return RGB(Float32(0.0))
+    if ls.is_delta:
+        return f * ls.Li * cos_s
+    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    return f * ls.Li * (cos_s * mis_w / ls.pdf)
+
+@always_inline
+def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
+    """Hair's own version of _nee_weight_simple above — hair's BRDF needs
+    the full precomputed per-hit HairLobeConstants (Marschner R/TT/TRT lobe
+    state) rather than a flat (alb, alpha) pair, so it can't share
+    bxdf_eval_any's signature, but presents the same LightSample-in,
+    weight-out shape."""
+    if not ls.valid:
+        return RGB(Float32(0.0))
+    var (cos_ti, f_val, pdf_over_cos) = _hair_eval_lobes(
+        ls.wi, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+        hc.dphi0, hc.dphi1, hc.dphi2,
+        hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+        hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+        hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+    )
+    if ls.is_delta:
+        return f_val * cos_ti * ls.Li
+    var pdf_bsdf = max(cos_ti * pdf_over_cos, Float32(1e-6))
+    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    return f_val * cos_ti * ls.Li * (mis_w / ls.pdf)
