@@ -7,6 +7,7 @@ from std.sys import has_accelerator
 from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
+from std.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory import alloc
 from std.atomic import Atomic
@@ -514,14 +515,21 @@ def _sppm_camera_pass(
     crosses a dielectric surface makes a genuine random reflect-vs-refract
     choice each sample, so as long as vp_samples is large enough, at least
     some samples land on the diffuse floor even if others reflect away."""
-    var scratch = alloc[Intersection_C](1)
+    # One scratch Intersection_C per worker (indexed by `combined`) instead
+    # of one shared slot — same convention the GPU kernel already uses
+    # (inter_scratch + combined, one per thread) — needed now that this loop
+    # runs across CPU threads too, not just GPU ones.
+    var scratch = alloc[Intersection_C](max(n_pix * vp_samples, 1))
 
-    for combined in range(n_pix * vp_samples):
+    @parameter
+    def trace_one(combined: Int):
         var pix = combined // vp_samples
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[combined] = _sppm_trace_visible_point(sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch)
+        vps[combined] = _sppm_trace_visible_point(sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch + combined)
+
+    parallelize[trace_one](n_pix * vp_samples)
 
     scratch.free()
 
@@ -708,7 +716,10 @@ def _sppm_photon_pass(
     if n_lights == 0:
         return 0
 
-    var scratch = alloc[Intersection_C](1)
+    # One scratch Intersection_C per worker (indexed by k), same convention
+    # as the GPU kernel's inter_scratch + k — needed now that this loop runs
+    # across CPU threads too.
+    var scratch = alloc[Intersection_C](max(n_emit, 1))
     var counter = alloc[Int32](1)
     counter[0] = Int32(0)
 
@@ -723,9 +734,16 @@ def _sppm_photon_pass(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    for k in range(n_emit):
+    # [True]: parallel CPU workers now need the SAME atomic slot-reservation
+    # _sppm_store_photon uses for GPU threads (concurrent racing writers to
+    # the shared `photons` buffer/`counter`), regardless of which backend
+    # is actually running.
+    @parameter
+    def emit_one(k: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-        _sppm_trace_photon[False](sd, pcg, scratch, n_emit, photons, max_photons, counter, default_emit_med)
+        _sppm_trace_photon[True](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med)
+
+    parallelize[emit_one](n_emit)
 
     var n_stored = min(Int(counter[0]), max_photons)
     counter.free()
@@ -766,10 +784,19 @@ def _build_grid(
     heads:    UnsafePointer[Int32, MutAnyOrigin],
     inv_cell: Float32,
 ):
-    for i in range(_HSIZE):
+    @parameter
+    def reset_one(i: Int):
         _sppm_reset_grid_cell(heads, i)
-    for k in range(n_phot):
-        _sppm_insert_photon[False](k, photons, heads, inv_cell)
+
+    parallelize[reset_one](_HSIZE)
+
+    # [True]: parallel CPU workers race on the same bucket heads a GPU
+    # kernel's threads would, so need the same atomic-exchange insert.
+    @parameter
+    def insert_one(k: Int):
+        _sppm_insert_photon[True](k, photons, heads, inv_cell)
+
+    parallelize[insert_one](n_phot)
 
 
 # ── Gather + SPPM update ──────────────────────────────────────────────────────
@@ -834,8 +861,11 @@ def _gather_update(
     heads:    UnsafePointer[Int32, MutAnyOrigin],
     inv_cell: Float32,
 ):
-    for i in range(n_pix):
+    @parameter
+    def gather_one(i: Int):
         _sppm_gather_one(vps, i, photons, heads, inv_cell)
+
+    parallelize[gather_one](n_pix)
 
 
 # ── Direct (NEE) lighting update ──────────────────────────────────────────────
@@ -913,9 +943,12 @@ def _sppm_nee_update(
     if n_lights == 0:
         return
 
-    for i in range(n_vps):
+    @parameter
+    def nee_one(i: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
         _sppm_nee_one(vps, i, sd, pcg)
+
+    parallelize[nee_one](n_vps)
 
 
 # ── Finalize ──────────────────────────────────────────────────────────────────
@@ -1048,11 +1081,14 @@ def sppm_render(
     # would show.
     var out_pixels = alloc[Float32](n_pix * 3)
 
-    for i in range(n_pix):
+    @parameter
+    def finalize_one(i: Int):
         var acc = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp)
         out_pixels[i * 3 + 0] = acc.r
         out_pixels[i * 3 + 1] = acc.g
         out_pixels[i * 3 + 2] = acc.b
+
+    parallelize[finalize_one](n_pix)
 
     _ = write_image(out_pixels, psc[0].film_w, psc[0].film_h,
                     psc[0].film_filename, Int32(32), Int32(32))

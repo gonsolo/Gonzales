@@ -1,4 +1,4 @@
-# Bidirectional Path Tracing (CPU, single-threaded)
+# Bidirectional Path Tracing (CPU, multithreaded, + GPU).
 # Supports homogeneous participating media and specular chains (glass).
 # Strategies: t >= 1, s >= 1 only (no lens sampling for s=0).
 # MIS: balance heuristic over all valid connection strategies.
@@ -7,6 +7,7 @@ from std.sys import has_accelerator
 from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
+from std.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, abs, ceildiv
 from std.memory import alloc
 from std.atomic import Atomic
@@ -895,31 +896,51 @@ def bdpt_render(
     var lvc_cap = n_light_paths * _BDPT_MAX_VERTS
     var lvc = alloc[BDPTVertex](max(lvc_cap, 1))
     var lvc_counter = alloc[Int32](1)
-    var scratch = alloc[Intersection_C](1)
+    # One scratch Intersection_C per concurrent worker (light path / pixel)
+    # instead of one shared slot — CPU threads now race on this exactly like
+    # GPU threads already do (see _bdpt_emit_light_paths_gpu/
+    # _bdpt_camera_connect_gpu's own per-thread inter_light_ptr+k/
+    # inter_cam_ptr+pix), so it can no longer be a single reused buffer.
+    var scratch_light = alloc[Intersection_C](max(n_light_paths, 1))
+    var scratch_cam = alloc[Intersection_C](max(n_pix, 1))
 
     for si in range(n_spp):
         # ── Phase 1: fill the shared Light Vertex Cache for this sample ──────
+        # [True]: parallel CPU workers now need the SAME atomic slot-
+        # reservation _bdpt_store_lvc_vertex uses for GPU threads — "use_gpu"
+        # really means "needs atomic writes," true for any concurrent caller.
         lvc_counter[0] = Int32(0)
-        for lp_idx in range(n_light_paths):
+
+        @parameter
+        def emit_light_path(lp_idx: Int):
             var lpcg = PCG32(base_seed ^ UInt64(lp_idx * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
-            _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med, scratch, lvc, lvc_cap, lvc_counter)
+            _bdpt_trace_light_path[True](sd, lpcg, has_med, default_emit_med,
+                                         scratch_light + lp_idx, lvc, lvc_cap, lvc_counter)
+
+        parallelize[emit_light_path](n_light_paths)
+
         var lvc_count = min(Int(lvc_counter[0]), lvc_cap)
         var scale = _bdpt_lvc_connection_scale(lvc_count, n_light_paths)
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
-        for pix in range(n_pix):
+        # Each worker only ever writes its own buf[pix] slot and only reads
+        # (never mutates) the now-fully-built lvc cache — no atomics needed.
+        @parameter
+        def camera_connect(pix: Int):
             var px = pix % fw; var py = pix // fw
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
             var contrib = _bdpt_trace_camera_and_connect[False](
-                r2c, c2w, px, py, sd, cpcg, has_med, scratch, lvc, lvc_count, scale)
+                r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, lvc_count, scale)
             buf[pix] += contrib
+
+        parallelize[camera_connect](n_pix)
 
         if verbose:
             print("BDPT: sample " + String(si + 1) + "/" + String(n_spp))
 
-    scratch.free(); lvc.free(); lvc_counter.free()
+    scratch_light.free(); scratch_cam.free(); lvc.free(); lvc_counter.free()
 
     # Clamp and write image
     var inv_spp = iso_scale / Float32(n_spp)
