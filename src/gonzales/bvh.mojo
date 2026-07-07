@@ -259,8 +259,10 @@ def _equal_area_square_to_sphere(u: Float32, v: Float32) -> SIMD[DType.float32, 
 
 @always_inline
 def _lower_bound_bvh(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
-    """Duplicate of shading.mojo's _lower_bound: first index i in [lo, hi)
-    s.t. arr[i] >= val; returns hi if all < val."""
+    """Binary search: first index i in [lo, hi) s.t. arr[i] >= val; returns
+    hi if all < val. Used only by _sample_infinite_light_textured below —
+    the sole remaining copy after unifying the 3 duplicate CDF-walk sites
+    (project_equal_area_mapping_bug memory, bug #4)."""
     var l = lo; var h = hi
     while l < h:
         var mid = (l + h) // 2
@@ -271,6 +273,61 @@ def _lower_bound_bvh(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int
     return l
 
 @always_inline
+def _sample_infinite_light_textured(
+    ilight: InfiniteLight_C,
+    u: Point2f,
+) -> Tuple[Vec3f, RGB, Float32]:
+    """CDF-importance-sample a TEXTURED environment light, returning
+    (world-space direction, radiance there, solid-angle pdf). Callers must
+    already know `ilight` has a valid texture+CDF (see the guard every call
+    site checks: `tex_idx>=0 and pixels_ptr/cdf_ptr allocated and cdf_w>0`).
+
+    THE single shared implementation of this CDF walk — previously
+    duplicated byte-for-byte in 3 places (this function, shading.mojo's
+    _nee_infinite_light, and shading.mojo's shade_coated_diffuse env-NEE
+    block), which is exactly how an off-by-one bug in the CDF bucket lookup
+    survived undetected: fixed in one copy without realizing 2 others
+    existed. See project_equal_area_mapping_bug memory (bug #4) for the
+    off-by-one's diagnosis — `_lower_bound`/`_lower_bound_bvh` return the
+    first index i with cdf[i] >= val (the END of the bucket containing val),
+    so the bucket index itself is i-1; every caller needs `- 1` (clamped to
+    0) on both the row and column lookup."""
+    var w2l = ilight.world_to_light
+    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
+    var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x) - 1
+    row_idx = max(0, min(row_idx, ih - 1))
+    var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+    var cond_base = (ih + 1) + row_idx * (iw + 1)
+    var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base - 1
+    col_idx = max(0, min(col_idx, iw - 1))
+    var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+
+    var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
+    var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+    var local_d_s = _equal_area_square_to_sphere(sample_u, sample_v)
+    var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
+
+    var env_dir = Vec3f(
+        w2l[0]*local_d.x + w2l[1]*local_d.y + w2l[2]*local_d.z,
+        w2l[4]*local_d.x + w2l[5]*local_d.y + w2l[6]*local_d.z,
+        w2l[8]*local_d.x + w2l[9]*local_d.y + w2l[10]*local_d.z,
+    )
+
+    var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
+    var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
+    var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
+    var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
+    var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+    var env_rgb = RGB(pr, pg, pb) * ilight.scale
+
+    var pdf_light: Float32
+    if dp_row > Float32(0) and dp_col > Float32(0):
+        pdf_light = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
+    else:
+        pdf_light = Float32(1) / (Float32(4) * PI)
+    return (env_dir, env_rgb, pdf_light)
+
+@always_inline
 def _sample_infinite_light_dir(
     ilight: InfiniteLight_C,
     u: Point2f,
@@ -279,47 +336,9 @@ def _sample_infinite_light_dir(
     returning (world-space direction, radiance there, solid-angle pdf).
     Used for BOTH light-path/photon emission (bdpt.mojo/sppm.mojo) and NEE
     toward the light (same distribution works for both — the only
-    difference is which end of the ray you start from). Mirrors
-    shading.mojo's _nee_infinite_light CDF-importance-sampling block."""
-    var w2l = ilight.world_to_light
+    difference is which end of the ray you start from)."""
     if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
-        var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-        # _lower_bound_bvh returns the first index i with cdf[i] >= val, i.e.
-        # the END of the bucket containing val — the bucket index is i-1 (see
-        # shading.mojo's _nee_infinite_light for the matching fix + full
-        # writeup; project_equal_area_mapping_bug memory).
-        var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x) - 1
-        row_idx = max(0, min(row_idx, ih - 1))
-        var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
-        var cond_base = (ih + 1) + row_idx * (iw + 1)
-        var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base - 1
-        col_idx = max(0, min(col_idx, iw - 1))
-        var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
-
-        var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
-        var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
-        var local_d_s = _equal_area_square_to_sphere(sample_u, sample_v)
-        var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
-
-        var env_dir = Vec3f(
-            w2l[0]*local_d.x + w2l[1]*local_d.y + w2l[2]*local_d.z,
-            w2l[4]*local_d.x + w2l[5]*local_d.y + w2l[6]*local_d.z,
-            w2l[8]*local_d.x + w2l[9]*local_d.y + w2l[10]*local_d.z,
-        )
-
-        var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
-        var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
-        var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
-        var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
-        var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
-        var env_rgb = RGB(pr, pg, pb) * ilight.scale
-
-        var pdf_light: Float32
-        if dp_row > Float32(0) and dp_col > Float32(0):
-            pdf_light = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
-        else:
-            pdf_light = Float32(1) / (Float32(4) * PI)
-        return (env_dir, env_rgb, pdf_light)
+        return _sample_infinite_light_textured(ilight, u)
     else:
         # No texture: uniform sphere sampling, constant radiance.
         var cosT = Float32(2) * u.x - Float32(1)

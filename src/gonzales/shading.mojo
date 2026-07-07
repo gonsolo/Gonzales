@@ -4,7 +4,7 @@ from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair
 from .rng import PCG32
-from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _equal_area_square_to_sphere, _equal_area_sphere_to_square
+from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
@@ -88,18 +88,6 @@ def _shading_normal(
     if dot(sn, geo_normal) < Float32(0.0):
         sn = -sn
     return sn
-
-@always_inline
-def _lower_bound(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
-    """Returns first index i in [lo, hi) s.t. arr[i] >= val. Returns hi if all < val."""
-    var l = lo; var h = hi
-    while l < h:
-        var m = (l + h) >> 1
-        if arr[m] < val:
-            l = m + 1
-        else:
-            h = m
-    return l
 
 @always_inline
 def _srgb_to_linear(c: Float32) -> Float32:
@@ -795,40 +783,16 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             did_env_nee = True
             for inf_i in range(ctx.lights.infinite_count):
                 var ilight = ctx.lights.infinite_lights[inf_i]
-                var w2l = ilight.world_to_light
                 var env_dir: SIMD[DType.float32, 3]
                 var env_rgb: RGB
                 var pdf_light: Float32
                 if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
-                    var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
                     var u1_env = pcg.next_float()
                     var u2_env = pcg.next_float()
-                    # See shading.mojo's _nee_infinite_light for why "- 1" is
-                    # required here (project_equal_area_mapping_bug memory).
-                    var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env) - 1
-                    row_idx = max(0, min(row_idx, ih - 1))
-                    var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
-                    var cond_base = (ih + 1) + row_idx * (iw + 1)
-                    var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base - 1
-                    col_idx = max(0, min(col_idx, iw - 1))
-                    var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
-                    var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
-                    var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
-                    var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
-                    var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
-                    var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
-                    var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
-                    env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
-                    var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
-                    var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
-                    var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
-                    var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
-                    var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
-                    env_rgb = RGB(pr, pg, pb) * ilight.scale
-                    if dp_row > Float32(0) and dp_col > Float32(0):
-                        pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
-                    else:
-                        pdf_light = INV_FOUR_PI
+                    var (dir_v, rgb_v, pdf_v) = _sample_infinite_light_textured(ilight, Point2f(u1_env, u2_env))
+                    env_dir = dir_v.to_simd()
+                    env_rgb = rgb_v
+                    pdf_light = pdf_v
                 else:
                     var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
                     env_dir = _env_s[0]
@@ -1809,13 +1773,12 @@ def _nee_infinite_light[enqueue_shadow: Bool](
     mut pcg: PCG32,
     guide_write: GuideGrid,
 ):
-    var w2l = ilight.world_to_light
     var env_dir: SIMD[DType.float32, 3]
     var env_rgb: RGB
     var pdf_light: Float32
 
     if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
-        # ── CDF importance sampling ──────────────────────────────────────
+        # ── CDF importance sampling, via the shared bvh.mojo implementation ──
         # (A separate "sample a cosine-hemisphere direction, look up the env
         # map there, add it unweighted" block used to live here as an extra
         # "BSDF-sampling" MIS strategy. It's redundant AND wrong: the real
@@ -1826,51 +1789,10 @@ def _nee_infinite_light[enqueue_shadow: Bool](
         # with NO such weight, double-counting unoccluded sky light and
         # washing out shadow contrast — see [[project_object_instancing]] for
         # the barcelona-pavilion/bunny-fur symptom this caused.)
-        var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-        var u1_env = u_env1
-        var u2_env = u_env2
-
-        # 1. Sample row from marginal CDF. _lower_bound returns the first index
-        # i with cdf[i] >= val, i.e. the END of the bucket containing val — the
-        # bucket index itself is i-1 (off-by-one fixed 2026-07-07: every row/col
-        # was silently shifted by +1, corrupting which texel's radiance/pdf gets
-        # used relative to which probability mass actually selected it. See
-        # project_equal_area_mapping_bug memory for the isolated-scene diagnosis
-        # that found this).
-        var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env) - 1
-        row_idx = max(0, min(row_idx, ih - 1))
-        var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
-
-        # 2. Sample column from conditional CDF for this row
-        var cond_base = (ih + 1) + row_idx * (iw + 1)
-        var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base - 1
-        col_idx = max(0, min(col_idx, iw - 1))
-        var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
-
-        # 3. Texel center UV → light-space direction
-        var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
-        var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
-        var local_d = _equal_area_square_to_sphere(sample_u, sample_v)
-
-        # 4. Rotate to world space: L2W = transpose(W2L) for pure rotation
-        var wd_x = w2l[0]*local_d[0] + w2l[1]*local_d[1] + w2l[2]*local_d[2]
-        var wd_y = w2l[4]*local_d[0] + w2l[5]*local_d[1] + w2l[6]*local_d[2]
-        var wd_z = w2l[8]*local_d[0] + w2l[9]*local_d[1] + w2l[10]*local_d[2]
-        env_dir = SIMD[DType.float32, 3](wd_x, wd_y, wd_z)
-
-        # 5. Lookup env-map value at sampled pixel
-        var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
-        var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
-        var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
-        var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
-        var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
-        env_rgb = RGB(pr, pg, pb) * ilight.scale
-
-        # 6. PDF in solid angle: dp_row * dp_col * (iw * ih) / (4π)
-        if dp_row > Float32(0) and dp_col > Float32(0):
-            pdf_light = dp_row * dp_col * Float32(iw * ih) * INV_FOUR_PI
-        else:
-            pdf_light = INV_FOUR_PI
+        var (dir_v, rgb_v, pdf_v) = _sample_infinite_light_textured(ilight, Point2f(u_env1, u_env2))
+        env_dir = dir_v.to_simd()
+        env_rgb = rgb_v
+        pdf_light = pdf_v
     else:
         # ── Fallback: cosine-weighted hemisphere (no CDF) ─────────────────
         var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
