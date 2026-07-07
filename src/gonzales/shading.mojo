@@ -803,12 +803,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
                     var u1_env = pcg.next_float()
                     var u2_env = pcg.next_float()
-                    var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
-                    row_idx = min(row_idx, ih - 1)
+                    # See shading.mojo's _nee_infinite_light for why "- 1" is
+                    # required here (project_equal_area_mapping_bug memory).
+                    var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env) - 1
+                    row_idx = max(0, min(row_idx, ih - 1))
                     var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
                     var cond_base = (ih + 1) + row_idx * (iw + 1)
-                    var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
-                    col_idx = min(col_idx, iw - 1)
+                    var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base - 1
+                    col_idx = max(0, min(col_idx, iw - 1))
                     var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
                     var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
                     var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
@@ -1828,15 +1830,21 @@ def _nee_infinite_light[enqueue_shadow: Bool](
         var u1_env = u_env1
         var u2_env = u_env2
 
-        # 1. Sample row from marginal CDF
-        var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env)
-        row_idx = min(row_idx, ih - 1)
+        # 1. Sample row from marginal CDF. _lower_bound returns the first index
+        # i with cdf[i] >= val, i.e. the END of the bucket containing val — the
+        # bucket index itself is i-1 (off-by-one fixed 2026-07-07: every row/col
+        # was silently shifted by +1, corrupting which texel's radiance/pdf gets
+        # used relative to which probability mass actually selected it. See
+        # project_equal_area_mapping_bug memory for the isolated-scene diagnosis
+        # that found this).
+        var row_idx = _lower_bound(ilight.cdf_ptr, 0, ih, u1_env) - 1
+        row_idx = max(0, min(row_idx, ih - 1))
         var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
 
         # 2. Sample column from conditional CDF for this row
         var cond_base = (ih + 1) + row_idx * (iw + 1)
-        var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base
-        col_idx = min(col_idx, iw - 1)
+        var col_idx = _lower_bound(ilight.cdf_ptr, cond_base, cond_base + iw, u2_env) - cond_base - 1
+        col_idx = max(0, min(col_idx, iw - 1))
         var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
 
         # 3. Texel center UV → light-space direction

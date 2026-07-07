@@ -284,12 +284,16 @@ def _sample_infinite_light_dir(
     var w2l = ilight.world_to_light
     if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
         var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
-        var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x)
-        row_idx = min(row_idx, ih - 1)
+        # _lower_bound_bvh returns the first index i with cdf[i] >= val, i.e.
+        # the END of the bucket containing val — the bucket index is i-1 (see
+        # shading.mojo's _nee_infinite_light for the matching fix + full
+        # writeup; project_equal_area_mapping_bug memory).
+        var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x) - 1
+        row_idx = max(0, min(row_idx, ih - 1))
         var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
         var cond_base = (ih + 1) + row_idx * (iw + 1)
-        var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base
-        col_idx = min(col_idx, iw - 1)
+        var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base - 1
+        col_idx = max(0, min(col_idx, iw - 1))
         var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
 
         var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
