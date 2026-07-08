@@ -18,6 +18,7 @@ from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind
                         LightSampler_C, Instance_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
+from .spectrum import SpectralHandle
 from .sampling import gaussian_norm
 from .ply import load_ply
 from .material_builder import _psc_handle_make_named_material, _psc_handle_named_material
@@ -2495,7 +2496,8 @@ def mojo_apply_overrides(
         psc[0].n_base4_digits = log2_dim + log4_spp
 
 def mojo_parsed_scene_descriptor(
-    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]
+    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    spectral: SpectralHandle,
 ) -> UnsafePointer[SceneDescriptor2_C, MutAnyOrigin]:
     var sd = alloc[SceneDescriptor2_C](1)
     sd[0].bvh2Nodes        = psc[0].bvh_nodes_cpu
@@ -2530,4 +2532,5 @@ def mojo_parsed_scene_descriptor(
     sd[0].blasCount       = Int64(psc[0].blas_count)
     sd[0].instances       = psc[0].instances
     sd[0].instanceCount   = Int64(psc[0].instance_count)
+    sd[0].spectral        = spectral
     return sd

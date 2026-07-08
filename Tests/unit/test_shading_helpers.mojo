@@ -17,7 +17,7 @@ from gonzales.geometry import (
     Instance_C, PathState_C, AreaLight_C, DistantLight_C, PointLight_C,
     InfiniteLight_C, Sphere_C, dot, cross,
 )
-from gonzales.spectrum import SampledWavelengths
+from gonzales.spectrum import SampledWavelengths, null_spectral_handle
 from gonzales.bvh import BVH2Node
 from gonzales.guide import GuideGrid, null_guide
 from gonzales.shading import (
@@ -96,6 +96,7 @@ def _make_ctx(
         UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        null_spectral_handle(),
     )
 
 def _make_path(org: SIMD[DType.float32, 3], dir: SIMD[DType.float32, 3]) -> PathState_C:

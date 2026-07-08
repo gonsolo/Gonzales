@@ -3,6 +3,7 @@ from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
 from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel
+from gonzales.spectrum import load_spectral_context, spectral_handle
 
 def _parse_int32(s: String, start: Int) -> Int32:
     var v = Int32(0)
@@ -150,6 +151,19 @@ def main() raises:
         return
     var sobol = sobol_opt.value()
 
+    # Load the real Jakob-Hanika spectral upsampling table once (staged
+    # spectral rendering rollout, see project_spectral_rendering memory)
+    # and keep the owning SpectralContext alive for the whole render — the
+    # SpectralHandle threaded everywhere else is just raw pointers into it.
+    # Missing table -> null_spectral_handle() default everywhere downstream
+    # (same "unwired yet" behavior as before this table existed), not a
+    # fatal error, so a stale/missing data dir doesn't block rendering.
+    var spectral_ctx_result = load_spectral_context(data_dir)
+    var spectral_ctx = spectral_ctx_result[1].copy()
+    var spectral = spectral_handle(spectral_ctx)
+    if not spectral_ctx_result[0]:
+        print("Warning: could not load spectral table from " + data_dir + " -- spectral rendering disabled")
+
     var path_len = scene_path.byte_length()
     var path_cstr = alloc[UInt8](path_len + 1)
     for k in range(path_len):
@@ -159,9 +173,9 @@ def main() raises:
     if pixel_x >= 0 and pixel_y >= 0:
         debug_trace_pixel(path_cstr, pixel_x, pixel_y)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, fullscreen, override_w, override_h, spp_override, verbose)
+        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, override_w, override_h, no_denoise, spp_override, verbose, use_sppm, sppm_passes, sppm_photons, sppm_radius, use_guide, use_bdpt, bdpt_spp)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_bdpt=use_bdpt, bdpt_spp=bdpt_spp)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

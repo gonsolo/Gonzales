@@ -2,6 +2,7 @@ from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric
 from .rng import PCG32
+from .spectrum import SpectralHandle, null_spectral_handle
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -101,6 +102,15 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
     var instanceCount:  Int64
 
+    # Staged spectral rendering rollout (see project_spectral_rendering memory
+    # / lovely-dazzling-meteor plan, Stage 2c). Loaded once per render and
+    # threaded through here so render_tile/shade_core_cpu_nee need no new
+    # parameter of their own — they already carry a SceneDescriptor2_C.
+    # Dangling (null_spectral_handle()) for BDPT/SPPM (_mk_sd_full below,
+    # Stage 3/4 — not wired yet) and test fixtures that don't supply a real
+    # loaded table.
+    var spectral: SpectralHandle
+
 @always_inline
 def _mk_sd_full(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -172,6 +182,7 @@ def _mk_sd_full(
         lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,
+        spectral=null_spectral_handle(),
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and

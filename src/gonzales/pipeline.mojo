@@ -13,6 +13,7 @@ from .bdpt import bdpt_render, bdpt_render_gpu
 from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
+from .spectrum import SpectralHandle, null_spectral_handle
 
 # Resolve effective SPPM radius/photons-per-pass: an explicit CLI flag
 # (sentinel -1 = not passed) wins; otherwise fall back to what the scene's
@@ -156,6 +157,7 @@ def _gpu_upload_scene(
     psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     n_pixels: Int,
+    spectral: SpectralHandle = null_spectral_handle(),
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     var fw = psc[0].film_w
     var fh = psc[0].film_h
@@ -454,6 +456,7 @@ def parse_and_render(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
+    spectral: SpectralHandle = null_spectral_handle(),
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     no_denoise: Bool = False,
     spp_override: Int32 = Int32(0),
@@ -496,7 +499,7 @@ def parse_and_render(
     var crop_h = crop_y1px - crop_y0px
 
     if use_gpu and use_sppm:
-        var sd = mojo_parsed_scene_descriptor(psc)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
         if Int(handle) <= 8:
             sd.free()
@@ -513,7 +516,7 @@ def parse_and_render(
         mojo_parsed_free(psc)
         return ret
     elif use_gpu and use_bdpt:
-        var sd = mojo_parsed_scene_descriptor(psc)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
         if Int(handle) <= 8:
             sd.free()
@@ -529,7 +532,7 @@ def parse_and_render(
         # World units spanned by one pixel per unit distance (for mip LOD):
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
         var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral)
         if Int(handle) <= 8:
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -588,13 +591,13 @@ def parse_and_render(
         mojo_parsed_free(psc)
         return Int32(0)
     elif use_bdpt:
-        var sd = mojo_parsed_scene_descriptor(psc)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var ret = bdpt_render(psc, sd[0], Int(bdpt_spp), no_denoise, verbose)
         sd.free()
         mojo_parsed_free(psc)
         return ret
     elif use_sppm:
-        var sd = mojo_parsed_scene_descriptor(psc)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var resolved = _resolve_sppm_params(psc, sppm_photons, sppm_radius)
         var ret = sppm_render(
             psc, sd[0],
@@ -611,7 +614,7 @@ def parse_and_render(
             filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
         for _ in range(n_pixels):
             results.append(zero)
-        var sd = mojo_parsed_scene_descriptor(psc)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
 
         if use_guide and psc[0].bvh_node_count > Int32(0):
             # ── Two-batch guided rendering ────────────────────────────────────
@@ -793,6 +796,7 @@ def render_interactive(
     path: UnsafePointer[UInt8, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     use_gpu: Bool,
+    spectral: SpectralHandle = null_spectral_handle(),
     fullscreen: Bool = False,
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     spp_override: Int32 = Int32(0),
@@ -817,7 +821,7 @@ def render_interactive(
 
     var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     if use_gpu:
-        handle = _gpu_upload_scene(psc, sobol, n_pixels)
+        handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral)
         if Int(handle) <= 8:
             mojo_parsed_free(psc)
             return
@@ -898,7 +902,7 @@ def render_interactive(
         gpu_clear_film(handle, Int64(n_pixels))
         gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
     else:
-        sd = mojo_parsed_scene_descriptor(psc)
+        sd = mojo_parsed_scene_descriptor(psc, spectral)
         for _ in range(n_pixels * 3):
             accum.append(Float32(0))
             albedo_acc.append(Float32(0))

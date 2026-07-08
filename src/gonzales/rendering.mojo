@@ -243,7 +243,7 @@ def render_tile(
                                scene.spheres, Int(scene.sphereCount),
                                scene.lightSampler, sp.sobolMatrices, guide_read,
                                blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
-                               instances=scene.instances, guide_write=guide_write)
+                               instances=scene.instances, guide_write=guide_write, spectral=scene.spectral)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:

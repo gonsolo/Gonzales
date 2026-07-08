@@ -14,7 +14,7 @@ from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
 from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
-from .spectrum import SampledWavelengths
+from .spectrum import SampledWavelengths, SpectralHandle, null_spectral_handle
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
 # path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
@@ -122,6 +122,16 @@ struct GpuSceneHandle(Movable):
     var filter_type: Int32
     var fw: Int
     var fh: Int
+    # Staged spectral rendering rollout (Stage 2c-1, see
+    # project_spectral_rendering memory) — device-side twin of the host
+    # SpectralHandle; spectral_res=0 means no real table was uploaded (dummy
+    # 1-element buffers, BDPT/SPPM GPU dispatch, Stage 3/4 not wired yet).
+    var spectral_coeffs_buf: DeviceBuffer[DType.uint8]
+    var spectral_cie_x_buf:  DeviceBuffer[DType.uint8]
+    var spectral_cie_y_buf:  DeviceBuffer[DType.uint8]
+    var spectral_cie_z_buf:  DeviceBuffer[DType.uint8]
+    var spectral_d65_buf:    DeviceBuffer[DType.uint8]
+    var spectral_res: Int
 
 def gpu_available() -> Bool:
     return has_accelerator()
@@ -177,6 +187,7 @@ def gpu_upload_scene(
     filter_norm_x: Float32, filter_norm_y: Float32,
     filter_type: Int32,
     fw: Int32, fh: Int32,
+    spectral: SpectralHandle = null_spectral_handle(),
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     comptime if has_accelerator():
         try:
@@ -729,6 +740,45 @@ def gpu_upload_scene(
                 for i in range(16):
                     dst[i] = c2w_init[i]
 
+            # Upload the spectral (Jakob-Hanika) coefficient table + CIE
+            # X/Y/Z/D65 tables, if a real one was loaded (spectral.res > 0)
+            # — Stage 2c-1, see project_spectral_rendering memory. Dummy
+            # 1-element buffers otherwise (BDPT/SPPM GPU dispatch don't wire
+            # spectral yet — Stage 3/4 — same "at least 1 elem" convention
+            # already used above for zero-size scene data).
+            var spectral_res = Int(spectral.res)
+            comptime CIE_N = 95
+            var spec_coeffs_count = (3 * spectral_res * spectral_res * spectral_res * 3) if spectral_res > 0 else 1
+            var spec_coeffs_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_coeffs_count * 4)
+            if spectral_res > 0:
+                with spec_coeffs_gpu_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for i in range(spec_coeffs_count):
+                        dst[i] = spectral.coeffs[i]
+
+            var spec_cie_count = CIE_N if spectral_res > 0 else 1
+            var spec_cie_x_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
+            var spec_cie_y_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
+            var spec_cie_z_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
+            var spec_d65_gpu_buf   = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
+            if spectral_res > 0:
+                with spec_cie_x_gpu_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for i in range(CIE_N):
+                        dst[i] = spectral.cie_x[i]
+                with spec_cie_y_gpu_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for i in range(CIE_N):
+                        dst[i] = spectral.cie_y[i]
+                with spec_cie_z_gpu_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for i in range(CIE_N):
+                        dst[i] = spectral.cie_z[i]
+                with spec_d65_gpu_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for i in range(CIE_N):
+                        dst[i] = spectral.d65[i]
+
             # Allocate handle on heap
             var handle = alloc[GpuSceneHandle](1)
             handle.init_pointee_move(GpuSceneHandle(
@@ -808,6 +858,12 @@ def gpu_upload_scene(
                 filter_type=filter_type,
                 fw=Int(fw),
                 fh=Int(fh),
+                spectral_coeffs_buf=spec_coeffs_gpu_buf^,
+                spectral_cie_x_buf=spec_cie_x_gpu_buf^,
+                spectral_cie_y_buf=spec_cie_y_gpu_buf^,
+                spectral_cie_z_buf=spec_cie_z_gpu_buf^,
+                spectral_d65_buf=spec_d65_gpu_buf^,
+                spectral_res=spectral_res,
             ))
 
             print("GPU: scene uploaded")
@@ -952,6 +1008,12 @@ def shade_nee_preamble_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -969,6 +1031,7 @@ def shade_nee_preamble_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1010,6 +1073,12 @@ def shade_diffuse_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1028,6 +1097,7 @@ def shade_diffuse_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1065,6 +1135,12 @@ def shade_coated_diffuse_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1083,6 +1159,7 @@ def shade_coated_diffuse_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1120,6 +1197,12 @@ def shade_diffuse_transmit_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1137,6 +1220,7 @@ def shade_diffuse_transmit_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1174,6 +1258,12 @@ def shade_mix_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1192,6 +1282,7 @@ def shade_mix_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1229,6 +1320,12 @@ def shade_conductor_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1247,6 +1344,7 @@ def shade_conductor_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1322,6 +1420,12 @@ def shade_coated_conductor_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1340,6 +1444,7 @@ def shade_coated_conductor_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1665,6 +1770,12 @@ def shade_hair_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1683,6 +1794,7 @@ def shade_hair_gpu(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1713,6 +1825,12 @@ def shade_enqueue_shadow_gpu(
     n_spheres: Int,
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     count: Int,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1730,6 +1848,7 @@ def shade_enqueue_shadow_gpu(
         textures=textures, n_textures=n_textures, shadow_tasks=shadow_tasks,
         px_scale=Float32(0.0), sobol_matrices=UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(), guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=UnsafePointer[DistantLight_C, MutAnyOrigin](), distant_count=0,
@@ -2355,6 +2474,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_diffuse_gpu](
@@ -2384,6 +2509,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
@@ -2413,6 +2544,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_diffuse_transmit_gpu](
@@ -2442,6 +2579,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_mix_gpu](
@@ -2471,6 +2614,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_conductor_gpu](
@@ -2500,6 +2649,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
@@ -2545,6 +2700,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_interface_gpu](
@@ -2593,6 +2754,12 @@ def gpu_render_sample(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_int, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
             handle[].ctx.enqueue_function[accumulate_film_gpu](
@@ -2741,6 +2908,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_diffuse_gpu](
@@ -2770,6 +2943,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
@@ -2799,6 +2978,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_diffuse_transmit_gpu](
@@ -2828,6 +3013,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_mix_gpu](
@@ -2857,6 +3048,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_conductor_gpu](
@@ -2886,6 +3083,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
@@ -2931,6 +3134,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_interface_gpu](
@@ -2979,6 +3188,12 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](

@@ -292,7 +292,6 @@ struct RGBSigmoidCoeffs(TrivialRegisterPassable):
     var c1: Float32
     var c2: Float32
 
-@always_inline
 def eval_sigmoid_spectrum(coeffs: RGBSigmoidCoeffs, lambda_nm: Float32) -> Float32:
     """s(lambda) = sigmoid(c0*lambda^2 + c1*lambda + c2), lambda in actual nm
     (not normalized) — matches PBRT's RGBSigmoidPolynomial::operator()
@@ -301,8 +300,10 @@ def eval_sigmoid_spectrum(coeffs: RGBSigmoidCoeffs, lambda_nm: Float32) -> Float
     quadratic term — see EvaluatePolynomial's Horner-scheme convention)."""
     var x = coeffs.c0 * lambda_nm + coeffs.c1
     x = x * lambda_nm + coeffs.c2
-    var xf = Float64(x)
-    return Float32(_sigmoid(xf))
+    # Float32 sigmoid, not the Float64 _sigmoid() the offline fitting code
+    # uses — Float64 sqrt is not supported in approx mode on NVIDIA GPUs,
+    # and this function is reachable from GPU-compiled shading code.
+    return Float32(0.5) * x / sqrt(Float32(1.0) + x * x) + Float32(0.5)
 
 def _gauss_newton_core(r: Float64, g: Float64, b: Float64, tables: _QuadratureTables, c0_init: Float64, c1_init: Float64, c2_init: Float64) -> Tuple[Float64, Float64, Float64]:
     """Direct port of pbrt's gauss_newton()/eval_residual()/eval_jacobian().
@@ -647,40 +648,65 @@ struct CieXyzTables(Copyable, Movable):
     D65 illuminant table, all built once and reused for every spectral<->RGB
     conversion at render time. d65_tbl exists specifically so cie_d65_runtime
     never has to call the List-rebuilding _cie_d65/_CIE_D65_RAW() path — see
-    that function's docstring."""
-    var x_tbl: List[Float64]
-    var y_tbl: List[Float64]
-    var z_tbl: List[Float64]
-    var d65_tbl: List[Float64]
+    that function's docstring. Stored as Float32 (not the Float64 the OFFLINE
+    fitting code uses) — Float32 is plenty for a per-sample Monte Carlo XYZ
+    estimate, and critically, Float64 sqrt/sin/asin are NOT supported in
+    approx mode on NVIDIA GPUs (a real error hit while wiring Stage 2c), so
+    the entire render-hot-path chain below stays in Float32 throughout."""
+    var x_tbl: List[Float32]
+    var y_tbl: List[Float32]
+    var z_tbl: List[Float32]
+    var d65_tbl: List[Float32]
+
+def _f64_list_to_f32(src: List[Float64]) -> List[Float32]:
+    var out = List[Float32](capacity=len(src))
+    for i in range(len(src)):
+        out.append(Float32(src[i]))
+    return out^
 
 def build_cie_xyz_tables() -> CieXyzTables:
-    return CieXyzTables(_CIE_X(), _CIE_Y(), _CIE_Z(), _CIE_D65_RAW())
+    return CieXyzTables(
+        _f64_list_to_f32(_CIE_X()), _f64_list_to_f32(_CIE_Y()),
+        _f64_list_to_f32(_CIE_Z()), _f64_list_to_f32(_CIE_D65_RAW()),
+    )
 
 @always_inline
-def xyz_to_srgb(x: Float64, y: Float64, z: Float64) -> Tuple[Float64, Float64, Float64]:
-    var r = _XYZ_TO_SRGB00 * x + _XYZ_TO_SRGB01 * y + _XYZ_TO_SRGB02 * z
-    var g = _XYZ_TO_SRGB10 * x + _XYZ_TO_SRGB11 * y + _XYZ_TO_SRGB12 * z
-    var b = _XYZ_TO_SRGB20 * x + _XYZ_TO_SRGB21 * y + _XYZ_TO_SRGB22 * z
+def xyz_to_srgb(x: Float32, y: Float32, z: Float32) -> Tuple[Float32, Float32, Float32]:
+    var r = Float32(_XYZ_TO_SRGB00) * x + Float32(_XYZ_TO_SRGB01) * y + Float32(_XYZ_TO_SRGB02) * z
+    var g = Float32(_XYZ_TO_SRGB10) * x + Float32(_XYZ_TO_SRGB11) * y + Float32(_XYZ_TO_SRGB12) * z
+    var b = Float32(_XYZ_TO_SRGB20) * x + Float32(_XYZ_TO_SRGB21) * y + Float32(_XYZ_TO_SRGB22) * z
     return (r, g, b)
 
-# ── Render-hot-path (pointer-based) API — no per-call allocation ───────────
+# ── Render-hot-path (pointer-based, Float32-only) API — no per-call
+# allocation, and no Float64 transcendentals (GPU-safe: see CieXyzTables'
+# docstring above for why this whole section is Float32, not Float64) ──────
 
 @always_inline
-def rgb_to_coeffs_table_lookup_ptr(table: UnsafePointer[Float32, MutAnyOrigin], res: Int, r: Float64, g: Float64, b: Float64) -> RGBSigmoidCoeffs:
+def _inverse_smoothstep_f32(x: Float32) -> Float32:
+    """Float32 twin of _inverse_smoothstep — see that function's docstring.
+    Float64 sin/asin are not supported in approx mode on NVIDIA GPUs, so the
+    render-hot-path table lookup below must stay in Float32."""
+    var v = Float32(1.0) - Float32(2.0) * x
+    if v > Float32(1.0): v = Float32(1.0)
+    if v < Float32(-1.0): v = Float32(-1.0)
+    return Float32(0.5) - sin(asin(v) / Float32(3.0))
+
+@always_inline
+def rgb_to_coeffs_table_lookup_ptr(table: UnsafePointer[Float32, MutAnyOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> RGBSigmoidCoeffs:
     """Pointer-based twin of rgb_to_coeffs_table_lookup — identical trilinear
     query, just indexing a raw pointer (see SpectralHandle in spectrum.mojo)
     instead of an owned List, so it's safe to call every NEE sample without
-    any per-call allocation or copy."""
+    any per-call allocation or copy. Float32 throughout (GPU-safe)."""
     var maxc = 0
     var maxv = r
     if g >= maxv: maxc = 1; maxv = g
     if b >= maxv: maxc = 2; maxv = b
 
-    if maxv <= Float64(0.0):
+    if maxv <= Float32(0.0):
         return RGBSigmoidCoeffs(Float32(0.0), Float32(0.0), Float32(-1e6))
 
-    var other1: Float64
-    var other2: Float64
+    var other1: Float32
+    var other2: Float32
     if maxc == 0:
         other1 = g; other2 = b
     elif maxc == 1:
@@ -688,67 +714,83 @@ def rgb_to_coeffs_table_lookup_ptr(table: UnsafePointer[Float32, MutAnyOrigin], 
     else:
         other1 = r; other2 = g
 
-    var x = (other1 / maxv) * Float64(res - 1)
-    var y = (other2 / maxv) * Float64(res - 1)
+    var x = (other1 / maxv) * Float32(res - 1)
+    var y = (other2 / maxv) * Float32(res - 1)
     var zf = maxv
-    if zf > Float64(1.0): zf = Float64(1.0)
-    var kf = _inverse_smoothstep(_inverse_smoothstep(zf)) * Float64(res - 1)
+    if zf > Float32(1.0): zf = Float32(1.0)
+    var kf = _inverse_smoothstep_f32(_inverse_smoothstep_f32(zf)) * Float32(res - 1)
 
     var i0 = Int(x); var i1 = i0 + 1
     if i1 > res - 1: i1 = res - 1
     if i0 > res - 1: i0 = res - 1
-    var ti = x - Float64(i0)
+    var ti = x - Float32(i0)
 
     var j0 = Int(y); var j1 = j0 + 1
     if j1 > res - 1: j1 = res - 1
     if j0 > res - 1: j0 = res - 1
-    var tj = y - Float64(j0)
+    var tj = y - Float32(j0)
 
     var k0i = Int(kf); var k1i = k0i + 1
     if k1i > res - 1: k1i = res - 1
     if k0i > res - 1: k0i = res - 1
-    var tk = kf - Float64(k0i)
+    var tk = kf - Float32(k0i)
 
-    var acc0 = Float64(0.0); var acc1 = Float64(0.0); var acc2 = Float64(0.0)
+    var acc0 = Float32(0.0); var acc1 = Float32(0.0); var acc2 = Float32(0.0)
     for corner in range(8):
         var ki = k0i if (corner & 1) == 0 else k1i
         var ji = j0 if (corner & 2) == 0 else j1
         var ii = i0 if (corner & 4) == 0 else i1
-        var wk = (Float64(1.0) - tk) if (corner & 1) == 0 else tk
-        var wj = (Float64(1.0) - tj) if (corner & 2) == 0 else tj
-        var wi = (Float64(1.0) - ti) if (corner & 4) == 0 else ti
+        var wk = (Float32(1.0) - tk) if (corner & 1) == 0 else tk
+        var wj = (Float32(1.0) - tj) if (corner & 2) == 0 else tj
+        var wi = (Float32(1.0) - ti) if (corner & 4) == 0 else ti
         var w = wk * wj * wi
-        if w == Float64(0.0):
+        if w == Float32(0.0):
             continue
         var base = (((maxc * res + ki) * res + ji) * res + ii) * 3
-        acc0 += w * Float64(table[base + 0])
-        acc1 += w * Float64(table[base + 1])
-        acc2 += w * Float64(table[base + 2])
+        acc0 += w * table[base + 0]
+        acc1 += w * table[base + 1]
+        acc2 += w * table[base + 2]
 
-    return RGBSigmoidCoeffs(Float32(acc0), Float32(acc1), Float32(acc2))
+    return RGBSigmoidCoeffs(acc0, acc1, acc2)
 
-@always_inline
+def _cie_interp_ptr_f32(table: UnsafePointer[Float32, MutAnyOrigin], lambda_nm: Float32) -> Float32:
+    """Float32 twin of _cie_interp/_cie_interp_ptr, for the render-hot-path
+    (GPU-safe, see CieXyzTables' docstring)."""
+    var x = lambda_nm - Float32(CIE_LAMBDA_MIN)
+    x *= Float32(CIE_SAMPLES - 1) / Float32(CIE_LAMBDA_MAX - CIE_LAMBDA_MIN)
+    var offset = Int(x)
+    if offset < 0:
+        offset = 0
+    if offset > CIE_SAMPLES - 2:
+        offset = CIE_SAMPLES - 2
+    var weight = x - Float32(offset)
+    return (Float32(1.0) - weight) * table[offset] + weight * table[offset + 1]
+
 def cie_xyz_at_ptr(
-    x_tbl: UnsafePointer[Float64, MutAnyOrigin],
-    y_tbl: UnsafePointer[Float64, MutAnyOrigin],
-    z_tbl: UnsafePointer[Float64, MutAnyOrigin],
-    lambda_nm: Float64,
-) -> Tuple[Float64, Float64, Float64]:
-    return (
-        _cie_interp_ptr(x_tbl, lambda_nm),
-        _cie_interp_ptr(y_tbl, lambda_nm),
-        _cie_interp_ptr(z_tbl, lambda_nm),
-    )
+    x_tbl: UnsafePointer[Float32, MutAnyOrigin],
+    y_tbl: UnsafePointer[Float32, MutAnyOrigin],
+    z_tbl: UnsafePointer[Float32, MutAnyOrigin],
+    lambda_nm: Float32,
+) -> Tuple[Float32, Float32, Float32]:
+    # Named locals, not inline constructor-argument calls -- see
+    # rgb_to_spectral_sample's comment in spectrum.mojo for why (a real,
+    # reproducible Mojo miscompilation with multiple always_inline calls
+    # passed directly as constructor/tuple arguments).
+    var xv = _cie_interp_ptr_f32(x_tbl, lambda_nm)
+    var yv = _cie_interp_ptr_f32(y_tbl, lambda_nm)
+    var zv = _cie_interp_ptr_f32(z_tbl, lambda_nm)
+    return (xv, yv, zv)
 
-@always_inline
-def cie_d65_runtime(d65_tbl: UnsafePointer[Float64, MutAnyOrigin], lambda_nm: Float32) -> Float32:
+comptime _CIE_D65_NORM_F32 = Float32(10566.864005283874576)
+
+def cie_d65_runtime(d65_tbl: UnsafePointer[Float32, MutAnyOrigin], lambda_nm: Float32) -> Float32:
     """PBRT's RUNTIME D65 illuminant (RGBColorSpace::illuminant): rescaled so
     integral(D65*ybar) = CIE_Y_integral (~106.86), NOT the unit-luminance
     convention used internally for FITTING the table. Pointer-based — see
     CieXyzTables.d65_tbl / SpectralHandle."""
-    return Float32(_cie_interp_ptr(d65_tbl, Float64(lambda_nm)) / _CIE_D65_NORM) * CIE_Y_INTEGRAL
+    return (_cie_interp_ptr_f32(d65_tbl, lambda_nm) / _CIE_D65_NORM_F32) * CIE_Y_INTEGRAL
 
-def rgb_illuminant_to_coeffs_ptr(table: UnsafePointer[Float32, MutAnyOrigin], res: Int, r: Float64, g: Float64, b: Float64) -> Tuple[RGBSigmoidCoeffs, Float64]:
+def rgb_illuminant_to_coeffs_ptr(table: UnsafePointer[Float32, MutAnyOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> Tuple[RGBSigmoidCoeffs, Float32]:
     """PBRT's RGBIlluminantSpectrum convention for light-color RGB values
     (which are NOT in [0,1] like a reflectance): scale=2*max(r,g,b), fit the
     table against rgb/scale, evaluate as scale*rsp(lambda)*D65(lambda) — the
@@ -758,12 +800,11 @@ def rgb_illuminant_to_coeffs_ptr(table: UnsafePointer[Float32, MutAnyOrigin], re
     var maxc = r
     if g > maxc: maxc = g
     if b > maxc: maxc = b
-    var scale = Float64(2.0) * maxc
-    if scale < Float64(1e-6):
-        scale = Float64(1.0)
+    var scale = Float32(2.0) * maxc
+    if scale < Float32(1e-6):
+        scale = Float32(1.0)
     var coeffs = rgb_to_coeffs_table_lookup_ptr(table, res, r / scale, g / scale, b / scale)
     return (coeffs, scale)
 
-@always_inline
-def eval_illuminant_spectrum(coeffs: RGBSigmoidCoeffs, scale: Float64, d65_tbl: UnsafePointer[Float64, MutAnyOrigin], lambda_nm: Float32) -> Float32:
-    return eval_sigmoid_spectrum(coeffs, lambda_nm) * Float32(scale) * cie_d65_runtime(d65_tbl, lambda_nm)
+def eval_illuminant_spectrum(coeffs: RGBSigmoidCoeffs, scale: Float32, d65_tbl: UnsafePointer[Float32, MutAnyOrigin], lambda_nm: Float32) -> Float32:
+    return eval_sigmoid_spectrum(coeffs, lambda_nm) * scale * cie_d65_runtime(d65_tbl, lambda_nm)

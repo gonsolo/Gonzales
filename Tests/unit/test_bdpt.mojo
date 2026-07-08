@@ -25,7 +25,7 @@ from gonzales.bdpt import (
     BDPTVertex, _pdf_solid_to_area, _geom_term, _eval_vertex, _eval_conductor_ggx,
     _bdpt_connect_to_cache, _bdpt_lvc_connection_scale, _BDPT_K_CONNECTIONS,
 )
-from gonzales.spectrum import SampledWavelengths
+from gonzales.spectrum import SampledWavelengths, null_spectral_handle
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-3
@@ -74,6 +74,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         Int64(0),
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        null_spectral_handle(),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -290,6 +291,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
         UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         Int64(0),
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        null_spectral_handle(),
     )
 
     var cv = BDPTVertex(

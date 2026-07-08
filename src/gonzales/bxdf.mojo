@@ -2,7 +2,7 @@ from std.math import sqrt
 from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
-from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample
+from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -491,6 +491,15 @@ def _nee_weight_simple(
 # own stage migrates them. Hair is NOT covered here (Marschner lobe color
 # comes from sigma_a absorption, a genuinely more involved conversion) —
 # _nee_weight_hair stays RGB-only for now, a deliberate scoped exclusion.
+# The `spectral_coeffs/_res/_cie_x/_cie_y/_cie_z/_d65` sextuple below replaces
+# a single `ctx: SpectralHandle` parameter -- see spectrum.mojo's long
+# comment above rgb_to_spectral_sample for why: passing that 6-field struct
+# BY VALUE across a real Mojo function-call boundary is a confirmed,
+# reproducible miscompilation (one field comes back corrupted on a random
+# subset of runs). Callers hold a SpectralHandle (e.g. shading.mojo's
+# ctx.spectral) and pass its fields individually: ctx.spectral.coeffs,
+# ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
+# ctx.spectral.d65.
 @always_inline
 def bxdf_eval_any_spectral(
     mat_kind: Int32,
@@ -499,10 +508,14 @@ def bxdf_eval_any_spectral(
     n:        SIMD[DType.float32, 3],
     wo:       SIMD[DType.float32, 3],
     wi:       SIMD[DType.float32, 3],
-    ctx:         SpectralHandle,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
     wavelengths: SampledWavelengths,
 ) -> Tuple[SpectralSample, Float32]:
-    var alb_spectral = rgb_to_spectral_sample(ctx, alb.r, alb.g, alb.b, wavelengths)
+    var alb_spectral = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, alb.r, alb.g, alb.b, wavelengths)
     if mat_kind == Int32(1):
         var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
         if not valid:
@@ -522,7 +535,11 @@ def _nee_weight_simple_spectral(
     alpha: Float32,
     n:     SIMD[DType.float32, 3],
     wo:    SIMD[DType.float32, 3],
-    ctx:         SpectralHandle,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
@@ -536,14 +553,43 @@ def _nee_weight_simple_spectral(
     var cos_s = dot(n, ls.wi)
     if cos_s <= Float32(0.0):
         return SpectralSample(Float32(0.0))
-    var (f, pdf_bsdf) = bxdf_eval_any_spectral(mat_kind, alb, alpha, n, wo, ls.wi, ctx, wavelengths)
+    var (f, pdf_bsdf) = bxdf_eval_any_spectral(mat_kind, alb, alpha, n, wo, ls.wi, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
     if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
         return SpectralSample(Float32(0.0))
-    var li_spectral = rgb_illuminant_to_spectral_sample(ctx, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
+    var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
     if ls.is_delta:
         return f * li_spectral * cos_s
     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
     return (f * li_spectral) * (cos_s * mis_w / ls.pdf)
+
+@always_inline
+def _nee_weight_simple_via_spectral(
+    ls:    LightSample,
+    mat_kind: Int32,
+    alb:   RGB,
+    alpha: Float32,
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+    wavelengths: SampledWavelengths,
+) -> RGB:
+    """Stage 2c-3's actual behavior-changing entry point: evaluates the NEE
+    term spectrally (real Jakob-Hanika material/light color conversion at
+    this path's 4 hero wavelengths) then immediately converts back to RGB,
+    rather than flipping PathState_C.throughput/estimate to a spectral type
+    for the whole path (that's a separate, much larger future change — see
+    project_spectral_rendering memory). This still captures the real
+    per-wavelength product-of-spectra behavior for the direct-lighting term,
+    just re-expressed in RGB before accumulation, exactly the approach
+    validated by this session's product-of-spectra tests
+    (test_bxdf_spectral.mojo's _nee_weight_simple_spectral round-trip test)."""
+    var spec = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, n, wo, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, spec, wavelengths)
+    return RGB(r, g, b)
 
 @always_inline
 def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:

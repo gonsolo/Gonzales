@@ -2,12 +2,13 @@ from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
-from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair
+from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
+from .spectrum import SpectralHandle, null_spectral_handle
 
 @fieldwise_init
 struct LightContext(Copyable, Movable):
@@ -55,6 +56,10 @@ struct ShadeContext:
     var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
     var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
     var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
+    # Staged spectral rendering rollout (Stage 2c, see project_spectral_rendering
+    # memory) — host pointers on CPU, device pointers on GPU (see gpu.mojo's
+    # ShadeContext construction sites).
+    var spectral:       SpectralHandle
 
 @always_inline
 def _shading_normal(
@@ -500,25 +505,25 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var wo_dt = -ray_dir
     for dl_i in range(ctx.lights.distant_count):
         var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-        var w_d = _nee_weight_simple(ls_d, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
         if not w_d.is_black():
             var contrib_d = path_ptr[].throughput * w_d
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d)
     for pl_i in range(ctx.lights.point_count):
         var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-        var w_p = _nee_weight_simple(ls_p, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
         if not w_p.is_black():
             var contrib_p = path_ptr[].throughput * w_p
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
     for sph_i in range(ctx.lights.sphere_count):
         var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-        var w_sph = _nee_weight_simple(ls_sph, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
         if not w_sph.is_black():
             var contrib_sph = path_ptr[].throughput * w_sph
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_simple(ls_e, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt) * lobe_w
+        var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(0), lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
@@ -1062,28 +1067,28 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
     material previously had none)."""
     for dl_i in range(ctx.lights.distant_count):
         var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-        var w_d = _nee_weight_simple(ls_d, Int32(1), f0, alpha, n, wo)
+        var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(1), f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_d.is_black():
             var contrib_d = path_ptr[].throughput * w_d
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d)
 
     for pl_i in range(ctx.lights.point_count):
         var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-        var w_p = _nee_weight_simple(ls_p, Int32(1), f0, alpha, n, wo)
+        var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(1), f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_p.is_black():
             var contrib_p = path_ptr[].throughput * w_p
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
 
     for sph_i in range(ctx.lights.sphere_count):
         var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-        var w_sph = _nee_weight_simple(ls_sph, Int32(1), f0, alpha, n, wo)
+        var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(1), f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_sph.is_black():
             var contrib_sph = path_ptr[].throughput * w_sph
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
 
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_simple(ls_e, Int32(1), f0, alpha, n, wo)
+        var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(1), f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
@@ -2116,21 +2121,21 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # above (MNEE glass-refraction probing, also diffuse-specific).
     for dl_i in range(ctx.lights.distant_count):
         var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-        var w_d = _nee_weight_simple(ls_d, Int32(0), alb, Float32(0.0), normal, wo)
+        var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(0), alb, Float32(0.0), normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_d.is_black():
             var contrib_d = path_ptr[].throughput * w_d
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d, guide_write)
 
     for pl_i in range(ctx.lights.point_count):
         var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-        var w_p = _nee_weight_simple(ls_p, Int32(0), alb, Float32(0.0), normal, wo)
+        var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(0), alb, Float32(0.0), normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_p.is_black():
             var contrib_p = path_ptr[].throughput * w_p
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p, guide_write)
 
     for sph_i in range(ctx.lights.sphere_count):
         var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-        var w_sph = _nee_weight_simple(ls_sph, Int32(0), alb, Float32(0.0), normal, wo)
+        var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(0), alb, Float32(0.0), normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
         if not w_sph.is_black():
             var contrib_sph = path_ptr[].throughput * w_sph
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph, guide_write)
@@ -2584,6 +2589,7 @@ def shade_core_cpu_nee(
     blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
+    spectral: SpectralHandle = null_spectral_handle(),
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2596,6 +2602,7 @@ def shade_core_cpu_nee(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=spectral,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=distantLightCount,
