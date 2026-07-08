@@ -555,6 +555,23 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 
 # ── CoatedDiffuse (plastic) branch ───────────────────────────────────────────
 @always_inline
+def _albedo_highlight_boost(albedo: RGB, contrib: RGB) -> RGB:
+    """Nudge the albedo AOV toward white in proportion to a highlight-strength
+    NEE contribution. Saturates via 1-exp(-k*luma) rather than linearly
+    (min(1,luma)) so even a modest per-sample hit — rare across an spp
+    average, since a sharp/sparse specular contribution looks identical to
+    its dark neighbours in a single sample — visibly elevates the denoiser's
+    guide buffer instead of needing many such hits to add up. Without a
+    strong-enough boost here, the coat's specular highlights (and, since
+    2026-07-08, the multi-tap base-recycling energy) carry correct energy in
+    beauty but get smoothed away by the denoiser anyway because albedo never
+    discriminates the highlight pixels from their neighbours strongly enough.
+    """
+    var luma = contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
+    var boost = Float32(1.0) - exp(-luma * Float32(4.0))
+    return albedo + (RGB(Float32(1.0)) - albedo) * boost
+
+@always_inline
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     inter: Intersection_C,
@@ -670,20 +687,11 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                             if pdf_light_coat > Float32(0.0):
                                 var w_coat = power_heuristic(pdf_light_coat, pdf_bsdf_coat)
                                 var contrib_coat = path_ptr[].throughput * al_coat.emission * (f_cos_nee * w_coat / pdf_light_coat)
-                                # Nudge the albedo AOV toward white in proportion to this
-                                # sample's own highlight strength (saturating at 1). NEE
-                                # shadow rays never otherwise touch albedo, so a sharp
-                                # specular highlight — bright in only a few of the spp
-                                # samples per pixel — looks identical to its dark
-                                # neighbours in the denoiser's guide buffer and gets
-                                # smoothed away. Averaged over samples like beauty itself,
-                                # this converges to a signal that's actually elevated where
-                                # the highlight is, unlike a per-pixel-constant heuristic
-                                # (view-angle Fresnel was tried first here and didn't
-                                # discriminate at all — it barely varies across a curved
-                                # surface's highlight vs. its immediate neighbours).
-                                var boost_coat = min(Float32(1.0), contrib_coat.r * Float32(0.2126) + contrib_coat.g * Float32(0.7152) + contrib_coat.b * Float32(0.0722))
-                                path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0)) - path_ptr[].albedo) * boost_coat
+                                # See _albedo_highlight_boost: NEE shadow rays never
+                                # otherwise touch albedo, so a sharp specular highlight
+                                # looks identical to its dark neighbours in the denoiser's
+                                # guide buffer and gets smoothed away without this.
+                                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_coat)
                                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_c, dist_c * Float32(0.9999), contrib_coat)
 
         # Distant (delta) lights through the coat's glossy lobe. No MIS weight —
@@ -706,8 +714,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                             var f_dl = fr_dielectric(cos_wm_dl, ior)
                             var f_cos_dl = d_dl * g2_dl * f_dl / (Float32(4.0) * cos_o)
                             var contrib_dl = path_ptr[].throughput * dl_coat.emission * f_cos_dl
-                            var boost_dl = min(Float32(1.0), contrib_dl.r * Float32(0.2126) + contrib_dl.g * Float32(0.7152) + contrib_dl.b * Float32(0.0722))
-                            path_ptr[].albedo = path_ptr[].albedo + (RGB(Float32(1.0)) - path_ptr[].albedo) * boost_dl
+                            path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_dl)
                             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_dl, Float32(2000.0), contrib_dl)
 
     if pcg.next_float() < f_entry:
