@@ -1,64 +1,26 @@
-# Foundational spectral-rendering types: hero-wavelength sampling, an
-# analytic CIE-1931 XYZ color-matching-function fit, and an approximate
-# RGB<->spectrum conversion. This is layer 1 of item 15 in the priority
-# backlog ("Spectral rendering") — self-contained and independently
-# testable, NOT yet wired into any integrator. `SampledSpectrum` in
-# geometry.mojo remains an alias for `RGB` until a later layer threads
-# `SampledWavelengths` through the shading context and switches that alias
-# over; see project_spectral_rendering memory for the staged plan.
-#
-# The CIE XYZ fit is the analytic multi-Gaussian approximation from Wyman,
-# Sloan & Shirley, "Simple Analytic Approximations to the CIE XYZ Color
-# Matching Functions" (JCGT 2013) — closed-form, no lookup table needed,
-# accurate to within ~1e-3 of the tabulated CIE 1931 2-degree data over the
-# visible range.
-#
-# The RGB->spectrum upsampling is NOT the Jakob-Hanika 2019 method PBRT
-# itself uses (that needs a precomputed 3D coefficient table produced by an
-# offline per-RGB-value optimization) — it's a much simpler analytic
-# 3-Gaussian-bump basis (one bump per primary), good enough to give a
-# non-flat, plausible-looking spectrum for a given RGB reflectance/emission,
-# but it does NOT round-trip through the CIE integral back to the exact
-# input RGB the way a properly-optimized upsampling table would. Documented
-# limitation, not a bug — matches this session's approach to `measured` and
-# `subsurface` materials (a scoped, clearly-labeled approximation, not the
-# full literature method).
+# Foundational spectral-rendering types: hero-wavelength sampling and
+# spectral-value arithmetic, plus the actual RGB<->spectrum conversion —
+# which is the REAL Jakob & Hanika 2019 method (via rgb2spec.mojo's prebaked
+# table + exact tabulated CIE curves), not an approximation. This used to
+# hold a hand-designed 3-Gaussian-basis approximation (layer 1); that was
+# retired once rgb2spec.mojo's real table was built and verified (layer 2)
+# — see project_spectral_rendering memory for the staged history. This is
+# layer 1+2 combined: self-contained and independently testable, NOT yet
+# wired into any integrator. `SampledSpectrum` in geometry.mojo remains an
+# alias for `RGB` until a later layer threads `SampledWavelengths` through
+# the shading context and switches that alias over.
 
-from std.math import exp, sqrt, cos, sin
+from gonzales.rgb2spec import (
+    SpectrumTable, CieXyzTables, RGBSigmoidCoeffs,
+    rgb_to_coeffs_table_lookup, eval_sigmoid_spectrum,
+    rgb_illuminant_to_coeffs, eval_illuminant_spectrum,
+    build_cie_xyz_tables, cie_xyz_at, xyz_to_srgb,
+    load_default_spectrum_table, CIE_Y_INTEGRAL,
+)
 
 comptime N_SPECTRAL_SAMPLES = 4
 comptime LAMBDA_MIN = Float32(360.0)
 comptime LAMBDA_MAX = Float32(830.0)
-
-# ── Analytic CIE 1931 XYZ color-matching-function fit (Wyman et al. 2013) ──
-
-@always_inline
-def _asym_gaussian(x: Float32, mu: Float32, sigma1: Float32, sigma2: Float32) -> Float32:
-    var sigma = sigma1 if x < mu else sigma2
-    var t = (x - mu) / sigma
-    return exp(Float32(-0.5) * t * t)
-
-@always_inline
-def cie_x(lambda_nm: Float32) -> Float32:
-    return (Float32(1.056) * _asym_gaussian(lambda_nm, Float32(599.8), Float32(37.9), Float32(31.0))
-          + Float32(0.362) * _asym_gaussian(lambda_nm, Float32(442.0), Float32(16.0), Float32(26.7))
-          - Float32(0.065) * _asym_gaussian(lambda_nm, Float32(501.1), Float32(20.4), Float32(26.2)))
-
-@always_inline
-def cie_y(lambda_nm: Float32) -> Float32:
-    return (Float32(0.821) * _asym_gaussian(lambda_nm, Float32(568.8), Float32(46.9), Float32(40.5))
-          + Float32(0.286) * _asym_gaussian(lambda_nm, Float32(530.9), Float32(16.3), Float32(31.1)))
-
-@always_inline
-def cie_z(lambda_nm: Float32) -> Float32:
-    return (Float32(1.217) * _asym_gaussian(lambda_nm, Float32(437.0), Float32(11.8), Float32(36.0))
-          + Float32(0.681) * _asym_gaussian(lambda_nm, Float32(459.0), Float32(26.0), Float32(13.8)))
-
-# Integral of CIE Y-bar over [LAMBDA_MIN, LAMBDA_MAX] — the normalization
-# constant (CIE_Y_INTEGRAL = 106.856895 for the standard 1931 2-degree
-# observer over 360-830nm) used to turn a Monte-Carlo XYZ estimate into
-# properly-normalized tristimulus values (matches PBRT's CIE_Y_integral).
-comptime CIE_Y_INTEGRAL = Float32(106.856895)
 
 # ── Hero-wavelength sampling ────────────────────────────────────────────────
 
@@ -140,87 +102,82 @@ struct SpectralSample(TrivialRegisterPassable):
     def average(self) -> Float32:
         return (self.v0 + self.v1 + self.v2 + self.v3) * Float32(0.25)
 
-# ── RGB -> spectrum upsampling (approximate, see module docstring) ─────────
+# ── Spectral context: the loaded table + CIE data, built once per render ───
+
+@fieldwise_init
+struct SpectralContext(Copyable, Movable):
+    """Bundles everything RGB<->spectrum conversion needs, built ONCE (e.g.
+    at scene load, mirroring how gonzales already builds its sobol matrices
+    once and threads a pointer through the whole render) and passed down to
+    every conversion call — never reloaded/rebuilt per-sample."""
+    var table: SpectrumTable
+    var cie: CieXyzTables
+
+def load_spectral_context(data_dir: String) -> Tuple[Bool, SpectralContext]:
+    var loaded = load_default_spectrum_table(data_dir + "/rgb2spectrum_table.bin")
+    var ok = loaded[0]
+    var table = loaded[1].copy()
+    if not ok:
+        var empty = SpectralContext(table^, CieXyzTables(List[Float64](), List[Float64](), List[Float64]()))
+        return (False, empty^)
+    var cie = build_cie_xyz_tables()
+    var ctx = SpectralContext(table^, cie^)
+    return (True, ctx^)
+
+# ── RGB -> spectrum upsampling (real Jakob-Hanika, via rgb2spec.mojo) ──────
 
 @always_inline
-def _rgb_basis_r(lambda_nm: Float32) -> Float32:
-    return _asym_gaussian(lambda_nm, Float32(600.0), Float32(50.0), Float32(90.0))
+def rgb_to_spectral_sample(ctx: SpectralContext, rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
+    """Reflectance/albedo conversion — values are expected in [0,1] (clamped
+    here defensively) since the table's domain is a bounded reflectance."""
+    var r = Float64(rgb_r); var g = Float64(rgb_g); var b = Float64(rgb_b)
+    if r < Float64(0.0): r = Float64(0.0)
+    if r > Float64(1.0): r = Float64(1.0)
+    if g < Float64(0.0): g = Float64(0.0)
+    if g > Float64(1.0): g = Float64(1.0)
+    if b < Float64(0.0): b = Float64(0.0)
+    if b > Float64(1.0): b = Float64(1.0)
+    var coeffs = rgb_to_coeffs_table_lookup(ctx.table.coeffs, ctx.table.res, r, g, b)
+    return SpectralSample(
+        eval_sigmoid_spectrum(coeffs, wavelengths.lambda0),
+        eval_sigmoid_spectrum(coeffs, wavelengths.lambda1),
+        eval_sigmoid_spectrum(coeffs, wavelengths.lambda2),
+        eval_sigmoid_spectrum(coeffs, wavelengths.lambda3),
+    )
 
 @always_inline
-def _rgb_basis_g(lambda_nm: Float32) -> Float32:
-    return _asym_gaussian(lambda_nm, Float32(545.0), Float32(45.0), Float32(45.0))
-
-@always_inline
-def _rgb_basis_b(lambda_nm: Float32) -> Float32:
-    return _asym_gaussian(lambda_nm, Float32(455.0), Float32(45.0), Float32(50.0))
-
-# Correction matrix so the round trip rgb -> spectrum -> (CIE XYZ) -> rgb is
-# the identity (up to hero-wavelength Monte Carlo noise), NOT an attempt at
-# spectral realism. The raw 3-basis upsampling above measurably does NOT
-# round-trip (white came back as ~(1.54, 1.64, 0.92) with substantial
-# cross-channel bleed when checked numerically) — since the whole pipeline
-# (basis evaluation -> CIE integral -> XYZ->RGB matrix) is linear in the
-# input RGB, that end-to-end map is exactly some 3x3 matrix M. Measured M by
-# feeding in the 3 unit colors (20000-sample stratified hero-wavelength
-# average, converged well past MC noise):
-#   M = [[ 1.363472,  0.313217, -0.133374],
-#        [ 0.507774,  0.897182,  0.236897],
-#        [-0.059150,  0.069572,  0.913498]]
-# and pre-multiply every input RGB by M^-1 here so the net transform is
-# M @ M^-1 = I. This does NOT make the intermediate spectrum "correct" in
-# any physical sense (M^-1 has negative entries, so the pre-corrected
-# per-primary weights can be negative/>1 — clamped per-wavelength below since
-# a reflectance/emission spectrum can't itself go negative) — it only
-# guarantees achromatic colors and the sRGB primaries survive the round trip
-# undistorted, which matters far more for a first spectral-rendering layer
-# than basis-function elegance.
-comptime _M_INV_RR = Float32(0.86027551); comptime _M_INV_RG = Float32(-0.31643614); comptime _M_INV_RB = Float32(0.20766458)
-comptime _M_INV_GR = Float32(-0.51188899); comptime _M_INV_GG = Float32(1.32576438); comptime _M_INV_GB = Float32(-0.41854808)
-comptime _M_INV_BR = Float32(0.09468971); comptime _M_INV_BG = Float32(-0.12146000); comptime _M_INV_BB = Float32(1.14001670)
-
-@always_inline
-def rgb_to_spectral_sample(rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
-    """Evaluate an approximate reflectance/emission spectrum built from 3
-    smooth per-primary basis functions, at the path's 4 hero wavelengths.
-    Pre-corrected by M^-1 (see comment above) so the round trip through
-    spectral_sample_to_rgb is the identity for achromatic/primary colors."""
-    var cr = _M_INV_RR * rgb_r + _M_INV_RG * rgb_g + _M_INV_RB * rgb_b
-    var cg = _M_INV_GR * rgb_r + _M_INV_GG * rgb_g + _M_INV_GB * rgb_b
-    var cb = _M_INV_BR * rgb_r + _M_INV_BG * rgb_g + _M_INV_BB * rgb_b
-    var out = SpectralSample(Float32(0.0))
-    for i in range(N_SPECTRAL_SAMPLES):
-        var lam = wavelengths.get(i)
-        var val = cr * _rgb_basis_r(lam) + cg * _rgb_basis_g(lam) + cb * _rgb_basis_b(lam)
-        val = max(Float32(0.0), val)
-        if i == 0: out.v0 = val
-        elif i == 1: out.v1 = val
-        elif i == 2: out.v2 = val
-        else: out.v3 = val
-    return out
+def rgb_illuminant_to_spectral_sample(ctx: SpectralContext, rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
+    """Light-emission conversion — PBRT's RGBIlluminantSpectrum convention
+    (values are NOT bounded to [0,1], tints the D65 illuminant shape rather
+    than standing alone as a bare reflectance)."""
+    var (coeffs, scale) = rgb_illuminant_to_coeffs(ctx.table, Float64(rgb_r), Float64(rgb_g), Float64(rgb_b))
+    return SpectralSample(
+        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda0),
+        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda1),
+        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda2),
+        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda3),
+    )
 
 # ── spectrum -> RGB (via XYZ), for converting a final pixel radiance sample
 #    back to a displayable color ──────────────────────────────────────────
 
 @always_inline
-def spectral_sample_to_rgb(radiance: SpectralSample, wavelengths: SampledWavelengths) -> Tuple[Float32, Float32, Float32]:
+def spectral_sample_to_rgb(ctx: SpectralContext, radiance: SpectralSample, wavelengths: SampledWavelengths) -> Tuple[Float32, Float32, Float32]:
     """Monte-Carlo estimate of the CIE XYZ integral from one hero-wavelength
-    sample, then XYZ -> linear sRGB. Divides by the sampling pdf and by
-    CIE_Y_INTEGRAL, matching PBRT's SampledSpectrum::ToXYZ/ToRGB — the
+    sample (exact tabulated CIE curves, same data the table itself was
+    fitted against), then XYZ -> linear sRGB. Divides by the sampling pdf and
+    by CIE_Y_INTEGRAL, matching PBRT's SampledSpectrum::ToXYZ/ToRGB — the
     unbiased estimator for integral(radiance(lambda) * cie_x/y/z(lambda) dlambda)
     is (1/N) * sum_i radiance_i * cie_*(lambda_i) / pdf_i."""
-    var x = Float32(0.0); var y = Float32(0.0); var z = Float32(0.0)
+    var x = Float64(0.0); var y = Float64(0.0); var z = Float64(0.0)
     if wavelengths.pdf > Float32(0.0):
         for i in range(N_SPECTRAL_SAMPLES):
-            var lam = wavelengths.get(i)
-            var r = radiance.get(i)
-            x += r * cie_x(lam)
-            y += r * cie_y(lam)
-            z += r * cie_z(lam)
-        var norm = Float32(1.0) / (Float32(N_SPECTRAL_SAMPLES) * wavelengths.pdf * CIE_Y_INTEGRAL)
+            var lam = Float64(wavelengths.get(i))
+            var r = Float64(radiance.get(i))
+            var (xv, yv, zv) = cie_xyz_at(ctx.cie, lam)
+            x += r * xv; y += r * yv; z += r * zv
+        var norm = Float64(1.0) / (Float64(N_SPECTRAL_SAMPLES) * Float64(wavelengths.pdf) * Float64(CIE_Y_INTEGRAL))
         x *= norm; y *= norm; z *= norm
 
-    # XYZ -> linear sRGB (standard matrix, D65 white point)
-    var r_lin =  Float32(3.2406) * x - Float32(1.5372) * y - Float32(0.4986) * z
-    var g_lin = -Float32(0.9689) * x + Float32(1.8758) * y + Float32(0.0415) * z
-    var b_lin =  Float32(0.0557) * x - Float32(0.2040) * y + Float32(1.0570) * z
-    return (r_lin, g_lin, b_lin)
+    var (r_lin, g_lin, b_lin) = xyz_to_srgb(x, y, z)
+    return (Float32(r_lin), Float32(g_lin), Float32(b_lin))

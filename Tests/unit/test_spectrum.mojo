@@ -2,26 +2,47 @@ from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.spectrum import (
     SampledWavelengths, sample_wavelengths_uniform,
-    rgb_to_spectral_sample, spectral_sample_to_rgb,
-    cie_x, cie_y, cie_z, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES,
+    rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
+    SpectralContext, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES,
 )
+from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime EPS: Float32 = 1e-3
 
 def _close(a: Float32, b: Float32, tol: Float32 = EPS) -> Bool:
     return abs(a - b) < tol
 
+comptime TEST_RES = 16
+
+def _test_ctx() -> SpectralContext:
+    var table = build_spectrum_table(TEST_RES)
+    var cie = build_cie_xyz_tables()
+    return SpectralContext(SpectrumTable(table^, TEST_RES), cie^)
+
 # Stratified average over many hero-wavelength draws — removes per-sample MC
 # noise so these tests check the underlying round-trip math, not variance.
 comptime N_TRIALS = 2000
 
-def _roundtrip(r: Float32, g: Float32, b: Float32) -> Tuple[Float32, Float32, Float32]:
+def _roundtrip(ctx: SpectralContext, r: Float32, g: Float32, b: Float32) -> Tuple[Float32, Float32, Float32]:
+    """A bare reflectance spectrum is fit assuming it's viewed under a D65
+    illuminant (the sRGB standard's own convention — sRGB primaries are
+    defined relative to the D65 white point), so it only round-trips back to
+    its own RGB when multiplied by a reference D65 white light (RGB=1,1,1)
+    before conversion — mirrors exactly how a real NEE term (albedo * light)
+    behaves, and matches the diagnostic methodology already used to validate
+    rgb2spec.mojo's product-of-spectra accuracy (see project_spectral_rendering
+    memory). Converting a bare albedo directly (no light) measures its color
+    under an idealized equal-energy illuminant instead — a different, and for
+    saturated colors quite different, number — so that is NOT what's tested
+    here."""
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
         var wl = sample_wavelengths_uniform(u)
-        var spec = rgb_to_spectral_sample(r, g, b, wl)
-        var (rr, gg, bb) = spectral_sample_to_rgb(spec, wl)
+        var alb = rgb_to_spectral_sample(ctx, r, g, b, wl)
+        var light = rgb_illuminant_to_spectral_sample(ctx, Float32(1.0), Float32(1.0), Float32(1.0), wl)
+        var product = alb * light
+        var (rr, gg, bb) = spectral_sample_to_rgb(ctx, product, wl)
         accR += rr; accG += gg; accB += bb
     return (accR / Float32(N_TRIALS), accG / Float32(N_TRIALS), accB / Float32(N_TRIALS))
 
@@ -50,79 +71,89 @@ def test_sample_wavelengths_uniform_strata_are_distinct() raises:
     assert_true(not _close(wl.lambda1, wl.lambda2, Float32(1.0)))
     assert_true(not _close(wl.lambda2, wl.lambda3, Float32(1.0)))
 
-# ── CIE color-matching-function sanity ──────────────────────────────────────
-
-def test_cie_y_peaks_near_555nm() raises:
-    var peak = Float32(-1.0); var peak_lam = Float32(0.0)
-    var lam = LAMBDA_MIN
-    while lam <= LAMBDA_MAX:
-        var yv = cie_y(lam)
-        if yv > peak:
-            peak = yv; peak_lam = lam
-        lam += Float32(2.0)
-    assert_true(_close(peak_lam, Float32(555.0), Float32(6.0)))
-    assert_true(_close(peak, Float32(1.0), Float32(0.05)))
-
-def test_cie_curves_nonnegative_over_visible_range() raises:
-    var lam = LAMBDA_MIN
-    while lam <= LAMBDA_MAX:
-        assert_true(cie_x(lam) >= Float32(-0.01))  # x-bar's small negative lobe near 500nm
-        assert_true(cie_y(lam) >= Float32(-0.001))
-        assert_true(cie_z(lam) >= Float32(-0.001))
-        lam += Float32(5.0)
-
-# ── RGB -> spectrum -> RGB round trip ───────────────────────────────────────
-# The full pipeline is linear in the input RGB (basis evaluation -> CIE
-# integral -> XYZ->RGB matrix), corrected by a precomputed M^-1 so achromatic
-# colors and the primaries round-trip cleanly; see spectrum.mojo's comment on
-# _M_INV_* for the derivation. These tests pin that guarantee down.
+# ── RGB -> spectrum -> RGB round trip (real Jakob-Hanika table) ────────────
+# Much tighter tolerances than the old basis-function approximation — this is
+# the actual pbrt method, verified to sub-1% at the shipped res=64 (see
+# rgb2spec.mojo/project_spectral_rendering memory); tests here use a smaller
+# TEST_RES for speed, so tolerances are a bit looser than production.
 
 def test_roundtrip_white_is_near_identity() raises:
-    var (r, g, b) = _roundtrip(Float32(1.0), Float32(1.0), Float32(1.0))
-    assert_true(_close(r, Float32(1.0), Float32(0.01)))
-    assert_true(_close(g, Float32(1.0), Float32(0.01)))
-    assert_true(_close(b, Float32(1.0), Float32(0.01)))
+    var ctx = _test_ctx()
+    var (r, g, b) = _roundtrip(ctx, Float32(1.0), Float32(1.0), Float32(1.0))
+    assert_true(_close(r, Float32(1.0), Float32(0.02)))
+    assert_true(_close(g, Float32(1.0), Float32(0.02)))
+    assert_true(_close(b, Float32(1.0), Float32(0.02)))
 
 def test_roundtrip_grey_scales_linearly() raises:
-    var (r, g, b) = _roundtrip(Float32(0.5), Float32(0.5), Float32(0.5))
-    assert_true(_close(r, Float32(0.5), Float32(0.01)))
-    assert_true(_close(g, Float32(0.5), Float32(0.01)))
-    assert_true(_close(b, Float32(0.5), Float32(0.01)))
+    var ctx = _test_ctx()
+    var (r, g, b) = _roundtrip(ctx, Float32(0.5), Float32(0.5), Float32(0.5))
+    assert_true(_close(r, Float32(0.5), Float32(0.02)))
+    assert_true(_close(g, Float32(0.5), Float32(0.02)))
+    assert_true(_close(b, Float32(0.5), Float32(0.02)))
 
 def test_roundtrip_black_is_black() raises:
-    var (r, g, b) = _roundtrip(Float32(0.0), Float32(0.0), Float32(0.0))
-    assert_true(_close(r, Float32(0.0)))
-    assert_true(_close(g, Float32(0.0)))
-    assert_true(_close(b, Float32(0.0)))
+    var ctx = _test_ctx()
+    var (r, g, b) = _roundtrip(ctx, Float32(0.0), Float32(0.0), Float32(0.0))
+    assert_true(_close(r, Float32(0.0), Float32(0.02)))
+    assert_true(_close(g, Float32(0.0), Float32(0.02)))
+    assert_true(_close(b, Float32(0.0), Float32(0.02)))
 
 def test_roundtrip_red_dominant_channel_preserved() raises:
-    """Not an exact round trip (the spectrum's non-negativity clamp is a real,
-    documented nonlinearity) — but the dominant channel must stay dominant
-    and the off-channel bleed must stay small, or the approximation isn't
-    good enough to be useful."""
-    var (r, g, b) = _roundtrip(Float32(1.0), Float32(0.0), Float32(0.0))
-    assert_true(r > Float32(0.9))
-    assert_true(g < Float32(0.15))
-    assert_true(b < Float32(0.05))
+    var ctx = _test_ctx()
+    var (r, g, b) = _roundtrip(ctx, Float32(0.8), Float32(0.05), Float32(0.05))
+    assert_true(_close(r, Float32(0.8), Float32(0.03)))
+    assert_true(_close(g, Float32(0.05), Float32(0.03)))
+    assert_true(_close(b, Float32(0.05), Float32(0.03)))
 
 def test_roundtrip_green_dominant_channel_preserved() raises:
-    var (r, g, b) = _roundtrip(Float32(0.0), Float32(1.0), Float32(0.0))
-    assert_true(g > Float32(0.9))
-    assert_true(r < Float32(0.15))
-    assert_true(b < Float32(0.05))
+    var ctx = _test_ctx()
+    var (r, g, b) = _roundtrip(ctx, Float32(0.05), Float32(0.8), Float32(0.05))
+    assert_true(_close(r, Float32(0.05), Float32(0.03)))
+    assert_true(_close(g, Float32(0.8), Float32(0.03)))
+    assert_true(_close(b, Float32(0.05), Float32(0.03)))
 
 def test_roundtrip_blue_dominant_channel_preserved() raises:
-    var (r, g, b) = _roundtrip(Float32(0.0), Float32(0.0), Float32(1.0))
-    assert_true(b > Float32(0.9))
-    assert_true(r < Float32(0.1))
-    assert_true(g < Float32(0.1))
+    var ctx = _test_ctx()
+    var (r, g, b) = _roundtrip(ctx, Float32(0.05), Float32(0.05), Float32(0.8))
+    assert_true(_close(r, Float32(0.05), Float32(0.03)))
+    assert_true(_close(g, Float32(0.05), Float32(0.03)))
+    assert_true(_close(b, Float32(0.8), Float32(0.03)))
 
 def test_spectral_sample_values_are_nonnegative() raises:
     """A reflectance/emission spectrum can never go negative at any
-    wavelength, regardless of input RGB (even out-of-gamut-leaning inputs
-    that make the M^-1-corrected coefficients negative)."""
+    wavelength (sigmoid is bounded in (0,1) by construction), regardless of
+    input RGB."""
+    var ctx = _test_ctx()
     var wl = sample_wavelengths_uniform(Float32(0.42))
-    var spec = rgb_to_spectral_sample(Float32(1.0), Float32(0.0), Float32(0.0), wl)
+    var spec = rgb_to_spectral_sample(ctx, Float32(1.0), Float32(0.0), Float32(0.0), wl)
+    assert_true(spec.v0 >= Float32(0.0))
+    assert_true(spec.v1 >= Float32(0.0))
+    assert_true(spec.v2 >= Float32(0.0))
+    assert_true(spec.v3 >= Float32(0.0))
+
+# ── illuminant (light-color) conversion ─────────────────────────────────────
+
+def test_illuminant_roundtrip_matches_direct_rgb_for_neutral_light() raises:
+    """A neutral (equal-RGB) light emission should round-trip to itself,
+    same as a neutral albedo — the illuminant scale/D65-tint machinery
+    shouldn't introduce color shift for the achromatic case."""
+    var ctx = _test_ctx()
+    var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
+    for i in range(N_TRIALS):
+        var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
+        var wl = sample_wavelengths_uniform(u)
+        var spec = rgb_illuminant_to_spectral_sample(ctx, Float32(10.0), Float32(10.0), Float32(10.0), wl)
+        var (rr, gg, bb) = spectral_sample_to_rgb(ctx, spec, wl)
+        accR += rr; accG += gg; accB += bb
+    accR /= Float32(N_TRIALS); accG /= Float32(N_TRIALS); accB /= Float32(N_TRIALS)
+    assert_true(_close(accR, Float32(10.0), Float32(0.5)))
+    assert_true(_close(accG, Float32(10.0), Float32(0.5)))
+    assert_true(_close(accB, Float32(10.0), Float32(0.5)))
+
+def test_illuminant_spectral_values_are_nonnegative() raises:
+    var ctx = _test_ctx()
+    var wl = sample_wavelengths_uniform(Float32(0.6))
+    var spec = rgb_illuminant_to_spectral_sample(ctx, Float32(17.0), Float32(12.0), Float32(4.0), wl)
     assert_true(spec.v0 >= Float32(0.0))
     assert_true(spec.v1 >= Float32(0.0))
     assert_true(spec.v2 >= Float32(0.0))

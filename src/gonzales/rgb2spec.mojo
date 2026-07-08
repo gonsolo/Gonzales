@@ -573,3 +573,83 @@ def load_spectrum_table(path: String) -> Tuple[Bool, Int, List[Float32]]:
         return (True, res, out^)
     except:
         return (False, 0, empty^)
+
+# ── Render-facing wrappers — the actual API spectrum.mojo consumes ─────────
+#
+# CIE_Y_INTEGRAL, exact tabulated CIE X/Y/Z evaluation, and the D65
+# illuminant convention all live here (not spectrum.mojo) since they're the
+# same color-science data this file already ships (the 95-sample tabulated
+# CIE curves, the D65 table, the XYZ<->sRGB matrices) — spectrum.mojo only
+# adds wavelength SAMPLING and spectral-value arithmetic on top.
+
+comptime CIE_Y_INTEGRAL = Float32(106.856895)
+
+@fieldwise_init
+struct SpectrumTable(Copyable, Movable):
+    """A loaded dense Jakob-Hanika coefficient grid (see build_spectrum_table)
+    ready for O(1) queries via rgb_to_coeffs_table_lookup."""
+    var coeffs: List[Float32]
+    var res: Int
+
+def load_default_spectrum_table(path: String) -> Tuple[Bool, SpectrumTable]:
+    var loaded = load_spectrum_table(path)
+    var ok = loaded[0]
+    var res = loaded[1]
+    var table = loaded[2].copy()
+    if not ok:
+        return (False, SpectrumTable(List[Float32](), 0))
+    return (True, SpectrumTable(table^, res))
+
+@fieldwise_init
+struct CieXyzTables(Copyable, Movable):
+    """Exact tabulated CIE 1931 2-degree X/Y/Z color-matching functions
+    (the same 95-sample data used to fit the spectrum table itself), built
+    once and reused for every spectral->XYZ conversion at render time."""
+    var x_tbl: List[Float64]
+    var y_tbl: List[Float64]
+    var z_tbl: List[Float64]
+
+def build_cie_xyz_tables() -> CieXyzTables:
+    return CieXyzTables(_CIE_X(), _CIE_Y(), _CIE_Z())
+
+@always_inline
+def cie_xyz_at(tables: CieXyzTables, lambda_nm: Float64) -> Tuple[Float64, Float64, Float64]:
+    return (
+        _cie_interp(tables.x_tbl, lambda_nm),
+        _cie_interp(tables.y_tbl, lambda_nm),
+        _cie_interp(tables.z_tbl, lambda_nm),
+    )
+
+@always_inline
+def xyz_to_srgb(x: Float64, y: Float64, z: Float64) -> Tuple[Float64, Float64, Float64]:
+    var r = _XYZ_TO_SRGB00 * x + _XYZ_TO_SRGB01 * y + _XYZ_TO_SRGB02 * z
+    var g = _XYZ_TO_SRGB10 * x + _XYZ_TO_SRGB11 * y + _XYZ_TO_SRGB12 * z
+    var b = _XYZ_TO_SRGB20 * x + _XYZ_TO_SRGB21 * y + _XYZ_TO_SRGB22 * z
+    return (r, g, b)
+
+@always_inline
+def cie_d65_runtime(lambda_nm: Float32) -> Float32:
+    """PBRT's RUNTIME D65 illuminant (RGBColorSpace::illuminant): rescaled so
+    integral(D65*ybar) = CIE_Y_integral (~106.86), NOT the unit-luminance
+    convention _cie_d65 uses internally for FITTING the table."""
+    return Float32(_cie_d65(Float64(lambda_nm))) * CIE_Y_INTEGRAL
+
+def rgb_illuminant_to_coeffs(table: SpectrumTable, r: Float64, g: Float64, b: Float64) -> Tuple[RGBSigmoidCoeffs, Float64]:
+    """PBRT's RGBIlluminantSpectrum convention for light-color RGB values
+    (which are NOT in [0,1] like a reflectance): scale=2*max(r,g,b), fit the
+    table against rgb/scale, evaluate as scale*rsp(lambda)*D65(lambda) — the
+    fitted sigmoid tints the D65 shape, it doesn't stand alone. Returns the
+    fitted coefficients plus the scale factor to apply via
+    eval_illuminant_spectrum."""
+    var maxc = r
+    if g > maxc: maxc = g
+    if b > maxc: maxc = b
+    var scale = Float64(2.0) * maxc
+    if scale < Float64(1e-6):
+        scale = Float64(1.0)
+    var coeffs = rgb_to_coeffs_table_lookup(table.coeffs, table.res, r / scale, g / scale, b / scale)
+    return (coeffs, scale)
+
+@always_inline
+def eval_illuminant_spectrum(coeffs: RGBSigmoidCoeffs, scale: Float64, lambda_nm: Float32) -> Float32:
+    return eval_sigmoid_spectrum(coeffs, lambda_nm) * Float32(scale) * cie_d65_runtime(lambda_nm)
