@@ -89,6 +89,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var mat_remap_roughness = True
     var tex_idx_for_mat = Int32(-1)
     var normal_tex_idx_for_mat = Int32(-1)
+    var rough_tex_idx_for_mat = Int32(-1)
     # Procedural checkerboard params, only meaningful when tex_idx_for_mat == -2.
     var checker_tex1 = RGB(Float32(1))
     var checker_tex2 = RGB(Float32(0))
@@ -239,6 +240,22 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                         checker_uscale = s[0].checker_uscale[ki]
                         checker_vscale = s[0].checker_vscale[ki]
                         break
+        elif (ps.name_is("roughness") or ps.name_is("uroughness")) and ps.type_buf[0] == UInt8(116):  # 't' = texture
+            # Isotropic only: applies to both roughU/roughV (matches every
+            # texture-roughness usage seen in this scene corpus so far — a
+            # separate "texture vroughness" would need its own slot, not
+            # added since nothing uses it yet). Imagemap textures only (no
+            # constant-texture/checkerboard fallback, unlike "reflectance"
+            # above — a roughness value read off a procedural checkerboard
+            # or flat-color texture isn't a pattern seen in practice).
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
+            if ps.is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            var rough_str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            for ti in range(len(s[0].tex_names)):
+                if s[0].tex_names[ti] == rough_str_name:
+                    rough_tex_idx_for_mat = Int32(ti)
+                    break
         elif ps.name_is("L") and ps.is_float():
             _psc_scan_rgb(handle, rgb, ps.is_array)
         elif ps.name_is("filename") and is_measured and ps.type_buf[0] == UInt8(115):  # 's' = string
@@ -307,7 +324,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     # Store into named_materials List
     var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
     # For named-spectrum conductors: compute Fresnel F0 per channel
-    if has_spectral_conductor and mat_type == MatKind.conductor:
+    if has_spectral_conductor and (mat_type == MatKind.conductor or mat_type == MatKind.coated_conductor):
         var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
                   ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
         var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
@@ -345,6 +362,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
+    nm.rough_tex_idx  = rough_tex_idx_for_mat
     nm.checker_tex1   = checker_tex1
     nm.checker_tex2   = checker_tex2
     nm.checker_uscale = checker_uscale

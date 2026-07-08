@@ -282,6 +282,12 @@ struct Material_C(TrivialRegisterPassable):
     var roughU: Float32     # GGX uroughness (conductor); 0 = perfect mirror
     var roughV: Float32     # GGX vroughness (conductor); 0 = perfect mirror
     var normal_tex_idx: Int32  # -1 = no normal map; >= 0 = index into texture table
+    var rough_tex_idx: Int32   # -1 = no roughness map; >= 0 = index into texture table.
+                                # Isotropic only (applies to both roughU/roughV) -- covers
+                                # the "texture roughness" param, not separate per-axis
+                                # "texture uroughness"/"texture vroughness" textures.
+                                # Conductor only today (shade_conductor); not resolved for
+                                # coated_conductor/dielectric/coated_diffuse's coat.
     var medium_interface_idx: Int32  # -1 = no medium interface bound
     # Procedural checkerboard params, valid only when tex_idx == -2.
     var checker_tex1: RGB

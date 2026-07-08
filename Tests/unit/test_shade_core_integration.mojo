@@ -35,7 +35,7 @@ def test_shade_core_area_light_hit_adds_emission() raises:
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)),                                  # albedo (unused for area_light)
         RGB(Float32(2.0), Float32(3.0), Float32(4.0)),      # emission
-        Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1),
+        Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0),
     )
 

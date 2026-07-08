@@ -1413,6 +1413,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         mats[i].roughU  = nm3.roughness_u
         mats[i].roughV  = nm3.roughness_v
         mats[i].normal_tex_idx = nm3.normal_tex_idx
+        mats[i].rough_tex_idx = nm3.rough_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
         mats[i].checker_tex1   = nm3.checker_tex1
         mats[i].checker_tex2   = nm3.checker_tex2
@@ -1543,6 +1544,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[al_mat_base + al_idx].roughU   = Float32(0)
             mats[al_mat_base + al_idx].roughV   = Float32(0)
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
+            mats[al_mat_base + al_idx].rough_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             al_count += 1
 
@@ -1566,6 +1568,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[slot].roughU   = Float32(0)
             mats[slot].roughV   = Float32(0)
             mats[slot].normal_tex_idx = Int32(-1)
+            mats[slot].rough_tex_idx = Int32(-1)
             mats[slot].medium_interface_idx = Int32(-1)
             curve_al_running += 1
         else:

@@ -1105,6 +1105,31 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     if not ok:
         path_ptr[].active = 0
         return
+
+    # Texture-driven roughness ("texture roughness"/"uroughness" — see
+    # material_builder.mojo): resolve to a local mutable copy of `mat` here,
+    # once, before anything reads roughU/V below, rather than threading a
+    # texture lookup through every downstream GGX-alpha call site. Isotropic
+    # only (see Material_C.rough_tex_idx's docstring); falls back to the
+    # parsed scalar roughU/V when there's no texture or no UVs.
+    var mat_eff = mat
+    if mat_eff.rough_tex_idx >= Int32(0) and Int(mesh.uvs) > 4:
+        var bw0 = Float32(1.0) - inter.u - inter.v
+        var uv_u = bw0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
+        var uv_v = bw0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
+        var found = False
+        var rtex = sample_texture[use_gpu](Int(mat_eff.rough_tex_idx), uv_u, uv_v, True, Float32(0.0),
+            ctx.tex_filenames, ctx.textures, ctx.n_textures, found)
+        if found:
+            # Perceptual roughness -> GGX alpha (remaproughness=true default,
+            # matching the scalar-float "roughness" param's own sqrt() remap
+            # in material_builder.mojo -- not threading the remaproughness
+            # bool through the texture path since every scene seen so far
+            # uses the default).
+            var r = sqrt(max(rtex.luma(), Float32(0.0)))
+            mat_eff.roughU = r
+            mat_eff.roughV = r
+
     var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
     var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
@@ -1115,8 +1140,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
 
     # roughU/V already hold the resolved GGX alpha — no squaring here.
-    var alpha_x = max(mat.roughU, Float32(0.0001))
-    var alpha_y = max(mat.roughV, Float32(0.0001))
+    var alpha_x = max(mat_eff.roughU, Float32(0.0001))
+    var alpha_y = max(mat_eff.roughV, Float32(0.0001))
 
     # Anisotropy tangent frame: UV-gradient (aligned to texture space) when the
     # mesh has UVs and the material is anisotropic; else an arbitrary Frisvad
@@ -1153,14 +1178,14 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         RGB(Float32(0.0)), Float32(0.0))
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var bs = bxdf_sample_conductor(gc, mat, pcg.next_float(), pcg.next_float())
+    var bs = bxdf_sample_conductor(gc, mat_eff, pcg.next_float(), pcg.next_float())
     if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
         var alpha_iso = max(alpha_x, alpha_y)
-        _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat.albedo, alpha_iso, pcg)
+        _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat_eff.albedo, alpha_iso, pcg)
         path_ptr[].pcgState = pcg.state
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            path_ptr[].albedo = mat.albedo
+            path_ptr[].albedo = mat_eff.albedo
         path_ptr[].throughput *= bs.f
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_iso)
@@ -1174,7 +1199,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
         path_ptr[].pcgState = pcg.state
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
+        _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat_eff.albedo)
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.

@@ -27,6 +27,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var roughness_v:    Float32
     var tex_idx:        Int32
     var normal_tex_idx: Int32
+    var rough_tex_idx:  Int32
     var mix_name1:      String
     var mix_name2:      String
     var mix_amount:     Float32
@@ -46,6 +47,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.roughness_v    = Float32(0)
         self.tex_idx        = Int32(-1)
         self.normal_tex_idx = Int32(-1)
+        self.rough_tex_idx  = Int32(-1)
         self.mix_name1      = String("")
         self.mix_name2      = String("")
         self.mix_amount     = Float32(0.5)

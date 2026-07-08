@@ -55,7 +55,7 @@ def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], 
 
 def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material_C:
     return Material_C(Int8(1), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
-        Int32(-1), Float32(0.0), Float32(0.0), normal_tex_idx, Int32(-1),
+        Int32(-1), Float32(0.0), Float32(0.0), normal_tex_idx, Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0))
 
 def _null_light_context() -> LightContext:

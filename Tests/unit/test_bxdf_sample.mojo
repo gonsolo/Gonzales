@@ -20,7 +20,7 @@ def _simd_len(v: SIMD[DType.float32, 3]) -> Float32:
 
 def _make_material(albedo: RGB, roughU: Float32, roughV: Float32) -> Material_C:
     return Material_C(Int8(0), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
-        Int32(-1), roughU, roughV, Int32(-1), Int32(-1),
+        Int32(-1), roughU, roughV, Int32(-1), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0))
 
 def _make_gc(
