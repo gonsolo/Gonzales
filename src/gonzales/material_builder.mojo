@@ -7,6 +7,7 @@ from .lexer import (PbrtScanner, scanner_parse_quoted_string,
                     _psc_scan_one_bool)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
 from .geometry import RGB, MatKind
+from .measured_bsdf import load_measured_bsdf_reflectance
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                    s: UnsafePointer[SceneParseState, MutAnyOrigin],
@@ -25,6 +26,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     var metal_k   = alloc[Float32](3)
     metal_k[0] = Float32(0.5); metal_k[1] = Float32(0.5); metal_k[2] = Float32(0.5)
     var has_spectral_conductor = False
+    # "measured" (tabulated .bsdf) material — approximated as a rough
+    # conductor whose F0 is the mean of the file's own "luminance" tensor;
+    # see measured_bsdf.mojo for why this isn't the full spectral BxDF.
+    var is_measured = False
     # hair material melanin parameters
     var eumelanin   = Float32(0.0)
     var pheomelanin = Float32(0.0)
@@ -32,6 +37,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     sigma_a_rgb[0] = Float32(-1); sigma_a_rgb[1] = Float32(-1); sigma_a_rgb[2] = Float32(-1)
     var has_sigma_a = False
     var mat_type = MatKind.diffuse
+    var mat_ior  = Float32(1.5)
+    var mat_roughU = Float32(0.0)
+    var mat_roughV = Float32(0.0)
     # For inline Material directives, the first quoted string is the TYPE, not the name.
     # Map it to mat_type; the name buffer keeps the type string as a synthetic key.
     if inline_type:
@@ -45,17 +53,18 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
         elif _psc_streq(mat_name, "hair"):          mat_type = MatKind.hair
         elif _psc_streq(mat_name, "interface"):     mat_type = MatKind.interface
         elif _psc_streq(mat_name, "diffuse"):       mat_type = MatKind.diffuse
+        elif _psc_streq(mat_name, "measured"):
+            mat_type = MatKind.conductor
+            is_measured = True
+            mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
         else:
-            # Unrecognized material type (e.g. pbrt's "measured" or "subsurface",
-            # neither implemented here) — used to fall back to a flat 50%-grey
-            # diffuse in total silence, which made scenes using them (sportscar,
-            # lte-orb, sssdragon) look wrong with no clue why. mat_type already
-            # defaults to MatKind.diffuse above, so this just adds the warning.
+            # Unrecognized material type (e.g. pbrt's "subsurface", not
+            # implemented here) — used to fall back to a flat 50%-grey diffuse
+            # in total silence, which made scenes using it look wrong with no
+            # clue why. mat_type already defaults to MatKind.diffuse above, so
+            # this just adds the warning.
             var unsup_name = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
-            print("Warning: unsupported material type '" + unsup_name + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface.")
-    var mat_ior  = Float32(1.5)
-    var mat_roughU = Float32(0.0)
-    var mat_roughV = Float32(0.0)
+            print("Warning: unsupported material type '" + unsup_name + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate).")
     # pbrt default: remaproughness=true means roughU/V are a perceptual
     # roughness remapped to GGX alpha via sqrt(); false means the parsed
     # value already IS alpha and must be used as-is (see RoughnessToAlpha
@@ -102,10 +111,14 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_type = MatKind.interface
             elif _psc_streq(str_val, "diffuse"):
                 mat_type = MatKind.diffuse
+            elif _psc_streq(str_val, "measured"):
+                mat_type = MatKind.conductor
+                is_measured = True
+                mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
             else:
                 # See the matching inline_type warning above.
                 var unsup_name2 = String(unsafe_from_utf8_ptr=str_val.as_immutable())
-                print("Warning: unsupported material type '" + unsup_name2 + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface.")
+                print("Warning: unsupported material type '" + unsup_name2 + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate).")
                 mat_type = MatKind.diffuse
         elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
             if ps.name_is("eta"):
@@ -207,6 +220,21 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                         break
         elif ps.name_is("L") and ps.is_float():
             _psc_scan_rgb(handle, rgb, ps.is_array)
+        elif ps.name_is("filename") and is_measured and ps.type_buf[0] == UInt8(115):  # 's' = string
+            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
+            if ps.is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            var bsdf_path = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
+            var (bsdf_ok, mean_lum) = load_measured_bsdf_reflectance(bsdf_path)
+            if bsdf_ok:
+                # Clamp away from the extremes — a raw tensor mean can read
+                # near 0 or above 1 at the tabulated grid's edges/highlights,
+                # neither of which is a sane Fresnel F0 for the conductor
+                # approximation this material is being rendered as.
+                var refl = min(Float32(0.95), max(Float32(0.03), mean_lum))
+                rgb[0] = refl; rgb[1] = refl; rgb[2] = refl
+            else:
+                print("Warning: could not read measured BRDF file '" + bsdf_path + "' — using default grey")
         elif (ps.name_is("normalmap") or ps.name_is("bumpmap")) and ps.type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
             _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
             if ps.is_array:
