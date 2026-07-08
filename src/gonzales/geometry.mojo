@@ -139,8 +139,15 @@ struct Bounds3f(TrivialRegisterPassable):
     var max: Point3f
 
 # ── Color / Spectrum ───────────────────────────────────────────────────────────
-# SampledSpectrum is currently an RGB triple. This alias makes the shader code
-# forward-compatible with a future spectral representation.
+# SampledSpectrum is the RGB-typed running throughput/radiance accumulator
+# threaded through PathState_C, BDPTVertex, SPPMPixel/SPPMPhoton, etc. It is
+# deliberately RGB, not a 4-wide spectral type: real per-wavelength spectral
+# evaluation (spectrum.mojo's SpectralSample, Jakob-Hanika upsampling) happens
+# only at the specific points that need it -- NEE terms, medium transmittance
+# -- converting back to RGB immediately so it can fold into this accumulator.
+# Flipping this alias to a true spectral accumulator (full multi-bounce
+# spectral coherence) is a distinct, much larger future project, not a
+# mechanical rename -- see project_spectral_rendering memory's Stage 6 notes.
 # See: docs/02_spectra_and_color.md
 
 @fieldwise_init
@@ -216,7 +223,8 @@ struct RGB(TrivialRegisterPassable):
 
 comptime SampledSpectrum = RGB
 # <<listing: SampledSpectrum>>
-"""Placeholder alias for a future spectral type. Currently == RGB.
+"""RGB-typed running throughput/radiance accumulator. Intentionally == RGB,
+   not a spectral type -- see the comment above this alias's declaration.
    See: docs/02_spectra_and_color.md
 # <</listing>>
 """
