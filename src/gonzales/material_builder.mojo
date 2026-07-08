@@ -30,6 +30,12 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     # conductor whose F0 is the mean of the file's own "luminance" tensor;
     # see measured_bsdf.mojo for why this isn't the full spectral BxDF.
     var is_measured = False
+    # "subsurface" — approximated as coateddiffuse; "string name" (a named
+    # measured-scattering preset, e.g. "Skin1") needs its own lookup since no
+    # other material type uses that param name. See measured_bsdf.mojo-style
+    # scoping note at the subsurface branch below for why this isn't a real
+    # BSSRDF.
+    var is_subsurface = False
     # hair material melanin parameters
     var eumelanin   = Float32(0.0)
     var pheomelanin = Float32(0.0)
@@ -57,14 +63,25 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             mat_type = MatKind.conductor
             is_measured = True
             mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
+        elif _psc_streq(mat_name, "subsurface"):
+            # Approximated as a coateddiffuse (specular coat + Lambertian
+            # base) — real subsurface needs a volumetric random walk /
+            # BSSRDF (lateral light transport under the surface, translucency
+            # through thin geometry), which this does NOT reproduce. This
+            # just gets the base color roughly right (see the "name" param
+            # handler below) so the material isn't flat grey; reuses
+            # coateddiffuse's existing reflectance-texture/roughness/eta
+            # parsing below for free since subsurface uses the same param
+            # names for those.
+            mat_type = MatKind.coated_diffuse
+            is_subsurface = True
         else:
-            # Unrecognized material type (e.g. pbrt's "subsurface", not
-            # implemented here) — used to fall back to a flat 50%-grey diffuse
-            # in total silence, which made scenes using it look wrong with no
-            # clue why. mat_type already defaults to MatKind.diffuse above, so
-            # this just adds the warning.
+            # Unrecognized material type — used to fall back to a flat
+            # 50%-grey diffuse in total silence, which made scenes using it
+            # look wrong with no clue why. mat_type already defaults to
+            # MatKind.diffuse above, so this just adds the warning.
             var unsup_name = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
-            print("Warning: unsupported material type '" + unsup_name + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate).")
+            print("Warning: unsupported material type '" + unsup_name + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface (approximate).")
     # pbrt default: remaproughness=true means roughU/V are a perceptual
     # roughness remapped to GGX alpha via sqrt(); false means the parsed
     # value already IS alpha and must be used as-is (see RoughnessToAlpha
@@ -115,10 +132,14 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_type = MatKind.conductor
                 is_measured = True
                 mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
+            elif _psc_streq(str_val, "subsurface"):
+                # See the matching inline_type comment above.
+                mat_type = MatKind.coated_diffuse
+                is_subsurface = True
             else:
                 # See the matching inline_type warning above.
                 var unsup_name2 = String(unsafe_from_utf8_ptr=str_val.as_immutable())
-                print("Warning: unsupported material type '" + unsup_name2 + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate).")
+                print("Warning: unsupported material type '" + unsup_name2 + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface (approximate).")
                 mat_type = MatKind.diffuse
         elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
             if ps.name_is("eta"):
@@ -235,6 +256,28 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 rgb[0] = refl; rgb[1] = refl; rgb[2] = refl
             else:
                 print("Warning: could not read measured BRDF file '" + bsdf_path + "' — using default grey")
+        elif ps.name_is("name") and is_subsurface and ps.is_str():
+            # Named measured-scattering preset (Jensen/Marschner/Levoy/Hanrahan
+            # 2001, "A Practical Model for Subsurface Light Transport" — the
+            # same table pbrt's GetMediumScatteringProperties uses). Only the
+            # presets actually seen in this scene corpus (sssdragon's "Skin1")
+            # plus its common companion "Skin2" are included — add more from
+            # pbrt's media.cpp SubsurfaceParameterTable if another shows up.
+            # Approximates the base reflectance as each channel's single-
+            # scattering albedo sigma_s'/(sigma_s'+sigma_a) — not the true
+            # dipole diffuse reflectance, but a reasonable, cheap proxy (and,
+            # notably, no substitute for the real lateral subsurface light
+            # transport this material is completely missing).
+            _ = scanner_parse_quoted_string(handle, str_val, 64)
+            if ps.is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+            if _psc_streq(str_val, "Skin1"):
+                rgb[0] = Float32(0.9585); rgb[1] = Float32(0.8381); rgb[2] = Float32(0.6779)
+            elif _psc_streq(str_val, "Skin2"):
+                rgb[0] = Float32(0.9882); rgb[1] = Float32(0.9578); rgb[2] = Float32(0.9250)
+            else:
+                var preset_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+                print("Warning: unrecognized subsurface preset '" + preset_name + "' — using default grey reflectance")
         elif (ps.name_is("normalmap") or ps.name_is("bumpmap")) and ps.type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
             _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
             if ps.is_array:
