@@ -2,7 +2,7 @@ from std.math import sqrt
 from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
-from .spectrum import SampledWavelengths, SpectralSample, SpectralContext, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample
+from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -499,7 +499,7 @@ def bxdf_eval_any_spectral(
     n:        SIMD[DType.float32, 3],
     wo:       SIMD[DType.float32, 3],
     wi:       SIMD[DType.float32, 3],
-    ctx:         SpectralContext,
+    ctx:         SpectralHandle,
     wavelengths: SampledWavelengths,
 ) -> Tuple[SpectralSample, Float32]:
     var alb_spectral = rgb_to_spectral_sample(ctx, alb.r, alb.g, alb.b, wavelengths)
@@ -522,7 +522,7 @@ def _nee_weight_simple_spectral(
     alpha: Float32,
     n:     SIMD[DType.float32, 3],
     wo:    SIMD[DType.float32, 3],
-    ctx:         SpectralContext,
+    ctx:         SpectralHandle,
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the

@@ -3,7 +3,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.spectrum import (
     SampledWavelengths, sample_wavelengths_uniform,
     rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
-    SpectralContext, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES,
+    SpectralContext, SpectralHandle, spectral_handle, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES,
 )
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
@@ -23,7 +23,7 @@ def _test_ctx() -> SpectralContext:
 # noise so these tests check the underlying round-trip math, not variance.
 comptime N_TRIALS = 2000
 
-def _roundtrip(ctx: SpectralContext, r: Float32, g: Float32, b: Float32) -> Tuple[Float32, Float32, Float32]:
+def _roundtrip(handle: SpectralHandle, r: Float32, g: Float32, b: Float32) -> Tuple[Float32, Float32, Float32]:
     """A bare reflectance spectrum is fit assuming it's viewed under a D65
     illuminant (the sRGB standard's own convention — sRGB primaries are
     defined relative to the D65 white point), so it only round-trips back to
@@ -39,10 +39,10 @@ def _roundtrip(ctx: SpectralContext, r: Float32, g: Float32, b: Float32) -> Tupl
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
         var wl = sample_wavelengths_uniform(u)
-        var alb = rgb_to_spectral_sample(ctx, r, g, b, wl)
-        var light = rgb_illuminant_to_spectral_sample(ctx, Float32(1.0), Float32(1.0), Float32(1.0), wl)
+        var alb = rgb_to_spectral_sample(handle, r, g, b, wl)
+        var light = rgb_illuminant_to_spectral_sample(handle, Float32(1.0), Float32(1.0), Float32(1.0), wl)
         var product = alb * light
-        var (rr, gg, bb) = spectral_sample_to_rgb(ctx, product, wl)
+        var (rr, gg, bb) = spectral_sample_to_rgb(handle, product, wl)
         accR += rr; accG += gg; accB += bb
     return (accR / Float32(N_TRIALS), accG / Float32(N_TRIALS), accB / Float32(N_TRIALS))
 
@@ -79,42 +79,48 @@ def test_sample_wavelengths_uniform_strata_are_distinct() raises:
 
 def test_roundtrip_white_is_near_identity() raises:
     var ctx = _test_ctx()
-    var (r, g, b) = _roundtrip(ctx, Float32(1.0), Float32(1.0), Float32(1.0))
+    var handle = spectral_handle(ctx)
+    var (r, g, b) = _roundtrip(handle, Float32(1.0), Float32(1.0), Float32(1.0))
     assert_true(_close(r, Float32(1.0), Float32(0.02)))
     assert_true(_close(g, Float32(1.0), Float32(0.02)))
     assert_true(_close(b, Float32(1.0), Float32(0.02)))
 
 def test_roundtrip_grey_scales_linearly() raises:
     var ctx = _test_ctx()
-    var (r, g, b) = _roundtrip(ctx, Float32(0.5), Float32(0.5), Float32(0.5))
+    var handle = spectral_handle(ctx)
+    var (r, g, b) = _roundtrip(handle, Float32(0.5), Float32(0.5), Float32(0.5))
     assert_true(_close(r, Float32(0.5), Float32(0.02)))
     assert_true(_close(g, Float32(0.5), Float32(0.02)))
     assert_true(_close(b, Float32(0.5), Float32(0.02)))
 
 def test_roundtrip_black_is_black() raises:
     var ctx = _test_ctx()
-    var (r, g, b) = _roundtrip(ctx, Float32(0.0), Float32(0.0), Float32(0.0))
+    var handle = spectral_handle(ctx)
+    var (r, g, b) = _roundtrip(handle, Float32(0.0), Float32(0.0), Float32(0.0))
     assert_true(_close(r, Float32(0.0), Float32(0.02)))
     assert_true(_close(g, Float32(0.0), Float32(0.02)))
     assert_true(_close(b, Float32(0.0), Float32(0.02)))
 
 def test_roundtrip_red_dominant_channel_preserved() raises:
     var ctx = _test_ctx()
-    var (r, g, b) = _roundtrip(ctx, Float32(0.8), Float32(0.05), Float32(0.05))
+    var handle = spectral_handle(ctx)
+    var (r, g, b) = _roundtrip(handle, Float32(0.8), Float32(0.05), Float32(0.05))
     assert_true(_close(r, Float32(0.8), Float32(0.03)))
     assert_true(_close(g, Float32(0.05), Float32(0.03)))
     assert_true(_close(b, Float32(0.05), Float32(0.03)))
 
 def test_roundtrip_green_dominant_channel_preserved() raises:
     var ctx = _test_ctx()
-    var (r, g, b) = _roundtrip(ctx, Float32(0.05), Float32(0.8), Float32(0.05))
+    var handle = spectral_handle(ctx)
+    var (r, g, b) = _roundtrip(handle, Float32(0.05), Float32(0.8), Float32(0.05))
     assert_true(_close(r, Float32(0.05), Float32(0.03)))
     assert_true(_close(g, Float32(0.8), Float32(0.03)))
     assert_true(_close(b, Float32(0.05), Float32(0.03)))
 
 def test_roundtrip_blue_dominant_channel_preserved() raises:
     var ctx = _test_ctx()
-    var (r, g, b) = _roundtrip(ctx, Float32(0.05), Float32(0.05), Float32(0.8))
+    var handle = spectral_handle(ctx)
+    var (r, g, b) = _roundtrip(handle, Float32(0.05), Float32(0.05), Float32(0.8))
     assert_true(_close(r, Float32(0.05), Float32(0.03)))
     assert_true(_close(g, Float32(0.05), Float32(0.03)))
     assert_true(_close(b, Float32(0.8), Float32(0.03)))
@@ -124,8 +130,9 @@ def test_spectral_sample_values_are_nonnegative() raises:
     wavelength (sigmoid is bounded in (0,1) by construction), regardless of
     input RGB."""
     var ctx = _test_ctx()
+    var handle = spectral_handle(ctx)
     var wl = sample_wavelengths_uniform(Float32(0.42))
-    var spec = rgb_to_spectral_sample(ctx, Float32(1.0), Float32(0.0), Float32(0.0), wl)
+    var spec = rgb_to_spectral_sample(handle, Float32(1.0), Float32(0.0), Float32(0.0), wl)
     assert_true(spec.v0 >= Float32(0.0))
     assert_true(spec.v1 >= Float32(0.0))
     assert_true(spec.v2 >= Float32(0.0))
@@ -138,12 +145,13 @@ def test_illuminant_roundtrip_matches_direct_rgb_for_neutral_light() raises:
     same as a neutral albedo — the illuminant scale/D65-tint machinery
     shouldn't introduce color shift for the achromatic case."""
     var ctx = _test_ctx()
+    var handle = spectral_handle(ctx)
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
         var wl = sample_wavelengths_uniform(u)
-        var spec = rgb_illuminant_to_spectral_sample(ctx, Float32(10.0), Float32(10.0), Float32(10.0), wl)
-        var (rr, gg, bb) = spectral_sample_to_rgb(ctx, spec, wl)
+        var spec = rgb_illuminant_to_spectral_sample(handle, Float32(10.0), Float32(10.0), Float32(10.0), wl)
+        var (rr, gg, bb) = spectral_sample_to_rgb(handle, spec, wl)
         accR += rr; accG += gg; accB += bb
     accR /= Float32(N_TRIALS); accG /= Float32(N_TRIALS); accB /= Float32(N_TRIALS)
     assert_true(_close(accR, Float32(10.0), Float32(0.5)))
@@ -152,8 +160,9 @@ def test_illuminant_roundtrip_matches_direct_rgb_for_neutral_light() raises:
 
 def test_illuminant_spectral_values_are_nonnegative() raises:
     var ctx = _test_ctx()
+    var handle = spectral_handle(ctx)
     var wl = sample_wavelengths_uniform(Float32(0.6))
-    var spec = rgb_illuminant_to_spectral_sample(ctx, Float32(17.0), Float32(12.0), Float32(4.0), wl)
+    var spec = rgb_illuminant_to_spectral_sample(handle, Float32(17.0), Float32(12.0), Float32(4.0), wl)
     assert_true(spec.v0 >= Float32(0.0))
     assert_true(spec.v1 >= Float32(0.0))
     assert_true(spec.v2 >= Float32(0.0))

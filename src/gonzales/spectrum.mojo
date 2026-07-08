@@ -12,9 +12,9 @@
 
 from gonzales.rgb2spec import (
     SpectrumTable, CieXyzTables, RGBSigmoidCoeffs,
-    rgb_to_coeffs_table_lookup, eval_sigmoid_spectrum,
-    rgb_illuminant_to_coeffs, eval_illuminant_spectrum,
-    build_cie_xyz_tables, cie_xyz_at, xyz_to_srgb,
+    rgb_to_coeffs_table_lookup_ptr, eval_sigmoid_spectrum,
+    rgb_illuminant_to_coeffs_ptr, eval_illuminant_spectrum,
+    build_cie_xyz_tables, cie_xyz_at_ptr, xyz_to_srgb,
     load_default_spectrum_table, CIE_Y_INTEGRAL,
 )
 
@@ -108,8 +108,14 @@ struct SpectralSample(TrivialRegisterPassable):
 struct SpectralContext(Copyable, Movable):
     """Bundles everything RGB<->spectrum conversion needs, built ONCE (e.g.
     at scene load, mirroring how gonzales already builds its sobol matrices
-    once and threads a pointer through the whole render) and passed down to
-    every conversion call — never reloaded/rebuilt per-sample."""
+    once and threads a pointer through the whole render). OWNS its buffers
+    (SpectrumTable.coeffs / CieXyzTables.*_tbl are List[...]) — do NOT thread
+    this struct itself into per-bounce code (see rgb2spec.mojo's "owning
+    table types" docstring for why). Call spectral_handle(ctx) ONCE after
+    loading to get a cheap, TrivialRegisterPassable SpectralHandle, and
+    thread THAT through the render instead. The owning SpectralContext value
+    must simply stay alive (in scope) for the whole render, since the
+    handle's raw pointers point into its buffers."""
     var table: SpectrumTable
     var cie: CieXyzTables
 
@@ -118,16 +124,38 @@ def load_spectral_context(data_dir: String) -> Tuple[Bool, SpectralContext]:
     var ok = loaded[0]
     var table = loaded[1].copy()
     if not ok:
-        var empty = SpectralContext(table^, CieXyzTables(List[Float64](), List[Float64](), List[Float64]()))
+        var empty = SpectralContext(table^, CieXyzTables(List[Float64](), List[Float64](), List[Float64](), List[Float64]()))
         return (False, empty^)
     var cie = build_cie_xyz_tables()
     var ctx = SpectralContext(table^, cie^)
     return (True, ctx^)
 
+@fieldwise_init
+struct SpectralHandle(TrivialRegisterPassable):
+    """Cheap-to-copy view into a SpectralContext's buffers — raw pointers
+    only, safe to reconstruct/pass every bounce/every NEE sample (unlike
+    SpectralContext itself, which owns the underlying List buffers). The
+    SpectralContext this was built from must outlive every use of the
+    handle."""
+    var coeffs: UnsafePointer[Float32, MutAnyOrigin]
+    var res:    Int
+    var cie_x:  UnsafePointer[Float64, MutAnyOrigin]
+    var cie_y:  UnsafePointer[Float64, MutAnyOrigin]
+    var cie_z:  UnsafePointer[Float64, MutAnyOrigin]
+    var d65:    UnsafePointer[Float64, MutAnyOrigin]
+
+@always_inline
+def spectral_handle(mut ctx: SpectralContext) -> SpectralHandle:
+    return SpectralHandle(
+        ctx.table.coeffs.unsafe_ptr(), ctx.table.res,
+        ctx.cie.x_tbl.unsafe_ptr(), ctx.cie.y_tbl.unsafe_ptr(), ctx.cie.z_tbl.unsafe_ptr(),
+        ctx.cie.d65_tbl.unsafe_ptr(),
+    )
+
 # ── RGB -> spectrum upsampling (real Jakob-Hanika, via rgb2spec.mojo) ──────
 
 @always_inline
-def rgb_to_spectral_sample(ctx: SpectralContext, rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
+def rgb_to_spectral_sample(handle: SpectralHandle, rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
     """Reflectance/albedo conversion — values are expected in [0,1] (clamped
     here defensively) since the table's domain is a bounded reflectance."""
     var r = Float64(rgb_r); var g = Float64(rgb_g); var b = Float64(rgb_b)
@@ -137,7 +165,7 @@ def rgb_to_spectral_sample(ctx: SpectralContext, rgb_r: Float32, rgb_g: Float32,
     if g > Float64(1.0): g = Float64(1.0)
     if b < Float64(0.0): b = Float64(0.0)
     if b > Float64(1.0): b = Float64(1.0)
-    var coeffs = rgb_to_coeffs_table_lookup(ctx.table.coeffs, ctx.table.res, r, g, b)
+    var coeffs = rgb_to_coeffs_table_lookup_ptr(handle.coeffs, handle.res, r, g, b)
     return SpectralSample(
         eval_sigmoid_spectrum(coeffs, wavelengths.lambda0),
         eval_sigmoid_spectrum(coeffs, wavelengths.lambda1),
@@ -146,23 +174,23 @@ def rgb_to_spectral_sample(ctx: SpectralContext, rgb_r: Float32, rgb_g: Float32,
     )
 
 @always_inline
-def rgb_illuminant_to_spectral_sample(ctx: SpectralContext, rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
+def rgb_illuminant_to_spectral_sample(handle: SpectralHandle, rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths) -> SpectralSample:
     """Light-emission conversion — PBRT's RGBIlluminantSpectrum convention
     (values are NOT bounded to [0,1], tints the D65 illuminant shape rather
     than standing alone as a bare reflectance)."""
-    var (coeffs, scale) = rgb_illuminant_to_coeffs(ctx.table, Float64(rgb_r), Float64(rgb_g), Float64(rgb_b))
+    var (coeffs, scale) = rgb_illuminant_to_coeffs_ptr(handle.coeffs, handle.res, Float64(rgb_r), Float64(rgb_g), Float64(rgb_b))
     return SpectralSample(
-        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda0),
-        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda1),
-        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda2),
-        eval_illuminant_spectrum(coeffs, scale, wavelengths.lambda3),
+        eval_illuminant_spectrum(coeffs, scale, handle.d65, wavelengths.lambda0),
+        eval_illuminant_spectrum(coeffs, scale, handle.d65, wavelengths.lambda1),
+        eval_illuminant_spectrum(coeffs, scale, handle.d65, wavelengths.lambda2),
+        eval_illuminant_spectrum(coeffs, scale, handle.d65, wavelengths.lambda3),
     )
 
 # ── spectrum -> RGB (via XYZ), for converting a final pixel radiance sample
 #    back to a displayable color ──────────────────────────────────────────
 
 @always_inline
-def spectral_sample_to_rgb(ctx: SpectralContext, radiance: SpectralSample, wavelengths: SampledWavelengths) -> Tuple[Float32, Float32, Float32]:
+def spectral_sample_to_rgb(handle: SpectralHandle, radiance: SpectralSample, wavelengths: SampledWavelengths) -> Tuple[Float32, Float32, Float32]:
     """Monte-Carlo estimate of the CIE XYZ integral from one hero-wavelength
     sample (exact tabulated CIE curves, same data the table itself was
     fitted against), then XYZ -> linear sRGB. Divides by the sampling pdf and
@@ -174,7 +202,7 @@ def spectral_sample_to_rgb(ctx: SpectralContext, radiance: SpectralSample, wavel
         for i in range(N_SPECTRAL_SAMPLES):
             var lam = Float64(wavelengths.get(i))
             var r = Float64(radiance.get(i))
-            var (xv, yv, zv) = cie_xyz_at(ctx.cie, lam)
+            var (xv, yv, zv) = cie_xyz_at_ptr(handle.cie_x, handle.cie_y, handle.cie_z, lam)
             x += r * xv; y += r * yv; z += r * zv
         var norm = Float64(1.0) / (Float64(N_SPECTRAL_SAMPLES) * Float64(wavelengths.pdf) * Float64(CIE_Y_INTEGRAL))
         x *= norm; y *= norm; z *= norm
