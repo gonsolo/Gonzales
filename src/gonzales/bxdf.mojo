@@ -2,6 +2,7 @@ from std.math import sqrt
 from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
+from .spectrum import SampledWavelengths, SpectralSample, SpectralContext, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -64,14 +65,34 @@ def bxdf_eval_conductor_ggx(
     bdpt.mojo's own connection-formula variant, which folds cos_i in for its
     path-throughput weighting. Schlick Fresnel at the half-vector,
     height-correlated Smith G2."""
+    var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
+    if not valid:
+        return RGB(Float32(0))
+    var fr = f0 + (RGB(Float32(1)) - f0) * schlick
+    return RGB(k * fr.r, k * fr.g, k * fr.b)
+
+@always_inline
+def _ggx_conductor_shape_terms(
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],
+    wi:    SIMD[DType.float32, 3],
+    alpha: Float32,
+) -> Tuple[Bool, Float32, Float32]:
+    """The wavelength-independent half of bxdf_eval_conductor_ggx's formula
+    (microfacet D/G2 + the Schlick blend factor), shared by both the RGB
+    evaluator above and the spectral one (bxdf_eval_any_spectral) so the two
+    don't duplicate the GGX math itself, only how they combine it with a
+    color (f0 directly for RGB, a spectrally-converted f0 for spectral).
+    Returns (valid, k, schlick) where the full BRDF is
+    k * (f0 + (1-f0)*schlick) for whichever color representation f0 is in."""
     var cos_o = dot(wo, n)
     var cos_i = dot(wi, n)
     if cos_o <= Float32(0) or cos_i <= Float32(0):
-        return RGB(Float32(0))
+        return (False, Float32(0), Float32(0))
     var wh = wo + wi
     var whl = dot(wh, wh)
     if whl <= Float32(0):
-        return RGB(Float32(0))
+        return (False, Float32(0), Float32(0))
     wh = wh * (Float32(1) / sqrt(whl))
     var cos_h = dot(wh, n)
     var cos_wo_h = dot(wo, wh)
@@ -81,9 +102,8 @@ def bxdf_eval_conductor_ggx(
     var one_m = Float32(1) - cos_wo_h
     var one_m2 = one_m * one_m
     var schlick = one_m2 * one_m2 * one_m
-    var fr = f0 + (RGB(Float32(1)) - f0) * schlick
     var k = d * g / (Float32(4) * cos_o * cos_i)
-    return RGB(k * fr.r, k * fr.g, k * fr.b)
+    return (True, k, schlick)
 
 @always_inline
 def bxdf_pdf_conductor_ggx(
@@ -458,6 +478,72 @@ def _nee_weight_simple(
         return f * ls.Li * cos_s
     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
     return f * ls.Li * (cos_s * mis_w / ls.pdf)
+
+# ── Spectral siblings (staged rollout, see project_spectral_rendering memory
+# / lovely-dazzling-meteor plan) ────────────────────────────────────────────
+# Added ALONGSIDE bxdf_eval_any/_nee_weight_simple above rather than mutating
+# them in place: those two are also called from bdpt.mojo (Stage 3) and
+# sppm.mojo (Stage 4), which aren't wavelength-aware yet — changing their
+# signature now would force-couple this (Stage 2, plain-path-tracer-only)
+# change into BDPT/SPPM ahead of their own stages, defeating the point of
+# staging. shading.mojo (Stage 2) calls these new spectral versions instead;
+# bdpt.mojo/sppm.mojo keep calling the RGB originals unchanged until their
+# own stage migrates them. Hair is NOT covered here (Marschner lobe color
+# comes from sigma_a absorption, a genuinely more involved conversion) —
+# _nee_weight_hair stays RGB-only for now, a deliberate scoped exclusion.
+@always_inline
+def bxdf_eval_any_spectral(
+    mat_kind: Int32,
+    alb:      RGB,             # diffuse albedo, or conductor f0
+    alpha:    Float32,         # conductor GGX roughness; unused for diffuse
+    n:        SIMD[DType.float32, 3],
+    wo:       SIMD[DType.float32, 3],
+    wi:       SIMD[DType.float32, 3],
+    ctx:         SpectralContext,
+    wavelengths: SampledWavelengths,
+) -> Tuple[SpectralSample, Float32]:
+    var alb_spectral = rgb_to_spectral_sample(ctx, alb.r, alb.g, alb.b, wavelengths)
+    if mat_kind == Int32(1):
+        var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
+        if not valid:
+            return (SpectralSample(Float32(0.0)), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
+        # fr = f0 + (1-f0)*schlick, expressed without SpectralSample.__sub__
+        # (not defined): fr = f0*(1-schlick) + 1*schlick.
+        var fr_spectral = alb_spectral * (Float32(1.0) - schlick) + SpectralSample(schlick)
+        return (fr_spectral * k, bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
+    var cos_wi = dot(n, wi)
+    return (alb_spectral * INV_PI, bxdf_pdf_diffuse(cos_wi))
+
+@always_inline
+def _nee_weight_simple_spectral(
+    ls:    LightSample,
+    mat_kind: Int32,
+    alb:   RGB,
+    alpha: Float32,
+    n:     SIMD[DType.float32, 3],
+    wo:    SIMD[DType.float32, 3],
+    ctx:         SpectralContext,
+    wavelengths: SampledWavelengths,
+) -> SpectralSample:
+    """Spectral counterpart of _nee_weight_simple — same formula, but the
+    material color and light color are each converted to a SpectralSample at
+    this path's hero wavelengths (rgb_to_spectral_sample for the reflectance,
+    rgb_illuminant_to_spectral_sample for the light's unbounded radiance/
+    intensity) before multiplying, instead of multiplying plain RGB
+    triples."""
+    if not ls.valid:
+        return SpectralSample(Float32(0.0))
+    var cos_s = dot(n, ls.wi)
+    if cos_s <= Float32(0.0):
+        return SpectralSample(Float32(0.0))
+    var (f, pdf_bsdf) = bxdf_eval_any_spectral(mat_kind, alb, alpha, n, wo, ls.wi, ctx, wavelengths)
+    if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
+        return SpectralSample(Float32(0.0))
+    var li_spectral = rgb_illuminant_to_spectral_sample(ctx, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
+    if ls.is_delta:
+        return f * li_spectral * cos_s
+    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    return (f * li_spectral) * (cos_s * mis_w / ls.pdf)
 
 @always_inline
 def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
