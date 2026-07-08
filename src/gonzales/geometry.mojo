@@ -334,12 +334,13 @@ struct PathState_C(TrivialRegisterPassable):
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32
     var current_medium_idx: Int32  # -1 = vacuum; >= 0 = index into scene.mediums
-    var sampler_dim: Int32         # next Sobol dimension; 2 after primary ray (dims 0+1), +8 per bounce
+    var sampler_dim: Int32         # next Sobol dimension; 3 after primary ray (dims 0+1 film pos, dim 2 wavelength), +8 per bounce
     var sobol_idx: UInt64          # path's Z-Sobol sample index (from Morton code + si)
     # Hero-wavelength sample for spectral rendering (staged rollout, see
     # project_spectral_rendering memory / lovely-dazzling-meteor plan).
-    # Sampled once per path at primary-ray generation; unused by shading
-    # until Stage 2 wires spectral BxDF/light evaluation through it.
+    # Sampled once per path at primary-ray generation (Sobol dim 2, see
+    # gen_primary_ray_state); unused by shading until Stage 2b/2c wire
+    # spectral BxDF/light evaluation through it.
     var wavelengths: SampledWavelengths
 # <</listing>>
 # PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8+20 = 124 bytes (no trailing pad needed);

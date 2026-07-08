@@ -1834,7 +1834,7 @@ def gen_primary_rays_wavefront_gpu(
     var py = Int32(px_flat // fw)
     var si = si_start + Int32(si_local)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (ray, pcg_state, pcg_inc, sobol_idx) = gen_primary_ray_state(
+    var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
@@ -1850,8 +1850,8 @@ def gen_primary_rays_wavefront_gpu(
         Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0),
         Int32(-1),
-        Int32(2), sobol_idx,
-        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        Int32(3), sobol_idx,
+        wavelengths,
     )
 
 
@@ -2042,7 +2042,7 @@ def gen_primary_rays_gpu(
     var px = Int32(tid % fw)
     var py = Int32(tid // fw)
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
-    var (ray, pcg_state, pcg_inc, sobol_idx) = gen_primary_ray_state(
+    var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
@@ -2058,8 +2058,8 @@ def gen_primary_rays_gpu(
         Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0),
         Int32(-1),
-        Int32(2), sobol_idx,
-        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        Int32(3), sobol_idx,
+        wavelengths,
     )
 
 

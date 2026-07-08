@@ -48,7 +48,7 @@ def render_tile(
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
             for si in range(spp):
-                var (ray, pcg_state, pcg_inc, sobol_idx) = gen_primary_ray_state(
+                var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
                     px, py, Int32(si) + sp.sampleIndexOffset,
                     log2spp, n_base4,
                     seed_dim0, seed_dim1, rng_seed, matrices,
@@ -66,8 +66,8 @@ def render_tile(
                     Int8(1), Int8(0), Int8(0), Int8(0),
                     Float32(0.0),
                     Int32(-1),
-                    Int32(2), sobol_idx,
-                    SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+                    Int32(3), sobol_idx,
+                    wavelengths,
                 )
                 idx += 1
 
