@@ -5,6 +5,7 @@ from std.sys import has_accelerator
 from std.gpu.host import DeviceContext
 from gonzales.gpu import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, PathState_C
+from gonzales.spectrum import SampledWavelengths
 
 comptime EPS: Float32 = 1e-4
 
@@ -28,6 +29,7 @@ def _dummy_path(estimate: RGB, albedo: RGB) -> PathState_C:
         Int32(-1),          # current_medium_idx
         Int32(0),           # sampler_dim
         UInt64(0),          # sobol_idx
+        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),  # wavelengths
     )
 
 def test_clear_film_gpu_zeroes_a_dirty_buffer() raises:

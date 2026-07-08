@@ -30,6 +30,13 @@ from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .gpu import GpuSceneHandle
+from .spectrum import SampledWavelengths
+
+@always_inline
+def _zero_wavelengths() -> SampledWavelengths:
+    """Placeholder used until Stage 4 wires real per-photon/per-VP wavelength
+    sampling through SPPM (see project_spectral_rendering memory)."""
+    return SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0))
 
 comptime _ALPHA  = Float32(0.7)
 comptime _MAX_B  = 10
@@ -105,6 +112,10 @@ struct SPPMPixel(TrivialRegisterPassable):
     var hair_curve_idx: Int32
     var hair_h: Float32
     var hair_v: Float32
+    # Hero-wavelength sample this VP's camera subpath was traced at (staged
+    # spectral rollout, see project_spectral_rendering memory /
+    # lovely-dazzling-meteor plan). Unused until Stage 4.
+    var wavelengths: SampledWavelengths
 
 @fieldwise_init
 struct SPPMPhoton(TrivialRegisterPassable):
@@ -120,6 +131,13 @@ struct SPPMPhoton(TrivialRegisterPassable):
     # gather ignores this (f_r is angle-independent), so it's set but unused
     # for those photon kinds.
     var dir_in: Vec3f
+    # Hero-wavelength sample this photon was emitted at — independent of the
+    # gathering VP's own wavelengths (real photons are independently
+    # colored); see Stage 4 in project_spectral_rendering memory for how the
+    # cross-wavelength gather is handled (converted to RGB at deposit time,
+    # not kept spectral through tau's progressive accumulator). Unused until
+    # Stage 4.
+    var wavelengths: SampledWavelengths
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -451,6 +469,7 @@ def _sppm_trace_visible_point(
         wo=Vec3f(Float32(0)),
         alpha=Float32(0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
+        wavelengths=_zero_wavelengths(),
     )
 
     # Sub-pixel jitter — diversifies which point on a dielectric-obscured
@@ -854,7 +873,7 @@ def _sppm_trace_photon[use_gpu: Bool](
                 # term).
                 if bounce > 0:
                     _sppm_store_photon[use_gpu](
-                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd),
+                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=_zero_wavelengths()),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
                 flux *= ff.albedo
@@ -894,7 +913,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             # once via NEE and again via an unfiltered photon density).
             if bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=_zero_wavelengths()),
                     photons, max_photons, counter)
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — without this, photons always
@@ -957,7 +976,7 @@ def _sppm_trace_photon[use_gpu: Bool](
                 break
             if not bxdf_is_delta(bs_c.flags) and bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=_zero_wavelengths()),
                     photons, max_photons, counter)
             flux *= bs_c.f
             rd = vec3f(bs_c.wi)
@@ -972,7 +991,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
             if bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=_zero_wavelengths()),
                     photons, max_photons, counter)
             var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
             flux *= f_hs / pdf_hs

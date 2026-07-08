@@ -30,6 +30,7 @@ from .postprocess import write_image
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair
 from .gpu import GpuSceneHandle
+from .spectrum import SampledWavelengths
 
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
                                 # non-stored delta/dielectric bounces — glass-of-water's
@@ -84,6 +85,13 @@ struct BDPTVertex(TrivialRegisterPassable):
     var hair_curve_idx: Int32
     var hair_h: Float32
     var hair_v: Float32
+    # Hero-wavelength sample this vertex's subpath was traced at (staged
+    # spectral rollout, see project_spectral_rendering memory /
+    # lovely-dazzling-meteor plan). Unused until Stage 3; needed on every
+    # vertex (not just the subpath root) because the Light-Vertex-Cache
+    # connects camera vertices to globally-random-indexed light vertices —
+    # no natural per-path pairing to inherit wavelengths from.
+    var wavelengths: SampledWavelengths
 
 @always_inline
 def _null_vertex() -> BDPTVertex:
@@ -97,6 +105,7 @@ def _null_vertex() -> BDPTVertex:
         med_idx=Int32(-1), mat_kind=Int32(0),
         wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
+        wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────

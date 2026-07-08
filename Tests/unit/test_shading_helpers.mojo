@@ -17,6 +17,7 @@ from gonzales.geometry import (
     Instance_C, PathState_C, AreaLight_C, DistantLight_C, PointLight_C,
     InfiniteLight_C, Sphere_C, dot, cross,
 )
+from gonzales.spectrum import SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import GuideGrid, null_guide
 from gonzales.shading import (
@@ -103,6 +104,7 @@ def _make_path(org: SIMD[DType.float32, 3], dir: SIMD[DType.float32, 3]) -> Path
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
+        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
 
 # ── _get_tri_verts ────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, min, max, abs
+from gonzales.spectrum import SampledWavelengths
 
 # ── Math constants ─────────────────────────────────────────────────────────────
 # Stored as Float32 aliases so every formula reads like the paper it came from.
@@ -335,8 +336,14 @@ struct PathState_C(TrivialRegisterPassable):
     var current_medium_idx: Int32  # -1 = vacuum; >= 0 = index into scene.mediums
     var sampler_dim: Int32         # next Sobol dimension; 2 after primary ray (dims 0+1), +8 per bounce
     var sobol_idx: UInt64          # path's Z-Sobol sample index (from Morton code + si)
+    # Hero-wavelength sample for spectral rendering (staged rollout, see
+    # project_spectral_rendering memory / lovely-dazzling-meteor plan).
+    # Sampled once per path at primary-ray generation; unused by shading
+    # until Stage 2 wires spectral BxDF/light evaluation through it.
+    var wavelengths: SampledWavelengths
 # <</listing>>
-# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8 = 104 bytes (no trailing pad needed)
+# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8+20 = 124 bytes (no trailing pad needed);
+# size is computed via size_of[PathState_C]() everywhere (GPU buffer sizing included), not hardcoded.
 
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md

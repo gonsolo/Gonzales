@@ -2,6 +2,7 @@ from std.math import abs
 from std.memory import alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, Ray_C, Intersection_C, PathState_C, Material_C, MatKind
+from gonzales.spectrum import SampledWavelengths
 from gonzales.shading import shade_core
 from _scene_fixture import make_triangle_scene
 
@@ -15,6 +16,7 @@ def _dummy_path(ray: Ray_C, throughput: RGB) -> PathState_C:
         ray, throughput, RGB(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
+        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
 
 # ── shade_core, exercised against a REAL BVH hit (via _scene_fixture) ───────

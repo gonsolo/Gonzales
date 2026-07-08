@@ -8,6 +8,7 @@ from .shading import shade_core_cpu_nee
 from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
+from .spectrum import SampledWavelengths
 
 
 def render_tile(
@@ -66,6 +67,7 @@ def render_tile(
                     Float32(0.0),
                     Int32(-1),
                     Int32(2), sobol_idx,
+                    SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
                 )
                 idx += 1
 
