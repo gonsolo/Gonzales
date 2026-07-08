@@ -333,7 +333,7 @@ def test_dielectric_bounce_normal_incidence_output_is_always_colinear() raises:
     var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
     var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var (new_dir, _) = _dielectric_bounce(ray_dir, hit_point, geom_normal, Float32(1.5), 0, pcg)
+    var (new_dir, _, _) = _dielectric_bounce(ray_dir, hit_point, geom_normal, Float32(1.5), 0, pcg)
     assert_true(_close(_simd_len(new_dir), Float32(1.0)))
     var colinear = _close(abs(new_dir[2]), Float32(1.0)) and _close(new_dir[0], Float32(0.0)) and _close(new_dir[1], Float32(0.0))
     assert_true(colinear)
@@ -347,10 +347,40 @@ def test_dielectric_bounce_total_internal_reflection_obeys_reflection_law() rais
     var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
     var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()  # exiting (dot(ray,n) > 0)
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var (new_dir, _) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 1, pcg)
+    var (new_dir, _, _) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 1, pcg)
     var wo = -Vec3f(ray_dir[0], ray_dir[1], ray_dir[2])
     var expected = reflect(wo, Vec3f(0.0, 0.0, 1.0)).to_simd()
     assert_true(_simd_close(new_dir, expected))
+
+def test_dielectric_bounce_tir_radiance_scale_is_exactly_one() raises:
+    """Reflection (including forced TIR) never crosses an IOR boundary, so
+    the returned radiance_scale (the PBRT non-symmetric-scattering
+    correction for camera/Radiance-mode transport) must be exactly 1 — no
+    solid-angle compression/expansion happens on a reflect. Reuses the same
+    guaranteed-TIR setup as the reflection-law test above, so the branch
+    taken is deterministic (not pcg-dependent)."""
+    var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()
+    var pcg = PCG32(UInt64(1), UInt64(1))
+    var (_, _, radiance_scale) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 1, pcg)
+    assert_true(_close(radiance_scale, Float32(1.0)))
+
+def test_dielectric_bounce_transmit_radiance_scale_matches_inverse_eta_squared() raises:
+    """On transmission (entering ior=1.5 from vacuum: eta = eta_i/eta_t =
+    1/1.5), radiance_scale must equal 1/eta^2 = ior^2 = 2.25 -- the PBRT
+    SpecularTransmission `mode == Radiance` correction factor. Whichever
+    branch pcg actually picks (reflect vs. transmit) is checked via new_dir's
+    z-sign (transmit continues in roughly the same direction as ray_dir;
+    reflect flips it), so this test is not tied to one specific pcg draw."""
+    var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var ray_dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)  # normal incidence, entering
+    var pcg = PCG32(UInt64(1), UInt64(1))
+    var (new_dir, _, radiance_scale) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 0, pcg)
+    var transmitted = new_dir[2] < Float32(0.0)  # continued downward == transmit; flipped upward == reflect
+    if transmitted:
+        assert_true(_close(radiance_scale, Float32(2.25)))
+    else:
+        assert_true(_close(radiance_scale, Float32(1.0)))
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

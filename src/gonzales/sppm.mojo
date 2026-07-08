@@ -256,8 +256,19 @@ def _cosine_hemisphere_sample(n: SIMD[DType.float32, 3], u1: Float32, u2: Float3
 
 
 # ── Dielectric bounce helper ──────────────────────────────────────────────────
-# Returns (new_dir, new_org) after reflection or refraction. Mutates pcg.
-
+# Returns (new_dir, new_org, radiance_scale) after reflection or refraction.
+# Mutates pcg. `radiance_scale` is the PBRT-style non-symmetric-scattering
+# correction (1/eta² on transmission, 1 on reflection) for transporting
+# RADIANCE (camera/VP paths) across a change of IOR — solid angle compresses/
+# expands across the interface, so radiance isn't conserved the way
+# importance/flux is. Callers tracing a camera-origin subpath (SPPM's
+# visible-point pass, BDPT's camera path) must multiply their beta by this;
+# callers tracing a light-origin subpath (SPPM's photon-emission pass, BDPT's
+# light path — TransportMode::Importance) must NOT apply it, or every
+# transmissive light/photon path gets silently biased. Shared by both since
+# the geometry math (entering/exiting, eta, Fresnel, TIR) is identical either
+# way — only which mode multiplies the returned scale into its throughput
+# differs, entirely at the call site.
 @always_inline
 def _dielectric_bounce(
     ray_dir: SIMD[DType.float32, 3],
@@ -266,7 +277,7 @@ def _dielectric_bounce(
     ior: Float32,
     bounce: Int,
     mut pcg: PCG32,
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], Float32]:
     var facing = dot(ray_dir, geom_normal) < Float32(0.0)
     var entering = facing
     if bounce == 0:
@@ -283,14 +294,14 @@ def _dielectric_bounce(
         var refl = ray_dir + normal * (Float32(2.0) * cos_i)
         var rl = dot(refl, refl)
         if rl > Float32(0.0): refl = refl * (Float32(1.0) / sqrt(rl))
-        return (refl, hit_point + normal * Float32(0.0001))
+        return (refl, hit_point + normal * Float32(0.0001), Float32(1.0))
     else:
         # Refract: t = eta*d + (eta*cos_i - sqrt(1 - sin2_t))*n
         var cos_t = sqrt(max(Float32(0.0), Float32(1.0) - sin2_t))
         var refr = ray_dir * eta + normal * (eta * cos_i - cos_t)
         var rl = dot(refr, refr)
         if rl > Float32(0.0): refr = refr * (Float32(1.0) / sqrt(rl))
-        return (refr, hit_point - normal * Float32(0.0001))
+        return (refr, hit_point - normal * Float32(0.0001), Float32(1.0) / (eta * eta))
 
 
 # ── Homogeneous-medium free-flight sampling ───────────────────────────────────
@@ -593,7 +604,8 @@ def _sppm_trace_visible_point(
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+            var (new_dir, new_org, radiance_scale) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+            vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
@@ -949,7 +961,11 @@ def _sppm_trace_photon[use_gpu: Bool](
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+            var (new_dir, new_org, _) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
+            # Light path (TransportMode::Importance): do NOT apply the
+            # radiance_scale non-symmetric-scattering correction to flux —
+            # it's only for camera/Radiance-mode paths, see
+            # _dielectric_bounce's docstring.
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:

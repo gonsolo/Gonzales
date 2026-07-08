@@ -333,7 +333,15 @@ def bxdf_sample_dielectric(
     var rlen = dot(refr, refr)
     if rlen > Float32(0.0):
         refr = refr * (Float32(1.0) / sqrt(rlen))
-    return (BxDFSample(refr, white, Float32(1.0), BxDFFlags.delta | BxDFFlags.transmit, Int8(1), Int8(0), Int8(0)), normal)
+    # Radiance-transport (camera-path) non-symmetry correction: transmitting
+    # through a change of IOR compresses/expands solid angle, so radiance is
+    # NOT conserved across the interface the way importance/flux is (PBRT
+    # SpecularTransmission's `mode == Radiance` factor). This function is only
+    # ever reached from camera-path contexts (the plain path tracer's wavefront
+    # shading kernels), never from a light-emission/photon path, so the 1/eta²
+    # factor applies unconditionally here.
+    var radiance_transmit = white / (eta * eta)
+    return (BxDFSample(refr, radiance_transmit, Float32(1.0), BxDFFlags.delta | BxDFFlags.transmit, Int8(1), Int8(0), Int8(0)), normal)
 
 # ── Thin dielectric (one-sided glass slab: window, soap film) ────────────────
 # Transmitted ray keeps its original direction (no refraction) — models a thin

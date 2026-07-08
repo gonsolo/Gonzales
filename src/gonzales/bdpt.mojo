@@ -779,10 +779,13 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg)
+            var (new_dir, new_org, radiance_scale) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg)
             n_bounces += 1
             last_bsdf_pdf = Float32(-1)  # delta bounce: no infinite-light NEE done here
-            # Specular vertex: no BSDF record needed, just track throughput
+            # Specular vertex: no BSDF record needed, just track throughput.
+            # Camera path (Radiance mode): apply the non-symmetric-scattering
+            # correction (see _dielectric_bounce's docstring).
+            beta *= radiance_scale
             if has_med:
                 var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
@@ -1098,8 +1101,12 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
-            var (new_dir, new_org) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg)
+            var (new_dir, new_org, _) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg)
             n_lbounces += 1
+            # Light path (TransportMode::Importance): do NOT apply the
+            # radiance_scale non-symmetric-scattering correction — it's only
+            # for camera/Radiance-mode paths, see _dielectric_bounce's
+            # docstring.
             if has_med:
                 var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
