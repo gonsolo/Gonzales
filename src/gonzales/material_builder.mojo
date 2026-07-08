@@ -44,6 +44,15 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
         elif _psc_streq(mat_name, "thindielectric"): mat_type = MatKind.thin_dielectric
         elif _psc_streq(mat_name, "hair"):          mat_type = MatKind.hair
         elif _psc_streq(mat_name, "interface"):     mat_type = MatKind.interface
+        elif _psc_streq(mat_name, "diffuse"):       mat_type = MatKind.diffuse
+        else:
+            # Unrecognized material type (e.g. pbrt's "measured" or "subsurface",
+            # neither implemented here) — used to fall back to a flat 50%-grey
+            # diffuse in total silence, which made scenes using them (sportscar,
+            # lte-orb, sssdragon) look wrong with no clue why. mat_type already
+            # defaults to MatKind.diffuse above, so this just adds the warning.
+            var unsup_name = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+            print("Warning: unsupported material type '" + unsup_name + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface.")
     var mat_ior  = Float32(1.5)
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
@@ -91,7 +100,12 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 mat_type = MatKind.hair
             elif _psc_streq(str_val, "interface"):
                 mat_type = MatKind.interface
+            elif _psc_streq(str_val, "diffuse"):
+                mat_type = MatKind.diffuse
             else:
+                # See the matching inline_type warning above.
+                var unsup_name2 = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+                print("Warning: unsupported material type '" + unsup_name2 + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface.")
                 mat_type = MatKind.diffuse
         elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
             if ps.name_is("eta"):
