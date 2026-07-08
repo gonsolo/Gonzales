@@ -2,7 +2,7 @@ from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric
 from .rng import PCG32
-from .spectrum import SpectralHandle, null_spectral_handle
+from .spectrum import SpectralHandle
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
 # Layout: Point3f min (12 B) + Point3f max (12 B) + Int32 offset (4 B) + Int32 count (4 B) = 32 B
@@ -140,6 +140,18 @@ def _mk_sd_full(
     infiniteLightCount: Int64 = Int64(0),
     pointLights: UnsafePointer[PointLight_C, MutAnyOrigin] = UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
     pointLightCount: Int64 = Int64(0),
+    # Staged spectral rendering rollout, Stage 3 (BDPT). Decomposed into
+    # individual pointer/int params -- NOT a single `spectral: SpectralHandle`
+    # by-value param -- because that shape is a confirmed, reproducible Mojo
+    # miscompilation (see spectrum.mojo's comment above rgb_to_spectral_sample
+    # / project_spectral_rendering memory). Defaults match null_spectral_handle()
+    # so existing (SPPM, Stage 4) callers that don't pass these are unaffected.
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -182,7 +194,7 @@ def _mk_sd_full(
         lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,
-        spectral=null_spectral_handle(),
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and

@@ -517,7 +517,7 @@ def parse_and_render(
         return ret
     elif use_gpu and use_bdpt:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral)
         if Int(handle) <= 8:
             sd.free()
             mojo_parsed_free(psc)
