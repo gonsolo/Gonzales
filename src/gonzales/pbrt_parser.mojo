@@ -1348,6 +1348,40 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     cts.free(); str_mat.free(); rts.free(); cts_inv.free()
 
     # ---- Materials ----
+    # A Shape parsed with no active Material directive keeps cur_attr.mat_idx at
+    # its -1 "unset" sentinel (parse_types.mojo's SceneParseState init). PBRT's
+    # own default in that case is a plain 50%-grey diffuse material (see
+    # DiffuseMaterial::Create's `reflectance` fallback) — NOT whatever happens to
+    # be the first Material statement encountered in the file. Previously -1 was
+    # clamped to material index 0 below, so an unrelated shape silently borrowed
+    # material index 0's appearance (e.g. ganesha.pbrt's floor, parsed before the
+    # scene's sole "coateddiffuse" Material statement, rendered with Ganesha's
+    # near-mirror coat instead of a matte grey floor). Only append the synthetic
+    # default when something actually needs it.
+    var needs_default_mat = False
+    for i in range(len(s[0].meshes)):
+        if s[0].meshes[i].mat_idx == Int32(-1) and not s[0].meshes[i].is_area_light:
+            needs_default_mat = True
+            break
+    if not needs_default_mat:
+        for i in range(len(s[0].spheres_mat)):
+            if s[0].spheres_mat[i] == Int32(-1):
+                needs_default_mat = True
+                break
+    if not needs_default_mat:
+        for i in range(len(s[0].curves_mat)):
+            var curve_is_al = i < len(s[0].curves_al) and s[0].curves_al[i]
+            if s[0].curves_mat[i] == Int32(-1) and not curve_is_al:
+                needs_default_mat = True
+                break
+    var default_mat_idx = Int32(-1)
+    if needs_default_mat:
+        var default_nm = NamedMaterial(String("__default_diffuse__"))
+        default_nm.kind = MatKind.diffuse
+        default_nm.albedo = RGB(Float32(0.5), Float32(0.5), Float32(0.5))
+        s[0].named_materials.append(default_nm^)
+        default_mat_idx = Int32(len(s[0].named_materials) - 1)
+
     var n_regular = len(s[0].named_materials)
 
     var n_al_mesh = 0
@@ -1762,7 +1796,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             var mi = Int(t_mesh[orig])
             var ti = Int(t_local[orig])
             var mat_idx = Int(s[0].meshes[mi].mat_idx)
-            t_prim_ids[k] = PrimId_C(Int64(mi), Int64(ti * 3), Int64(max(mat_idx, 0)), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+            var mat_idx_r = mat_idx if mat_idx >= 0 else Int(default_mat_idx)
+            t_prim_ids[k] = PrimId_C(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
         t_mesh.free(); t_local.free(); t_order.free()
         blas_nodes_arr[tmpl]   = t_nodes
         blas_primids_arr[tmpl] = t_prim_ids
@@ -1857,14 +1892,15 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 prim_ids_gpu[k].type          = Int8(0)
                 prim_ids_gpu[k].id1           = Int64(mi)
                 prim_ids_gpu[k].id2           = Int64(ti * 3)
-                prim_ids_gpu[k].materialIndex = Int64(max(mat_idx, 0))
+                prim_ids_gpu[k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
         else:
             var gidx = orig - Int(total_tris)
             var ci = Int(group_curve_idx[gidx])
+            var curve_mat_idx = Int(s[0].curves_mat[ci])
             prim_ids_gpu[k].type          = Int8(5)
             prim_ids_gpu[k].id1           = Int64(ci)
             prim_ids_gpu[k].id2           = Int64(group_id2[gidx])
-            prim_ids_gpu[k].materialIndex = Int64(curve_al_mat_idx[ci]) if s[0].curves_al[ci] else Int64(max(Int(s[0].curves_mat[ci]), 0))
+            prim_ids_gpu[k].materialIndex = Int64(curve_al_mat_idx[ci]) if s[0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
         prim_ids_gpu[k].instanceIdx = Int32(-1)
         prim_ids_gpu[k]._pad0 = Int8(0); prim_ids_gpu[k]._pad1 = Int8(0); prim_ids_gpu[k]._pad2 = Int8(0)
 
@@ -1884,14 +1920,15 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                 prim_ids[k].type          = Int8(0)
                 prim_ids[k].id1           = Int64(mi)
                 prim_ids[k].id2           = Int64(ti * 3)
-                prim_ids[k].materialIndex = Int64(max(mat_idx, 0))
+                prim_ids[k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
         elif orig < Int(total_tris) + Int(total_curve_groups):
             var gidx = orig - Int(total_tris)
             var ci = Int(group_curve_idx[gidx])
+            var curve_mat_idx = Int(s[0].curves_mat[ci])
             prim_ids[k].type          = Int8(5)
             prim_ids[k].id1           = Int64(ci)
             prim_ids[k].id2           = Int64(group_id2[gidx])
-            prim_ids[k].materialIndex = Int64(curve_al_mat_idx[ci]) if s[0].curves_al[ci] else Int64(max(Int(s[0].curves_mat[ci]), 0))
+            prim_ids[k].materialIndex = Int64(curve_al_mat_idx[ci]) if s[0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
         else:
             var inst_idx = orig - Int(total_tris) - Int(total_curve_groups)
             prim_ids[k].type          = Int8(6)
@@ -2136,10 +2173,13 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         for i in range(ns):
             var em = SampledSpectrum(s[0].spheres_rgb[i].r, s[0].spheres_rgb[i].g, s[0].spheres_rgb[i].b)
             var al_flag = Int8(1) if s[0].spheres_al[i] else Int8(0)
+            var sph_mat_idx = s[0].spheres_mat[i]
+            if sph_mat_idx == Int32(-1) and not s[0].spheres_al[i]:
+                sph_mat_idx = default_mat_idx
             sph_buf[i] = Sphere_C(
                 Point3f(s[0].spheres_cx[i], s[0].spheres_cy[i], s[0].spheres_cz[i]),
                 s[0].spheres_r[i],
-                s[0].spheres_mat[i],
+                sph_mat_idx,
                 al_flag,
                 Int8(0), Int8(0), Int8(0),
                 em)
