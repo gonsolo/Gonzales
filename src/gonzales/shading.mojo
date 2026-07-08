@@ -741,16 +741,37 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var beta = RGB(Float32(1.0))
     var exited = False
     var exit_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var did_nee = False
-    var did_env_nee = False
-    var did_distant_nee = False
 
     comptime MAX_COAT_DEPTH = 10
-    for _ in range(MAX_COAT_DEPTH):
-        # ── Diffuse base: NEE (single scatter) once, weighted by the coat's
-        #    transmittance for the incoming light direction. ──
-        if not did_nee and ctx.lights.area_light_count > 0:
-            did_nee = True
+    for depth in range(MAX_COAT_DEPTH):
+        # Russian-roulette the recycling walk itself once `beta` (the base
+        # albedo raised to the number of prior internal-reflection bounces at
+        # THIS hit point) has decayed enough that further bounces contribute
+        # negligibly — mirrors PBRT LayeredBxDF::f()'s own `depth>3` RR gate.
+        # Needed because NEE now fires every iteration (see below), not just
+        # the first, so an unbounded walk would mean unbounded shadow rays.
+        if depth > 3:
+            var beta_max = max(beta.r, max(beta.g, beta.b))
+            if beta_max < Float32(0.25):
+                var q_rr = max(Float32(0.0), Float32(1.0) - beta_max)
+                if pcg.next_float() < q_rr:
+                    break
+                beta = beta * (Float32(1.0) / (Float32(1.0) - q_rr))
+
+        # ── Diffuse base: NEE at THIS bounce, weighted by the coat's
+        #    transmittance for the incoming light direction AND `beta` — the
+        #    accumulated base-albedo attenuation from any prior recycled
+        #    bounces at this same hit point (still 1.0 on the first pass, so
+        #    this exactly reproduces the old single-scatter formula there).
+        #    Firing every iteration instead of only the first is what turns
+        #    this into "full stochastic NEE": PBRT's LayeredBxDF::f() gets the
+        #    same TRT/TRTRT/... multi-scatter terms from ONE correlated random
+        #    walk reusing a single virtual-light sample; gonzales instead
+        #    draws an independent fresh light sample per bounce (decorrelated,
+        #    same expected energy, simpler to reason about). The RR gate above
+        #    keeps this from growing shadow-ray traffic unboundedly on
+        #    high-albedo/grazing-angle coats that recycle many times. ──
+        if ctx.lights.area_light_count > 0:
             var ls_u_cd = pcg.next_float()
             var ls_result_cd = light_sampler_sample(ctx.lights.light_sampler, ls_u_cd)
             var light_idx = ls_result_cd[0]
@@ -773,14 +794,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var pdf_bsdf_cd = cos_s / PI
                     var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
                     var weight_cd = alb * al.emission * (cos_s * t_light * w_cd / (pdf_light_cd * PI))
-                    var contrib = path_ptr[].throughput * weight_cd
+                    var contrib = path_ptr[].throughput * beta * weight_cd
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
 
-        # ── Env-map (infinite light) NEE at the base, once. Light enters via
-        #    the coat so the contribution is weighted by 1 - F(cos_env). The
-        #    view-side coat transmittance is implicit in reaching this branch. ──
-        if not did_env_nee and ctx.lights.infinite_count > 0:
-            did_env_nee = True
+        # ── Env-map (infinite light) NEE at the base, every bounce (see area
+        #    lights above). Light enters via the coat so the contribution is
+        #    weighted by 1 - F(cos_env). The view-side coat transmittance is
+        #    implicit in reaching this branch (and, for depth>0, in `beta`). ──
+        if ctx.lights.infinite_count > 0:
             for inf_i in range(ctx.lights.infinite_count):
                 var ilight = ctx.lights.infinite_lights[inf_i]
                 var env_dir: SIMD[DType.float32, 3]
@@ -803,22 +824,21 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var t_env = Float32(1.0) - fr_dielectric(cos_env, ior)
                     var pdf_bsdf_nee = cos_env / PI
                     var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
-                    var contrib_e = path_ptr[].throughput * alb * env_rgb * (cos_env * t_env / (PI * pdf_light)) * mis_w
+                    var contrib_e = path_ptr[].throughput * beta * alb * env_rgb * (cos_env * t_env / (PI * pdf_light)) * mis_w
                     var t_max_env = Float32(100000.0)
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
 
-        # Distant light NEE through the coat (delta light: MIS weight = 1). Once only,
-        # matching did_nee/did_env_nee — firing each iteration would double-count with
-        # incorrect beta weights and causes ~8x excess shadow rays via warp divergence.
-        if not did_distant_nee and ctx.lights.distant_count > 0:
-            did_distant_nee = True
+        # Distant light NEE through the coat (delta light: MIS weight = 1),
+        # every bounce (see area lights above) — now correctly `beta`-weighted
+        # per depth instead of the old fire-once gate, so no double-counting.
+        if ctx.lights.distant_count > 0:
             for dl_i in range(ctx.lights.distant_count):
                 var dl = ctx.lights.distant_lights[dl_i]
                 var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
                 var cos_s = dot(normal, to_light)
                 if cos_s > Float32(0.0):
                     var t_coat = Float32(1.0) - fr_dielectric(cos_s, ior)
-                    var contrib = path_ptr[].throughput * alb * dl.emission * (cos_s * t_coat / PI)
+                    var contrib = path_ptr[].throughput * beta * alb * dl.emission * (cos_s * t_coat / PI)
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, Float32(2000.0), contrib)
 
         # Lambertian base: sample a cosine-weighted up-going direction.
