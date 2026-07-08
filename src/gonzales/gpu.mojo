@@ -14,7 +14,7 @@ from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
 from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
-from .spectrum import SampledWavelengths, SpectralHandle, null_spectral_handle
+from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
 # path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
@@ -1538,6 +1538,35 @@ def update_medium_gpu(
 
 comptime MEDIUM_TRACK_MAX_ITERS: Int = 10000  # delta/ratio-tracking loop safety bound
 
+def _spectral_beer_lambert_rgb(
+    sigma_t: RGB, dist: Float32, wl: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+) -> RGB:
+    """Beer-Lambert transmittance exp(-sigma_t * dist), colored via a real
+    per-wavelength spectral evaluation of sigma_t at this path's own hero
+    wavelengths (staged spectral rendering rollout, Stage 5b -- see
+    project_spectral_rendering memory) instead of the old independent-
+    per-RGB-channel exp(). sigma_t is an extinction COEFFICIENT, not a
+    light color, and has no dedicated spectral-upsampling target in this
+    codebase -- this reuses the Jakob-Hanika illuminant-style unbounded-RGB
+    conversion (rgb_illuminant_to_spectral_sample) as a documented, scoped
+    approximation (same "approximate via the closest existing conversion"
+    precedent as project_material_type_warnings' subsurface/measured
+    material approximations), not a physically rigorous spectral-extinction
+    fit."""
+    var sigma_t_spec = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, sigma_t.r, sigma_t.g, sigma_t.b, wl)
+    var v0 = exp(-sigma_t_spec.v0 * dist)
+    var v1 = exp(-sigma_t_spec.v1 * dist)
+    var v2 = exp(-sigma_t_spec.v2 * dist)
+    var v3 = exp(-sigma_t_spec.v3 * dist)
+    var trans_spec = SpectralSample(v0, v1, v2, v3)
+    var (tr, tg, tb) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, trans_spec, wl)
+    return RGB(tr, tg, tb)
+
 def _sample_medium_core(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -1556,6 +1585,12 @@ def _sample_medium_core(
     n_area_lights: Int,
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
     n_light_sampler: Int,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     """Apply medium transmittance along the ray segment and possibly scatter
     or absorb inside the medium. On scatter, performs direct area-light NEE
@@ -1595,6 +1630,22 @@ def _sample_medium_core(
     (hero-wavelength weighting) to be unbiased for a colored heterogeneous
     medium — not needed for uniformgrid, would matter for a future colored
     nanovdb medium.
+
+    Staged spectral rendering rollout, Stage 5b (spectralize now that 5a
+    unified this function — see project_spectral_rendering memory): the
+    HOMOGENEOUS branch's Beer-Lambert transmittance (both the main
+    throughput multiply and the NEE shadow-ray transmittance) now goes
+    through _spectral_beer_lambert_rgb — real per-wavelength color at this
+    path's own hero wavelengths, not independent per-RGB-channel exp().
+    Deliberately scoped to just the COLOR of the transmittance result, not
+    the free-flight DISTANCE-sampling decision above (still red-channel-only,
+    unchanged) — matches this whole rollout's established "evaluate
+    spectrally, convert back to RGB immediately, don't touch the sampling
+    PDF" pattern. The heterogeneous (uniformgrid) branch is NOT spectralized:
+    per this docstring's own note, uniformgrid density has no per-channel
+    color to begin with, so there is nothing to spectralize there yet — this
+    would matter for a future colored volumetric medium (e.g. nanovdb), not
+    today's grayscale uniformgrid smoke/fire density.
     """
     var path_ptr = paths + i
     if path_ptr[].active == 0:
@@ -1651,7 +1702,10 @@ def _sample_medium_core(
         var u_free = pcg.next_float()
         t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
         var t_seg = min(t_free, t_surf)
-        path_ptr[].throughput *= RGB(exp(-sigma_t.r * t_seg), exp(-sigma_t.g * t_seg), exp(-sigma_t.b * t_seg))
+        if spectral_res > 0:
+            path_ptr[].throughput *= _spectral_beer_lambert_rgb(sigma_t, t_seg, path_ptr[].wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        else:
+            path_ptr[].throughput *= RGB(exp(-sigma_t.r * t_seg), exp(-sigma_t.g * t_seg), exp(-sigma_t.b * t_seg))
         if t_free >= t_surf:
             path_ptr[].pcgState = pcg.state
             return
@@ -1726,6 +1780,8 @@ def _sample_medium_core(
                                         Tval = Float32(0.0)
                                         break
                             T = RGB(Tval, Tval, Tval)
+                        elif spectral_res > 0:
+                            T = _spectral_beer_lambert_rgb(sigma_t, dist, path_ptr[].wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
                         else:
                             T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
@@ -1768,6 +1824,12 @@ def sample_medium_gpu(
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
     n_light_sampler: Int,
     count: Int,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     """GPU kernel wrapper: bounds-check, then call the SAME
     _sample_medium_core the CPU driver (render_all_tiles) calls."""
@@ -1779,6 +1841,7 @@ def sample_medium_gpu(
         bvh2Nodes, primIds, meshes, curves,
         blasNodesArr, blasPrimIdsArr, instances,
         areaLights, n_area_lights, lightSamplerCdf, n_light_sampler,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
     )
 
 
@@ -2485,6 +2548,12 @@ def gpu_render_sample(
                     handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
                     handle[].n_light_sampler,
                     n_int,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
@@ -2919,6 +2988,12 @@ def gpu_render_wavefront(
                     handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
                     handle[].n_light_sampler,
                     n_total,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
                 handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
