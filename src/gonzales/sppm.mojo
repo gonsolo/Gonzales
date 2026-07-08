@@ -23,20 +23,18 @@ from .bvh import (
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
 )
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image
 from .gpu import GpuSceneHandle
-from .spectrum import SampledWavelengths
+from .spectrum import (
+    SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
+    rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
+)
 
-@always_inline
-def _zero_wavelengths() -> SampledWavelengths:
-    """Placeholder used until Stage 4 wires real per-photon/per-VP wavelength
-    sampling through SPPM (see project_spectral_rendering memory)."""
-    return SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0))
 
 comptime _ALPHA  = Float32(0.7)
 comptime _MAX_B  = 10
@@ -455,6 +453,12 @@ def _sppm_trace_visible_point(
     var org = Point3f(c2w[12], c2w[13], c2w[14])
     var has_media = Int(sd.mediumCount) > 0
 
+    # One hero-wavelength sample for this VP's own camera subpath (staged
+    # spectral rendering rollout, Stage 4 -- see project_spectral_rendering
+    # memory), used for its direct (NEE) lighting term. The photon-density
+    # (tau) gather term stays RGB by design -- see _sppm_gather_one.
+    var vp_wavelengths = sample_wavelengths_uniform(pcg.next_float())
+
     var vp = SPPMPixel(
         pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
@@ -469,7 +473,7 @@ def _sppm_trace_visible_point(
         wo=Vec3f(Float32(0)),
         alpha=Float32(0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
-        wavelengths=_zero_wavelengths(),
+        wavelengths=vp_wavelengths,
     )
 
     # Sub-pixel jitter — diversifies which point on a dielectric-obscured
@@ -787,6 +791,15 @@ def _sppm_trace_photon[use_gpu: Bool](
     var ro: Point3f
     var rd: Vec3f
     var flux: RGB
+    # One hero-wavelength sample for this photon subpath (staged spectral
+    # rendering rollout, Stage 4 -- see project_spectral_rendering memory).
+    # Stored on each stored SPPMPhoton but NOT used to make tau/flux
+    # spectral -- see _sppm_gather_one's docstring for why that stays RGB
+    # (independent per-photon wavelength draws pooled into one running VP
+    # sum is the classic spectral-photon-mapping cross-wavelength problem;
+    # this field is here for potential future use, e.g. a from-scratch
+    # spectral photon-density estimator, not consumed by anything yet).
+    var ph_wavelengths = sample_wavelengths_uniform(pcg.next_float())
 
     var light_pick = Int(pcg.next_uint() % UInt32(n_lights))
     if light_pick < n_area:
@@ -873,7 +886,7 @@ def _sppm_trace_photon[use_gpu: Bool](
                 # term).
                 if bounce > 0:
                     _sppm_store_photon[use_gpu](
-                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=_zero_wavelengths()),
+                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
                 flux *= ff.albedo
@@ -913,7 +926,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             # once via NEE and again via an unfiltered photon density).
             if bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=_zero_wavelengths()),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — without this, photons always
@@ -976,7 +989,7 @@ def _sppm_trace_photon[use_gpu: Bool](
                 break
             if not bxdf_is_delta(bs_c.flags) and bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=_zero_wavelengths()),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             flux *= bs_c.f
             rd = vec3f(bs_c.wi)
@@ -991,7 +1004,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
             if bounce > 0:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=_zero_wavelengths()),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
             flux *= f_hs / pdf_hs
@@ -1277,7 +1290,7 @@ def _sppm_nee_weight(
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         return _nee_weight_hair(ls, hc)
     var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
-    return _nee_weight_simple(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo)
+    return _nee_weight_simple_via_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
 
 def _sppm_nee_one(
     vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
@@ -1331,8 +1344,28 @@ def _sppm_nee_one(
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-                    var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
-                    vps[i].ld += (brdf * al.emission) * geom
+                    # Spectral eval (staged spectral rendering rollout, Stage 4
+                    # -- see project_spectral_rendering memory): real
+                    # per-wavelength material response x light emission,
+                    # multiplied as a SpectralSample product (not each factor
+                    # separately, for real product-of-spectra accuracy) then
+                    # converted back to RGB, mirroring bdpt.mojo's _connect.
+                    # bxdf_eval_any_spectral's conductor branch uses the same
+                    # arbitrary-direction (no cosine fused) convention
+                    # _sppm_vp_brdf's own bxdf_eval_conductor_ggx call already
+                    # relies on, so this is a drop-in spectral replacement for
+                    # mat_kind in {diffuse(0), conductor(1)}. Hair (2) and the
+                    # no-table-loaded case fall back to the original RGB path.
+                    if vp.mat_kind == Int32(2) or sd.spectral.res <= 0:
+                        var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
+                        vps[i].ld += (brdf * al.emission) * geom
+                    else:
+                        var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
+                        var (f_spec, _) = bxdf_eval_any_spectral(mat_kind_simple, vp.alb, vp.alpha, vn, wo, wi, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
+                        var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
+                        var product_spec = f_spec * light_spec
+                        var (pr, pg, pb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, product_spec, vp.wavelengths)
+                        vps[i].ld += RGB(pr, pg, pb) * geom
 
     # Distant/point/sphere/infinite NEE — via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (_sppm_nee_weight
@@ -1764,9 +1797,21 @@ def sppm_nee_gpu(
     infiniteLightCount: Int64,
     pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
     pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
-    driver (_sppm_nee_update) calls."""
+    driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
+    that needs the spectral device buffers (staged spectral rendering
+    rollout, Stage 4 -- see project_spectral_rendering memory): VP
+    generation and the photon pass sample their own wavelengths via PCG
+    only (no table lookup needed to draw a wavelength), and the gather pass
+    stays RGB by design (see _sppm_gather_one's docstring) -- only this
+    NEE pass's direct-lighting term actually dereferences sd.spectral."""
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_vps:
         return
@@ -1777,6 +1822,7 @@ def sppm_nee_gpu(
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
         pointLights, pointLightCount,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
     _sppm_nee_one(vps, i, sd, pcg)
@@ -1914,6 +1960,12 @@ def sppm_render_gpu(
             var n_point_lights = Int64(handle[].n_point_lights)
             var n_blas = Int64(handle[].n_blas)
             var n_instances = Int64(handle[].n_instances)
+            var spectral_coeffs = handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_cie_x = handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_cie_y = handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_cie_z = handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_d65 = handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_res = handle[].spectral_res
 
             var grid_pix = ceildiv(n_pix, block_size)
             var grid_vps = ceildiv(n_vps, block_size)
@@ -1979,6 +2031,7 @@ def sppm_render_gpu(
                     blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     pointLights, n_point_lights,
+                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     grid_dim=grid_vps, block_dim=block_size)
 
                 if verbose or (pass_idx + 1) % 10 == 0:
