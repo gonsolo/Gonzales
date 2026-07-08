@@ -1538,9 +1538,10 @@ def update_medium_gpu(
 
 comptime MEDIUM_TRACK_MAX_ITERS: Int = 10000  # delta/ratio-tracking loop safety bound
 
-def sample_medium_gpu(
+def _sample_medium_core(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    i: Int,
     mediums: UnsafePointer[Medium_C, MutAnyOrigin],
     n_mediums: Int,
     grids: UnsafePointer[Grid_C, MutAnyOrigin],
@@ -1555,11 +1556,22 @@ def sample_medium_gpu(
     n_area_lights: Int,
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
     n_light_sampler: Int,
-    count: Int,
 ):
     """Apply medium transmittance along the ray segment and possibly scatter
     or absorb inside the medium. On scatter, performs direct area-light NEE
-    with isotropic phase function.
+    with isotropic phase function. Shared verbatim between the GPU kernel
+    (sample_medium_gpu, one call per thread) and the CPU driver
+    (render_all_tiles's per-sample loop) — staged spectral rendering
+    rollout, Stage 5a (unify before spectralize), see
+    project_spectral_rendering memory. Was previously hand-duplicated with
+    real, if minor, divergences: the CPU copy never set `.bounce`/
+    `.lastBsdfPdf` on a volume-scatter event (this function, matching what
+    was already GPU's behavior, now does on both) and drew its NEE/
+    scatter-direction random numbers in the opposite order from GPU (this
+    function uses GPU's order, matching the CPU code's own long-standing
+    comment that GPU was the intended canonical reference "mirrored" on the
+    CPU side) — both fixed as a natural side effect of unifying into one
+    body, not preserved as intentional per-backend differences.
 
     Homogeneous media (grid_idx < 0): closed-form analytic transmittance,
     single free-flight sample (unchanged from before heterogeneous support).
@@ -1584,16 +1596,13 @@ def sample_medium_gpu(
     medium — not needed for uniformgrid, would matter for a future colored
     nanovdb medium.
     """
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
-        return
-    var path_ptr = paths + tid
+    var path_ptr = paths + i
     if path_ptr[].active == 0:
         return
     var med_idx = Int(path_ptr[].current_medium_idx)
     if med_idx < 0 or med_idx >= n_mediums:
         return
-    var inter = intersections[tid]
+    var inter = intersections[i]
     if inter.hit == 0:
         return
     var med = mediums[med_idx]
@@ -1735,11 +1744,42 @@ def sample_medium_gpu(
         path_ptr[].lastBsdfPdf = INV_FOUR_PI
         path_ptr[].volume_scattered = Int8(1)
         path_ptr[].bounce += 1
-        intersections[tid].hit = Int8(0)  # no surface hit this bounce
+        intersections[i].hit = Int8(0)  # no surface hit this bounce
     else:
         # Absorbed
         path_ptr[].pcgState = pcg.state
         path_ptr[].active = Int8(0)
+
+def sample_medium_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    n_mediums: Int,
+    grids: UnsafePointer[Grid_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    n_area_lights: Int,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    n_light_sampler: Int,
+    count: Int,
+):
+    """GPU kernel wrapper: bounds-check, then call the SAME
+    _sample_medium_core the CPU driver (render_all_tiles) calls."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    _sample_medium_core(
+        paths, intersections, tid, mediums, n_mediums, grids,
+        bvh2Nodes, primIds, meshes, curves,
+        blasNodesArr, blasPrimIdsArr, instances,
+        areaLights, n_area_lights, lightSamplerCdf, n_light_sampler,
+    )
 
 
 def shade_hair_gpu(

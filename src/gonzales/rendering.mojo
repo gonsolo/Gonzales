@@ -9,6 +9,7 @@ from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths
+from .gpu import _sample_medium_core
 
 
 def render_tile(
@@ -92,144 +93,23 @@ def render_tile(
             if paths[i].active == 0:
                 continue
             # ── Volume transmittance sampling ──────────────────────────
-            # Homogeneous (grid_idx < 0): closed-form analytic transmittance.
-            # Heterogeneous (grid_idx >= 0, "uniformgrid"): delta tracking
-            # against the grid's majorant — see sample_medium_gpu's docstring
-            # in gpu.mojo for the full rationale (same algorithm, mirrored
-            # here for the CPU path).
-            var med_idx = Int(paths[i].current_medium_idx)
-            if med_idx >= 0 and Int(scene.mediumCount) > 0 and intersections[i].hit != Int8(0):
-                var med = scene.mediums[med_idx]
-                var sigma_t = med.sigma_a + med.sigma_s
-                var t_surf = intersections[i].tHit
-                var pcg_vol = PCG32(paths[i].pcgState, paths[i].pcgInc)
-
-                var have_collision = False
-                var t_free = Float32(0.0)
-                var p_absorb = Float32(0.0)
-                var p_scatter = Float32(0.0)
-
-                if med.grid_idx >= Int32(0):
-                    var grid = scene.grids[Int(med.grid_idx)]
-                    var sigma_maj = grid.max_density * sigma_t.r
-                    if sigma_maj > Float32(0.0):
-                        var ray_org = SIMD[DType.float32, 3](paths[i].ray.origin.x, paths[i].ray.origin.y, paths[i].ray.origin.z)
-                        var ray_dir = SIMD[DType.float32, 3](paths[i].ray.direction.x, paths[i].ray.direction.y, paths[i].ray.direction.z)
-                        var t = Float32(0.0)
-                        var iters = 0
-                        while iters < 10000:
-                            iters += 1
-                            var u = pcg_vol.next_float()
-                            t += -log(max(u, Float32(1e-7))) / sigma_maj
-                            if t >= t_surf:
-                                break
-                            var density = grid_sample_density(grid, ray_org + t * ray_dir)
-                            var sigma_t_real = density * sigma_t.r
-                            var u2 = pcg_vol.next_float()
-                            if u2 < sigma_t_real / sigma_maj:
-                                have_collision = True
-                                t_free = t
-                                break
-                        # Density cancels out of the scatter/absorb ratio given a
-                        # real collision already happened — see gpu.mojo.
-                        p_absorb  = med.sigma_a.r / max(sigma_t.r, Float32(1e-7))
-                        p_scatter = med.sigma_s.r / max(sigma_t.r, Float32(1e-7))
-                else:
-                    var sigma_maj = sigma_t.r
-                    if sigma_maj > Float32(0.0):
-                        var u_free = pcg_vol.next_float()
-                        t_free = -log(max(u_free, Float32(1e-7))) / sigma_maj
-                        var t_seg = min(t_free, t_surf)
-                        paths[i].throughput *= RGB(exp(-sigma_t.r * t_seg), exp(-sigma_t.g * t_seg), exp(-sigma_t.b * t_seg))
-                        have_collision = t_free < t_surf
-                        p_absorb  = med.sigma_a.r / sigma_maj
-                        p_scatter = med.sigma_s.r / sigma_maj
-                paths[i].pcgState = pcg_vol.state
-
-                if have_collision:
-                        var pcg2 = PCG32(paths[i].pcgState, paths[i].pcgInc)
-                        var u_mode = pcg2.next_float()
-                        paths[i].pcgState = pcg2.state
-                        if u_mode < p_absorb:
-                            paths[i].throughput = RGB(Float32(0))
-                            paths[i].active = Int8(0)
-                        elif u_mode < p_absorb + p_scatter:
-                            var pcg3 = PCG32(paths[i].pcgState, paths[i].pcgInc)
-                            var u1 = pcg3.next_float()
-                            var u2 = pcg3.next_float()
-                            paths[i].pcgState = pcg3.state
-                            var cos_theta = Float32(2) * u1 - Float32(1)
-                            var sin_theta = sqrt(max(Float32(0), Float32(1) - cos_theta * cos_theta))
-                            var phi = Float32(6.28318530718) * u2
-                            var scatter_pt = paths[i].ray.origin + paths[i].ray.direction * t_free
-                            # ── Volume scatter NEE — area light direct lighting ──────────
-                            if Int(scene.areaLightCount) > 0 and Int(scene.lightSampler.n) > 0:
-                                var pcg_nee = PCG32(paths[i].pcgState, paths[i].pcgInc)
-                                var u_nee = pcg_nee.next_float()
-                                var ls_result = light_sampler_sample(scene.lightSampler, u_nee)
-                                var light_idx = ls_result[0]
-                                var light_sel_pdf = ls_result[1]
-                                var al = scene.areaLights[light_idx]
-                                var lmesh = scene.meshes[Int(al.meshIdx)]
-                                var lti = Int(pcg_nee.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-                                var r1 = pcg_nee.next_float()
-                                var r2 = pcg_nee.next_float()
-                                paths[i].pcgState = pcg_nee.state
-                                var lb = lti * 3
-                                var lv0 = Int(lmesh.vertexIndices[lb])
-                                var lv1 = Int(lmesh.vertexIndices[lb + 1])
-                                var lv2 = Int(lmesh.vertexIndices[lb + 2])
-                                var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-                                var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-                                var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-                                var sqrt_r1 = sqrt(r1)
-                                var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
-                                var lcross = cross(lp1 - lp0, lp2 - lp0)
-                                var lcross_len = sqrt(dot(lcross, lcross))
-                                var light_normal = lcross * (Float32(1) / max(lcross_len, Float32(1e-7)))
-                                var scatter_pt_s = scatter_pt.to_simd()
-                                var to_light = light_point - scatter_pt_s
-                                var dist_sq = dot(to_light, to_light)
-                                var dist = sqrt(dist_sq)
-                                if dist > Float32(0.0001) and al.total_area > Float32(0):
-                                    var shadow_dir = to_light * (Float32(1) / dist)
-                                    var cos_l = -dot(light_normal, shadow_dir)
-                                    if cos_l > Float32(0):
-                                        var shad_org = point3f(scatter_pt_s + shadow_dir * Float32(0.0002))
-                                        var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
-                                        var shad_tmax = dist * Float32(0.9995)
-                                        if not any_hit_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, shad_ray, shad_tmax,
-                                                                  scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances):
-                                            var T: RGB
-                                            if med.grid_idx >= Int32(0):
-                                                var grid_s = scene.grids[Int(med.grid_idx)]
-                                                var sigma_maj_s = grid_s.max_density * sigma_t.r
-                                                var Tval = Float32(1.0)
-                                                if sigma_maj_s > Float32(0.0):
-                                                    var ts = Float32(0.0)
-                                                    var siters = 0
-                                                    while siters < 10000:
-                                                        siters += 1
-                                                        var us = pcg_nee.next_float()
-                                                        ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
-                                                        if ts >= dist:
-                                                            break
-                                                        var ps = scatter_pt_s + shadow_dir * ts
-                                                        var density_s = grid_sample_density(grid_s, ps)
-                                                        Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
-                                                        if Tval < Float32(1e-4):
-                                                            Tval = Float32(0.0)
-                                                            break
-                                                    paths[i].pcgState = pcg_nee.state
-                                                T = RGB(Tval, Tval, Tval)
-                                            else:
-                                                T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
-                                            var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
-                                            paths[i].estimate += paths[i].throughput * al.emission * T * (geom * INV_FOUR_PI)
-                            paths[i].volume_scattered = Int8(1)
-                            paths[i].ray = Ray_C(scatter_pt, Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
-                            paths[i].specularBounce = Int8(0)
-                            intersections[i].hit = Int8(0)
+            # Shared with the GPU wavefront path (gpu.mojo's
+            # sample_medium_gpu kernel) via _sample_medium_core — staged
+            # spectral rendering rollout, Stage 5a (unify before
+            # spectralize), see project_spectral_rendering memory. See that
+            # function's own docstring for the two real CPU/GPU behavioral
+            # divergences this unification found and fixed (bounce/
+            # lastBsdfPdf not set on CPU volume-scatter; reversed NEE-vs-
+            # scatter-direction RNG draw order), not preserved as
+            # intentional per-backend differences.
+            _sample_medium_core(
+                paths, intersections, i,
+                scene.mediums, Int(scene.mediumCount), scene.grids,
+                scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
+                scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
+                scene.areaLights, Int(scene.areaLightCount),
+                scene.lightSampler.cdf, Int(scene.lightSampler.n),
+            )
         for i in range(n):
             if paths[i].active == 0:
                 continue
