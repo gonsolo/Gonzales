@@ -22,11 +22,12 @@ from .bvh import (
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
+    render_aux_buffers,
 )
 from .sampling import power_heuristic
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
-from .postprocess import write_image
+from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .gpu import GpuSceneHandle
@@ -383,14 +384,18 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     lvc_count: Int,
     scale: Float32,
     start_med_idx: Int32 = Int32(-1),
-) -> RGB:
+) -> Tuple[RGB, RGB]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
     connect inline/synchronously to the shared Light Vertex Cache via
     `_bdpt_connect_to_cache` — mirrors how every live GPU shading kernel in
     this codebase already does its shadow ray (any_hit test, straight into
     the thread's own accumulator; gpu.mojo's queued ShadowTask_C mechanism
-    is dead code, never used by the live render loop). Returns this camera
-    path's total contribution for one spp sample. `use_gpu` is unused inside
+    is dead code, never used by the live render loop). Returns (total, first_alb):
+    this camera path's total contribution for one spp sample, and the material
+    albedo at its first non-delta (stored) vertex — the same "first hit,
+    skipping through mirrors/glass" convention shading.mojo's path.albedo AOV
+    already uses, needed for the denoiser's albedo guide buffer (see
+    bdpt_render's docstring). `use_gpu` is unused inside
     this function's own body today (no CPU/GPU divergence needed here beyond
     what `_bdpt_connect_to_cache`'s `_connect`/`_visible_transmittance` calls
     already share) — kept as a parameter so its signature matches
@@ -429,6 +434,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var beta = RGB(Float32(1))
     var cur_med_idx = start_med_idx
     var total = RGB(Float32(0))
+    var first_alb = RGB(Float32(0))  # denoiser albedo AOV -- set at the first stored vertex, below
     # One hero-wavelength sample per camera subpath (staged spectral
     # rendering rollout, Stage 3 -- see project_spectral_rendering memory),
     # stored into every vertex this subpath constructs and used for this
@@ -482,6 +488,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
+                if n_verts == 0: first_alb = ff.albedo
                 n_verts += 1
                 if lvc_count > 0:
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
@@ -574,6 +581,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
+            if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if lvc_count > 0:
                 total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
@@ -664,6 +672,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
+                if n_verts == 0: first_alb = mat.albedo
                 n_verts += 1
                 if lvc_count > 0:
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
@@ -724,6 +733,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             v_h.pdf_fwd = Float32(1)
             v_h.med_idx = cur_med_idx
             v_h.wavelengths = wavelengths
+            if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if lvc_count > 0:
                 total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
@@ -788,7 +798,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         else:
             break
 
-    return total
+    return (total, first_alb)
 
 # ── Trace one light subpath, storing its vertices into the shared cache ─────
 
@@ -1412,10 +1422,13 @@ def bdpt_render(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    # Output buffer: one RGB per pixel
+    # Output buffer: one RGB per pixel, plus a parallel first-hit-albedo AOV
+    # accumulator for the post-render denoiser (see write_image call below).
     var buf = alloc[RGB](n_pix)
+    var albedo_buf = alloc[RGB](n_pix)
     for i in range(n_pix):
         buf[i] = RGB(Float32(0))
+        albedo_buf[i] = RGB(Float32(0))
 
     var r2c = psc[0].raster_to_camera
     var c2w = psc[0].camera_to_world
@@ -1464,9 +1477,10 @@ def bdpt_render(
             var px = pix % fw; var py = pix // fw
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
-            var contrib = _bdpt_trace_camera_and_connect[False](
+            var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, lvc_count, scale)
             buf[pix] += contrib
+            albedo_buf[pix] += alb
 
         parallelize[camera_connect](n_pix)
 
@@ -1489,8 +1503,35 @@ def bdpt_render(
         pixels[i*3+2] = c.b
     buf.free()
 
-    _ = write_image(pixels, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
-    pixels.free()
+    # Denoise (never wired up before -- no_denoise was a dead parameter):
+    # first-hit albedo (accumulated above) as the material guide, plus a
+    # fresh unjittered normals/depth pass via the SAME render_aux_buffers the
+    # plain path tracer uses (integrator-agnostic -- one primary ray per
+    # pixel against the BVH, no dependency on BDPT's own path state).
+    var albedo_pixels = alloc[Float32](n_pix * 3)
+    var inv_spp_alb = Float32(1) / Float32(n_spp)
+    for i in range(n_pix):
+        var a = albedo_buf[i] * inv_spp_alb
+        albedo_pixels[i*3]   = a.r
+        albedo_pixels[i*3+1] = a.g
+        albedo_pixels[i*3+2] = a.b
+    albedo_buf.free()
+
+    var normals = alloc[Float32](n_pix * 3)
+    var depth = alloc[Float32](n_pix)
+    var sd_local = sd
+    render_aux_buffers(r2c, c2w, Int32(0), Int32(0), psc[0].film_w, psc[0].film_h,
+                        UnsafePointer(to=sd_local), normals, depth)
+
+    var denoised = alloc[Float32](n_pix * 3)
+    if no_denoise:
+        for i in range(n_pix * 3): denoised[i] = pixels[i]
+    else:
+        denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+
+    _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+    pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
     return Int32(0)
 
 # ── GPU port ───────────────────────────────────────────────────────────────
@@ -1577,6 +1618,7 @@ def _bdpt_emit_light_paths_gpu(
 
 def _bdpt_camera_connect_gpu(
     accum: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_accum: UnsafePointer[Float32, MutAnyOrigin],
     n_pix: Int,
     fw: Int,
     r2c: UnsafePointer[Float32, MutAnyOrigin],
@@ -1645,11 +1687,14 @@ def _bdpt_camera_connect_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var scratch = inter_scratch + pix
-    var contrib = _bdpt_trace_camera_and_connect[True](
+    var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, lvc_count, scale)
     accum[pix*3]   += contrib.r
     accum[pix*3+1] += contrib.g
     accum[pix*3+2] += contrib.b
+    albedo_accum[pix*3]   += alb.r
+    albedo_accum[pix*3+1] += alb.g
+    albedo_accum[pix*3+2] += alb.b
 
 # ── Host driver ───────────────────────────────────────────────────────────
 
@@ -1703,6 +1748,11 @@ def bdpt_render_gpu(
                 var dst = host_buf.unsafe_ptr().bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[i] = Float32(0)
+            var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            with albedo_accum_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                for i in range(n_pix * 3):
+                    dst[i] = Float32(0)
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
@@ -1722,6 +1772,7 @@ def bdpt_render_gpu(
             var inter_light_ptr = inter_light_buf.unsafe_ptr().bitcast[Intersection_C]()
             var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
             var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
+            var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
 
@@ -1785,7 +1836,7 @@ def bdpt_render_gpu(
                 var scale = _bdpt_lvc_connection_scale(lvc_count, n_light_paths)
 
                 handle[].ctx.enqueue_function[_bdpt_camera_connect_gpu](
-                    accum_ptr, n_pix, Int(psc[0].film_w), r2c_ptr, c2w_ptr, inter_cam_ptr,
+                    accum_ptr, albedo_accum_ptr, n_pix, Int(psc[0].film_w), r2c_ptr, c2w_ptr, inter_cam_ptr,
                     lvc_ptr, lvc_count, scale, base_seed, si,
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
@@ -1815,8 +1866,34 @@ def bdpt_render_gpu(
                         b = b if b < max_comp else max_comp
                     pixels[i*3] = r; pixels[i*3+1] = g; pixels[i*3+2] = b
 
-            _ = write_image(pixels, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
-            pixels.free()
+            # Denoise (never wired up before -- no_denoise was a dead
+            # parameter): read back the albedo AOV accumulated above, run
+            # a fresh normals/depth pass via the host-side sd (same
+            # render_aux_buffers the CPU path/plain tracer use -- host-only,
+            # so it runs on the CPU here too, not as a GPU kernel), then the
+            # same CPU denoise() the CPU BDPT path uses.
+            var albedo_pixels = alloc[Float32](n_pix * 3)
+            with albedo_accum_buf.map_to_host() as host_buf:
+                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var inv_spp_alb = Float32(1) / Float32(n_spp)
+                for i in range(n_pix * 3):
+                    albedo_pixels[i] = src[i] * inv_spp_alb
+
+            var normals = alloc[Float32](n_pix * 3)
+            var depth = alloc[Float32](n_pix)
+            var sd_local = sd
+            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
+                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+
+            var denoised = alloc[Float32](n_pix * 3)
+            if no_denoise:
+                for i in range(n_pix * 3): denoised[i] = pixels[i]
+            else:
+                denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                        denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+
+            _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+            pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
         except e:
             print("BDPT GPU render failed: " + String(e))
             ret = Int32(-1)

@@ -22,13 +22,14 @@ from .bvh import (
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
+    render_aux_buffers,
 )
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
-from .postprocess import write_image
+from .postprocess import write_image, denoise
 from .gpu import GpuSceneHandle
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
@@ -1438,6 +1439,27 @@ def _sppm_nee_update(
 
 # ── Finalize ──────────────────────────────────────────────────────────────────
 
+@always_inline
+def _sppm_finalize_albedo_one_pixel(
+    vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
+    i:          Int,
+    vp_samples: Int,
+) -> RGB:
+    """Averages the first-hit material albedo AOV across vp_samples VP
+    samples for pixel i — same shape as _sppm_finalize_one_pixel, but for the
+    denoiser's albedo guide buffer. SPPMPixel.alb is set once per VP sample
+    at its first non-specular hit, in _sppm_trace_visible_point — already
+    exactly the quantity the denoiser wants, no separate tracking needed
+    (unlike bdpt.mojo, which had to add a new return value for this).
+    Shared between the CPU driver (sppm_render) and the GPU finalize kernel
+    (sppm_finalize_gpu)."""
+    var acc = RGB(Float32(0))
+    for vs in range(vp_samples):
+        var vp = vps[i * vp_samples + vs]
+        if vp.valid != Int32(0):
+            acc += vp.alb
+    return acc / Float32(vp_samples)
+
 def _sppm_finalize_one_pixel(
     vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
     i:          Int,
@@ -1570,6 +1592,7 @@ def sppm_render(
     # the fresnel-weighted reflect/refract blend a real specular interface
     # would show.
     var out_pixels = alloc[Float32](n_pix * 3)
+    var albedo_pixels = alloc[Float32](n_pix * 3)
 
     @parameter
     def finalize_one(i: Int):
@@ -1577,13 +1600,35 @@ def sppm_render(
         out_pixels[i * 3 + 0] = acc.r
         out_pixels[i * 3 + 1] = acc.g
         out_pixels[i * 3 + 2] = acc.b
+        var alb = _sppm_finalize_albedo_one_pixel(vps, i, _VP_SAMPLES)
+        albedo_pixels[i * 3 + 0] = alb.r
+        albedo_pixels[i * 3 + 1] = alb.g
+        albedo_pixels[i * 3 + 2] = alb.b
 
     parallelize[finalize_one](n_pix)
 
-    _ = write_image(out_pixels, psc[0].film_w, psc[0].film_h,
+    # Denoise (never wired up before -- no_denoise was a dead parameter):
+    # SPPMPixel.alb already gives the right albedo AOV (see
+    # _sppm_finalize_albedo_one_pixel's docstring); normals/depth come from
+    # the same integrator-agnostic render_aux_buffers the plain path tracer
+    # and BDPT use.
+    var normals = alloc[Float32](n_pix * 3)
+    var depth = alloc[Float32](n_pix)
+    var sd_local = sd
+    render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
+                        psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+
+    var denoised = alloc[Float32](n_pix * 3)
+    if no_denoise:
+        for i in range(n_pix * 3): denoised[i] = out_pixels[i]
+    else:
+        denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+
+    _ = write_image(denoised, psc[0].film_w, psc[0].film_h,
                     psc[0].film_filename, Int32(32), Int32(32))
 
-    out_pixels.free()
+    out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
     heads.free()
     photons.free()
     vps.free()
@@ -1836,9 +1881,12 @@ def sppm_finalize_gpu(
     iso_scale:  Float32,
     max_comp:   Float32,
     out_pixels: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_out: UnsafePointer[Float32, MutAnyOrigin],
 ):
     """One thread per pixel. Calls the SAME _sppm_finalize_one_pixel the CPU
-    driver (sppm_render's tail loop) calls."""
+    driver (sppm_render's tail loop) calls, plus the matching albedo AOV
+    average for the denoiser (staged along with the rest of Stage 4-adjacent
+    denoiser wiring — see project_spectral_rendering memory)."""
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
@@ -1846,6 +1894,10 @@ def sppm_finalize_gpu(
     out_pixels[i * 3 + 0] = acc.r
     out_pixels[i * 3 + 1] = acc.g
     out_pixels[i * 3 + 2] = acc.b
+    var alb = _sppm_finalize_albedo_one_pixel(vps, i, vp_samples)
+    albedo_out[i * 3 + 0] = alb.r
+    albedo_out[i * 3 + 1] = alb.g
+    albedo_out[i * 3 + 2] = alb.b
 
 
 # ── GPU host driver ───────────────────────────────────────────────────────────
@@ -1911,6 +1963,7 @@ def sppm_render_gpu(
             var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection_C]())
             var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
             var out_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            var albedo_out_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
@@ -1932,6 +1985,7 @@ def sppm_render_gpu(
             var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().bitcast[Intersection_C]()
             var counter_ptr = counter_buf.unsafe_ptr().bitcast[Int32]()
             var out_ptr     = out_buf.unsafe_ptr().bitcast[Float32]()
+            var albedo_out_ptr = albedo_out_buf.unsafe_ptr().bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
 
@@ -2041,7 +2095,7 @@ def sppm_render_gpu(
             print("")
 
             handle[].ctx.enqueue_function[sppm_finalize_gpu](
-                vps_ptr, n_pix, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp, out_ptr,
+                vps_ptr, n_pix, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp, out_ptr, albedo_out_ptr,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
 
@@ -2052,9 +2106,34 @@ def sppm_render_gpu(
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[i] = src[i]
 
-            _ = write_image(out_pixels, psc[0].film_w, psc[0].film_h,
+            # Denoise (never wired up before -- no_denoise was a dead
+            # parameter): read back the albedo AOV finalized above, run a
+            # fresh normals/depth pass via the host-side sd (same
+            # render_aux_buffers the CPU path/plain tracer use), then the
+            # same CPU denoise() the CPU SPPM path uses.
+            var albedo_pixels = alloc[Float32](n_pix * 3)
+            with albedo_out_buf.map_to_host() as host_buf:
+                var src = host_buf.unsafe_ptr()
+                var dst = albedo_pixels.bitcast[UInt8]()
+                for i in range(n_pix * 3 * size_of[Float32]()):
+                    dst[i] = src[i]
+
+            var normals = alloc[Float32](n_pix * 3)
+            var depth = alloc[Float32](n_pix)
+            var sd_local = sd
+            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
+                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+
+            var denoised = alloc[Float32](n_pix * 3)
+            if no_denoise:
+                for i in range(n_pix * 3): denoised[i] = out_pixels[i]
+            else:
+                denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                        denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+
+            _ = write_image(denoised, psc[0].film_w, psc[0].film_h,
                             psc[0].film_filename, Int32(32), Int32(32))
-            out_pixels.free()
+            out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
         except e:
             print("SPPM GPU render failed: " + String(e))
             ret = Int32(-1)
