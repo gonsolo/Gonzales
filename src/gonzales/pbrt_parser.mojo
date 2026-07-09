@@ -433,104 +433,51 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
 # ── Medium handlers ───────────────────────────────────────────────────────────
 
-comptime GRID_DENSITY_SCRATCH_MAX: Int = 16 * 1024 * 1024  # 64MB scratch; covers up to ~256^3 grids
-
-def _psc_scan_sigma(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                    type_buf: UnsafePointer[UInt8, MutAnyOrigin],
-                    dst: UnsafePointer[Float32, MutAnyOrigin],
-                    is_arr: Int32):
-    """Parse a medium's sigma_a/sigma_s value into dst[0..2] (RGB). Handles
-    both the plain "rgb sigma_a" [r g b] form (_psc_scan_rgb, unchanged) and
-    "spectrum sigma_a" [wavelen0 val0 wavelen1 val1 ...] (inline piecewise
-    spectrum, e.g. pbrt-v4-scenes' explosion/smoke-plume — 2-4 samples of a
-    near-constant absorption/scattering value across the visible range), via
-    the shared _psc_scan_spectrum_scalar helper (lexer.mojo) -- see its
-    docstring for why a single-shape scanner can't handle both forms safely.
-    A named-spectrum reference (a quoted string, not numbers) is safely
-    skipped instead of misread, since no medium in these scenes uses one for
-    sigma_a/sigma_s."""
-    if type_buf[0] == UInt8(115) and type_buf[1] == UInt8(112):  # "sp" spectrum
-        var name_buf = alloc[UInt8](64)
-        var (mean, is_numeric) = _psc_scan_spectrum_scalar(handle, is_arr, name_buf, Int32(64))
-        name_buf.free()
-        if is_numeric:
-            dst[0] = mean; dst[1] = mean; dst[2] = mean
-    else:
-        _psc_scan_rgb(handle, dst, is_arr)
-
 def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                   s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var name_buf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, name_buf, 64)
-    var sa = alloc[Float32](3); sa[0] = Float32(0); sa[1] = Float32(0); sa[2] = Float32(0)
-    var ss = alloc[Float32](3); ss[0] = Float32(0); ss[1] = Float32(0); ss[2] = Float32(0)
-    var sa_set = False
-    var ss_set = False
-    var g_val = Float32(0)
-    var scale = Float32(1)
-    var is_hom = False
-    var is_grid = False
+    var params = _psc_collect_params(handle)
+
+    # "string type" used to need its own hand-written bracket-close
+    # (["uniformgrid"] form) -- every other branch already consumed its
+    # closing ']' when an array, this one didn't, silently truncating the
+    # rest of the block (density/nx/ny/nz/sigma_a/sigma_s all skipped) for
+    # any medium that happened to bracket-wrap "type". _psc_collect_params's
+    # string-type handling always closes the bracket, so that bug class is
+    # gone structurally, not just for this one param.
+    var type_str = params.get_string("type", "")
+    var is_hom = type_str == "homogeneous"
+    var is_grid = type_str == "uniformgrid"
+
+    # sigma_a/sigma_s: rgb triple, OR inline numeric spectrum array (mean of
+    # samples, replicated to all 3 channels) via the same float-or-rgb
+    # duality as texture "value"/"tex1"/"tex2" above. A named-spectrum
+    # string reference (0 floats collected) is silently unsupported, same as
+    # before -- no medium in this scene corpus uses one.
+    var sa_set = len(params.get_floats("sigma_a")) > 0
+    var ss_set = len(params.get_floats("sigma_s")) > 0
+    var sa = _psc_get_float_or_rgb(params, "sigma_a", RGB(Float32(0)))
+    var ss = _psc_get_float_or_rgb(params, "sigma_s", RGB(Float32(0)))
+    var g_val = params.get_float("g", Float32(0))
+    var scale = params.get_float("scale", Float32(1))
     # uniformgrid-specific params
-    var g_nx = Int32(0); var g_ny = Int32(0); var g_nz = Int32(0)
-    var g_p0 = alloc[Float32](3); g_p0[0] = Float32(0); g_p0[1] = Float32(0); g_p0[2] = Float32(0)
-    var g_p1 = alloc[Float32](3); g_p1[0] = Float32(1); g_p1[1] = Float32(1); g_p1[2] = Float32(1)
-    var g_density = alloc[Float32](GRID_DENSITY_SCRATCH_MAX)
-    var g_density_n = Int32(0)
-    var ps = ParamScanner(Int32(64), Int32(64))
-    while ps.next(handle):
-        if ps.name_is("type"):
-            var tmp = alloc[UInt8](64)
-            _ = scanner_parse_quoted_string(handle, tmp, 64)
-            if _psc_streq(tmp, "homogeneous"):
-                is_hom = True
-            elif _psc_streq(tmp, "uniformgrid"):
-                is_grid = True
-            tmp.free()
-            # "string type" is sometimes bracket-wrapped (["uniformgrid"]) —
-            # every other branch below already consumes its closing ']' when
-            # is_array; this one didn't, which desynced the scanner right after
-            # the first param and silently truncated the rest of the
-            # MakeNamedMedium block (density/nx/ny/nz/sigma_a/sigma_s all
-            # skipped). Pre-existing bug, not just a uniformgrid thing — it
-            # just never triggered before because other scenes' media happen
-            # not to bracket-wrap "type".
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-        elif ps.name_is("sigma_a") and ps.is_float():
-            _psc_scan_sigma(handle, ps.type_buf, sa, ps.is_array)
-            sa_set = True
-        elif ps.name_is("sigma_s") and ps.is_float():
-            _psc_scan_sigma(handle, ps.type_buf, ss, ps.is_array)
-            ss_set = True
-        elif ps.name_is("g") and ps.is_float():
-            g_val = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("scale") and ps.is_float():
-            scale = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("nx") and ps.is_int():
-            g_nx = _psc_scan_one_int(handle, ps.is_array)
-        elif ps.name_is("ny") and ps.is_int():
-            g_ny = _psc_scan_one_int(handle, ps.is_array)
-        elif ps.name_is("nz") and ps.is_int():
-            g_nz = _psc_scan_one_int(handle, ps.is_array)
-        elif ps.name_is("p0") and ps.is_float():
-            _psc_scan_rgb(handle, g_p0, ps.is_array)
-        elif ps.name_is("p1") and ps.is_float():
-            _psc_scan_rgb(handle, g_p1, ps.is_array)
-        elif ps.name_is("density") and ps.is_float():
-            g_density_n = scanner_scan_floats(handle, g_density, Int32(GRID_DENSITY_SCRATCH_MAX))
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-        else:
-            ps.skip(handle)
+    var g_nx = params.get_int("nx", Int32(0))
+    var g_ny = params.get_int("ny", Int32(0))
+    var g_nz = params.get_int("nz", Int32(0))
+    var g_p0 = params.get_rgb("p0", RGB(Float32(0)))
+    var g_p1 = params.get_rgb("p1", RGB(Float32(1)))
+    var g_density = params.get_floats("density")
+
     if is_hom:
         var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
         s[0].med_names.append(name_str)
-        s[0].med_sa.append(sa[0] * scale)
-        s[0].med_sa.append(sa[1] * scale)
-        s[0].med_sa.append(sa[2] * scale)
-        s[0].med_ss.append(ss[0] * scale)
-        s[0].med_ss.append(ss[1] * scale)
-        s[0].med_ss.append(ss[2] * scale)
+        s[0].med_sa.append(sa.r * scale)
+        s[0].med_sa.append(sa.g * scale)
+        s[0].med_sa.append(sa.b * scale)
+        s[0].med_ss.append(ss.r * scale)
+        s[0].med_ss.append(ss.g * scale)
+        s[0].med_ss.append(ss.b * scale)
         s[0].med_g.append(g_val)
         s[0].med_grid_idx.append(Int32(-1))
     elif is_grid:
@@ -538,31 +485,30 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         # ConstantSpectrum(1) (see media.cpp) — unlike gonzales's existing
         # HomogeneousMedium path above, which happens to default to 0 (a
         # pre-existing, separate behavior not touched here).
-        var sa0 = sa[0] if sa_set else Float32(1); var sa1 = sa[1] if sa_set else Float32(1); var sa2 = sa[2] if sa_set else Float32(1)
-        var ss0 = ss[0] if ss_set else Float32(1); var ss1 = ss[1] if ss_set else Float32(1); var ss2 = ss[2] if ss_set else Float32(1)
+        var sa_eff = sa if sa_set else RGB(Float32(1))
+        var ss_eff = ss if ss_set else RGB(Float32(1))
         var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
         s[0].med_names.append(name_str)
-        s[0].med_sa.append(sa0 * scale); s[0].med_sa.append(sa1 * scale); s[0].med_sa.append(sa2 * scale)
-        s[0].med_ss.append(ss0 * scale); s[0].med_ss.append(ss1 * scale); s[0].med_ss.append(ss2 * scale)
+        s[0].med_sa.append(sa_eff.r * scale); s[0].med_sa.append(sa_eff.g * scale); s[0].med_sa.append(sa_eff.b * scale)
+        s[0].med_ss.append(ss_eff.r * scale); s[0].med_ss.append(ss_eff.g * scale); s[0].med_ss.append(ss_eff.b * scale)
         s[0].med_g.append(g_val)
         s[0].med_grid_idx.append(Int32(len(s[0].grid_nx)))
 
         s[0].grid_nx.append(g_nx); s[0].grid_ny.append(g_ny); s[0].grid_nz.append(g_nz)
-        s[0].grid_p0.append(g_p0[0]); s[0].grid_p0.append(g_p0[1]); s[0].grid_p0.append(g_p0[2])
-        s[0].grid_p1.append(g_p1[0]); s[0].grid_p1.append(g_p1[1]); s[0].grid_p1.append(g_p1[2])
+        s[0].grid_p0.append(g_p0.r); s[0].grid_p0.append(g_p0.g); s[0].grid_p0.append(g_p0.b)
+        s[0].grid_p1.append(g_p1.r); s[0].grid_p1.append(g_p1.g); s[0].grid_p1.append(g_p1.b)
         for ci in range(16):
             s[0].grid_ctm.append(s[0].ctm[ci])
         s[0].grid_density_base.append(Int32(len(s[0].grid_density)))
         var expected_n = Int(g_nx) * Int(g_ny) * Int(g_nz)
-        var copy_n = min(Int(g_density_n), expected_n) if expected_n > 0 else Int(g_density_n)
+        var copy_n = min(len(g_density), expected_n) if expected_n > 0 else len(g_density)
         for di in range(copy_n):
             s[0].grid_density.append(g_density[di])
         # Pad with zeros if the file had fewer values than nx*ny*nz declared
         # (shouldn't happen for well-formed scenes, but keeps indexing safe).
         for _ in range(copy_n, expected_n):
             s[0].grid_density.append(Float32(0))
-    name_buf.free(); sa.free(); ss.free()
-    g_p0.free(); g_p1.free(); g_density.free()
+    name_buf.free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                   name: UnsafePointer[UInt8, MutAnyOrigin]) -> Int32:
