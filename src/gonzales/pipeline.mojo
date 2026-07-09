@@ -157,7 +157,16 @@ def _gpu_upload_scene(
     psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sobol: UnsafePointer[UInt32, MutAnyOrigin],
     n_pixels: Int,
-    spectral: SpectralHandle = null_spectral_handle(),
+    # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
+    # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
+    # miscompilation; this GPU-upload path reproduced the same corruption
+    # class (see project_priority_backlog memory item 3).
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     var fw = psc[0].film_w
     var fh = psc[0].film_h
@@ -209,6 +218,7 @@ def _gpu_upload_scene(
         psc[0].filter_norm_x, psc[0].filter_norm_y,
         psc[0].filter_type,
         fw, fh,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
     )
     # pts_counts, fi_counts, vi_counts, uv_counts freed automatically
     return handle
@@ -500,7 +510,7 @@ def parse_and_render(
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if Int(handle) <= 8:
             sd.free()
             mojo_parsed_free(psc)
@@ -517,7 +527,7 @@ def parse_and_render(
         return ret
     elif use_gpu and use_bdpt:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if Int(handle) <= 8:
             sd.free()
             mojo_parsed_free(psc)
@@ -532,7 +542,7 @@ def parse_and_render(
         # World units spanned by one pixel per unit distance (for mip LOD):
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
         var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral)
+        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if Int(handle) <= 8:
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -821,7 +831,7 @@ def render_interactive(
 
     var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     if use_gpu:
-        handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral)
+        handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if Int(handle) <= 8:
             mojo_parsed_free(psc)
             return

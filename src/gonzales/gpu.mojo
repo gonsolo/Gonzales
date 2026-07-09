@@ -187,7 +187,19 @@ def gpu_upload_scene(
     filter_norm_x: Float32, filter_norm_y: Float32,
     filter_type: Int32,
     fw: Int32, fh: Int32,
-    spectral: SpectralHandle = null_spectral_handle(),
+    # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
+    # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
+    # miscompilation. This host function is part of the GPU-enabled
+    # compilation unit (--target-accelerator build), and passing the handle
+    # by value here reproduced the exact same corruption class (spectral_res
+    # read back as 0, coeffs pointer read back as a tiny garbage address) --
+    # see project_priority_backlog memory item 3 GPU-black-background bug.
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
 ) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
     comptime if has_accelerator():
         try:
@@ -746,7 +758,6 @@ def gpu_upload_scene(
             # 1-element buffers otherwise (BDPT/SPPM GPU dispatch don't wire
             # spectral yet — Stage 3/4 — same "at least 1 elem" convention
             # already used above for zero-size scene data).
-            var spectral_res = Int(spectral.res)
             comptime CIE_N = 95
             var spec_coeffs_count = (3 * spectral_res * spectral_res * spectral_res * 3) if spectral_res > 0 else 1
             var spec_coeffs_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_coeffs_count * 4)
@@ -754,7 +765,7 @@ def gpu_upload_scene(
                 with spec_coeffs_gpu_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().bitcast[Float32]()
                     for i in range(spec_coeffs_count):
-                        dst[i] = spectral.coeffs[i]
+                        dst[i] = spectral_coeffs[i]
 
             var spec_cie_count = CIE_N if spectral_res > 0 else 1
             var spec_cie_x_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
@@ -765,19 +776,19 @@ def gpu_upload_scene(
                 with spec_cie_x_gpu_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().bitcast[Float32]()
                     for i in range(CIE_N):
-                        dst[i] = spectral.cie_x[i]
+                        dst[i] = spectral_cie_x[i]
                 with spec_cie_y_gpu_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().bitcast[Float32]()
                     for i in range(CIE_N):
-                        dst[i] = spectral.cie_y[i]
+                        dst[i] = spectral_cie_y[i]
                 with spec_cie_z_gpu_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().bitcast[Float32]()
                     for i in range(CIE_N):
-                        dst[i] = spectral.cie_z[i]
+                        dst[i] = spectral_cie_z[i]
                 with spec_d65_gpu_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().bitcast[Float32]()
                     for i in range(CIE_N):
-                        dst[i] = spectral.d65[i]
+                        dst[i] = spectral_d65[i]
 
             # Allocate handle on heap
             var handle = alloc[GpuSceneHandle](1)
