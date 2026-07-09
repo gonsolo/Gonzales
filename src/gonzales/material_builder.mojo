@@ -1,30 +1,31 @@
 from std.memory import alloc
-from std.math import exp, sqrt
-from .lexer import (PbrtScanner, scanner_parse_quoted_string,
-                    scanner_scan_char, scanner_scan_float, ParamScanner,
-                    _psc_streq, _psc_strncpy, _psc_strncmp,
-                    _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
-                    _psc_scan_one_bool, _psc_scan_spectrum_scalar)
-from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
+from std.math import sqrt
+from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params)
+from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                    s: UnsafePointer[SceneParseState, MutAnyOrigin],
                                    inline_type: Bool = False):
+    """Builds a NamedMaterial from a `Material`/`MakeNamedMaterial` directive.
+    Scans every parameter ONCE, generically, into a ParameterDictionary
+    (_psc_collect_params -- lexer.mojo), then interprets specific named
+    parameters by querying it -- mirrors real pbrt's own ParameterDictionary
+    design instead of hand-scanning each (name, type) combination inline.
+    See project_parser_architecture memory for why this replaced the old
+    single-pass special-cased scan."""
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
 
-    var rgb = alloc[Float32](3)
-    rgb[0] = Float32(0.5); rgb[1] = Float32(0.5); rgb[2] = Float32(0.5)
+    var params = _psc_collect_params(handle)
+
+    var rgb = RGB(Float32(0.5))
     # transmittance for DiffuseTransmission (default 0.25 per PBRT)
-    var trans_rgb = alloc[Float32](3)
-    trans_rgb[0] = Float32(0.25); trans_rgb[1] = Float32(0.25); trans_rgb[2] = Float32(0.25)
+    var trans_rgb = params.get_rgb("transmittance", RGB(Float32(0.25)))
     # named-spectrum conductor optical constants (R/G/B at 630/530/450 nm)
-    var metal_eta = alloc[Float32](3)
-    metal_eta[0] = Float32(0.5); metal_eta[1] = Float32(0.5); metal_eta[2] = Float32(0.5)
-    var metal_k   = alloc[Float32](3)
-    metal_k[0] = Float32(0.5); metal_k[1] = Float32(0.5); metal_k[2] = Float32(0.5)
+    var metal_eta = RGB(Float32(0.5))
+    var metal_k = RGB(Float32(0.5))
     var has_spectral_conductor = False
     # "measured" (tabulated .bsdf) material — approximated as a rough
     # conductor whose F0 is the mean of the file's own "luminance" tensor;
@@ -36,34 +37,53 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     # scoping note at the subsurface branch below for why this isn't a real
     # BSSRDF.
     var is_subsurface = False
-    # hair material melanin parameters
-    var eumelanin   = Float32(0.0)
-    var pheomelanin = Float32(0.0)
-    var sigma_a_rgb = alloc[Float32](3)
-    sigma_a_rgb[0] = Float32(-1); sigma_a_rgb[1] = Float32(-1); sigma_a_rgb[2] = Float32(-1)
-    var has_sigma_a = False
     var mat_type = MatKind.diffuse
-    var mat_ior  = Float32(1.5)
+    var mat_ior = Float32(1.5)
     var mat_roughU = Float32(0.0)
     var mat_roughV = Float32(0.0)
-    # For inline Material directives, the first quoted string is the TYPE, not the name.
-    # Map it to mat_type; the name buffer keeps the type string as a synthetic key.
+
+    # Determine material kind from either the inline-directive keyword
+    # (`Material "conductor" ...`, where the "name" IS the type) or the
+    # "type" param (`MakeNamedMaterial "foo" "string type" "conductor"`).
+    # Both paths dispatch the exact same recognized-type set and warning --
+    # collapsed from two separately-written elif chains in the old code into
+    # one, since the dictionary model no longer needs a separate live-scan
+    # branch per directive shape.
+    var type_str = String("diffuse")
+    var have_type_str = False
     if inline_type:
-        if _psc_streq(mat_name, "conductor"):       mat_type = MatKind.conductor
-        elif _psc_streq(mat_name, "dielectric"):    mat_type = MatKind.dielectric
-        elif _psc_streq(mat_name, "coateddiffuse"): mat_type = MatKind.coated_diffuse
-        elif _psc_streq(mat_name, "diffusetransmission"): mat_type = MatKind.diffuse_transmit
-        elif _psc_streq(mat_name, "coatedconductor"): mat_type = MatKind.coated_conductor
-        elif _psc_streq(mat_name, "mix"):           mat_type = MatKind.mix
-        elif _psc_streq(mat_name, "thindielectric"): mat_type = MatKind.thin_dielectric
-        elif _psc_streq(mat_name, "hair"):          mat_type = MatKind.hair
-        elif _psc_streq(mat_name, "interface"):     mat_type = MatKind.interface
-        elif _psc_streq(mat_name, "diffuse"):       mat_type = MatKind.diffuse
-        elif _psc_streq(mat_name, "measured"):
+        type_str = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+        have_type_str = True
+    elif params.has("type"):
+        type_str = params.get_string("type", "diffuse")
+        have_type_str = True
+
+    if have_type_str:
+        if type_str == "conductor":
+            mat_type = MatKind.conductor
+        elif type_str == "dielectric":
+            mat_type = MatKind.dielectric
+        elif type_str == "coateddiffuse":
+            mat_type = MatKind.coated_diffuse
+        elif type_str == "diffusetransmission":
+            mat_type = MatKind.diffuse_transmit
+        elif type_str == "coatedconductor":
+            mat_type = MatKind.coated_conductor
+        elif type_str == "mix":
+            mat_type = MatKind.mix
+        elif type_str == "thindielectric":
+            mat_type = MatKind.thin_dielectric
+        elif type_str == "hair":
+            mat_type = MatKind.hair
+        elif type_str == "interface":
+            mat_type = MatKind.interface
+        elif type_str == "diffuse":
+            mat_type = MatKind.diffuse
+        elif type_str == "measured":
             mat_type = MatKind.conductor
             is_measured = True
             mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
-        elif _psc_streq(mat_name, "subsurface"):
+        elif type_str == "subsurface":
             # Approximated as a coateddiffuse (specular coat + Lambertian
             # base) — real subsurface needs a volumetric random walk /
             # BSSRDF (lateral light transport under the surface, translucency
@@ -71,7 +91,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             # just gets the base color roughly right (see the "name" param
             # handler below) so the material isn't flat grey; reuses
             # coateddiffuse's existing reflectance-texture/roughness/eta
-            # parsing below for free since subsurface uses the same param
+            # handling below for free since subsurface uses the same param
             # names for those.
             mat_type = MatKind.coated_diffuse
             is_subsurface = True
@@ -80,279 +100,238 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             # 50%-grey diffuse in total silence, which made scenes using it
             # look wrong with no clue why. mat_type already defaults to
             # MatKind.diffuse above, so this just adds the warning.
-            var unsup_name = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
-            print("Warning: unsupported material type '" + unsup_name + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface (approximate).")
-    # pbrt default: remaproughness=true means roughU/V are a perceptual
-    # roughness remapped to GGX alpha via sqrt(); false means the parsed
-    # value already IS alpha and must be used as-is (see RoughnessToAlpha
-    # in the pbrt-v4 book, section 9.6.1).
-    var mat_remap_roughness = True
+            print("Warning: unsupported material type '" + type_str + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface (approximate).")
+            mat_type = MatKind.diffuse
+
+    # "eta"/"k": dielectric IOR (a scalar) and conductor Fresnel constants (an
+    # RGB triple OR a named-spectrum string OR an inline numeric spectrum
+    # array, both already reduced to a single scalar mean by
+    # _psc_scan_spectrum_scalar during collection) all arrive as the SAME
+    # dictionary entry differing only in how many floats it holds -- >=3 is
+    # an explicit RGB triple (conductor-only), exactly 1 is a scalar (used
+    # for both mat_ior, meaningful only for dielectric, and metal_eta/k,
+    # meaningful only for conductor -- harmless cross-assignment either way
+    # since a material can't be both kinds), and 0 floats means it was a
+    # named-spectrum string, looked up by common-metal prefix.
+    if params.has("eta"):
+        var eta_f = params.get_floats("eta")
+        if len(eta_f) >= 3:
+            metal_eta = RGB(eta_f[0], eta_f[1], eta_f[2])
+            has_spectral_conductor = True
+        elif len(eta_f) == 1:
+            mat_ior = eta_f[0]
+            metal_eta = RGB(eta_f[0])
+            has_spectral_conductor = True
+        else:
+            # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
+            # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
+            var eta_name = params.get_string("eta", "")
+            if eta_name.startswith("metal-Ag"):
+                metal_eta = RGB(Float32(0.136), Float32(0.130), Float32(0.144))
+            elif eta_name.startswith("metal-Al"):
+                metal_eta = RGB(Float32(1.300), Float32(0.826), Float32(0.644))
+            elif eta_name.startswith("metal-Au"):
+                metal_eta = RGB(Float32(0.194), Float32(0.608), Float32(1.426))
+            elif eta_name.startswith("metal-Cu"):
+                metal_eta = RGB(Float32(0.272), Float32(1.120), Float32(1.160))
+            has_spectral_conductor = True
+    if params.has("intIOR"):
+        # Float-only alias for dielectric eta; no RGB/spectrum/named form.
+        var iior_f = params.get_floats("intIOR")
+        if len(iior_f) > 0:
+            mat_ior = iior_f[0]
+    if params.has("k"):
+        var k_f = params.get_floats("k")
+        if len(k_f) >= 3:
+            metal_k = RGB(k_f[0], k_f[1], k_f[2])
+            has_spectral_conductor = True
+        elif len(k_f) == 1:
+            metal_k = RGB(k_f[0])
+            has_spectral_conductor = True
+        else:
+            var k_name = params.get_string("k", "")
+            if k_name.startswith("metal-Ag"):
+                metal_k = RGB(Float32(3.880), Float32(3.070), Float32(2.560))
+            elif k_name.startswith("metal-Al"):
+                metal_k = RGB(Float32(7.480), Float32(6.280), Float32(5.580))
+            elif k_name.startswith("metal-Au"):
+                metal_k = RGB(Float32(3.060), Float32(2.120), Float32(1.846))
+            elif k_name.startswith("metal-Cu"):
+                metal_k = RGB(Float32(3.240), Float32(2.605), Float32(2.433))
+            has_spectral_conductor = True
+
+    # "reflectance": either an RGB/float value, OR a texture reference --
+    # looked up in tex_names (imagemap) first, then constant textures, then
+    # procedural checkerboard textures.
     var tex_idx_for_mat = Int32(-1)
-    var normal_tex_idx_for_mat = Int32(-1)
-    var rough_tex_idx_for_mat = Int32(-1)
-    # Procedural checkerboard params, only meaningful when tex_idx_for_mat == -2.
     var checker_tex1 = RGB(Float32(1))
     var checker_tex2 = RGB(Float32(0))
     var checker_uscale = Float32(1)
     var checker_vscale = Float32(1)
-    var mix_name1 = alloc[UInt8](PSC_NAME_MAX)
-    var mix_name2 = alloc[UInt8](PSC_NAME_MAX)
-    var mix_amount = Float32(0.5)
-    mix_name1[0] = UInt8(0); mix_name2[0] = UInt8(0)
-    # Sized for the normalmap/bumpmap filename branch below (scans up to
-    # PSC_FILE_MAX * 2 bytes) — a 64-byte buffer here was a real overflow
-    # for any normal-map path longer than 64 bytes.
-    var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.name_is("type") and ps.is_str():
-            _ = scanner_parse_quoted_string(handle, str_val, 64)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            if _psc_streq(str_val, "conductor"):
-                mat_type = MatKind.conductor
-            elif _psc_streq(str_val, "dielectric"):
-                mat_type = MatKind.dielectric
-            elif _psc_streq(str_val, "coateddiffuse"):
-                mat_type = MatKind.coated_diffuse
-            elif _psc_streq(str_val, "diffusetransmission"):
-                mat_type = MatKind.diffuse_transmit
-            elif _psc_streq(str_val, "coatedconductor"):
-                mat_type = MatKind.coated_conductor
-            elif _psc_streq(str_val, "mix"):
-                mat_type = MatKind.mix
-            elif _psc_streq(str_val, "thindielectric"):
-                mat_type = MatKind.thin_dielectric
-            elif _psc_streq(str_val, "hair"):
-                mat_type = MatKind.hair
-            elif _psc_streq(str_val, "interface"):
-                mat_type = MatKind.interface
-            elif _psc_streq(str_val, "diffuse"):
-                mat_type = MatKind.diffuse
-            elif _psc_streq(str_val, "measured"):
-                mat_type = MatKind.conductor
-                is_measured = True
-                mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
-            elif _psc_streq(str_val, "subsurface"):
-                # See the matching inline_type comment above.
-                mat_type = MatKind.coated_diffuse
-                is_subsurface = True
-            else:
-                # See the matching inline_type warning above.
-                var unsup_name2 = String(unsafe_from_utf8_ptr=str_val.as_immutable())
-                print("Warning: unsupported material type '" + unsup_name2 + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface (approximate).")
-                mat_type = MatKind.diffuse
-        elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(114):  # 'r' rgb eta/k for conductor
-            if ps.name_is("eta"):
-                _psc_scan_rgb(handle, metal_eta, ps.is_array)
-            else:
-                _psc_scan_rgb(handle, metal_k, ps.is_array)
-            has_spectral_conductor = True
-        elif (ps.name_is("eta") or ps.name_is("intIOR")) and ps.type_buf[0] == UInt8(102):  # 'f' float IOR for dielectric
-            var tmp = alloc[Float32](1)
-            _ = scanner_scan_float(handle, tmp)
-            mat_ior = tmp[0]
-            tmp.free()
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-        elif (ps.name_is("uroughness") or ps.name_is("roughness")) and ps.is_float():
-            mat_roughU = _psc_scan_one_float(handle, ps.is_array)
-            if ps.name_is("roughness"):
-                mat_roughV = mat_roughU
-        elif ps.name_is("vroughness") and ps.is_float():
-            mat_roughV = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("remaproughness") and ps.type_buf[0] == UInt8(98):  # 'b' bool
-            mat_remap_roughness = _psc_scan_one_bool(handle, ps.is_array)
-        elif ps.name_is("reflectance") and ps.is_float():
-            _psc_scan_rgb(handle, rgb, ps.is_array)
-        elif ps.name_is("transmittance") and ps.is_float():
-            # DiffuseTransmission transmittance — stored in trans_rgb, later -> mat.emission
-            _psc_scan_rgb(handle, trans_rgb, ps.is_array)
-        elif ps.name_is("eumelanin") and ps.is_float():
-            # Hair material: melanin concentration -> stored in rgb[0] (temp)
-            eumelanin = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("pheomelanin") and ps.is_float():
-            pheomelanin = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("sigma_a") and ps.is_float():
-            # Hair material: direct absorption coefficients (R,G,B)
-            _psc_scan_rgb(handle, sigma_a_rgb, ps.is_array)
-            has_sigma_a = True
-        elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(115):  # 's' = spectrum
-            # "spectrum eta"/"k" takes EITHER a named-spectrum string
-            # ("metal-Au-eta") OR an inline piecewise spectrum
-            # [wavelen0 val0 wavelen1 val1 ...] -- e.g. crown.pbrt's diamond:
-            # "spectrum eta" [200 3.5 900 3.3], a dielectric, not a named
-            # conductor. _psc_scan_spectrum_scalar (lexer.mojo) handles both
-            # forms robustly -- see its docstring for why a single-shape
-            # scanner can't (confirmed via a real crown.pbrt render: diamond's
-            # IOR was silently defaulting to 1.5 instead of ~3.4 before this).
-            var mname = alloc[UInt8](64)
-            var (mean, is_numeric) = _psc_scan_spectrum_scalar(handle, ps.is_array, mname, Int32(64))
-            if is_numeric:
-                # Not a real spectral-to-RGB conversion -- just the mean of
-                # the value samples, matching _psc_scan_spectrum_scalar's
-                # own documented scope (good enough for the near-constant
-                # spectra these scenes actually use).
-                if ps.name_is("eta"):
-                    mat_ior = mean  # meaningful for dielectric; harmlessly unused for conductor
-                    metal_eta[0] = mean; metal_eta[1] = mean; metal_eta[2] = mean
-                else:
-                    metal_k[0] = mean; metal_k[1] = mean; metal_k[2] = mean
-                has_spectral_conductor = True
-            else:
-                # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
-                # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
-                # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
-                if ps.name_is("eta"):
-                    if _psc_strncmp(mname, "metal-Ag", 8) == 0:
-                        metal_eta[0] = Float32(0.136); metal_eta[1] = Float32(0.130); metal_eta[2] = Float32(0.144)
-                    elif _psc_strncmp(mname, "metal-Al", 8) == 0:
-                        metal_eta[0] = Float32(1.300); metal_eta[1] = Float32(0.826); metal_eta[2] = Float32(0.644)
-                    elif _psc_strncmp(mname, "metal-Au", 8) == 0:
-                        metal_eta[0] = Float32(0.194); metal_eta[1] = Float32(0.608); metal_eta[2] = Float32(1.426)
-                    elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
-                        metal_eta[0] = Float32(0.272); metal_eta[1] = Float32(1.120); metal_eta[2] = Float32(1.160)
-                    has_spectral_conductor = True
-                else:  # "k"
-                    if _psc_strncmp(mname, "metal-Ag", 8) == 0:
-                        metal_k[0] = Float32(3.880); metal_k[1] = Float32(3.070); metal_k[2] = Float32(2.560)
-                    elif _psc_strncmp(mname, "metal-Al", 8) == 0:
-                        metal_k[0] = Float32(7.480); metal_k[1] = Float32(6.280); metal_k[2] = Float32(5.580)
-                    elif _psc_strncmp(mname, "metal-Au", 8) == 0:
-                        metal_k[0] = Float32(3.060); metal_k[1] = Float32(2.120); metal_k[2] = Float32(1.846)
-                    elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
-                        metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
-                    has_spectral_conductor = True
-            mname.free()
-        elif ps.name_is("reflectance") and ps.type_buf[0] == UInt8(116):  # 't' = texture
-            _ = scanner_parse_quoted_string(handle, str_val, 64)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            # Look up str_val in tex_names (imagemap) first, then constant
-            # textures, then procedural checkerboard textures.
-            var str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
-            var matched_tex = False
-            for ti in range(len(s[0].tex_names)):
-                if s[0].tex_names[ti] == str_name:
-                    tex_idx_for_mat = Int32(ti)
-                    matched_tex = True
-                    break
-            if not matched_tex:
-                for ci in range(len(s[0].const_tex_names)):
-                    if s[0].const_tex_names[ci] == str_name:
-                        rgb[0] = s[0].const_tex_rgb[ci*3+0]
-                        rgb[1] = s[0].const_tex_rgb[ci*3+1]
-                        rgb[2] = s[0].const_tex_rgb[ci*3+2]
+    if params.has("reflectance"):
+        var refl_f = params.get_floats("reflectance")
+        if len(refl_f) >= 3:
+            rgb = RGB(refl_f[0], refl_f[1], refl_f[2])
+        else:
+            var tex_name = params.get_string("reflectance", "")
+            if tex_name != "":
+                var matched_tex = False
+                for ti in range(len(s[0].tex_names)):
+                    if s[0].tex_names[ti] == tex_name:
+                        tex_idx_for_mat = Int32(ti)
                         matched_tex = True
                         break
-            if not matched_tex:
-                for ki in range(len(s[0].checker_tex_names)):
-                    if s[0].checker_tex_names[ki] == str_name:
-                        # -2 marks the material as using the embedded procedural
-                        # checkerboard fields below (see shading.mojo's _tex_lookup)
-                        # rather than the imagemap texture table.
-                        tex_idx_for_mat = Int32(-2)
-                        checker_tex1 = RGB(s[0].checker_tex1[ki*3+0], s[0].checker_tex1[ki*3+1], s[0].checker_tex1[ki*3+2])
-                        checker_tex2 = RGB(s[0].checker_tex2[ki*3+0], s[0].checker_tex2[ki*3+1], s[0].checker_tex2[ki*3+2])
-                        checker_uscale = s[0].checker_uscale[ki]
-                        checker_vscale = s[0].checker_vscale[ki]
-                        break
-        elif (ps.name_is("roughness") or ps.name_is("uroughness")) and ps.type_buf[0] == UInt8(116):  # 't' = texture
-            # Isotropic only: applies to both roughU/roughV (matches every
-            # texture-roughness usage seen in this scene corpus so far — a
-            # separate "texture vroughness" would need its own slot, not
-            # added since nothing uses it yet). Imagemap textures only (no
-            # constant-texture/checkerboard fallback, unlike "reflectance"
-            # above — a roughness value read off a procedural checkerboard
-            # or flat-color texture isn't a pattern seen in practice).
-            _ = scanner_parse_quoted_string(handle, str_val, 64)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            var rough_str_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
+                if not matched_tex:
+                    for ci in range(len(s[0].const_tex_names)):
+                        if s[0].const_tex_names[ci] == tex_name:
+                            rgb = RGB(s[0].const_tex_rgb[ci*3+0], s[0].const_tex_rgb[ci*3+1], s[0].const_tex_rgb[ci*3+2])
+                            matched_tex = True
+                            break
+                if not matched_tex:
+                    for ki in range(len(s[0].checker_tex_names)):
+                        if s[0].checker_tex_names[ki] == tex_name:
+                            # -2 marks the material as using the embedded
+                            # procedural checkerboard fields below (see
+                            # shading.mojo's _tex_lookup) rather than the
+                            # imagemap texture table.
+                            tex_idx_for_mat = Int32(-2)
+                            checker_tex1 = RGB(s[0].checker_tex1[ki*3+0], s[0].checker_tex1[ki*3+1], s[0].checker_tex1[ki*3+2])
+                            checker_tex2 = RGB(s[0].checker_tex2[ki*3+0], s[0].checker_tex2[ki*3+1], s[0].checker_tex2[ki*3+2])
+                            checker_uscale = s[0].checker_uscale[ki]
+                            checker_vscale = s[0].checker_vscale[ki]
+                            break
+
+    # "L": some scenes set a material's base color via this name instead of
+    # "reflectance" -- overrides if present (same target, same as the RGB
+    # form of "reflectance" above).
+    if params.has("L"):
+        var l_f = params.get_floats("L")
+        if len(l_f) >= 3:
+            rgb = RGB(l_f[0], l_f[1], l_f[2])
+
+    # "roughness"/"uroughness"/"vroughness": each may be a float value OR
+    # (isotropic "roughness"/"uroughness" only) a texture reference. Applying
+    # "roughness" first and letting "uroughness"/"vroughness" override
+    # matches the more-specific-wins convention real pbrt's own
+    # GetFloat("uroughness", roughness_default) accessor chain uses,
+    # independent of the params' declaration order in the scene file.
+    var rough_tex_idx_for_mat = Int32(-1)
+    var rough_f = params.get_floats("roughness")
+    if len(rough_f) > 0:
+        mat_roughU = rough_f[0]; mat_roughV = rough_f[0]
+    else:
+        # Isotropic only: applies to both roughU/roughV (matches every
+        # texture-roughness usage seen in this scene corpus so far — a
+        # separate "texture vroughness" would need its own slot, not added
+        # since nothing uses it yet). Imagemap textures only (no constant-
+        # texture/checkerboard fallback, unlike "reflectance" above — a
+        # roughness value read off a procedural checkerboard or flat-color
+        # texture isn't a pattern seen in practice).
+        var rough_tex = params.get_string("roughness", "")
+        if rough_tex != "":
             for ti in range(len(s[0].tex_names)):
-                if s[0].tex_names[ti] == rough_str_name:
+                if s[0].tex_names[ti] == rough_tex:
                     rough_tex_idx_for_mat = Int32(ti)
                     break
-        elif ps.name_is("L") and ps.is_float():
-            _psc_scan_rgb(handle, rgb, ps.is_array)
-        elif ps.name_is("filename") and is_measured and ps.type_buf[0] == UInt8(115):  # 's' = string
-            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            var bsdf_path = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
-            var (bsdf_ok, mean_lum) = load_measured_bsdf_reflectance(bsdf_path)
-            if bsdf_ok:
-                # Clamp away from the extremes — a raw tensor mean can read
-                # near 0 or above 1 at the tabulated grid's edges/highlights,
-                # neither of which is a sane Fresnel F0 for the conductor
-                # approximation this material is being rendered as.
-                var refl = min(Float32(0.95), max(Float32(0.03), mean_lum))
-                rgb[0] = refl; rgb[1] = refl; rgb[2] = refl
-            else:
-                print("Warning: could not read measured BRDF file '" + bsdf_path + "' — using default grey")
-        elif ps.name_is("name") and is_subsurface and ps.is_str():
-            # Named measured-scattering preset (Jensen/Marschner/Levoy/Hanrahan
-            # 2001, "A Practical Model for Subsurface Light Transport" — the
-            # same table pbrt's GetMediumScatteringProperties uses). Only the
-            # presets actually seen in this scene corpus (sssdragon's "Skin1")
-            # plus its common companion "Skin2" are included — add more from
-            # pbrt's media.cpp SubsurfaceParameterTable if another shows up.
-            # Approximates the base reflectance as each channel's single-
-            # scattering albedo sigma_s'/(sigma_s'+sigma_a) — not the true
-            # dipole diffuse reflectance, but a reasonable, cheap proxy (and,
-            # notably, no substitute for the real lateral subsurface light
-            # transport this material is completely missing).
-            _ = scanner_parse_quoted_string(handle, str_val, 64)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            if _psc_streq(str_val, "Skin1"):
-                rgb[0] = Float32(0.9585); rgb[1] = Float32(0.8381); rgb[2] = Float32(0.6779)
-            elif _psc_streq(str_val, "Skin2"):
-                rgb[0] = Float32(0.9882); rgb[1] = Float32(0.9578); rgb[2] = Float32(0.9250)
-            else:
-                var preset_name = String(unsafe_from_utf8_ptr=str_val.as_immutable())
-                print("Warning: unrecognized subsurface preset '" + preset_name + "' — using default grey reflectance")
-        elif (ps.name_is("normalmap") or ps.name_is("bumpmap")) and ps.type_buf[0] == UInt8(115):  # 's' = string (pbrt syntax: "string normalmap" "file")
-            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            # Register the file as an (unnamed) imagemap texture and point the
-            # material's normal_tex_idx at it — same path as a texture reference.
-            var nm_file = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
-            normal_tex_idx_for_mat = Int32(len(s[0].tex_names))
-            s[0].tex_names.append(String("__normalmap"))
-            s[0].tex_files.append(nm_file)
-        elif ps.name_is("amount") and ps.is_float():
-            mix_amount = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("materials") and ps.is_str():
-            # Two quoted material names for mix
-            var tmp1 = alloc[UInt8](PSC_NAME_MAX)
-            var tmp2 = alloc[UInt8](PSC_NAME_MAX)
-            _ = scanner_parse_quoted_string(handle, tmp1, PSC_NAME_MAX)
-            _ = scanner_parse_quoted_string(handle, tmp2, PSC_NAME_MAX)
-            _psc_strncpy(mix_name1, tmp1, PSC_NAME_MAX)
-            _psc_strncpy(mix_name2, tmp2, PSC_NAME_MAX)
-            tmp1.free(); tmp2.free()
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
+    var urough_f = params.get_floats("uroughness")
+    if len(urough_f) > 0:
+        mat_roughU = urough_f[0]
+    else:
+        var urough_tex = params.get_string("uroughness", "")
+        if urough_tex != "":
+            for ti in range(len(s[0].tex_names)):
+                if s[0].tex_names[ti] == urough_tex:
+                    rough_tex_idx_for_mat = Int32(ti)
+                    break
+    var vrough_f = params.get_floats("vroughness")
+    if len(vrough_f) > 0:
+        mat_roughV = vrough_f[0]
+
+    # pbrt default: remaproughness=true means roughU/V are a perceptual
+    # roughness remapped to GGX alpha via sqrt(); false means the parsed
+    # value already IS alpha and must be used as-is (see RoughnessToAlpha
+    # in the pbrt-v4 book, section 9.6.1).
+    var mat_remap_roughness = params.get_bool("remaproughness", True)
+
+    # Hair material melanin parameters / direct sigma_a.
+    var eumelanin = params.get_float("eumelanin", Float32(0.0))
+    var pheomelanin = params.get_float("pheomelanin", Float32(0.0))
+    var has_sigma_a = params.has("sigma_a")
+    var sigma_a_rgb = params.get_rgb("sigma_a", RGB(Float32(-1)))
+
+    # "measured": read the tensor file's mean "luminance" as an achromatic
+    # Fresnel F0 approximation (see measured_bsdf.mojo for the real-BxDF gap).
+    if is_measured and params.has("filename"):
+        var bsdf_path = s[0].scene_dir + params.get_string("filename", "")
+        var (bsdf_ok, mean_lum) = load_measured_bsdf_reflectance(bsdf_path)
+        if bsdf_ok:
+            # Clamp away from the extremes — a raw tensor mean can read near
+            # 0 or above 1 at the tabulated grid's edges/highlights, neither
+            # of which is a sane Fresnel F0 for the conductor approximation
+            # this material is being rendered as.
+            var refl = min(Float32(0.95), max(Float32(0.03), mean_lum))
+            rgb = RGB(refl)
         else:
-            ps.skip(handle)
+            print("Warning: could not read measured BRDF file '" + bsdf_path + "' — using default grey")
+
+    # "subsurface": named measured-scattering preset (Jensen/Marschner/Levoy/
+    # Hanrahan 2001, "A Practical Model for Subsurface Light Transport" — the
+    # same table pbrt's GetMediumScatteringProperties uses). Only the presets
+    # actually seen in this scene corpus (sssdragon's "Skin1") plus its
+    # common companion "Skin2" are included — add more from pbrt's media.cpp
+    # SubsurfaceParameterTable if another shows up. Approximates the base
+    # reflectance as each channel's single-scattering albedo
+    # sigma_s'/(sigma_s'+sigma_a) — not the true dipole diffuse reflectance,
+    # but a reasonable, cheap proxy (and, notably, no substitute for the real
+    # lateral subsurface light transport this material is completely
+    # missing).
+    if is_subsurface and params.has("name"):
+        var preset_name = params.get_string("name", "")
+        if preset_name == "Skin1":
+            rgb = RGB(Float32(0.9585), Float32(0.8381), Float32(0.6779))
+        elif preset_name == "Skin2":
+            rgb = RGB(Float32(0.9882), Float32(0.9578), Float32(0.9250))
+        else:
+            print("Warning: unrecognized subsurface preset '" + preset_name + "' — using default grey reflectance")
+
+    # "normalmap"/"bumpmap": register the file as an (unnamed) imagemap
+    # texture and point the material's normal_tex_idx at it — same path as a
+    # texture reference.
+    var normal_tex_idx_for_mat = Int32(-1)
+    var normalmap_file = params.get_string("normalmap", "")
+    if normalmap_file == "":
+        normalmap_file = params.get_string("bumpmap", "")
+    if normalmap_file != "":
+        var nm_file = s[0].scene_dir + normalmap_file
+        normal_tex_idx_for_mat = Int32(len(s[0].tex_names))
+        s[0].tex_names.append(String("__normalmap"))
+        s[0].tex_files.append(nm_file)
+
+    # "mix": blend amount and the two component material names.
+    var mix_amount = params.get_float("amount", Float32(0.5))
+    var mix_names = params.get_strings("materials")
+    var mix_name1 = String("")
+    var mix_name2 = String("")
+    if len(mix_names) > 0:
+        mix_name1 = mix_names[0]
+    if len(mix_names) > 1:
+        mix_name2 = mix_names[1]
 
     # Store into named_materials List
     var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
     # For named-spectrum conductors: compute Fresnel F0 per channel
     if has_spectral_conductor and (mat_type == MatKind.conductor or mat_type == MatKind.coated_conductor):
-        var f0r = ((metal_eta[0]-Float32(1.0))*(metal_eta[0]-Float32(1.0)) + metal_k[0]*metal_k[0]) / \
-                  ((metal_eta[0]+Float32(1.0))*(metal_eta[0]+Float32(1.0)) + metal_k[0]*metal_k[0])
-        var f0g = ((metal_eta[1]-Float32(1.0))*(metal_eta[1]-Float32(1.0)) + metal_k[1]*metal_k[1]) / \
-                  ((metal_eta[1]+Float32(1.0))*(metal_eta[1]+Float32(1.0)) + metal_k[1]*metal_k[1])
-        var f0b = ((metal_eta[2]-Float32(1.0))*(metal_eta[2]-Float32(1.0)) + metal_k[2]*metal_k[2]) / \
-                  ((metal_eta[2]+Float32(1.0))*(metal_eta[2]+Float32(1.0)) + metal_k[2]*metal_k[2])
+        var f0r = ((metal_eta.r-Float32(1.0))*(metal_eta.r-Float32(1.0)) + metal_k.r*metal_k.r) / \
+                  ((metal_eta.r+Float32(1.0))*(metal_eta.r+Float32(1.0)) + metal_k.r*metal_k.r)
+        var f0g = ((metal_eta.g-Float32(1.0))*(metal_eta.g-Float32(1.0)) + metal_k.g*metal_k.g) / \
+                  ((metal_eta.g+Float32(1.0))*(metal_eta.g+Float32(1.0)) + metal_k.g*metal_k.g)
+        var f0b = ((metal_eta.b-Float32(1.0))*(metal_eta.b-Float32(1.0)) + metal_k.b*metal_k.b) / \
+                  ((metal_eta.b+Float32(1.0))*(metal_eta.b+Float32(1.0)) + metal_k.b*metal_k.b)
         nm.albedo = RGB(f0r, f0g, f0b)
     elif mat_type == MatKind.hair:
         var ce = eumelanin; var cp = pheomelanin
         if has_sigma_a:
-            nm.albedo = RGB(sigma_a_rgb[0], sigma_a_rgb[1], sigma_a_rgb[2])
+            nm.albedo = sigma_a_rgb
         else:
             nm.albedo = RGB(
                 ce * Float32(0.419) + cp * Float32(0.187),
@@ -360,8 +339,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 ce * Float32(1.370) + cp * Float32(1.050),
             )
     else:
-        nm.albedo = RGB(rgb[0], rgb[1], rgb[2])
-    nm.transmittance  = RGB(trans_rgb[0], trans_rgb[1], trans_rgb[2])
+        nm.albedo = rgb
+    nm.transmittance  = trans_rgb
     nm.kind           = mat_type
     nm.ior            = mat_ior
     # Resolve roughU/V to the actual GGX alpha here, once, so every shading call
@@ -384,15 +363,12 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     nm.checker_tex2   = checker_tex2
     nm.checker_uscale = checker_uscale
     nm.checker_vscale = checker_vscale
-    nm.mix_name1      = String(unsafe_from_utf8_ptr=mix_name1.as_immutable())
-    nm.mix_name2      = String(unsafe_from_utf8_ptr=mix_name2.as_immutable())
+    nm.mix_name1      = mix_name1
+    nm.mix_name2      = mix_name2
     nm.mix_amount     = mix_amount
     s[0].named_materials.append(nm^)
 
-    mat_name.free(); str_val.free(); rgb.free()
-    trans_rgb.free(); metal_eta.free(); metal_k.free()
-    mix_name1.free(); mix_name2.free()
-    sigma_a_rgb.free()
+    mat_name.free()
 
 def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                                s: UnsafePointer[SceneParseState, MutAnyOrigin]):
