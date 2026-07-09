@@ -1,4 +1,5 @@
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/imagecache.h>
 #include <OpenImageIO/texture.h>
 #include <algorithm>
 #include <cmath>
@@ -87,7 +88,26 @@ bool texture(const char *filename_c, float s, float t, float result[3]) {
         float dsdy = 0;
         float dtdy = 0;
         int nchannels = 3;
-        return textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
+        bool ok = textureSystem->texture(filename, options, s, t, dsdx, dtdx, dsdy, dtdy, nchannels, result);
+        // TextureOpt::fill defaults to 0, so a single-channel (greyscale) or
+        // two-channel source image sampled here for 3 channels comes back
+        // with the missing channel(s) at 0 instead of replicated luminance --
+        // e.g. a grey texture turns pure red (R=lum, G=B=0). Detect and
+        // replicate, matching load_texture_rgb's already-correct nc-aware
+        // handling used by the GPU upload path.
+        if (ok) {
+                const OIIO::ImageSpec *spec = textureSystem->imagecache()->imagespec(filename);
+                if (spec) {
+                        int nc = spec->nchannels;
+                        if (nc <= 1) {
+                                result[1] = result[0];
+                                result[2] = result[0];
+                        } else if (nc == 2) {
+                                result[2] = result[0];
+                        }
+                }
+        }
+        return ok;
 }
 
 int load_texture_rgb(const char *filename, float **data, int *width, int *height, int raw) {
