@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import exp, sqrt
 from .lexer import (PbrtScanner, scanner_parse_quoted_string,
-                    scanner_scan_char, scanner_scan_float, ParamScanner,
+                    scanner_scan_char, scanner_scan_float, scanner_scan_floats, ParamScanner,
                     _psc_streq, _psc_strncpy, _psc_strncmp,
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
                     _psc_scan_one_bool)
@@ -178,35 +178,78 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             _psc_scan_rgb(handle, sigma_a_rgb, ps.is_array)
             has_sigma_a = True
         elif (ps.name_is("eta") or ps.name_is("k")) and ps.type_buf[0] == UInt8(115):  # 's' = spectrum
-            # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
-            # Read the metal name string, look up precomputed F0 per channel.
-            var mname = alloc[UInt8](64)
-            _ = scanner_parse_quoted_string(handle, mname, 64)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
-            # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
-            if ps.name_is("eta"):
-                if _psc_strncmp(mname, "metal-Ag", 8) == 0:
-                    metal_eta[0] = Float32(0.136); metal_eta[1] = Float32(0.130); metal_eta[2] = Float32(0.144)
-                elif _psc_strncmp(mname, "metal-Al", 8) == 0:
-                    metal_eta[0] = Float32(1.300); metal_eta[1] = Float32(0.826); metal_eta[2] = Float32(0.644)
-                elif _psc_strncmp(mname, "metal-Au", 8) == 0:
-                    metal_eta[0] = Float32(0.194); metal_eta[1] = Float32(0.608); metal_eta[2] = Float32(1.426)
-                elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
-                    metal_eta[0] = Float32(0.272); metal_eta[1] = Float32(1.120); metal_eta[2] = Float32(1.160)
+            # "spectrum eta"/"k" takes EITHER a named-spectrum string
+            # ("metal-Au-eta") OR an inline piecewise spectrum
+            # [wavelen0 val0 wavelen1 val1 ...] -- e.g. crown.pbrt's diamond:
+            # "spectrum eta" [200 3.5 900 3.3], a dielectric, not a named
+            # conductor. Try the numeric-array form first: scanner_scan_floats
+            # returns 0 without consuming anything if the next token isn't a
+            # number (e.g. a quote), so falling through to the string parse
+            # below is still safe. Same pattern as pbrt_parser.mojo's
+            # _psc_scan_sigma, which fixed the identical bug for medium
+            # sigma_a/sigma_s. Getting this wrong doesn't just misread ONE
+            # material's IOR (bad enough on its own -- confirmed via a real
+            # crown.pbrt render this way: diamond's IOR silently defaulted to
+            # 1.5 instead of ~3.4) -- scanner_parse_quoted_string bails
+            # immediately on a non-quote token without consuming it, so the
+            # numeric array is left sitting in the stream and gets re-parsed
+            # token-by-token as bogus top-level scene directives until the
+            # next real one, silently (no warning, no crash, wrong data for
+            # however many tokens that spans).
+            var spec_vals = alloc[Float32](64)
+            var n_spec = scanner_scan_floats(handle, spec_vals, Int32(64))
+            if n_spec > Int32(0):
+                # Not a real spectral-to-RGB conversion -- just the mean of
+                # the value samples (odd indices), matching _psc_scan_sigma's
+                # own documented scope (good enough for the near-constant
+                # spectra these scenes actually use).
+                var sum = Float32(0.0)
+                var count = 0
+                var vi = 1
+                while vi < Int(n_spec):
+                    sum += spec_vals[vi]
+                    count += 1
+                    vi += 2
+                var mean = sum / Float32(max(count, 1))
+                if ps.is_array:
+                    _ = scanner_scan_char(handle, UInt8(93))
+                if ps.name_is("eta"):
+                    mat_ior = mean  # meaningful for dielectric; harmlessly unused for conductor
+                    metal_eta[0] = mean; metal_eta[1] = mean; metal_eta[2] = mean
+                else:
+                    metal_k[0] = mean; metal_k[1] = mean; metal_k[2] = mean
                 has_spectral_conductor = True
-            else:  # "k"
-                if _psc_strncmp(mname, "metal-Ag", 8) == 0:
-                    metal_k[0] = Float32(3.880); metal_k[1] = Float32(3.070); metal_k[2] = Float32(2.560)
-                elif _psc_strncmp(mname, "metal-Al", 8) == 0:
-                    metal_k[0] = Float32(7.480); metal_k[1] = Float32(6.280); metal_k[2] = Float32(5.580)
-                elif _psc_strncmp(mname, "metal-Au", 8) == 0:
-                    metal_k[0] = Float32(3.060); metal_k[1] = Float32(2.120); metal_k[2] = Float32(1.846)
-                elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
-                    metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
-                has_spectral_conductor = True
-            mname.free()
+            else:
+                # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
+                # Read the metal name string, look up precomputed F0 per channel.
+                var mname = alloc[UInt8](64)
+                _ = scanner_parse_quoted_string(handle, mname, 64)
+                if ps.is_array:
+                    _ = scanner_scan_char(handle, UInt8(93))
+                # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
+                # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
+                if ps.name_is("eta"):
+                    if _psc_strncmp(mname, "metal-Ag", 8) == 0:
+                        metal_eta[0] = Float32(0.136); metal_eta[1] = Float32(0.130); metal_eta[2] = Float32(0.144)
+                    elif _psc_strncmp(mname, "metal-Al", 8) == 0:
+                        metal_eta[0] = Float32(1.300); metal_eta[1] = Float32(0.826); metal_eta[2] = Float32(0.644)
+                    elif _psc_strncmp(mname, "metal-Au", 8) == 0:
+                        metal_eta[0] = Float32(0.194); metal_eta[1] = Float32(0.608); metal_eta[2] = Float32(1.426)
+                    elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
+                        metal_eta[0] = Float32(0.272); metal_eta[1] = Float32(1.120); metal_eta[2] = Float32(1.160)
+                    has_spectral_conductor = True
+                else:  # "k"
+                    if _psc_strncmp(mname, "metal-Ag", 8) == 0:
+                        metal_k[0] = Float32(3.880); metal_k[1] = Float32(3.070); metal_k[2] = Float32(2.560)
+                    elif _psc_strncmp(mname, "metal-Al", 8) == 0:
+                        metal_k[0] = Float32(7.480); metal_k[1] = Float32(6.280); metal_k[2] = Float32(5.580)
+                    elif _psc_strncmp(mname, "metal-Au", 8) == 0:
+                        metal_k[0] = Float32(3.060); metal_k[1] = Float32(2.120); metal_k[2] = Float32(1.846)
+                    elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
+                        metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
+                    has_spectral_conductor = True
+                mname.free()
+            spec_vals.free()
         elif ps.name_is("reflectance") and ps.type_buf[0] == UInt8(116):  # 't' = texture
             _ = scanner_parse_quoted_string(handle, str_val, 64)
             if ps.is_array:
