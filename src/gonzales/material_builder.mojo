@@ -1,10 +1,10 @@
 from std.memory import alloc
 from std.math import exp, sqrt
 from .lexer import (PbrtScanner, scanner_parse_quoted_string,
-                    scanner_scan_char, scanner_scan_float, scanner_scan_floats, ParamScanner,
+                    scanner_scan_char, scanner_scan_float, ParamScanner,
                     _psc_streq, _psc_strncpy, _psc_strncmp,
                     _psc_scan_rgb, _psc_scan_one_float, _psc_scan_one_str,
-                    _psc_scan_one_bool)
+                    _psc_scan_one_bool, _psc_scan_spectrum_scalar)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, PSC_FILE_MAX
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
@@ -182,37 +182,17 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
             # ("metal-Au-eta") OR an inline piecewise spectrum
             # [wavelen0 val0 wavelen1 val1 ...] -- e.g. crown.pbrt's diamond:
             # "spectrum eta" [200 3.5 900 3.3], a dielectric, not a named
-            # conductor. Try the numeric-array form first: scanner_scan_floats
-            # returns 0 without consuming anything if the next token isn't a
-            # number (e.g. a quote), so falling through to the string parse
-            # below is still safe. Same pattern as pbrt_parser.mojo's
-            # _psc_scan_sigma, which fixed the identical bug for medium
-            # sigma_a/sigma_s. Getting this wrong doesn't just misread ONE
-            # material's IOR (bad enough on its own -- confirmed via a real
-            # crown.pbrt render this way: diamond's IOR silently defaulted to
-            # 1.5 instead of ~3.4) -- scanner_parse_quoted_string bails
-            # immediately on a non-quote token without consuming it, so the
-            # numeric array is left sitting in the stream and gets re-parsed
-            # token-by-token as bogus top-level scene directives until the
-            # next real one, silently (no warning, no crash, wrong data for
-            # however many tokens that spans).
-            var spec_vals = alloc[Float32](64)
-            var n_spec = scanner_scan_floats(handle, spec_vals, Int32(64))
-            if n_spec > Int32(0):
+            # conductor. _psc_scan_spectrum_scalar (lexer.mojo) handles both
+            # forms robustly -- see its docstring for why a single-shape
+            # scanner can't (confirmed via a real crown.pbrt render: diamond's
+            # IOR was silently defaulting to 1.5 instead of ~3.4 before this).
+            var mname = alloc[UInt8](64)
+            var (mean, is_numeric) = _psc_scan_spectrum_scalar(handle, ps.is_array, mname, Int32(64))
+            if is_numeric:
                 # Not a real spectral-to-RGB conversion -- just the mean of
-                # the value samples (odd indices), matching _psc_scan_sigma's
+                # the value samples, matching _psc_scan_spectrum_scalar's
                 # own documented scope (good enough for the near-constant
                 # spectra these scenes actually use).
-                var sum = Float32(0.0)
-                var count = 0
-                var vi = 1
-                while vi < Int(n_spec):
-                    sum += spec_vals[vi]
-                    count += 1
-                    vi += 2
-                var mean = sum / Float32(max(count, 1))
-                if ps.is_array:
-                    _ = scanner_scan_char(handle, UInt8(93))
                 if ps.name_is("eta"):
                     mat_ior = mean  # meaningful for dielectric; harmlessly unused for conductor
                     metal_eta[0] = mean; metal_eta[1] = mean; metal_eta[2] = mean
@@ -221,11 +201,6 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                 has_spectral_conductor = True
             else:
                 # Named-spectrum conductor: "spectrum eta" ["metal-Ag-eta"] etc.
-                # Read the metal name string, look up precomputed F0 per channel.
-                var mname = alloc[UInt8](64)
-                _ = scanner_parse_quoted_string(handle, mname, 64)
-                if ps.is_array:
-                    _ = scanner_scan_char(handle, UInt8(93))
                 # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
                 # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
                 if ps.name_is("eta"):
@@ -248,8 +223,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
                     elif _psc_strncmp(mname, "metal-Cu", 8) == 0:
                         metal_k[0] = Float32(3.240); metal_k[1] = Float32(2.605); metal_k[2] = Float32(2.433)
                     has_spectral_conductor = True
-                mname.free()
-            spec_vals.free()
+            mname.free()
         elif ps.name_is("reflectance") and ps.type_buf[0] == UInt8(116):  # 't' = texture
             _ = scanner_parse_quoted_string(handle, str_val, 64)
             if ps.is_array:

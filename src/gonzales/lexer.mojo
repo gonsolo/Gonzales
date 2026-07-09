@@ -819,6 +819,65 @@ def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     if is_array:
         _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
+comptime SPECTRUM_SCAN_SCRATCH_MAX: Int = 256  # generous bound for wavelength/value pairs
+
+def _psc_scan_spectrum_scalar(
+    handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+    is_array: Int32,
+    name_dst: UnsafePointer[UInt8, MutAnyOrigin],
+    name_max: Int32,
+) -> Tuple[Float32, Bool]:
+    """Robustly scan a "spectrum"-typed parameter's value into a single
+    representative scalar. pbrt allows a "spectrum" param to be EITHER a
+    named-spectrum string reference ("metal-Au-eta") OR an inline piecewise
+    array [wavelen0 val0 wavelen1 val1 ...] under the SAME declared type --
+    calling a single-shape scanner (a fixed quoted-string parse, or a
+    fixed-arity float scan) unconditionally silently mishandles whichever
+    form it didn't expect. A numeric array fed to a quoted-string parse
+    bails immediately without consuming anything, leaving the array sitting
+    in the token stream to be mis-parsed as bogus subsequent scene
+    directives -- no crash, no warning, just wrong data.
+
+    Consolidates a bug found and independently fixed twice in this codebase
+    (medium sigma_a/sigma_s in pbrt_parser.mojo, conductor/dielectric eta/k
+    in material_builder.mojo) into one place, so it can't recur a third
+    time. Returns (mean, True) for the numeric-array form -- not a real
+    spectral upsample, just the mean of the value samples (odd indices),
+    matching this codebase's existing scope for "good enough for the
+    near-constant spectra actually seen in this scene corpus." Returns
+    (0.0, False) for the named-string form, with the name copied into
+    name_dst for the caller's own lookup. Consumes the trailing array ']'
+    itself (matches _psc_scan_one_float/_psc_scan_rgb's convention, NOT
+    _psc_skip_value's, which leaves that to its caller)."""
+    var cnt = scanner_count_floats(handle)
+    if cnt > Int32(0):
+        var cap = Int(cnt) if Int(cnt) < SPECTRUM_SCAN_SCRATCH_MAX else SPECTRUM_SCAN_SCRATCH_MAX
+        var tmp = alloc[Float32](cap)
+        var n = scanner_scan_floats(handle, tmp, Int32(cap))
+        var sum = Float32(0.0)
+        var count = 0
+        var vi = 1
+        while vi < Int(n):
+            sum += tmp[vi]
+            count += 1
+            vi += 2
+        var mean = sum / Float32(max(count, 1))
+        tmp.free()
+        if name_max > Int32(0):
+            name_dst[0] = UInt8(0)
+        if is_array:
+            _ = scanner_scan_char(handle, UInt8(93))
+        return (mean, True)
+    else:
+        _ = scanner_parse_quoted_string(handle, name_dst, name_max)
+        if is_array:
+            var tmp_s = alloc[UInt8](Int(name_max) if name_max > Int32(0) else 1)
+            while scanner_parse_quoted_string(handle, tmp_s, name_max) >= 0:
+                pass
+            tmp_s.free()
+            _ = scanner_scan_char(handle, UInt8(93))
+        return (Float32(0.0), False)
+
 def _psc_scan_float4(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                     dst: UnsafePointer[Float32, MutAnyOrigin],
                     is_array: Int32):

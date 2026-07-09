@@ -9,6 +9,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_count_floats, scanner_count_ints, ParamScanner,
                     _psc_streq,
                     _psc_scan_rgb, _psc_scan_float4, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
+                    _psc_scan_spectrum_scalar,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
@@ -465,7 +466,6 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 # ── Medium handlers ───────────────────────────────────────────────────────────
 
 comptime GRID_DENSITY_SCRATCH_MAX: Int = 16 * 1024 * 1024  # 64MB scratch; covers up to ~256^3 grids
-comptime SIGMA_SPECTRUM_SCRATCH_MAX: Int = 256  # generous bound for wavelength/value pairs
 
 def _psc_scan_sigma(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                     type_buf: UnsafePointer[UInt8, MutAnyOrigin],
@@ -475,42 +475,18 @@ def _psc_scan_sigma(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     both the plain "rgb sigma_a" [r g b] form (_psc_scan_rgb, unchanged) and
     "spectrum sigma_a" [wavelen0 val0 wavelen1 val1 ...] (inline piecewise
     spectrum, e.g. pbrt-v4-scenes' explosion/smoke-plume — 2-4 samples of a
-    near-constant absorption/scattering value across the visible range).
-    _psc_scan_rgb always reads exactly 3 floats; calling it on a
-    differently-sized spectrum array desyncs the scanner cursor (it consumes
-    the wrong number of values, then fails to find the expected closing ']'),
-    corrupting everything parsed after this point in the file — this is what
-    that mismatch was silently doing before, on any medium using the
-    "spectrum" form.
-    Not a real spectral-to-RGB conversion — just the mean of the value
-    samples (odd indices), applied to all 3 channels. Good enough for the
-    near-constant spectra these scenes actually use; a named-spectrum
-    reference (a quoted string, not numbers) is safely skipped instead of
-    misread, since no medium in these scenes uses one for sigma_a/sigma_s."""
+    near-constant absorption/scattering value across the visible range), via
+    the shared _psc_scan_spectrum_scalar helper (lexer.mojo) -- see its
+    docstring for why a single-shape scanner can't handle both forms safely.
+    A named-spectrum reference (a quoted string, not numbers) is safely
+    skipped instead of misread, since no medium in these scenes uses one for
+    sigma_a/sigma_s."""
     if type_buf[0] == UInt8(115) and type_buf[1] == UInt8(112):  # "sp" spectrum
-        var vals = alloc[Float32](SIGMA_SPECTRUM_SCRATCH_MAX)
-        var n = scanner_scan_floats(handle, vals, Int32(SIGMA_SPECTRUM_SCRATCH_MAX))
-        if n > Int32(0):
-            var sum = Float32(0.0)
-            var count = 0
-            var vi = 1
-            while vi < Int(n):
-                sum += vals[vi]
-                count += 1
-                vi += 2
-            var mean = sum / Float32(max(count, 1))
+        var name_buf = alloc[UInt8](64)
+        var (mean, is_numeric) = _psc_scan_spectrum_scalar(handle, is_arr, name_buf, Int32(64))
+        name_buf.free()
+        if is_numeric:
             dst[0] = mean; dst[1] = mean; dst[2] = mean
-            if is_arr:
-                _ = scanner_scan_char(handle, UInt8(93))
-        else:
-            # Not numeric — a named-spectrum string reference. Not supported
-            # for sigma_a/sigma_s today; skip it rather than misread it.
-            var tmp = alloc[UInt8](64)
-            _ = scanner_parse_quoted_string(handle, tmp, 64)
-            tmp.free()
-            if is_arr:
-                _ = scanner_scan_char(handle, UInt8(93))
-        vals.free()
     else:
         _psc_scan_rgb(handle, dst, is_arr)
 
