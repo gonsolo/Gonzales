@@ -167,11 +167,34 @@ ut: unittest
 # from pbrt_parser.mojo/shading.mojo that references their C symbols
 # (load_texture_rgb, texture, ...) even on a code path that never executes
 # them — the JIT still needs the symbols resolvable at link time.
+#
+# Each file is already an independent `mojo run` process (TestSuite has no
+# built-in parallel-execution mode -- checked the actual stdlib source,
+# suite.mojo's run() is sequential in-process). Runs all files concurrently,
+# bounded by nproc, instead of one at a time: log each to its own file, wait
+# for all, then replay the logs back in the original file order so output
+# stays readable/deterministic despite running out of order. Fails if any
+# file failed (checked after all finish, not fail-fast, so a run tells you
+# everything that broke in one pass).
 unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB)
-	@for f in $(UNIT_TEST_SRCS); do \
+	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
+	@i=0; \
+	for f in $(UNIT_TEST_SRCS); do \
+		i=$$((i+1)); \
+		echo "$$f" >> build/unittest-logs/order.txt; \
+		( uv run mojo run -I src $(MOJO_LINK_FLAGS) "$$f" > build/unittest-logs/$$i.log 2>&1; \
+		  echo $$? > build/unittest-logs/$$i.exit ) & \
+		while [ $$(jobs -pr | wc -l) -ge $$(nproc) ]; do sleep 0.2; done; \
+	done; \
+	wait; \
+	fail=0; i=0; \
+	while IFS= read -r f; do \
+		i=$$((i+1)); \
 		echo "=== $$f ==="; \
-		uv run mojo run -I src $(MOJO_LINK_FLAGS) $$f || exit 1; \
-	done
+		cat build/unittest-logs/$$i.log; \
+		[ "$$(cat build/unittest-logs/$$i.exit)" = "0" ] || fail=1; \
+	done < build/unittest-logs/order.txt; \
+	exit $$fail
 
 # GPU profiling with Nsight Compute (needs nsight-compute + admin perf-counter
 # access). `sudo -E` preserves the env so the Mojo runtime libs load. Profiles
