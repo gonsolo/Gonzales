@@ -189,6 +189,20 @@ def null_spectral_handle() -> SpectralHandle:
 # the path needed the same treatment -- see bxdf.mojo's spectral siblings and
 # shading.mojo's call sites, which pass ctx.spectral.coeffs/.res/.cie_x/etc.
 # instead of ctx.spectral.
+#
+# SECOND CONFIRMED INSTANCE (2026-07-09, task #130): gpu.mojo's
+# gpu_upload_scene/pipeline.mojo's _gpu_upload_scene took `spectral:
+# SpectralHandle` by value too -- in the GPU-enabled (--target-accelerator)
+# compilation unit this reproduced the exact same corruption class
+# (spectral_res read back as 0, coeffs pointer read back as a tiny garbage
+# address), making the whole spectral NEE pipeline evaluate against a
+# 1-element dummy table and every --gpu render using it come back black.
+# Same fix applied there. Two independent reproductions of the same failure
+# mode across different call chains and compilation targets -- worth filing
+# as a Mojo compiler bug upstream rather than assuming more instances won't
+# turn up; any NEW function that takes a TrivialRegisterPassable struct
+# containing pointer fields by value should be treated as suspect until
+# proven otherwise.
 @always_inline
 def rgb_to_spectral_sample(
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
