@@ -487,6 +487,81 @@ def _nee_weight_simple(
     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
     return f * ls.Li * (cos_s * mis_w / ls.pdf)
 
+@always_inline
+def _nee_weight_coated_coat_lobe(
+    ls:         LightSample,
+    ior:        Float32,
+    coat_alpha: Float32,
+    n:          SIMD[DType.float32, 3],
+    wo:         SIMD[DType.float32, 3],
+) -> RGB:
+    """NEE contribution weight (throughput NOT applied) for ONE LightSample
+    against a coateddiffuse/coated_conductor coat's own glossy dielectric
+    GGX reflection lobe (D*G2*F/(4*cos_o), same microfacet term
+    shade_coated_diffuse's coat block used to hand-inline once per light
+    type). Delta lights get MIS weight 1 (no competing BSDF-sampling
+    strategy exists for a delta direction); real-pdf lights (sphere/
+    infinite/area) use the power heuristic against this lobe's own
+    ggx_vndf_pdf. Caller should skip calling this for a smooth coat
+    (coat_alpha below the is_rough_coat threshold) — a delta reflection can
+    never land on a stochastically-sampled light direction, so evaluating
+    this would just waste the shadow-ray test."""
+    if not ls.valid:
+        return RGB(Float32(0.0))
+    var cos_o = dot(wo, n)
+    var cos_s = dot(n, ls.wi)
+    if cos_o <= Float32(0.0) or cos_s <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var wm = wo + ls.wi
+    var wm_len = dot(wm, wm)
+    if wm_len <= Float32(0.0):
+        return RGB(Float32(0.0))
+    wm = wm * (Float32(1.0) / sqrt(wm_len))
+    var cos_wm = dot(wo, wm)
+    if cos_wm <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var d = ggx_D(dot(n, wm), coat_alpha)
+    var g2 = ggx_G2(cos_o, cos_s, coat_alpha)
+    var f = fr_dielectric(cos_wm, ior)
+    var f_cos = d * g2 * f / (Float32(4.0) * cos_o)
+    if ls.is_delta:
+        return ls.Li * f_cos
+    if ls.pdf <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var pdf_bsdf = ggx_vndf_pdf(cos_o, cos_wm, d, coat_alpha)
+    var w = power_heuristic(ls.pdf, pdf_bsdf)
+    return ls.Li * (f_cos * w / ls.pdf)
+
+@always_inline
+def _nee_weight_coated_diffuse_base(
+    ls:  LightSample,
+    alb: RGB,
+    ior: Float32,
+    n:   SIMD[DType.float32, 3],
+) -> RGB:
+    """NEE contribution weight (throughput AND the walk's `beta` NOT
+    applied — caller multiplies by both) for ONE LightSample against a
+    coateddiffuse's Lambertian base layer, reached by transmitting through
+    the coat (attenuated by 1 - Fresnel at the light's own incidence
+    angle). Delta lights get MIS weight 1; real-pdf lights use the power
+    heuristic against the base's own cosine-weighted pdf — same shape as
+    _nee_weight_simple, kept separate because the coat's transmittance
+    term and the caller's `beta` state don't fit bxdf_eval_any's flat
+    (mat_kind, alb, alpha) signature."""
+    if not ls.valid:
+        return RGB(Float32(0.0))
+    var cos_s = dot(n, ls.wi)
+    if cos_s <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
+    if ls.is_delta:
+        return alb * ls.Li * (cos_s * t_light / PI)
+    if ls.pdf <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var pdf_bsdf = cos_s / PI
+    var w = power_heuristic(ls.pdf, pdf_bsdf)
+    return alb * ls.Li * (cos_s * t_light * w / (ls.pdf * PI))
+
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory
 # / lovely-dazzling-meteor plan) ────────────────────────────────────────────
 # Added ALONGSIDE bxdf_eval_any/_nee_weight_simple above rather than mutating

@@ -2,7 +2,7 @@ from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
-from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
+from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
@@ -659,68 +659,54 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # stochastically-sampled light direction, so any shadow ray fired there
     # would just be wasted work.
     if is_rough_coat and cos_o > Float32(0.0):
-        if ctx.lights.area_light_count > 0:
-            var ls_u_coat = pcg.next_float()
-            var ls_result_coat = light_sampler_sample(ctx.lights.light_sampler, ls_u_coat)
-            var light_idx_coat = ls_result_coat[0]
-            var light_sel_pdf_coat = ls_result_coat[1]
-            var al_coat = ctx.lights.area_lights[light_idx_coat]
-            var r1c = pcg.next_float()
-            var r2c = pcg.next_float()
-            var (light_point_c, light_normal_c, _, _) = _sample_light_point_and_normal(ctx, al_coat, r1c, r2c, pcg)
-            var to_light_c = light_point_c - hit_point
-            var dist_sq_c = dot(to_light_c, to_light_c)
-            var dist_c = sqrt(dist_sq_c)
-            if dist_c > Float32(0.0001) and al_coat.total_area > Float32(0.0):
-                var wi_c = to_light_c * (Float32(1.0) / dist_c)
-                var cos_s_c = dot(normal, wi_c)
-                var cos_l_c = -dot(light_normal_c, wi_c)
-                if cos_s_c > Float32(0.0) and cos_l_c > Float32(0.0):
-                    var wm_nee = wo + wi_c
-                    var wm_nee_len = dot(wm_nee, wm_nee)
-                    if wm_nee_len > Float32(0.0):
-                        wm_nee = wm_nee * (Float32(1.0) / sqrt(wm_nee_len))
-                        var cos_wm_nee = dot(wo, wm_nee)
-                        if cos_wm_nee > Float32(0.0):
-                            var d_nee = ggx_D(dot(normal, wm_nee), coat_alpha)
-                            var g2_nee = ggx_G2(cos_o, cos_s_c, coat_alpha)
-                            var f_nee = fr_dielectric(cos_wm_nee, ior)
-                            # f(wo,wi)*cos_i = D*G2*F / (4*cos_o)
-                            var f_cos_nee = d_nee * g2_nee * f_nee / (Float32(4.0) * cos_o)
-                            var pdf_light_coat = dist_sq_c * light_sel_pdf_coat / (cos_l_c * al_coat.total_area)
-                            var pdf_bsdf_coat = ggx_vndf_pdf(cos_o, cos_wm_nee, d_nee, coat_alpha)
-                            if pdf_light_coat > Float32(0.0):
-                                var w_coat = power_heuristic(pdf_light_coat, pdf_bsdf_coat)
-                                var contrib_coat = path_ptr[].throughput * al_coat.emission * (f_cos_nee * w_coat / pdf_light_coat)
-                                # See _albedo_highlight_boost: NEE shadow rays never
-                                # otherwise touch albedo, so a sharp specular highlight
-                                # looks identical to its dark neighbours in the denoiser's
-                                # guide buffer and gets smoothed away without this.
-                                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_coat)
-                                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_c, dist_c * Float32(0.9999), contrib_coat)
+        # Coat's own glossy dielectric lobe against every light type, via the
+        # shared Light interface (LightSample samplers, bvh.mojo) + the
+        # coat-specific BxDF weight (_nee_weight_coated_coat_lobe, bxdf.mojo)
+        # — one call per light instead of the same D*G2*F/(4*cos_o) math
+        # hand-inlined once per light type. Previously only area+distant
+        # were covered; sphere/point/infinite were silently missing.
+        var ls_area_c = _sample_area_light_nee(ctx, hit_point, pcg)
+        var w_area_c = _nee_weight_coated_coat_lobe(ls_area_c, ior, coat_alpha, normal, wo)
+        if not w_area_c.is_black():
+            var contrib_area_c = path_ptr[].throughput * w_area_c
+            # See _albedo_highlight_boost: NEE shadow rays never otherwise
+            # touch albedo, so a sharp specular highlight looks identical to
+            # its dark neighbours in the denoiser's guide buffer and gets
+            # smoothed away without this.
+            path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_area_c)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area_c.wi, ls_area_c.dist * Float32(0.9999), contrib_area_c)
 
-        # Distant (delta) lights through the coat's glossy lobe. No MIS weight —
-        # a delta light direction has zero probability under any stochastic
-        # BSDF sample, so NEE is the only strategy that can ever see it.
-        if ctx.lights.distant_count > 0:
-            for dl_i_coat in range(ctx.lights.distant_count):
-                var dl_coat = ctx.lights.distant_lights[dl_i_coat]
-                var wi_dl = SIMD[DType.float32, 3](-dl_coat.direction.x, -dl_coat.direction.y, -dl_coat.direction.z)
-                var cos_s_dl = dot(normal, wi_dl)
-                if cos_s_dl > Float32(0.0):
-                    var wm_dl = wo + wi_dl
-                    var wm_dl_len = dot(wm_dl, wm_dl)
-                    if wm_dl_len > Float32(0.0):
-                        wm_dl = wm_dl * (Float32(1.0) / sqrt(wm_dl_len))
-                        var cos_wm_dl = dot(wo, wm_dl)
-                        if cos_wm_dl > Float32(0.0):
-                            var d_dl = ggx_D(dot(normal, wm_dl), coat_alpha)
-                            var g2_dl = ggx_G2(cos_o, cos_s_dl, coat_alpha)
-                            var f_dl = fr_dielectric(cos_wm_dl, ior)
-                            var f_cos_dl = d_dl * g2_dl * f_dl / (Float32(4.0) * cos_o)
-                            var contrib_dl = path_ptr[].throughput * dl_coat.emission * f_cos_dl
-                            path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_dl)
-                            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, wi_dl, Float32(2000.0), contrib_dl)
+        for sph_i_coat in range(ctx.lights.sphere_count):
+            var ls_sph_coat = _sample_sphere_light_nee(ctx.lights.spheres[sph_i_coat], ctx.lights.sphere_count, hit_point, pcg)
+            var w_sph_coat = _nee_weight_coated_coat_lobe(ls_sph_coat, ior, coat_alpha, normal, wo)
+            if not w_sph_coat.is_black():
+                var contrib_sph_coat = path_ptr[].throughput * w_sph_coat
+                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_sph_coat)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph_coat.wi, ls_sph_coat.dist * Float32(0.9999), contrib_sph_coat)
+
+        for dl_i_coat in range(ctx.lights.distant_count):
+            var ls_dl_coat = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i_coat])
+            var w_dl_coat = _nee_weight_coated_coat_lobe(ls_dl_coat, ior, coat_alpha, normal, wo)
+            if not w_dl_coat.is_black():
+                var contrib_dl_coat = path_ptr[].throughput * w_dl_coat
+                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_dl_coat)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_dl_coat.wi, ls_dl_coat.dist, contrib_dl_coat)
+
+        for pl_i_coat in range(ctx.lights.point_count):
+            var ls_pl_coat = _sample_point_light_nee(ctx.lights.point_lights[pl_i_coat], hit_point)
+            var w_pl_coat = _nee_weight_coated_coat_lobe(ls_pl_coat, ior, coat_alpha, normal, wo)
+            if not w_pl_coat.is_black():
+                var contrib_pl_coat = path_ptr[].throughput * w_pl_coat
+                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_pl_coat)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_pl_coat.wi, ls_pl_coat.dist * Float32(0.9999), contrib_pl_coat)
+
+        for inf_i_coat in range(ctx.lights.infinite_count):
+            var ls_inf_coat = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i_coat], Point2f(pcg.next_float(), pcg.next_float()))
+            var w_inf_coat = _nee_weight_coated_coat_lobe(ls_inf_coat, ior, coat_alpha, normal, wo)
+            if not w_inf_coat.is_black():
+                var contrib_inf_coat = path_ptr[].throughput * w_inf_coat
+                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_inf_coat)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_inf_coat.wi, ls_inf_coat.dist, contrib_inf_coat)
 
     if pcg.next_float() < f_entry:
         # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
@@ -783,31 +769,39 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         #    same expected energy, simpler to reason about). The RR gate above
         #    keeps this from growing shadow-ray traffic unboundedly on
         #    high-albedo/grazing-angle coats that recycle many times. ──
-        if ctx.lights.area_light_count > 0:
-            var ls_u_cd = pcg.next_float()
-            var ls_result_cd = light_sampler_sample(ctx.lights.light_sampler, ls_u_cd)
-            var light_idx = ls_result_cd[0]
-            var light_sel_pdf_cd = ls_result_cd[1]
-            var al = ctx.lights.area_lights[light_idx]
-            var r1 = pcg.next_float()
-            var r2 = pcg.next_float()
-            var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
-            var to_light = light_point - hit_point
-            var dist_sq = dot(to_light, to_light)
-            var dist = sqrt(dist_sq)
-            if dist > Float32(0.0001) and al.total_area > Float32(0.0):
-                var shadow_dir = to_light * (Float32(1.0) / dist)
-                var cos_s = dot(normal, shadow_dir)
-                var cos_l = -dot(light_normal, shadow_dir)
-                if cos_s > Float32(0.0) and cos_l > Float32(0.0):
-                    # Light must transmit through the coat to reach the base.
-                    var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
-                    var pdf_light_cd = dist_sq * light_sel_pdf_cd / (cos_l * al.total_area)
-                    var pdf_bsdf_cd = cos_s / PI
-                    var w_cd = power_heuristic(pdf_light_cd, pdf_bsdf_cd)
-                    var weight_cd = alb * al.emission * (cos_s * t_light * w_cd / (pdf_light_cd * PI))
-                    var contrib = path_ptr[].throughput * beta * weight_cd
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib)
+        # Diffuse base against every light type via the shared Light
+        # interface + the coat-transmittance-aware BxDF weight
+        # (_nee_weight_coated_diffuse_base, bxdf.mojo) — `beta` (this
+        # bounce's accumulated recycled-albedo attenuation) is applied by
+        # the caller here, not inside the weight function, since it's walk
+        # state the interface's flat per-LightSample signature can't hold.
+        # Previously only area+distant were covered; sphere was entirely
+        # missing (see the pbrt-book bug this closed: a scene lit ONLY by
+        # sphere lights rendered this material almost completely black) and
+        # point was entirely missing too. Infinite lights (below, unchanged)
+        # deliberately keep their own textured-CDF/cosine-hemisphere-fallback
+        # sampling rather than routing through the generic uniform-sphere
+        # fallback sampler — same rationale as diffuse's own infinite-light
+        # NEE (see project_light_bxdf_interfaces memory).
+        var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal)
+        if not w_area.is_black():
+            var contrib_area = path_ptr[].throughput * beta * w_area
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
+
+        for sph_i in range(ctx.lights.sphere_count):
+            var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
+            var w_sph = _nee_weight_coated_diffuse_base(ls_sph, alb, ior, normal)
+            if not w_sph.is_black():
+                var contrib_sph = path_ptr[].throughput * beta * w_sph
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
+
+        for pl_i in range(ctx.lights.point_count):
+            var ls_pl = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
+            var w_pl = _nee_weight_coated_diffuse_base(ls_pl, alb, ior, normal)
+            if not w_pl.is_black():
+                var contrib_pl = path_ptr[].throughput * beta * w_pl
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_pl.wi, ls_pl.dist * Float32(0.9999), contrib_pl)
 
         # ── Env-map (infinite light) NEE at the base, every bounce (see area
         #    lights above). Light enters via the coat so the contribution is
@@ -843,15 +837,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # Distant light NEE through the coat (delta light: MIS weight = 1),
         # every bounce (see area lights above) — now correctly `beta`-weighted
         # per depth instead of the old fire-once gate, so no double-counting.
-        if ctx.lights.distant_count > 0:
-            for dl_i in range(ctx.lights.distant_count):
-                var dl = ctx.lights.distant_lights[dl_i]
-                var to_light = SIMD[DType.float32, 3](-dl.direction.x, -dl.direction.y, -dl.direction.z)
-                var cos_s = dot(normal, to_light)
-                if cos_s > Float32(0.0):
-                    var t_coat = Float32(1.0) - fr_dielectric(cos_s, ior)
-                    var contrib = path_ptr[].throughput * beta * alb * dl.emission * (cos_s * t_coat / PI)
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, to_light, Float32(2000.0), contrib)
+        for dl_i in range(ctx.lights.distant_count):
+            var ls_dl = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
+            var w_dl = _nee_weight_coated_diffuse_base(ls_dl, alb, ior, normal)
+            if not w_dl.is_black():
+                var contrib_dl = path_ptr[].throughput * beta * w_dl
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_dl.wi, ls_dl.dist, contrib_dl)
 
         # Lambertian base: sample a cosine-weighted up-going direction.
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
@@ -1064,7 +1055,17 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
     shared Light interface (bvh.mojo's LightSample samplers) + BxDF
     interface, replacing 4 formerly hand-inlined blocks also duplicated in
     _shade_diffuse_nee/shade_hair. Sphere-light NEE is new here (this
-    material previously had none)."""
+    material previously had none). Area-light NEE (via _sample_area_light_nee,
+    a generic LightSample wrapper around the mesh/curve area-light picker)
+    is also new here — conductor/coated_conductor previously had NO
+    area-light NEE at all (a pre-existing, explicitly documented gap; see
+    project_light_bxdf_interfaces memory)."""
+    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    var w_area = _nee_weight_simple_via_spectral(ls_area, Int32(1), f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
+    if not w_area.is_black():
+        var contrib_area = path_ptr[].throughput * w_area
+        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
+
     for dl_i in range(ctx.lights.distant_count):
         var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
         var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(1), f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
@@ -1915,6 +1916,48 @@ def _sample_light_point_and_normal(
         if lcross_len > Float32(0.0):
             normal = lcross * (Float32(1.0) / sqrt(lcross_len))
         return (point, normal, lp1 - lp0, lp2 - lp0)
+
+@always_inline
+def _sample_area_light_nee(
+    ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3],
+    mut pcg: PCG32,
+) -> LightSample:
+    """Uniform LightSample wrapper around the mesh/curve area-light picking
+    machinery (light_sampler_sample + _sample_light_point_and_normal) — lets
+    ANY NEE call site built on the Light/BxDF interface (bvh.mojo's
+    LightSample + bxdf.mojo's _nee_weight_simple/_nee_weight_simple_via_spectral/
+    _nee_weight_coated_*) consume area lights too, not just the diffuse-
+    specific _nee_area_lights MNEE path (which additionally does glass-
+    refraction focusing — irrelevant here, this is the plain solid-angle
+    pdf every other light type already uses). valid=False when there are no
+    area lights or the sampled point is degenerate (zero distance/area, or
+    facing away from the shading point)."""
+    var invalid = LightSample(SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0)),
+                               RGB(Float32(0.0)), Float32(0.0), Float32(0.0), False, False)
+    if ctx.lights.area_light_count == 0:
+        return invalid.copy()
+    var u_light = pcg.next_float()
+    var ls_result = light_sampler_sample(ctx.lights.light_sampler, u_light)
+    var light_idx = ls_result[0]
+    var light_sel_pdf = ls_result[1]
+    var al = ctx.lights.area_lights[light_idx]
+    var r1 = pcg.next_float()
+    var r2 = pcg.next_float()
+    var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
+    var to_light = light_point - hit_point
+    var dist_sq = dot(to_light, to_light)
+    var dist = sqrt(dist_sq)
+    if dist <= Float32(0.0001) or al.total_area <= Float32(0.0):
+        return invalid.copy()
+    var wi = to_light * (Float32(1.0) / dist)
+    var cos_l = -dot(light_normal, wi)
+    if cos_l <= Float32(0.0):
+        return invalid.copy()
+    var pdf = dist_sq * light_sel_pdf / (cos_l * al.total_area)
+    if pdf <= Float32(0.0):
+        return invalid.copy()
+    return LightSample(wi, al.emission, pdf, dist, False, True)
 
 @always_inline
 def _nee_area_lights[enqueue_shadow: Bool](
