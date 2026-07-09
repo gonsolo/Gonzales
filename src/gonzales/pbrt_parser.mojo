@@ -589,27 +589,26 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         return
 
     if is_ply:
-        var ply_filename = alloc[UInt8](PSC_FILE_MAX)
-        ply_filename[0] = UInt8(0)
-        var ps = ParamScanner()
-        while ps.next(handle):
-            if ps.name_is("filename") and ps.is_str():
-                _ = scanner_parse_quoted_string(handle, ply_filename, PSC_FILE_MAX)
-                if ps.is_array:
-                    _ = scanner_scan_char(handle, UInt8(93))
-            else:
-                ps.skip(handle)
+        # The only scene-directive param this branch reads is "filename" --
+        # the bulk vertex/index/uv/normal data comes from load_ply() parsing
+        # a SEPARATE .ply file, not the pbrt token stream, so there's no
+        # bulk-array risk going through the generic dictionary here (unlike
+        # the trianglemesh "P"/"indices"/"uv" scan below, which stays on its
+        # existing dynamic-growth scratch buffers).
+        var params = _psc_collect_params(handle)
+        var ply_filename_str = params.get_string("filename", "")
 
         var full_path = alloc[UInt8](PSC_FILE_MAX * 2)
         var dir_len = s[0].scene_dir.byte_length()
         for ki in range(dir_len):
             full_path[ki] = s[0].scene_dir.unsafe_ptr()[ki]
+        var fn_bytes = ply_filename_str.unsafe_ptr()
+        var fn_len = ply_filename_str.byte_length()
         var fn_i = 0
-        while ply_filename[fn_i] != UInt8(0) and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
-            full_path[dir_len + fn_i] = ply_filename[fn_i]
+        while fn_i < fn_len and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
+            full_path[dir_len + fn_i] = fn_bytes[fn_i]
             fn_i += 1
         full_path[dir_len + fn_i] = UInt8(0)
-        ply_filename.free()
 
         var ply_pts     = alloc[UnsafePointer[Float32, MutAnyOrigin]](1)
         var ply_nv      = alloc[Int32](1)
