@@ -20,7 +20,7 @@ from .geometry import (
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
-    HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
+    HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
@@ -1027,7 +1027,7 @@ def _sppm_trace_photon[use_gpu: Bool](
             flux *= f_hs / pdf_hs
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
-            ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
+            ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
 
         elif mat.type == MatKind.interface:
             if has_media:
@@ -1309,6 +1309,20 @@ def _sppm_nee_weight(
     var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
     return _nee_weight_simple_via_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
 
+@always_inline
+def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: SIMD[DType.float32, 3]) -> Float32:
+    """Shadow-ray self-intersection offset for a stored SPPM visible point.
+    Hair vertices need the same curve-radius-scaled epsilon as the ray-bounce
+    offsets in shading.mojo/bdpt.mojo/sppm.mojo's own photon pass (see
+    bvh.mojo's curve_offset_eps) -- the fixed 0.0001 that works fine for
+    triangle/sphere hits was too coarse relative to a curve's own radius.
+    Triangle/sphere-hit VPs are unaffected, unchanged fixed epsilon."""
+    if vp.mat_kind == Int32(2):
+        var mat_h = sd.materials[Int(vp.mat_idx)]
+        var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
+        return curve_offset_eps(hc.radius)
+    return Float32(0.0001)
+
 def _sppm_nee_one(
     vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
     i:       Int,
@@ -1333,6 +1347,7 @@ def _sppm_nee_one(
     var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()
     var wo   = vp.wo.to_simd()
+    var shadow_eps = _sppm_vp_shadow_eps(vp, sd, wo)
 
     var n_area = Int(sd.areaLightCount)
     if n_area > 0:
@@ -1352,7 +1367,7 @@ def _sppm_nee_one(
             var cos_light = -dot(ln, wi)
             if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
-                var shadow_org = vp.pos + vp.normal * Float32(0.0001)
+                var shadow_org = vp.pos + vp.normal * shadow_eps
                 var shadow_ray = Ray_C(shadow_org, vec3f(wi))
                 var t_max = dist * Float32(0.999)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
@@ -1393,7 +1408,7 @@ def _sppm_nee_one(
         var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
         var w_d = _sppm_nee_weight(vp, sd, vn, wo, ls_d)
         if not w_d.is_black():
-            var shadow_org_d = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_org_d = vp.pos + vp.normal * shadow_eps
             var shadow_ray_d = Ray_C(shadow_org_d, vec3f(ls_d.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, ls_d.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
@@ -1403,7 +1418,7 @@ def _sppm_nee_one(
         var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], vpos)
         var w_p = _sppm_nee_weight(vp, sd, vn, wo, ls_p)
         if not w_p.is_black():
-            var shadow_org_p = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_org_p = vp.pos + vp.normal * shadow_eps
             var shadow_ray_p = Ray_C(shadow_org_p, vec3f(ls_p.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_p, ls_p.dist * Float32(0.9999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
@@ -1417,7 +1432,7 @@ def _sppm_nee_one(
         var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), vpos, pcg)
         var w_sph = _sppm_nee_weight(vp, sd, vn, wo, ls_sph)
         if not w_sph.is_black():
-            var shadow_org_sph = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_org_sph = vp.pos + vp.normal * shadow_eps
             var shadow_ray_sph = Ray_C(shadow_org_sph, vec3f(ls_sph.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_sph, ls_sph.dist * Float32(0.9999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
@@ -1427,7 +1442,7 @@ def _sppm_nee_one(
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
-            var shadow_org_e = vp.pos + vp.normal * Float32(0.0001)
+            var shadow_org_e = vp.pos + vp.normal * shadow_eps
             var shadow_ray_e = Ray_C(shadow_org_e, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):

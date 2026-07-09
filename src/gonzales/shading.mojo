@@ -4,7 +4,7 @@ from std.memory import alloc
 from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .rng import PCG32
-from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
+from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
@@ -1506,7 +1506,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # ── Hit point for shadow rays (always offset toward incoming side) ────────
     var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_base = ray_org + ray_dir * inter.tHit
-    var hit_point = hit_base + geo_normal * Float32(0.0001)
+    var curve_eps = curve_offset_eps(hc.radius)
+    var hit_point = hit_base + geo_normal * curve_eps
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -1524,7 +1525,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var w_e = _nee_weight_hair(ls_e, hc)
         if not w_e.is_black():
             var esign = Float32(1.0) if dot(ls_e.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var eorg = hit_base + geo_normal * Float32(0.0001) * esign
+            var eorg = hit_base + geo_normal * curve_eps * esign
             var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, eorg, ls_e.wi, ls_e.dist, contrib_e)
 
@@ -1533,7 +1534,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var w_d = _nee_weight_hair(ls_d, hc)
         if not w_d.is_black():
             var dsign = Float32(1.0) if dot(ls_d.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var dorg = hit_base + geo_normal * Float32(0.0001) * dsign
+            var dorg = hit_base + geo_normal * curve_eps * dsign
             var contrib_d = path_ptr[].throughput * w_d
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, dorg, ls_d.wi, ls_d.dist, contrib_d)
 
@@ -1542,7 +1543,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var w_p = _nee_weight_hair(ls_p, hc)
         if not w_p.is_black():
             var psign = Float32(1.0) if dot(ls_p.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var porg = hit_base + geo_normal * Float32(0.0001) * psign
+            var porg = hit_base + geo_normal * curve_eps * psign
             var contrib_p = path_ptr[].throughput * w_p
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, porg, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
 
@@ -1551,7 +1552,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var w_sph = _nee_weight_hair(ls_sph, hc)
         if not w_sph.is_black():
             var sphsign = Float32(1.0) if dot(ls_sph.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var sphorg = hit_base + geo_normal * Float32(0.0001) * sphsign
+            var sphorg = hit_base + geo_normal * curve_eps * sphsign
             var contrib_sph = path_ptr[].throughput * w_sph
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, sphorg, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
 
@@ -1570,7 +1571,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset scattered ray origin based on which side wi_s exits (avoids self-intersection
     # for transmission rays that cross through the ribbon).
     var scatter_sign = Float32(1.0) if dot(wi_s, geo_normal) >= Float32(0.0) else Float32(-1.0)
-    var scatter_org = hit_base + geo_normal * Float32(0.0001) * scatter_sign
+    var scatter_org = hit_base + geo_normal * curve_eps * scatter_sign
     path_ptr[].ray = Ray_C(
         Point3f(scatter_org[0], scatter_org[1], scatter_org[2]),
         Vec3f(wi_s[0], wi_s[1], wi_s[2]))

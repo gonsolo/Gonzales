@@ -715,6 +715,7 @@ struct HairLobeConstants(TrivialRegisterPassable):
     var lum2: Float32
     var lum3: Float32
     var total_lum: Float32
+    var radius: Float32   # local curve radius at the hit piece; scales self-intersection offset epsilon
 
 @always_inline
 def _hair_precompute(
@@ -736,7 +737,8 @@ def _hair_precompute(
     var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
     var curve = curves[curve_idx]
     var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
-    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+    var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
+    var radius = (r0 + r1) * Float32(0.5)
     var seg_axis = q1 - q0
     var seg_len = sqrt(dot(seg_axis, seg_axis))
     var tangent: SIMD[DType.float32, 3]
@@ -835,6 +837,7 @@ def _hair_precompute(
 
     return HairLobeConstants(
         tangent=tangent, b_perp=b_perp, n_perp=n_perp, geo_normal=geo_normal,
+        radius=radius,
         phi_o=phi_o, dphi0=dphi0, dphi1=dphi1, dphi2=dphi2,
         cos_tp0_o=cos_tp0_o, sin_tp0_o=sin_tp0_o,
         cos_tp1_o=cos_tp1_o, sin_tp1_o=sin_tp1_o,
@@ -847,6 +850,26 @@ def _hair_precompute(
         s=s, A0=A0, A1=A1, A2=A2, A3=A3,
         lum0=lum0, lum1=lum1, lum2=lum2, lum3=lum3, total_lum=total_lum,
     )
+
+@always_inline
+def curve_offset_eps(radius: Float32) -> Float32:
+    """Self-intersection offset for hair/curve shadow-ray origins and bounce
+    continuations, scaled to the local fiber radius rather than a fixed
+    universal constant. A flat `0.0001` offset was wrong in both directions
+    depending on the scene's fiber radius (too small relative to thick
+    strands to reliably clear the fiber's own curved surface; too large
+    relative to fine strands, jumping clear outside a fiber's silhouette).
+    A full local radius overshoots the other way in densely-packed fur/hair
+    (bunny-fur, curly-hair): adjacent strands are typically only a few
+    radii apart, so offsetting by a whole radius routinely lands the ray
+    origin inside a *neighboring* strand instead of just clearing the
+    current one, causing systematic over-occlusion (verified empirically —
+    1.0x turned the "hair" scene solid black and "bunny-fur" bald/smooth).
+    A small fraction of the radius is enough to escape the current fiber's
+    own surface (the self-intersection problem this exists to solve) without
+    reaching far enough to routinely hit a neighbor; the floor guards the
+    degenerate near-zero-radius case."""
+    return max(radius, Float32(1e-6))
 
 @always_inline
 def _hair_sample_dir(

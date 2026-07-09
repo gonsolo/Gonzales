@@ -20,7 +20,7 @@ from .geometry import (
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
-    HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir,
+    HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
@@ -267,6 +267,7 @@ def _bdpt_nee_contribute(
     cur_med_idx: Int32,
     sd: SceneDescriptor2_C,
     scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
+    eps: Float32 = Float32(0.0001),
 ) -> RGB:
     """BDPT-side NEE glue shared by every per-material light loop below:
     given a LightSample + material weight (from the shared Light interface
@@ -275,10 +276,12 @@ def _bdpt_nee_contribute(
     (BDPT's own occlusion primitive, media-aware — unlike shading.mojo/
     sppm.mojo's boolean any-hit test, so this stays a BDPT-local helper
     rather than a fully cross-integrator one) and return the beta-weighted
-    contribution, or black if invalid/occluded."""
+    contribution, or black if invalid/occluded. `eps` defaults to the fixed
+    offset used for triangle/sphere hits; hair call sites pass
+    curve_offset_eps(hc.radius) instead (see bvh.mojo)."""
     if w.is_black():
         return RGB(Float32(0))
-    var shadow_org = hit + vec3f(gn) * Float32(0.0001)
+    var shadow_org = hit + vec3f(gn) * eps
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * ls.dist
     var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch)
     if Tr[0] > Float32(0) or Tr[1] > Float32(0) or Tr[2] > Float32(0):
@@ -719,6 +722,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var curve_idx_h = Int(inter.primId.id1)
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
+            var hair_eps = curve_offset_eps(hc.radius)
             var v_h = _null_vertex()
             v_h.pos = hit
             v_h.normal = vec3f(hc.geo_normal)
@@ -750,25 +754,25 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             for dl_ih in range(Int(sd.distantLightCount)):
                 var ls_dh = _sample_distant_light_nee(sd.distantLights[dl_ih])
                 var w_dh = _nee_weight_hair(ls_dh, hc)
-                total += _bdpt_nee_contribute(beta, w_dh, ls_dh, hit, hc.geo_normal, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_dh, ls_dh, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
             for pl_ih in range(Int(sd.pointLightCount)):
                 var ls_ph = _sample_point_light_nee(sd.pointLights[pl_ih], hit.to_simd())
                 var w_ph = _nee_weight_hair(ls_ph, hc)
-                total += _bdpt_nee_contribute(beta, w_ph, ls_ph, hit, hc.geo_normal, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_ph, ls_ph, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
             for sph_ih in range(Int(sd.sphereCount)):
                 var ls_sphh = _sample_sphere_light_nee(sd.spheres[sph_ih], Int(sd.sphereCount), hit.to_simd(), pcg)
                 var w_sphh = _nee_weight_hair(ls_sphh, hc)
-                total += _bdpt_nee_contribute(beta, w_sphh, ls_sphh, hit, hc.geo_normal, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_sphh, ls_sphh, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
             for inf_ih in range(Int(sd.infiniteLightCount)):
                 var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_eh = _nee_weight_hair(ls_eh, hc)
-                total += _bdpt_nee_contribute(beta, w_eh, ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_eh, ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
 
             var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
             beta *= f_hs / pdf_hs
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
-            ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
+            ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
             last_bsdf_pdf = pdf_hs * cos_ti_hs2  # solid-angle pdf (pdf_hs already has /cos_ti baked in)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
@@ -1091,7 +1095,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             flux *= f_hs / pdf_hs
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
-            ro = hit + vec3f(hc.geo_normal) * Float32(0.0001) * hsign
+            ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
