@@ -958,6 +958,23 @@ struct ParameterDictionary(Movable):
                 return RGB(p.value.floats[0], p.value.floats[1], p.value.floats[2])
         return default
 
+    def get_rgb_or_blackbody(self, name: StringLiteral, default: RGB) -> RGB:
+        """Light emission color params ("L"/"I") accept EITHER an explicit
+        RGB triple ("rgb L" [r g b], 3 floats) OR a blackbody temperature
+        ("blackbody L" [6500], 1 float, Kelvin) -- both land in the same
+        dictionary entry's `.floats`, distinguished by count."""
+        for p in self.params:
+            if p.name == name:
+                if len(p.value.floats) >= 3:
+                    return RGB(p.value.floats[0], p.value.floats[1], p.value.floats[2])
+                elif len(p.value.floats) == 1:
+                    var rgb_out = alloc[Float32](3)
+                    _psc_blackbody_to_rgb(p.value.floats[0], rgb_out)
+                    var result = RGB(rgb_out[0], rgb_out[1], rgb_out[2])
+                    rgb_out.free()
+                    return result
+        return default
+
     def get_string(self, name: StringLiteral, default: String) -> String:
         for p in self.params:
             if p.name == name and len(p.value.strs) > 0:
@@ -1023,7 +1040,22 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Par
     while ps.next(handle):
         var pv = ParamValue(List[Float32](), List[String]())
         var is_spectrum = ps.type_buf[0] == UInt8(115) and ps.type_buf[1] == UInt8(112)  # "sp"
-        if is_spectrum:
+        if _psc_type_is_blackbody(ps.type_buf):
+            # "blackbody" is a single temperature value (Kelvin), not an RGB
+            # triple -- stored as a 1-element float list, same shape as a
+            # scalar "float"-typed param. Consumers that accept EITHER a
+            # direct RGB ("rgb L" [r g b], 3 floats) OR a blackbody
+            # temperature ("blackbody L" [6500], 1 float) for the same
+            # logical parameter distinguish the two by count, same pattern
+            # used for "eta"'s RGB-vs-scalar duality in material_builder.mojo.
+            var tmp = alloc[Float32](1)
+            var n = scanner_scan_float(handle, tmp)
+            if n > Int32(0):
+                pv.floats.append(tmp[0])
+            tmp.free()
+            if ps.is_array:
+                _ = scanner_scan_char(handle, UInt8(93))
+        elif is_spectrum:
             var name_buf = alloc[UInt8](256)
             var (mean, is_numeric) = _psc_scan_spectrum_scalar(handle, ps.is_array, name_buf, Int32(256))
             if is_numeric:
