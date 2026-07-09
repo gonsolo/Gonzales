@@ -9,7 +9,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_count_floats, scanner_count_ints, ParamScanner,
                     _psc_streq,
                     _psc_scan_rgb, _psc_scan_float4, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
-                    _psc_scan_spectrum_scalar,
+                    _psc_scan_spectrum_scalar, _psc_collect_params, ParameterDictionary,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
@@ -241,29 +241,20 @@ def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                           s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.name_is("maxdepth") and ps.is_int():
-            s[0].max_depth = _psc_scan_one_int(handle, ps.is_array)
-        elif ps.name_is("radius") and ps.is_float():
-            s[0].sppm_radius = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("photonsperiteration") and ps.is_int():
-            s[0].sppm_photons_per_iter = _psc_scan_one_int(handle, ps.is_array)
-        else:
-            ps.skip(handle)
     sbuf.free()
+    var params = _psc_collect_params(handle)
+    s[0].max_depth = params.get_int("maxdepth", s[0].max_depth)
+    s[0].sppm_radius = params.get_float("radius", s[0].sppm_radius)
+    s[0].sppm_photons_per_iter = params.get_int("photonsperiteration", s[0].sppm_photons_per_iter)
 
 def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                        s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if (ps.name_is("pixelsamples") or ps.name_is("samples")) and ps.is_int():
-            s[0].samples_per_pixel = _psc_scan_one_int(handle, ps.is_array)
-        else:
-            ps.skip(handle)
     sbuf.free()
+    var params = _psc_collect_params(handle)
+    s[0].samples_per_pixel = params.get_int("pixelsamples", s[0].samples_per_pixel)
+    s[0].samples_per_pixel = params.get_int("samples", s[0].samples_per_pixel)
 
 def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                       s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -275,60 +266,37 @@ def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         s[0].filter_type = Int32(2)
     else:
         s[0].filter_type = Int32(0)  # gaussian (default)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.name_is("xradius") and ps.is_float():
-            s[0].filter_support_x = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("yradius") and ps.is_float():
-            s[0].filter_support_y = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("sigma") and ps.is_float():
-            s[0].filter_sigma = _psc_scan_one_float(handle, ps.is_array)
-        else:
-            ps.skip(handle)
     sbuf.free()
+    var params = _psc_collect_params(handle)
+    s[0].filter_support_x = params.get_float("xradius", s[0].filter_support_x)
+    s[0].filter_support_y = params.get_float("yradius", s[0].filter_support_y)
+    s[0].filter_sigma = params.get_float("sigma", s[0].filter_sigma)
 
 def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                     s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.name_is("xresolution") and ps.is_int():
-            s[0].film_w = _psc_scan_one_int(handle, ps.is_array)
-        elif ps.name_is("yresolution") and ps.is_int():
-            s[0].film_h = _psc_scan_one_int(handle, ps.is_array)
-        elif ps.name_is("filename") and ps.is_str():
-            var fn_tmp = alloc[UInt8](PSC_FILE_MAX)
-            _psc_scan_one_str(handle, fn_tmp, Int32(PSC_FILE_MAX), ps.is_array)
-            s[0].film_filename = String(unsafe_from_utf8_ptr=fn_tmp.as_immutable())
-            fn_tmp.free()
-        elif ps.name_is("iso") and ps.is_float():
-            s[0].film_iso = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("maxcomponentvalue") and ps.is_float():
-            s[0].film_max_comp = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.name_is("cropwindow") and ps.is_float():
-            var cw = alloc[Float32](4)
-            _psc_scan_float4(handle, cw, ps.is_array)
-            s[0].crop_x0 = cw[0]; s[0].crop_x1 = cw[1]
-            s[0].crop_y0 = cw[2]; s[0].crop_y1 = cw[3]
-            cw.free()
-        else:
-            ps.skip(handle)
     sbuf.free()
+    var params = _psc_collect_params(handle)
+    s[0].film_w = params.get_int("xresolution", s[0].film_w)
+    s[0].film_h = params.get_int("yresolution", s[0].film_h)
+    s[0].film_filename = params.get_string("filename", s[0].film_filename)
+    s[0].film_iso = params.get_float("iso", s[0].film_iso)
+    s[0].film_max_comp = params.get_float("maxcomponentvalue", s[0].film_max_comp)
+    var cw = params.get_floats("cropwindow")
+    if len(cw) >= 4:
+        s[0].crop_x0 = cw[0]; s[0].crop_x1 = cw[1]
+        s[0].crop_y0 = cw[2]; s[0].crop_y1 = cw[3]
 
 def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                       s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
+    sbuf.free()
     # Copy current CTM into cam2w_raw
     for i in range(16): s[0].cam2w_raw[i] = s[0].ctm[i]
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.name_is("fov") and ps.is_float():
-            s[0].camera_fov = _psc_scan_one_float(handle, ps.is_array)
-        else:
-            ps.skip(handle)
-    sbuf.free()
+    var params = _psc_collect_params(handle)
+    s[0].camera_fov = params.get_float("fov", s[0].camera_fov)
 
 def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                          s: UnsafePointer[SceneParseState, MutAnyOrigin]):
@@ -620,13 +588,8 @@ def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
 def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                              s: UnsafePointer[SceneParseState, MutAnyOrigin]):
-    var radius = Float32(1.0)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.is_float() and ps.name_is("radius"):
-            radius = _psc_scan_one_float(handle, ps.is_array)
-        else:
-            ps.skip(handle)
+    var params = _psc_collect_params(handle)
+    var radius = params.get_float("radius", Float32(1.0))
 
     var cx = s[0].ctm[12]
     var cy = s[0].ctm[13]
@@ -850,6 +813,18 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
 # ── Texture handler ───────────────────────────────────────────────────────────
 
+def _psc_get_float_or_rgb(params: ParameterDictionary, name: StringLiteral, default: RGB) -> RGB:
+    """"value"/"tex1"/"tex2"-style texture params: a bare float replicates to
+    all 3 channels, an rgb triple sets them independently -- same duality as
+    material_builder.mojo's "eta" RGB-vs-scalar case, just without a
+    named-string third form here."""
+    var f = params.get_floats(name)
+    if len(f) >= 3:
+        return RGB(f[0], f[1], f[2])
+    elif len(f) == 1:
+        return RGB(f[0])
+    return default
+
 def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                        s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var tex_name = alloc[UInt8](PSC_NAME_MAX)
@@ -858,94 +833,44 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     _ = scanner_parse_quoted_string(handle, tex_type, 64)
     var tex_class = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, tex_class, 64)
+    var name_str = String(unsafe_from_utf8_ptr=tex_name.as_immutable())
+    tex_name.free()
+
     if _psc_streq(tex_class, "constant"):
-        var crgb  = alloc[Float32](3)
-        crgb[0] = Float32(0.5); crgb[1] = Float32(0.5); crgb[2] = Float32(0.5)
-        var cps = ParamScanner()
-        while cps.next(handle):
-            if cps.name_is("value"):
-                if cps.type_buf[0] == UInt8(102):  # 'f' float -> replicate to all channels
-                    var tmp = alloc[Float32](1)
-                    _ = scanner_scan_float(handle, tmp)
-                    crgb[0] = tmp[0]; crgb[1] = tmp[0]; crgb[2] = tmp[0]
-                    tmp.free()
-                    if cps.is_array:
-                        _ = scanner_scan_char(handle, UInt8(93))
-                else:
-                    _psc_scan_rgb(handle, crgb, cps.is_array)
-            else:
-                cps.skip(handle)
-        s[0].const_tex_names.append(String(unsafe_from_utf8_ptr=tex_name.as_immutable()))
-        s[0].const_tex_rgb.append(crgb[0])
-        s[0].const_tex_rgb.append(crgb[1])
-        s[0].const_tex_rgb.append(crgb[2])
-        crgb.free()
-        tex_name.free(); tex_type.free(); tex_class.free()
+        tex_type.free(); tex_class.free()
+        var params = _psc_collect_params(handle)
+        var crgb = _psc_get_float_or_rgb(params, "value", RGB(Float32(0.5)))
+        s[0].const_tex_names.append(name_str)
+        s[0].const_tex_rgb.append(crgb.r)
+        s[0].const_tex_rgb.append(crgb.g)
+        s[0].const_tex_rgb.append(crgb.b)
         return
     if _psc_streq(tex_class, "checkerboard"):
+        tex_type.free(); tex_class.free()
+        var params = _psc_collect_params(handle)
         # pbrt defaults: tex1=1 (white), tex2=0 (black), uscale=vscale=1.
-        var ktex1  = alloc[Float32](3)
-        ktex1[0] = Float32(1.0); ktex1[1] = Float32(1.0); ktex1[2] = Float32(1.0)
-        var ktex2  = alloc[Float32](3)
-        ktex2[0] = Float32(0.0); ktex2[1] = Float32(0.0); ktex2[2] = Float32(0.0)
-        var kuscale = Float32(1.0)
-        var kvscale = Float32(1.0)
-        var kps = ParamScanner()
-        while kps.next(handle):
-            if kps.name_is("tex1") and kps.is_float():
-                if kps.type_buf[0] == UInt8(102):  # 'f' float -> replicate to all channels
-                    var tmp = alloc[Float32](1)
-                    _ = scanner_scan_float(handle, tmp)
-                    ktex1[0] = tmp[0]; ktex1[1] = tmp[0]; ktex1[2] = tmp[0]
-                    tmp.free()
-                    if kps.is_array:
-                        _ = scanner_scan_char(handle, UInt8(93))
-                else:
-                    _psc_scan_rgb(handle, ktex1, kps.is_array)
-            elif kps.name_is("tex2") and kps.is_float():
-                if kps.type_buf[0] == UInt8(102):
-                    var tmp = alloc[Float32](1)
-                    _ = scanner_scan_float(handle, tmp)
-                    ktex2[0] = tmp[0]; ktex2[1] = tmp[0]; ktex2[2] = tmp[0]
-                    tmp.free()
-                    if kps.is_array:
-                        _ = scanner_scan_char(handle, UInt8(93))
-                else:
-                    _psc_scan_rgb(handle, ktex2, kps.is_array)
-            elif kps.name_is("uscale") and kps.is_float():
-                kuscale = _psc_scan_one_float(handle, kps.is_array)
-            elif kps.name_is("vscale") and kps.is_float():
-                kvscale = _psc_scan_one_float(handle, kps.is_array)
-            else:
-                kps.skip(handle)
-        s[0].checker_tex_names.append(String(unsafe_from_utf8_ptr=tex_name.as_immutable()))
-        s[0].checker_tex1.append(ktex1[0]); s[0].checker_tex1.append(ktex1[1]); s[0].checker_tex1.append(ktex1[2])
-        s[0].checker_tex2.append(ktex2[0]); s[0].checker_tex2.append(ktex2[1]); s[0].checker_tex2.append(ktex2[2])
+        var ktex1 = _psc_get_float_or_rgb(params, "tex1", RGB(Float32(1.0)))
+        var ktex2 = _psc_get_float_or_rgb(params, "tex2", RGB(Float32(0.0)))
+        var kuscale = params.get_float("uscale", Float32(1.0))
+        var kvscale = params.get_float("vscale", Float32(1.0))
+        s[0].checker_tex_names.append(name_str)
+        s[0].checker_tex1.append(ktex1.r); s[0].checker_tex1.append(ktex1.g); s[0].checker_tex1.append(ktex1.b)
+        s[0].checker_tex2.append(ktex2.r); s[0].checker_tex2.append(ktex2.g); s[0].checker_tex2.append(ktex2.b)
         s[0].checker_uscale.append(kuscale)
         s[0].checker_vscale.append(kvscale)
-        ktex1.free(); ktex2.free()
-        tex_name.free(); tex_type.free(); tex_class.free()
         return
     if not _psc_streq(tex_class, "imagemap"):
-        tex_name.free(); tex_type.free(); tex_class.free()
+        tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
         return
 
-    var str_val  = alloc[UInt8](PSC_FILE_MAX * 2)
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.name_is("filename") and ps.is_str():
-            _ = scanner_parse_quoted_string(handle, str_val, PSC_FILE_MAX * 2)
-            if ps.is_array:
-                _ = scanner_scan_char(handle, UInt8(93))
-            var name_str = String(unsafe_from_utf8_ptr=tex_name.as_immutable())
-            var file_str = s[0].scene_dir + String(unsafe_from_utf8_ptr=str_val.as_immutable())
-            s[0].tex_names.append(name_str)
-            s[0].tex_files.append(file_str)
-        else:
-            ps.skip(handle)
-    tex_name.free(); tex_type.free(); tex_class.free()
-    str_val.free()
+    tex_type.free(); tex_class.free()
+    var params = _psc_collect_params(handle)
+    var filename = params.get_string("filename", "")
+    if filename != "":
+        var file_str = s[0].scene_dir + filename
+        s[0].tex_names.append(name_str)
+        s[0].tex_files.append(file_str)
 
 # ── ObjectBegin/ObjectEnd/ObjectInstance (two-level BVH instancing) ──────────
 # See geometry.mojo's Instance_C docs and bvh.mojo's traverse_bvh2_core
