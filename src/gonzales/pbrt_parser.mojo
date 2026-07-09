@@ -4,11 +4,8 @@ from std.memory import alloc
 from std.math import tan, sqrt, abs
 from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_token, scanner_parse_quoted_string,
-                    scanner_scan_char, scanner_scan_float, scanner_scan_floats,
-                    scanner_scan_int, scanner_scan_ints,
-                    scanner_count_floats, scanner_count_ints, ParamScanner,
+                    scanner_scan_char, scanner_scan_float,
                     _psc_streq,
-                    _psc_scan_rgb, _psc_scan_float4, _psc_scan_one_float, _psc_scan_one_int, _psc_scan_one_str,
                     _psc_scan_spectrum_scalar, _psc_collect_params, ParameterDictionary,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
@@ -374,40 +371,26 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     """PBRT `Shape "curve"`: stored natively (no tessellation) as one Curve_C
     per local cubic B-spline segment, CTM-transformed at parse time. See
     Curve_C / intersect_curve in geometry.mojo for the BVH-time intersection."""
-    var cp_cap = Int32(512)
-    var cp_buf = alloc[Float32](Int(cp_cap) * 3)
-    var n_cp = Int32(0)
-    var width0 = Float32(0.002)
-    var width1 = Float32(-1.0)   # sentinel: not given -> falls back to width0
-    var ps = ParamScanner()
-    while ps.next(handle):
-        if ps.is_float() and ps.name_is("P"):
-            var cp_needed = scanner_count_floats(handle) / Int32(3)
-            if cp_needed > cp_cap:
-                cp_buf.free()
-                cp_cap = cp_needed
-                cp_buf = alloc[Float32](Int(cp_cap) * 3)
-            var n_f = scanner_scan_floats(handle, cp_buf, cp_cap * Int32(3))
-            n_cp = n_f / Int32(3)
-            if ps.is_array: _ = scanner_scan_char(handle, UInt8(93))
-        elif ps.is_float() and (ps.name_is("width") or ps.name_is("width0")):
-            width0 = _psc_scan_one_float(handle, ps.is_array)
-        elif ps.is_float() and ps.name_is("width1"):
-            width1 = _psc_scan_one_float(handle, ps.is_array)
-        else:
-            ps.skip(handle)
+    var params = _psc_collect_params(handle)
+    # take_floats moves "P"'s buffer out of the dictionary (List.pop, O(1) --
+    # no copy); _psc_collect_params already scanned it straight into the
+    # List's own backing buffer sized to exactly what's needed, matching the
+    # old hand-rolled cp_buf's cost with none of its 512-point-default waste
+    # (hair scenes have thousands of curve directives, most with a handful
+    # of control points).
+    var cp_list = params.take_floats("P")
+    var n_cp = Int32(len(cp_list) / 3)
+    var width0 = params.get_float("width0", params.get_float("width", Float32(0.002)))
+    var width1 = params.get_float("width1", width0)
     if n_cp < Int32(4):
-        cp_buf.free(); return
-    if width1 < Float32(0.0):
-        width1 = width0
+        return
 
     var n_raw = Int(n_cp)
     var raw4 = alloc[Float32](n_raw * 4)
     var xfm4 = alloc[Float32](n_raw * 4)
     for i in range(n_raw):
-        raw4[i*4+0] = cp_buf[i*3+0]; raw4[i*4+1] = cp_buf[i*3+1]
-        raw4[i*4+2] = cp_buf[i*3+2]; raw4[i*4+3] = Float32(1)
-    cp_buf.free()
+        raw4[i*4+0] = cp_list[i*3+0]; raw4[i*4+1] = cp_list[i*3+1]
+        raw4[i*4+2] = cp_list[i*3+2]; raw4[i*4+3] = Float32(1)
     transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(n_raw), xfm4)
     raw4.free()
 
@@ -688,73 +671,29 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
         ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
         return
 
-    var tmp_f_cap = Int32(65536)
-    var tmp_i_cap = Int32(16384)
-    var tmp_uv_cap = Int32(65536)
-    var tmp_f = alloc[Float32](Int(tmp_f_cap))
-    var tmp_i = alloc[Int32](Int(tmp_i_cap))
-    var tmp_uv = alloc[Float32](Int(tmp_uv_cap))
-    var n_pts  = Int32(0)
-    var n_idx  = Int32(0)
-    var n_uv   = Int32(0)
+    # take_floats/take_ints move each bulk array's buffer straight out of the
+    # dictionary (List.pop, O(1), no copy) -- _psc_collect_params already
+    # scanned "P"/"indices"/"uv" directly into each List's own backing
+    # buffer sized to exactly what's needed, matching this branch's old
+    # hand-rolled scratch-buffer cost with no extra copies. "uv"/"st" are
+    # aliases for the same logical param; try "uv" first.
+    var params = _psc_collect_params(handle)
+    var p_list = params.take_floats("P")
+    var i_list = params.take_ints("indices")
+    var uv_list = params.take_floats("uv")
+    if len(uv_list) == 0:
+        uv_list = params.take_floats("st")
 
-    var ps = ParamScanner()
-    while ps.next(handle):
-        var is_P  = ps.name_is("P") and ps.is_float()
-        var is_I  = ps.name_is("indices") and ps.is_int()
-        var is_UV = (ps.name_is("uv") or ps.name_is("st")) and ps.is_float()
-
-        if is_P:
-            if ps.is_array:
-                var p_needed = scanner_count_floats(handle)
-                if p_needed > tmp_f_cap:
-                    tmp_f.free()
-                    tmp_f_cap = p_needed
-                    tmp_f = alloc[Float32](Int(tmp_f_cap))
-                n_pts = scanner_scan_floats(handle, tmp_f, tmp_f_cap)
-                _ = scanner_scan_char(handle, UInt8(93))
-            else:
-                _ = scanner_scan_float(handle, tmp_f)
-                n_pts = Int32(3)
-        elif is_I:
-            if ps.is_array:
-                var i_needed = scanner_count_ints(handle)
-                if i_needed > tmp_i_cap:
-                    tmp_i.free()
-                    tmp_i_cap = i_needed
-                    tmp_i = alloc[Int32](Int(tmp_i_cap))
-                n_idx = scanner_scan_ints(handle, tmp_i, tmp_i_cap)
-                _ = scanner_scan_char(handle, UInt8(93))
-            else:
-                _ = scanner_scan_int(handle, tmp_i)
-                n_idx = Int32(1)
-        elif is_UV:
-            if ps.is_array:
-                var uv_needed = scanner_count_floats(handle)
-                if uv_needed > tmp_uv_cap:
-                    tmp_uv.free()
-                    tmp_uv_cap = uv_needed
-                    tmp_uv = alloc[Float32](Int(tmp_uv_cap))
-                n_uv = scanner_scan_floats(handle, tmp_uv, tmp_uv_cap)
-                _ = scanner_scan_char(handle, UInt8(93))
-            else:
-                _ = scanner_scan_float(handle, tmp_uv)
-                n_uv = Int32(2)
-        else:
-            ps.skip(handle)
-
-    var n_verts = n_pts / Int32(3)
-    var n_tris  = n_idx / Int32(3)
+    var n_verts = Int32(len(p_list) / 3)
+    var n_tris  = Int32(len(i_list) / 3)
 
     if n_verts <= 0 or n_tris <= 0:
-        tmp_f.free(); tmp_i.free(); tmp_uv.free()
         return
 
-    store_mesh(s, tmp_f, tmp_i, n_verts, n_tris)
-    if n_uv >= n_verts * Int32(2):
+    store_mesh(s, p_list.unsafe_ptr(), i_list.unsafe_ptr(), n_verts, n_tris)
+    if Int32(len(uv_list)) >= n_verts * Int32(2):
         for ui in range(Int(n_verts) * 2):
-            s[0].meshes[len(s[0].meshes) - 1].uvs.append(tmp_uv[ui])
-    tmp_f.free(); tmp_i.free(); tmp_uv.free()
+            s[0].meshes[len(s[0].meshes) - 1].uvs.append(uv_list[ui])
 
 # ── Texture handler ───────────────────────────────────────────────────────────
 

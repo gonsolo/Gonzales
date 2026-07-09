@@ -766,60 +766,6 @@ def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
     nl_buf.free()
     buf.free()
 
-def _psc_scan_one_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                       is_array: Int32) -> Float32:
-    var vp = alloc[Float32](1)
-    vp[0] = Float32(0)
-    _ = scanner_scan_float(handle, vp)
-    var v = vp[0]
-    vp.free()
-    if is_array:
-        _ = scanner_scan_char(handle, UInt8(93))  # ']'
-    return v
-
-def _psc_scan_one_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                     is_array: Int32) -> Int32:
-    var ip = alloc[Int32](1)
-    ip[0] = Int32(0)
-    _ = scanner_scan_int(handle, ip)
-    var v = ip[0]
-    ip.free()
-    if is_array:
-        _ = scanner_scan_char(handle, UInt8(93))  # ']'
-    return v
-
-def _psc_scan_one_str(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                     dst: UnsafePointer[UInt8, MutAnyOrigin], dst_max: Int32,
-                     is_array: Int32):
-    _ = scanner_parse_quoted_string(handle, dst, dst_max)
-    if is_array:
-        _ = scanner_scan_char(handle, UInt8(93))  # ']'
-
-# pbrt "bool" values are bare (unquoted) `true`/`false` tokens, e.g.
-# `"bool remaproughness" [ false ]` — scanned like the catch-all _psc_skip_value
-# else-branch, but the token is compared instead of discarded.
-def _psc_scan_one_bool(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                      is_array: Int32) -> Bool:
-    var buf = alloc[UInt8](32)
-    var nl_buf = alloc[UInt8](1)
-    nl_buf[0] = UInt8(10)
-    _ = scanner_scan_token(handle, nl_buf, 1, buf, 32)
-    var v = _psc_streq(buf, "true")
-    nl_buf.free()
-    buf.free()
-    if is_array:
-        _ = scanner_scan_char(handle, UInt8(93))  # ']'
-    return v
-
-def _psc_scan_rgb(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                 rgb: UnsafePointer[Float32, MutAnyOrigin],
-                 is_array: Int32):
-    _ = scanner_scan_float(handle, rgb + 0)
-    _ = scanner_scan_float(handle, rgb + 1)
-    _ = scanner_scan_float(handle, rgb + 2)
-    if is_array:
-        _ = scanner_scan_char(handle, UInt8(93))  # ']'
-
 comptime SPECTRUM_SCAN_SCRATCH_MAX: Int = 256  # generous bound for wavelength/value pairs
 
 def _psc_scan_spectrum_scalar(
@@ -848,8 +794,7 @@ def _psc_scan_spectrum_scalar(
     near-constant spectra actually seen in this scene corpus." Returns
     (0.0, False) for the named-string form, with the name copied into
     name_dst for the caller's own lookup. Consumes the trailing array ']'
-    itself (matches _psc_scan_one_float/_psc_scan_rgb's convention, NOT
-    _psc_skip_value's, which leaves that to its caller)."""
+    itself, unlike _psc_skip_value's, which leaves that to its caller."""
     var cnt = scanner_count_floats(handle)
     if cnt > Int32(0):
         var cap = Int(cnt) if Int(cnt) < SPECTRUM_SCAN_SCRATCH_MAX else SPECTRUM_SCAN_SCRATCH_MAX
@@ -879,16 +824,6 @@ def _psc_scan_spectrum_scalar(
             _ = scanner_scan_char(handle, UInt8(93))
         return (Float32(0.0), False)
 
-def _psc_scan_float4(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                    dst: UnsafePointer[Float32, MutAnyOrigin],
-                    is_array: Int32):
-    _ = scanner_scan_float(handle, dst + 0)
-    _ = scanner_scan_float(handle, dst + 1)
-    _ = scanner_scan_float(handle, dst + 2)
-    _ = scanner_scan_float(handle, dst + 3)
-    if is_array:
-        _ = scanner_scan_char(handle, UInt8(93))  # ']'
-
 # ── Generic parameter dictionary ─────────────────────────────────────────────
 # pbrt's own parser design: scan every directive's params ONCE into a generic
 # name -> typed-value structure (no per-name knowledge at scan time), then
@@ -912,18 +847,31 @@ def _psc_scan_float4(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
 
 @fieldwise_init
 struct ParamValue(Copyable, Movable):
-    """Holds a scanned parameter's value. Exactly one of the two lists is
+    """Holds a scanned parameter's value. Exactly one of the three lists is
     populated, depending on the declared pbrt type: `floats` for
-    float/integer/rgb/color/normal/point/vector/spectrum(numeric-array)
-    types, `strs` for string/texture/spectrum(named-string)/bool types (bool
-    stores its raw "true"/"false" token as a 1-element string list)."""
+    float/rgb/color/normal/point/vector/spectrum(numeric-array) types,
+    `ints` for integer types (kept as real Int32, not cast through Float32 --
+    Float32 only has 24 bits of exact integer precision, which a multi-
+    million-entry "indices" array could exceed), `strs` for
+    string/texture/spectrum(named-string)/bool types (bool stores its raw
+    "true"/"false" token as a 1-element string list)."""
     var floats: List[Float32]
+    var ints: List[Int32]
     var strs: List[String]
+
+    def take_floats(deinit self) -> List[Float32]:
+        return self.floats^
+
+    def take_ints(deinit self) -> List[Int32]:
+        return self.ints^
 
 @fieldwise_init
 struct ParsedParam(Copyable, Movable):
     var name: String
     var value: ParamValue
+
+    def take_value(deinit self) -> ParamValue:
+        return self.value^
 
 struct ParameterDictionary(Movable):
     """Small linear list of (name, ParamValue) pairs -- directives have at
@@ -942,8 +890,8 @@ struct ParameterDictionary(Movable):
 
     def get_int(self, name: StringLiteral, default: Int32) -> Int32:
         for p in self.params:
-            if p.name == name and len(p.value.floats) > 0:
-                return Int32(p.value.floats[0])
+            if p.name == name and len(p.value.ints) > 0:
+                return p.value.ints[0]
         return default
 
     def get_bool(self, name: StringLiteral, default: Bool) -> Bool:
@@ -997,11 +945,43 @@ struct ParameterDictionary(Movable):
                 return p.value.floats.copy()
         return List[Float32]()
 
+    def get_ints(self, name: StringLiteral) -> List[Int32]:
+        for p in self.params:
+            if p.name == name:
+                return p.value.ints.copy()
+        return List[Int32]()
+
     def get_strings(self, name: StringLiteral) -> List[String]:
         for p in self.params:
             if p.name == name:
                 return p.value.strs.copy()
         return List[String]()
+
+    def take_floats(mut self, name: StringLiteral) -> List[Float32]:
+        """Zero-copy variant of get_floats for bulk numeric params (mesh
+        "P"/"uv", curve "P") -- moves the entry's buffer out (via List.pop,
+        an O(1) pointer transfer) instead of deep-copying it, so callers
+        parsing a large array once don't pay for a retained-dictionary
+        convenience they don't need. Consumes just that one entry; other
+        params in the dictionary remain queryable afterward."""
+        for i in range(len(self.params)):
+            if self.params[i].name == name:
+                # A bare `pp.value.floats^` leaves the rest of `pp`/`value`
+                # "destroyed out of the middle" -- take_value()/take_floats()
+                # are `deinit self` methods, which the compiler treats as
+                # fully consuming (and correctly discarding the rest of)
+                # their receiver, one level at a time.
+                var pp = self.params.pop(i)
+                return pp^.take_value().take_floats()
+        return List[Float32]()
+
+    def take_ints(mut self, name: StringLiteral) -> List[Int32]:
+        """Zero-copy variant of get_ints -- see take_floats."""
+        for i in range(len(self.params)):
+            if self.params[i].name == name:
+                var pp = self.params.pop(i)
+                return pp^.take_value().take_ints()
+        return List[Int32]()
 
     def get_spectrum_scalar(self, name: StringLiteral, default: Float32) -> Tuple[Float32, String]:
         """(numeric_mean, "") for the inline-array spectrum form, or
@@ -1038,7 +1018,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Par
     var dict = ParameterDictionary()
     var ps = ParamScanner()
     while ps.next(handle):
-        var pv = ParamValue(List[Float32](), List[String]())
+        var pv = ParamValue(List[Float32](), List[Int32](), List[String]())
         var is_spectrum = ps.type_buf[0] == UInt8(115) and ps.type_buf[1] == UInt8(112)  # "sp"
         if _psc_type_is_blackbody(ps.type_buf):
             # "blackbody" is a single temperature value (Kelvin), not an RGB
@@ -1065,12 +1045,19 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Par
             name_buf.free()
         elif _psc_type_is_float(ps.type_buf):
             if ps.is_array:
+                # Count first, then scan straight into the List's own
+                # backing buffer (resize+unsafe_ptr) -- no temp buffer, no
+                # per-element copy loop. Safe for bulk arrays (mesh "P"/"uv",
+                # curve "P", medium "density") at exactly the same one-pass
+                # cost as the bespoke scratch-buffer code this replaces.
                 var cnt = scanner_count_floats(handle)
-                var tmp = alloc[Float32](Int(cnt) if cnt > Int32(0) else 1)
-                var n = scanner_scan_floats(handle, tmp, cnt)
-                for i in range(Int(n)):
-                    pv.floats.append(tmp[i])
-                tmp.free()
+                var cnt_i = Int(cnt) if cnt > Int32(0) else 0
+                pv.floats.resize(unsafe_uninit_length=cnt_i)
+                var n = Int32(0)
+                if cnt_i > 0:
+                    n = scanner_scan_floats(handle, pv.floats.unsafe_ptr(), cnt)
+                if n != cnt:
+                    pv.floats.resize(unsafe_uninit_length=Int(n) if n > Int32(0) else 0)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
                 var tmp = alloc[Float32](1)
@@ -1081,17 +1068,19 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Par
         elif _psc_type_is_int(ps.type_buf):
             if ps.is_array:
                 var cnt = scanner_count_ints(handle)
-                var tmp = alloc[Int32](Int(cnt) if cnt > Int32(0) else 1)
-                var n = scanner_scan_ints(handle, tmp, cnt)
-                for i in range(Int(n)):
-                    pv.floats.append(Float32(tmp[i]))
-                tmp.free()
+                var cnt_i = Int(cnt) if cnt > Int32(0) else 0
+                pv.ints.resize(unsafe_uninit_length=cnt_i)
+                var n = Int32(0)
+                if cnt_i > 0:
+                    n = scanner_scan_ints(handle, pv.ints.unsafe_ptr(), cnt)
+                if n != cnt:
+                    pv.ints.resize(unsafe_uninit_length=Int(n) if n > Int32(0) else 0)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
                 var tmp = alloc[Int32](1)
                 var n = scanner_scan_int(handle, tmp)
                 if n > Int32(0):
-                    pv.floats.append(Float32(tmp[0]))
+                    pv.ints.append(tmp[0])
                 tmp.free()
         elif _psc_type_is_str(ps.type_buf):
             var tmp_s = alloc[UInt8](512)
