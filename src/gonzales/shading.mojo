@@ -1245,11 +1245,36 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # the loader's isotropic-only scope note), so an arbitrary Frisvad tangent
 # frame is fine — no UV alignment needed (measured materials aren't
 # anisotropic in this scene corpus).
-@always_inline
+#
+# Deliberately NOT @always_inline, unlike every sibling _shade_X_nee (e.g.
+# _shade_conductor_nee) -- matching _shade_diffuse_nee's precedent (the other
+# NEE helper in this file heavy enough to warrant it). This is a genuine
+# code-size win kept on its own merits, but it turned out NOT to be the fix
+# for shade_measured_gpu's CUDA_ERROR_INVALID_PTX (see below).
+#
+# Takes `measured_brdfs` + an index rather than `mb: MeasuredBRDF_C` (loading
+# mb LOCALLY below instead) to avoid MeasuredBRDF_C -- a TrivialRegisterPassable
+# struct with 12 pointer fields -- crossing this now-real call boundary by
+# value, the modular/modular#6759 hazard already documented on SpectralHandle
+# (see spectrum.mojo). This was tried as a fix candidate before the real bug
+# (below) was found and did NOT resolve it on its own -- but it's a
+# reasonable precaution independent of that, so it's kept.
+#
+# The ACTUAL root cause (root-caused 2026-07-10 via progressive stubbing of
+# _shade_measured_nee's body down to single expressions): `_bxdf_eval_measured_core`
+# used plain `std.math.atan2` for phi_o/phi_m, which depends on an unresolved
+# CUDA libdevice extern and cannot produce valid PTX on this machine's
+# toolchain -- see `_atan2f` in bvh.mojo ("avoids the unresolved libdevice
+# extern on GPU"), already used for hair's own phi computation for exactly
+# this reason. Fixed by switching measured_bxdf_eval.mojo's atan2 calls to
+# `_atan2f`. See project_gpu_ptx_environment_break memory for the full
+# bisection trail, including the earlier wrong kernel-size and by-value-struct
+# hypotheses.
 def _shade_measured_nee[enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
-    mb: MeasuredBRDF_C,
+    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin],
+    measured_idx: Int32,
     tangent: SIMD[DType.float32, 3], bitangent: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
     wo: SIMD[DType.float32, 3],
     hit_point: SIMD[DType.float32, 3],
@@ -1259,6 +1284,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
     surface — same 5-light-type shape as _shade_conductor_nee, with
     _nee_weight_measured in place of _nee_weight_simple_via_spectral (which
     can't take a MeasuredBRDF_C, same reason hair has its own NEE)."""
+    var mb = measured_brdfs[Int(measured_idx)]
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
     var w_area = _nee_weight_measured(ls_area, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
     if not w_area.is_black():
@@ -1356,7 +1382,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     # body), and gating NEE on that sample's validity was discarding real,
     # correctly-lit direct illumination at exactly those pixels -- confirmed
     # against the pbrt reference showing they should stay lit, not black.
-    _shade_measured_nee[enqueue_shadow](path_ptr, ctx, mb, tangent, bitangent, normal, wo, hit_point, pcg)
+    _shade_measured_nee[enqueue_shadow](path_ptr, ctx, ctx.measured_brdfs, mat.measured_idx, tangent, bitangent, normal, wo, hit_point, pcg)
 
     var wo_l = SIMD[DType.float32, 3](dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
     var (wi_l, f, pdf, valid) = bxdf_sample_measured(mb, wo_l, pcg.next_float(), pcg.next_float(), path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)

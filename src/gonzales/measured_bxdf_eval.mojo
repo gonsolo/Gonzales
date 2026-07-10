@@ -21,26 +21,22 @@
 #
 # The PL2D primitives below (_pl_find_interval_array through _pl2d_invert2)
 # are deliberately NOT @always_inline, unlike every other BxDF helper in
-# this codebase. bxdf_eval_measured calls _pl2d_eval3 four times (one per
-# hero wavelength) and bxdf_sample_measured calls it another four, each a
-# ~40-line function; with @always_inline, shade_measured_gpu's compiled body
-# duplicated all of that at every call site, on top of the same repeated
-# expansion of _pl_param_wt/_pl_lookup2/_pl_lookup3 (called from nearly every
-# other primitive here too) -- easily the largest kernel body in the
-# codebase after shade_mix_gpu (see that kernel's docstring in gpu.mojo for
-# the sibling bug: this machine's CUDA 13.3/Modular 26.4.0 toolchain cannot
-# produce valid PTX for it, confirmed via bisection -- shade_measured_gpu
-# alone reproduces CUDA_ERROR_INVALID_PTX with every other kernel disabled).
+# this codebase, to avoid duplicating their ~40-line bodies at every one of
+# bxdf_eval_measured/bxdf_sample_measured's 8 call sites (4x per wavelength
+# each). This is a genuine code-size win kept on its own merits, but it was
+# NOT the fix for shade_measured_gpu's CUDA_ERROR_INVALID_PTX bug -- see
+# _bxdf_eval_measured_core's docstring below for the real root cause
+# (std.math.atan2, not kernel size).
+#
 # These functions take only plain UnsafePointer[Float32]/Int/Float32
 # arguments -- never MeasuredBRDF_C itself -- so making them real (non-
 # inlined) calls carries none of the by-value TrivialRegisterPassable-struct
-# corruption risk documented elsewhere (modular/modular#6759); it just
-# collapses the duplicated bodies back down to one copy each.
-from std.math import sqrt, atan2, sin, cos, acos, abs, min, max, floor
+# corruption risk documented elsewhere (modular/modular#6759).
+from std.math import sqrt, sin, cos, acos, abs, min, max, floor
 from .geometry import RGB, MeasuredBRDF_C, safe_sqrt, PI, dot
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
 from .rgb2spec import cie_d65_runtime
-from .bvh import LightSample
+from .bvh import LightSample, _atan2f
 from .sampling import power_heuristic
 
 # ── Local-frame warps (bxdfs.h:1058-1065) ────────────────────────────────────
@@ -444,7 +440,18 @@ def _bxdf_eval_measured_core(
     multiplying reflectance-spectral x illuminant-spectral BEFORE the
     one-time spectral_sample_to_rgb conversion (see
     _nee_weight_simple_spectral in bxdf.mojo). Callers here must do the
-    same -- see _nee_weight_measured below."""
+    same -- see _nee_weight_measured below.
+
+    Uses `_atan2f` (bvh.mojo), NOT std.math.atan2, for phi_o/phi_m. This is
+    the actual fix for shade_measured_gpu's long-standing CUDA_ERROR_INVALID_PTX
+    (root-caused 2026-07-10 via progressive stubbing, after an earlier,
+    WRONG hypothesis that it was an inlining/kernel-size issue -- see
+    project_gpu_ptx_environment_break memory for the full trail): plain
+    std.math.atan2 depends on an unresolved CUDA libdevice extern, exactly
+    as already documented on `_atan2f` itself ("avoids the unresolved
+    libdevice extern on GPU") and already worked around for hair's own
+    phi computation in bvh.mojo. This file used raw `atan2` because that
+    prior fix/precedent wasn't known when this port was written."""
     var wo = wo_l; var wi = wi_l
     # Same-hemisphere check (SameHemisphere: wo.z*wi.z > 0).
     if wo[2] * wi[2] <= Float32(0.0):
@@ -459,9 +466,9 @@ def _bxdf_eval_measured_core(
     wm = wm * (Float32(1.0) / sqrt(wm_len2))
 
     var theta_o = _measured_spherical_theta(wo)
-    var phi_o = atan2(wo[1], wo[0])
+    var phi_o = _atan2f(wo[1], wo[0])
     var theta_m = _measured_spherical_theta(wm)
-    var phi_m = atan2(wm[1], wm[0])
+    var phi_m = _atan2f(wm[1], wm[0])
 
     var u_wo_x = _measured_theta2u(theta_o)
     var u_wo_y = _measured_phi2u(phi_o)
@@ -582,9 +589,9 @@ def bxdf_pdf_measured(
     wm = wm * (Float32(1.0) / sqrt(wm_len2))
 
     var theta_o = _measured_spherical_theta(wo)
-    var phi_o = atan2(wo[1], wo[0])
+    var phi_o = _atan2f(wo[1], wo[0])
     var theta_m = _measured_spherical_theta(wm)
-    var phi_m = atan2(wm[1], wm[0])
+    var phi_m = _atan2f(wm[1], wm[0])
     var u_wm_x = _measured_theta2u(theta_m)
     var u_wm_y_raw = _measured_phi2u(phi_m - phi_o) if Int(mb.isotropic) != 0 else _measured_phi2u(phi_m)
     var u_wm_y = u_wm_y_raw - floor(u_wm_y_raw)
@@ -627,7 +634,7 @@ def bxdf_sample_measured(
         flip_wi = True
 
     var theta_o = _measured_spherical_theta(wo)
-    var phi_o = atan2(wo[1], wo[0])
+    var phi_o = _atan2f(wo[1], wo[0])
 
     var (lum_x, lum_y, lum_pdf) = _pl2d_sample2(
         mb.lum_data, mb.lum_marg, mb.lum_cond, Int(mb.lum_xs), Int(mb.lum_ys),
@@ -713,7 +720,14 @@ def bxdf_sample_measured(
 
 # ── NEE weight (mirrors bxdf.mojo's _nee_weight_simple / _nee_weight_hair) ──
 
-@always_inline
+# NOT @always_inline (unlike bxdf.mojo's _nee_weight_simple/_via_spectral,
+# which stay inline since conductor/diffuse's total NEE bulk fits fine) --
+# called 5x from _shade_measured_nee (one per light type), and that call
+# site is itself now a real function specifically to keep shade_measured_gpu
+# small (see _shade_measured_nee's docstring in shading.mojo); leaving this
+# inline would still unroll its full spectral-compositing body 5x into
+# _shade_measured_nee's own compiled body. De-inlining it directly reduces
+# that to 5 real calls instead.
 def _nee_weight_measured(
     ls: LightSample,
     mb: MeasuredBRDF_C,

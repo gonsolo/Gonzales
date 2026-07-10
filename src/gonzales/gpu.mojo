@@ -2978,19 +2978,42 @@ def gpu_render_sample(
                     handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
-                # shade_measured_gpu is NOT enqueued here: even after
-                # de-inlining its heaviest PL2D math (see
-                # measured_bxdf_eval.mojo's _bxdf_eval_measured_core), this
-                # machine's CUDA 13.3/Modular 26.4.0 toolchain still cannot
-                # produce valid PTX for it (CUDA_ERROR_INVALID_PTX),
-                # confirmed via bisection down to this exact kernel with
-                # every other kernel -- including the fixed shade_mix_gpu --
-                # working. A measured material's path simply never gets its
-                # pending_mat cleared on GPU (same degraded-but-not-crashing
-                # behavior as before this material type existed): it stays
-                # black rather than corrupting the whole render. See
-                # project_gpu_ptx_environment_break memory for the full
-                # bisection history and next steps.
+                handle[].ctx.enqueue_function[shade_measured_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_int, px_scale,
+                    handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+                    grid_dim=grid_dim, block_dim=block_size,
+                )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -3408,8 +3431,42 @@ def gpu_render_wavefront(
                     handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_total, block_dim=block_size,
                 )
-                # shade_measured_gpu not enqueued here either -- see the
-                # matching comment in gpu_render_sample above.
+                handle[].ctx.enqueue_function[shade_measured_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_total, px_scale,
+                    handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+                    grid_dim=grid_total, block_dim=block_size,
+                )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
