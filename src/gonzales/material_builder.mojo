@@ -261,8 +261,14 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
 
     # "measured": read the tensor file's mean "luminance" as an achromatic
     # Fresnel F0 approximation (see measured_bsdf.mojo for the real-BxDF gap).
+    # Also record the resolved path so the final-scene-build step (Stage 1 of
+    # the real-MeasuredBxDF port) can load+dedup the full tensor data; the
+    # approximate conductor fallback below stays live until material_builder
+    # is flipped to route through MatKind.measured (Stage 2).
+    var measured_bsdf_path = String("")
     if is_measured and params.has("filename"):
         var bsdf_path = s[0].scene_dir + params.get_string("filename", "")
+        measured_bsdf_path = bsdf_path
         var (bsdf_ok, mean_lum) = load_measured_bsdf_reflectance(bsdf_path)
         if bsdf_ok:
             # Clamp away from the extremes — a raw tensor mean can read near
@@ -366,6 +372,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
     nm.mix_name1      = mix_name1
     nm.mix_name2      = mix_name2
     nm.mix_amount     = mix_amount
+    nm.measured_bsdf_path = measured_bsdf_path
     s[0].named_materials.append(nm^)
 
     mat_name.free()

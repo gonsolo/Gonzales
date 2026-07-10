@@ -269,6 +269,7 @@ struct MatKind:
     comptime thin_dielectric   = Int8(9)
     comptime interface         = Int8(10)
     comptime hair              = Int8(11)
+    comptime measured          = Int8(12)
 
 @fieldwise_init
 struct Material_C(TrivialRegisterPassable):
@@ -294,6 +295,70 @@ struct Material_C(TrivialRegisterPassable):
     var checker_tex2: RGB
     var checker_uscale: Float32
     var checker_vscale: Float32
+    var measured_idx: Int32  # -1 = not a "measured" material; >= 0 = index into
+                              # SceneDescriptor2_C.measuredBrdfs (see MeasuredBRDF_C)
+
+# ── Measured (tabulated) BRDF ────────────────────────────────────────────────
+# One instance per distinct ".bsdf" tensor file (deduped by path — a scene may
+# reference the same file from many materials, e.g. sportscar's car-paint
+# body). Holds the real Dupuy & Jakob PiecewiseLinear2D marginal/conditional
+# distributions for vndf/luminance (with derived CDFs) plus the
+# Evaluate-only ndf/sigma/spectra tables — see measured_bsdf.mojo's loader
+# for construction and bxdf.mojo's bxdf_{eval,sample,pdf}_measured for the
+# consumers. Same struct reused for both the CPU host-pointer instance
+# (built by the loader) and the GPU device-pointer instance (built in
+# gpu.mojo's scene upload, Stage 3) — mirrors TriangleMesh_C/Curve_C's
+# existing host-then-device-pointer-reuse convention.
+#
+# CAUTION: this struct has many pointer fields, so it must NEVER be passed BY
+# VALUE across a real (non-inlined) function-call boundary -- see
+# spectrum.mojo's long comment on the confirmed Mojo compiler miscompilation
+# class (modular/modular#6759). Always load a local `var mb = ...[idx]` and
+# only hand it to @always_inline helpers.
+@fieldwise_init
+struct MeasuredBRDF_C(TrivialRegisterPassable):
+    var isotropic:     Int32  # 1 if n_phi_i <= 2 (only isotropic supported today)
+    var n_theta_i:     Int32
+    var n_phi_i:       Int32
+    var n_wavelengths: Int32
+    var theta_i:     UnsafePointer[Float32, MutAnyOrigin]  # [n_theta_i]
+    var phi_i:       UnsafePointer[Float32, MutAnyOrigin]  # [n_phi_i]
+    var wavelengths: UnsafePointer[Float32, MutAnyOrigin]  # [n_wavelengths]
+
+    # ndf / sigma: PiecewiseLinear2D<0> — Evaluate-only, no param axes, no CDF.
+    var ndf_data:   UnsafePointer[Float32, MutAnyOrigin]  # [ndf_ys * ndf_xs]
+    var ndf_xs:     Int32
+    var ndf_ys:     Int32
+    var sigma_data: UnsafePointer[Float32, MutAnyOrigin]  # [sigma_ys * sigma_xs]
+    var sigma_xs:   Int32
+    var sigma_ys:   Int32
+
+    # vndf / luminance: PiecewiseLinear2D<2>, param axes (phi_i, theta_i),
+    # both Sample+Evaluate-capable (marginal/conditional CDFs built). Both
+    # share the same param resolution, hence the same stride2_* pair below.
+    var vndf_data: UnsafePointer[Float32, MutAnyOrigin]  # [slices2 * vndf_ys * vndf_xs]
+    var vndf_marg: UnsafePointer[Float32, MutAnyOrigin]  # [slices2 * vndf_ys]
+    var vndf_cond: UnsafePointer[Float32, MutAnyOrigin]  # [slices2 * vndf_ys * vndf_xs]
+    var vndf_xs:   Int32
+    var vndf_ys:   Int32
+    var lum_data: UnsafePointer[Float32, MutAnyOrigin]   # [slices2 * lum_ys * lum_xs]
+    var lum_marg: UnsafePointer[Float32, MutAnyOrigin]   # [slices2 * lum_ys]
+    var lum_cond: UnsafePointer[Float32, MutAnyOrigin]   # [slices2 * lum_ys * lum_xs]
+    var lum_xs:   Int32
+    var lum_ys:   Int32
+    var stride2_phi:   Int32  # PiecewiseLinear2D<2>'s per-param-axis stride
+    var stride2_theta: Int32  # (in units of one x*y slice); shared by vndf+luminance
+
+    # spectra: PiecewiseLinear2D<3>, param axes (phi_i, theta_i, wavelengths),
+    # Evaluate-only (no CDF) — its own stride triple (different Dimension
+    # than vndf/luminance's, so the strides differ even though phi_i/theta_i
+    # are shared).
+    var spectra_data: UnsafePointer[Float32, MutAnyOrigin]  # [slices3 * spectra_ys * spectra_xs]
+    var spectra_xs: Int32
+    var spectra_ys: Int32
+    var stride3_phi:    Int32
+    var stride3_theta:  Int32
+    var stride3_lambda: Int32
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):

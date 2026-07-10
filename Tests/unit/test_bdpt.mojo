@@ -16,7 +16,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import (
     RGB, Point3f, Vec3f, Intersection_C, LightSampler_C, INV_FOUR_PI, INV_PI,
     AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C,
-    Medium_C, MediumInterface_C, Grid_C, PrimId_C, Instance_C,
+    Medium_C, MediumInterface_C, Grid_C, PrimId_C, Instance_C, MeasuredBRDF_C,
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
 from gonzales.rng import PCG32
@@ -74,6 +74,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         Int64(0),
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
     )
 
@@ -291,6 +292,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
         UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         Int64(0),
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
     )
 

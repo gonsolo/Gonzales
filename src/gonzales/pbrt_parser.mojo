@@ -15,13 +15,14 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
-                        LightSampler_C, Instance_C)
+                        LightSampler_C, Instance_C, MeasuredBRDF_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .spectrum import SpectralHandle
 from .sampling import gaussian_norm
 from .ply import load_ply
 from .material_builder import _psc_handle_make_named_material, _psc_handle_named_material
+from .measured_bsdf import load_measured_brdf_full
 from .light_builder import _psc_handle_area_light_source, handle_light_source
 
 # ── Output struct ─────────────────────────────────────────────────────────────
@@ -111,6 +112,12 @@ struct ParsedScene_Mojo:
     var blas_count:       Int32
     var instances:        UnsafePointer[Instance_C, MutAnyOrigin]
     var instance_count:   Int32
+    # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
+    # (deduped by path), referenced by Material_C.measured_idx. Populated at
+    # final-scene-build time from named_materials[i].measured_bsdf_path -- see
+    # the dedup+load loop near the materials array build below.
+    var measured_brdfs:  UnsafePointer[MeasuredBRDF_C, MutAnyOrigin]
+    var measured_count:  Int32
 
 # ── Matrix utilities ──────────────────────────────────────────────────────────
 
@@ -1223,6 +1230,39 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
 
     var n_al = n_al_mesh + n_al_curve
     var n_mats = n_regular + n_al
+
+    # "measured" materials: dedup by resolved .bsdf path, load each unique
+    # file once via the real tensor-file loader (measured_bsdf.mojo). Stage 1
+    # of the real-MeasuredBxDF port — shading doesn't consume this yet
+    # (material_builder.mojo still routes "measured" through the approximate
+    # conductor path); this just populates measured_brdfs/measured_idx so
+    # Stage 2 can flip the switch without further parser changes.
+    var measured_paths = List[String]()
+    var measured_ok    = List[Bool]()
+    var measured_list  = List[MeasuredBRDF_C]()
+    for i in range(n_regular):
+        var mpath = s[0].named_materials[i].measured_bsdf_path
+        if mpath == "":
+            continue
+        var already = False
+        for j in range(len(measured_paths)):
+            if measured_paths[j] == mpath:
+                already = True
+                break
+        if already:
+            continue
+        var (mok, mb) = load_measured_brdf_full(mpath)
+        if not mok:
+            print("Warning: could not load full measured BRDF '" + mpath + "' (real MeasuredBxDF unavailable, using approximation)")
+        measured_paths.append(mpath)
+        measured_ok.append(mok)
+        measured_list.append(mb)
+    psc[0].measured_count = Int32(len(measured_list))
+    var measured_brdfs_buf = alloc[MeasuredBRDF_C](max(len(measured_list), 1))
+    for i in range(len(measured_list)):
+        measured_brdfs_buf[i] = measured_list[i]
+    psc[0].measured_brdfs = measured_brdfs_buf
+
     var mats = alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
         var nm3 = s[0].named_materials[i]
@@ -1235,6 +1275,16 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
         mats[i].normal_tex_idx = nm3.normal_tex_idx
         mats[i].rough_tex_idx = nm3.rough_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
+        if nm3.measured_bsdf_path == "":
+            mats[i].measured_idx = Int32(-1)
+        else:
+            var midx = Int32(-1)
+            for j in range(len(measured_paths)):
+                if measured_paths[j] == nm3.measured_bsdf_path:
+                    if measured_ok[j]:
+                        midx = Int32(j)
+                    break
+            mats[i].measured_idx = midx
         mats[i].checker_tex1   = nm3.checker_tex1
         mats[i].checker_tex2   = nm3.checker_tex2
         mats[i].checker_uscale = nm3.checker_uscale
@@ -1366,6 +1416,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].rough_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
+            mats[al_mat_base + al_idx].measured_idx = Int32(-1)
             al_count += 1
 
     # ---- Curve area light material slots ----
@@ -1390,6 +1441,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
             mats[slot].normal_tex_idx = Int32(-1)
             mats[slot].rough_tex_idx = Int32(-1)
             mats[slot].medium_interface_idx = Int32(-1)
+            mats[slot].measured_idx = Int32(-1)
             curve_al_running += 1
         else:
             curve_al_mat_idx[ci] = Int32(-1)
@@ -2243,6 +2295,27 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
         psc[0].spheres.free()
     if psc[0].curve_count > 0:
         psc[0].curves.free()
+    if psc[0].measured_count > 0:
+        # Per-pointer sentinel-address guards (matches light_sampler.cdf's
+        # convention above): a MeasuredBRDF_C for a file that FAILED to load
+        # has every pointer field set via unsafe_dangling() (see
+        # measured_bsdf.mojo's _fail()), which must never be passed to
+        # .free() directly.
+        for mi in range(Int(psc[0].measured_count)):
+            var mb = psc[0].measured_brdfs[mi]
+            if Int(mb.theta_i) > 4: mb.theta_i.free()
+            if Int(mb.phi_i) > 4: mb.phi_i.free()
+            if Int(mb.wavelengths) > 4: mb.wavelengths.free()
+            if Int(mb.ndf_data) > 4: mb.ndf_data.free()
+            if Int(mb.sigma_data) > 4: mb.sigma_data.free()
+            if Int(mb.vndf_data) > 4: mb.vndf_data.free()
+            if Int(mb.vndf_marg) > 4: mb.vndf_marg.free()
+            if Int(mb.vndf_cond) > 4: mb.vndf_cond.free()
+            if Int(mb.lum_data) > 4: mb.lum_data.free()
+            if Int(mb.lum_marg) > 4: mb.lum_marg.free()
+            if Int(mb.lum_cond) > 4: mb.lum_cond.free()
+            if Int(mb.spectra_data) > 4: mb.spectra_data.free()
+        psc[0].measured_brdfs.free()
     if psc[0].grid_count > 0:
         for gi in range(Int(psc[0].grid_count)):
             psc[0].grids[gi].density.free()
@@ -2355,5 +2428,7 @@ def mojo_parsed_scene_descriptor(
     sd[0].blasCount       = Int64(psc[0].blas_count)
     sd[0].instances       = psc[0].instances
     sd[0].instanceCount   = Int64(psc[0].instance_count)
+    sd[0].measuredBrdfs      = psc[0].measured_brdfs
+    sd[0].measuredBrdfCount  = Int64(psc[0].measured_count)
     sd[0].spectral        = spectral
     return sd

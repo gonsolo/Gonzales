@@ -42,7 +42,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         RGB(Float32(0.0)),                                  # albedo
         RGB(Float32(200.0), Float32(80.0), Float32(20.0)),  # emission
         Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Int32(-1),
-        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0),
+        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
     )
 
     var ray = Ray_C(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
@@ -92,7 +92,7 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
         MatKind.hair, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.3)), RGB(Float32(1.55), Float32(0.0), Float32(0.0)),
         Int32(-1), Float32(0.3), Float32(0.3), Int32(-1), Int32(-1), Int32(-1),
-        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0),
+        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
     )
     assert_true(materials[0].type != MatKind.area_light)
 
@@ -129,7 +129,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)), RGB(Float32(200.0), Float32(80.0), Float32(20.0)),
         Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Int32(-1),
-        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0),
+        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
     )
 
     var total_area = curve_light_tube_area(curve)
