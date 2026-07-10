@@ -20,7 +20,8 @@
 # multilinear blend, pbrt's `lookup<Dim>`) via _pl_lookup2/_pl_lookup3.
 from std.math import sqrt, atan2, sin, cos, acos, abs, min, max, floor
 from .geometry import RGB, MeasuredBRDF_C, safe_sqrt, PI, dot
-from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
+from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
+from .rgb2spec import cie_d65_runtime
 from .bvh import LightSample
 from .sampling import power_heuristic
 
@@ -414,22 +415,31 @@ def bxdf_eval_measured(
     spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
     spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
-) -> Tuple[RGB, Float32]:
+) -> Tuple[SpectralSample, Float32]:
     """MeasuredBxDF::f + PDF combined (bxdfs.cpp:999-1034, :1087-1120) —
     both need the same wm/theta/phi/u_wm/vndf.Invert setup, so this computes
-    them once and returns (f_rgb, pdf) together, matching bxdf_eval_any's
-    shape. wo_l/wi_l are LOCAL-frame (z = shading normal)."""
+    them once and returns (fr_spectral, pdf) together, matching
+    bxdf_eval_any's shape. wo_l/wi_l are LOCAL-frame (z = shading normal).
+
+    Returns the RAW spectral reflectance-like value, NOT converted to RGB --
+    converting a bare reflectance spectrum to RGB in isolation implicitly
+    assumes an equal-energy illuminant, whose white point does not match
+    sRGB's D65 reference; every other material in this codebase avoids that
+    bias by multiplying reflectance-spectral x illuminant-spectral BEFORE
+    the one-time spectral_sample_to_rgb conversion (see
+    _nee_weight_simple_spectral in bxdf.mojo). Callers here must do the
+    same -- see _nee_weight_measured below."""
     var wo = wo_l; var wi = wi_l
     # Same-hemisphere check (SameHemisphere: wo.z*wi.z > 0).
     if wo[2] * wi[2] <= Float32(0.0):
-        return (RGB(Float32(0.0)), Float32(0.0))
+        return (SpectralSample(Float32(0.0)), Float32(0.0))
     if wo[2] < Float32(0.0):
         wo = -wo; wi = -wi
 
     var wm = wo + wi
     var wm_len2 = dot(wm, wm)
     if wm_len2 == Float32(0.0):
-        return (RGB(Float32(0.0)), Float32(0.0))
+        return (SpectralSample(Float32(0.0)), Float32(0.0))
     wm = wm * (Float32(1.0) / sqrt(wm_len2))
 
     var theta_o = _measured_spherical_theta(wo)
@@ -452,7 +462,7 @@ def bxdf_eval_measured(
 
     var cos_wi = wi[2]
     if cos_wi <= Float32(0.0):
-        return (RGB(Float32(0.0)), Float32(0.0))
+        return (SpectralSample(Float32(0.0)), Float32(0.0))
 
     var fr = SpectralSample(Float32(0.0))
     var fr0 = _pl2d_eval3(mb.spectra_data, Int(mb.spectra_xs), Int(mb.spectra_ys),
@@ -476,10 +486,9 @@ def bxdf_eval_measured(
     var ndf_val = _pl2d_eval0(mb.ndf_data, Int(mb.ndf_xs), Int(mb.ndf_ys), u_wm_x, u_wm_y)
     var sigma_val = _pl2d_eval0(mb.sigma_data, Int(mb.sigma_xs), Int(mb.sigma_ys), u_wo_x, u_wo_y)
     if sigma_val <= Float32(0.0):
-        return (RGB(Float32(0.0)), Float32(0.0))
+        return (SpectralSample(Float32(0.0)), Float32(0.0))
 
     var fr_scaled = fr * (ndf_val / (Float32(4.0) * sigma_val * cos_wi))
-    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, fr_scaled, wavelengths)
 
     # PDF (bxdfs.cpp:1087-1120) — reuses the same u_wm/vndf.Invert result.
     var lum_val = _pl2d_eval2(mb.lum_data, Int(mb.lum_xs), Int(mb.lum_ys),
@@ -491,7 +500,14 @@ def bxdf_eval_measured(
     if jacobian > Float32(0.0):
         pdf = vndf_pdf * lum_val / jacobian
 
-    return (RGB(max(r, Float32(0.0)), max(g, Float32(0.0)), max(b, Float32(0.0))), pdf)
+    # Returned raw (not RGB, not clamped past the per-wavelength max(fr_i,0)
+    # above): the caller must composite with an illuminant spectrum before
+    # the one-time spectral_sample_to_rgb conversion -- see this function's
+    # docstring and _nee_weight_measured. Converting here in isolation was
+    # the previous (buggy) behavior: it implicitly assumed an equal-energy
+    # illuminant, whose white point doesn't match sRGB's D65 reference, which
+    # biased neutral/blue reflectances toward violet.
+    return (fr_scaled, pdf)
 
 @always_inline
 def bxdf_pdf_measured(
@@ -611,7 +627,21 @@ def bxdf_sample_measured(
     if sigma_val <= Float32(0.0) or abs_cos_wi <= Float32(0.0):
         return (wi, RGB(Float32(0.0)), Float32(0.0), False)
     var fr_scaled = fr * (ndf_val / (Float32(4.0) * sigma_val * abs_cos_wi))
-    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, fr_scaled, wavelengths)
+
+    # This is a bounce-continuation sample: there is no specific light to
+    # composite with yet (unlike _nee_weight_measured, which has ls.Li), so
+    # -- matching every other material's indirect-bounce convention -- we
+    # composite against a neutral D65 illuminant shape before the one-time
+    # RGB conversion. Converting the bare reflectance alone (the previous,
+    # buggy behavior) implicitly assumes an equal-energy illuminant, whose
+    # white point doesn't match sRGB's D65 reference and biased neutral/blue
+    # reflectances toward violet -- see bxdf_eval_measured's docstring.
+    var illum0 = cie_d65_runtime(spectral_d65, wavelengths.get(0))
+    var illum1 = cie_d65_runtime(spectral_d65, wavelengths.get(1))
+    var illum2 = cie_d65_runtime(spectral_d65, wavelengths.get(2))
+    var illum3 = cie_d65_runtime(spectral_d65, wavelengths.get(3))
+    var fr_lit = SpectralSample(fr_scaled.v0 * illum0, fr_scaled.v1 * illum1, fr_scaled.v2 * illum2, fr_scaled.v3 * illum3)
+    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, fr_lit, wavelengths)
 
     var jacobian = Float32(4.0) * wo_dot_wm * max(Float32(2.0) * PI * PI * u_wm_x * sin_theta_m, Float32(1e-6))
     if jacobian <= Float32(0.0):
@@ -621,7 +651,11 @@ def bxdf_sample_measured(
     if flip_wi:
         wi = -wi
 
-    return (wi, RGB(max(r, Float32(0.0)), max(g, Float32(0.0)), max(b, Float32(0.0))), pdf, True)
+    # No post-conversion max(,0) clamp -- see bxdf_eval_measured's comment
+    # above the same pattern for why (out-of-sRGB-gamut negative red is
+    # legitimate for a saturated measured blue, and clamping it away here
+    # inflates the accumulated red channel, reading as violet).
+    return (wi, RGB(r, g, b), pdf, True)
 
 # ── NEE weight (mirrors bxdf.mojo's _nee_weight_simple / _nee_weight_hair) ──
 
@@ -642,7 +676,15 @@ def _nee_weight_measured(
     that function's flat (mat_kind, alb, alpha) signature since it needs the
     full MeasuredBRDF_C descriptor + wavelengths, same reason hair has its
     own _nee_weight_hair. Projects wo/ls.wi into the local (tangent,
-    bitangent, normal) frame bxdf_eval_measured expects."""
+    bitangent, normal) frame bxdf_eval_measured expects.
+
+    Mirrors _nee_weight_simple_via_spectral (bxdf.mojo): bxdf_eval_measured
+    returns a RAW spectral reflectance (not RGB -- see its docstring), which
+    must be composited with the light's own spectral radiance (via
+    rgb_illuminant_to_spectral_sample on ls.Li) BEFORE the one-time
+    spectral_sample_to_rgb conversion. Converting the bare reflectance alone
+    would (as it previously did) implicitly assume an equal-energy
+    illuminant, biasing neutral/blue reflectances toward violet."""
     if not ls.valid:
         return RGB(Float32(0.0))
     var cos_s = dot(normal, ls.wi)
@@ -650,12 +692,16 @@ def _nee_weight_measured(
         return RGB(Float32(0.0))
     var wo_l = SIMD[DType.float32, 3](dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
     var wi_l = SIMD[DType.float32, 3](dot(ls.wi, tangent), dot(ls.wi, bitangent), dot(ls.wi, normal))
-    var (f, pdf_bsdf) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-    if f.r <= Float32(0.0) and f.g <= Float32(0.0) and f.b <= Float32(0.0):
+    var (fr_spectral, pdf_bsdf) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    if fr_spectral.v0 <= Float32(0.0) and fr_spectral.v1 <= Float32(0.0) and fr_spectral.v2 <= Float32(0.0) and fr_spectral.v3 <= Float32(0.0):
         return RGB(Float32(0.0))
+    var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
+    var product = fr_spectral * li_spectral
+    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, product, wavelengths)
+    var f_times_li = RGB(r, g, b)
     if ls.is_delta:
-        return f * ls.Li * cos_s
+        return f_times_li * cos_s
     if ls.pdf <= Float32(0.0):
         return RGB(Float32(0.0))
     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
-    return f * ls.Li * (cos_s * mis_w / ls.pdf)
+    return f_times_li * (cos_s * mis_w / ls.pdf)

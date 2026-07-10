@@ -1326,6 +1326,18 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     var mb = ctx.measured_brdfs[Int(mat.measured_idx)]
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+
+    # NEE runs unconditionally, BEFORE the BSDF-sample validity checks below
+    # -- matches pbrt's own design, where direct lighting is independent of
+    # whether BSDF sampling succeeds (MeasuredBxDF::f() only bails out on a
+    # degenerate half-vector, not on "the self-sampled reflection direction
+    # happened to land below the horizon"). The tabulated lobe frequently
+    # samples a sub-horizon wi near grazing angles (e.g. the front of a car
+    # body), and gating NEE on that sample's validity was discarding real,
+    # correctly-lit direct illumination at exactly those pixels -- confirmed
+    # against the pbrt reference showing they should stay lit, not black.
+    _shade_measured_nee[enqueue_shadow](path_ptr, ctx, mb, tangent, bitangent, normal, wo, hit_point, pcg)
+
     var wo_l = SIMD[DType.float32, 3](dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
     var (wi_l, f, pdf, valid) = bxdf_sample_measured(mb, wo_l, pcg.next_float(), pcg.next_float(), path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
     path_ptr[].pcgState = pcg.state
@@ -1342,9 +1354,6 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     if cos_wi <= Float32(0.0):
         path_ptr[].active = 0
         return
-
-    _shade_measured_nee[enqueue_shadow](path_ptr, ctx, mb, tangent, bitangent, normal, wo, hit_point, pcg)
-    path_ptr[].pcgState = pcg.state
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
