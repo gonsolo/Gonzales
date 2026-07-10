@@ -1,8 +1,9 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
+from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
@@ -60,6 +61,11 @@ struct ShadeContext:
     # memory) — host pointers on CPU, device pointers on GPU (see gpu.mojo's
     # ShadeContext construction sites).
     var spectral:       SpectralHandle
+    # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file,
+    # indexed by Material_C.measured_idx (see measured_bsdf.mojo's loader).
+    # Host pointer on CPU; dangling on GPU call sites until Stage 3 uploads
+    # these as device buffers.
+    var measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin]
 
 @always_inline
 def _shading_normal(
@@ -1230,6 +1236,136 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].pcgState = pcg.state
     else:
         _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat_eff.albedo)
+
+
+# ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────
+# The real MeasuredBxDF, not an approximation — see measured_bsdf.mojo's
+# loader + measured_bxdf_eval.mojo's f/Sample_f/PDF port. Always glossy
+# reflection (never delta, never transmissive), isotropic in practice (see
+# the loader's isotropic-only scope note), so an arbitrary Frisvad tangent
+# frame is fine — no UV alignment needed (measured materials aren't
+# anisotropic in this scene corpus).
+@always_inline
+def _shade_measured_nee[enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    ctx: ShadeContext,
+    mb: MeasuredBRDF_C,
+    tangent: SIMD[DType.float32, 3], bitangent: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
+    wo: SIMD[DType.float32, 3],
+    hit_point: SIMD[DType.float32, 3],
+    mut pcg: PCG32,
+):
+    """Distant + point + sphere + area + infinite-light NEE for a measured
+    surface — same 5-light-type shape as _shade_conductor_nee, with
+    _nee_weight_measured in place of _nee_weight_simple_via_spectral (which
+    can't take a MeasuredBRDF_C, same reason hair has its own NEE)."""
+    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    var w_area = _nee_weight_measured(ls_area, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+    if not w_area.is_black():
+        var contrib_area = path_ptr[].throughput * w_area
+        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
+
+    for dl_i in range(ctx.lights.distant_count):
+        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
+        var w_d = _nee_weight_measured(ls_d, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+        if not w_d.is_black():
+            var contrib_d = path_ptr[].throughput * w_d
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d)
+
+    for pl_i in range(ctx.lights.point_count):
+        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
+        var w_p = _nee_weight_measured(ls_p, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+        if not w_p.is_black():
+            var contrib_p = path_ptr[].throughput * w_p
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
+
+    for sph_i in range(ctx.lights.sphere_count):
+        var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
+        var w_sph = _nee_weight_measured(ls_sph, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+        if not w_sph.is_black():
+            var contrib_sph = path_ptr[].throughput * w_sph
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
+
+    for inf_i in range(ctx.lights.infinite_count):
+        var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var w_e = _nee_weight_measured(ls_e, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+        if not w_e.is_black():
+            var contrib_e = path_ptr[].throughput * w_e
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
+
+@always_inline
+def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: Intersection_C,
+    ctx: ShadeContext,
+    mat: Material_C,
+):
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, ctx.meshes)
+    if not ok:
+        path_ptr[].active = 0
+        return
+
+    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+
+    var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
+    var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
+    var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+
+    if mat.measured_idx < Int32(0):
+        # Load failure fallback (see material_builder.mojo) -- render as flat
+        # black rather than dereferencing a nonexistent measured_brdfs entry.
+        path_ptr[].active = 0
+        return
+    var mb = ctx.measured_brdfs[Int(mat.measured_idx)]
+
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var wo_l = SIMD[DType.float32, 3](dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
+    var (wi_l, f, pdf, valid) = bxdf_sample_measured(mb, wo_l, pcg.next_float(), pcg.next_float(), path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+    path_ptr[].pcgState = pcg.state
+
+    if not valid or pdf <= Float32(0.0):
+        path_ptr[].active = 0
+        return
+
+    var wi = tangent * wi_l[0] + bitangent * wi_l[1] + normal * wi_l[2]
+    var wilen = dot(wi, wi)
+    if wilen > Float32(0.0):
+        wi = wi * (Float32(1.0) / sqrt(wilen))
+    var cos_wi = dot(wi, normal)
+    if cos_wi <= Float32(0.0):
+        path_ptr[].active = 0
+        return
+
+    _shade_measured_nee[enqueue_shadow](path_ptr, ctx, mb, tangent, bitangent, normal, wo, hit_point, pcg)
+    path_ptr[].pcgState = pcg.state
+
+    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+        path_ptr[].albedo = f
+    # General non-delta BxDFSample convention (f already includes the
+    # measured BRDF's own 1/AbsCosTheta(wi) term, matching pbrt's own fr —
+    # this cos_wi is the separate Monte-Carlo importance-sampling weight,
+    # not a duplicate of that internal term; no analytic cancellation exists
+    # for a tabulated BxDF the way there is for VNDF-sampled GGX conductor).
+    path_ptr[].throughput *= f * (cos_wi / pdf)
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].lastBsdfPdf = bxdf_pdf_measured(mb, wo_l, wi_l)
+    path_ptr[].bounce += 1
+    if path_ptr[].bounce > 1:
+        var lum = path_ptr[].throughput.luma()
+        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        if pcg.next_float() < q:
+            path_ptr[].active = 0
+        else:
+            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+    path_ptr[].pcgState = pcg.state
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.
@@ -2403,6 +2539,8 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.hair:
         comptime if not use_gpu:
             shade_hair[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
+    elif mat.type == MatKind.measured:
+        shade_measured[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     else:
         path_ptr[].active = 0
 
@@ -2669,6 +2807,7 @@ def shade_core_cpu_nee(
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
     spectral: SpectralHandle = null_spectral_handle(),
+    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2681,7 +2820,7 @@ def shade_core_cpu_nee(
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
-        spectral=spectral,
+        spectral=spectral, measured_brdfs=measured_brdfs,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=distantLightCount,

@@ -1285,6 +1285,13 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
                         midx = Int32(j)
                     break
             mats[i].measured_idx = midx
+            if midx >= Int32(0):
+                # Real MeasuredBxDF loaded successfully -- route through the
+                # real algorithm (shading.mojo's shade_measured) instead of
+                # material_builder.mojo's achromatic rough-conductor
+                # approximation (material_kind, still MatKind.conductor,
+                # stays as the graceful fallback for a load failure above).
+                mats[i].type = MatKind.measured
         mats[i].checker_tex1   = nm3.checker_tex1
         mats[i].checker_tex2   = nm3.checker_tex2
         mats[i].checker_uscale = nm3.checker_uscale
