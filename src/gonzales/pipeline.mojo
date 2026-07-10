@@ -9,7 +9,7 @@ from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
 from .sppm import sppm_render, sppm_render_gpu
-from .bdpt import bdpt_render, bdpt_render_gpu
+from .bdpt import bdpt_render, bdpt_render_gpu, vcm_render
 from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
@@ -479,6 +479,8 @@ def parse_and_render(
     use_guide: Bool = False,
     use_bdpt: Bool = False,
     bdpt_spp: Int32 = Int32(64),
+    use_vcm: Bool = False,
+    vcm_alpha: Float32 = Float32(0.5),
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -508,6 +510,11 @@ def parse_and_render(
     var crop_y1px = Int32(ceil(psc[0].crop_y1 * Float32(fh)))
     var crop_w = crop_x1px - crop_x0px
     var crop_h = crop_y1px - crop_y0px
+
+    if use_gpu and use_vcm:
+        print("--vcm has no GPU port yet (see vcm_render's docstring) -- run without --gpu")
+        mojo_parsed_free(psc)
+        return Int32(-1)
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
@@ -601,6 +608,21 @@ def parse_and_render(
         print("Warning: scene has no geometry, skipping render")
         mojo_parsed_free(psc)
         return Int32(0)
+    elif use_vcm:
+        # CPU only for now (see vcm_render's docstring) -- blends BDPT
+        # connections with progressive SPPM merging per pixel. Reuses the
+        # SAME sppm-param resolution bdpt/sppm's own branches use, and
+        # bdpt_spp for the connection-pass sample count.
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
+        var resolved = _resolve_sppm_params(psc, sppm_photons, sppm_radius)
+        var ret = vcm_render(
+            psc, sd[0], Int(bdpt_spp),
+            Int(sppm_passes), Int(resolved[0]), resolved[1],
+            vcm_alpha, no_denoise, verbose,
+        )
+        sd.free()
+        mojo_parsed_free(psc)
+        return ret
     elif use_bdpt:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var ret = bdpt_render(psc, sd[0], Int(bdpt_spp), no_denoise, verbose)

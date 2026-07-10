@@ -1644,16 +1644,22 @@ def _sppm_finalize_one_pixel(
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def sppm_render(
+def _sppm_render_core(
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,
-    no_denoise: Bool,
     verbose:  Bool,
-) -> Int32:
-    """Stochastic Progressive Photon Mapping main loop."""
+) -> Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
+    """Stochastic Progressive Photon Mapping main loop, factored out of
+    `sppm_render` so `vcm_render` (bdpt.mojo) can blend this progressive
+    merge estimate with BDPT's connection-only estimate before the shared
+    aux-buffer/denoise/write tail runs once. Returns (ok, pixels,
+    albedo_pixels) -- `ok=False` (both pointers null/unusable) when the
+    scene has no lights, mirroring the old function's `Int32(-1)` early
+    return. Same buffer contract as `_bdpt_render_core`: caller-owned
+    `n_pix*3` Float32 arrays, iso-scaled/max_comp-clamped, NOT yet denoised."""
     var fw = Int(psc[0].film_w)
     var fh = Int(psc[0].film_h)
     var n_pix = fw * fh
@@ -1662,7 +1668,8 @@ def sppm_render(
 
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
         print("SPPM: no lights in scene, cannot emit photons")
-        return Int32(-1)
+        return Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]](
+            False, UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling())
 
     print("SPPM: " + String(fw) + "x" + String(fh)
           + " " + String(n_passes) + " passes x "
@@ -1739,11 +1746,34 @@ def sppm_render(
 
     parallelize[finalize_one](n_pix)
 
-    # Denoise (never wired up before -- no_denoise was a dead parameter):
-    # SPPMPixel.alb already gives the right albedo AOV (see
-    # _sppm_finalize_albedo_one_pixel's docstring); normals/depth come from
-    # the same integrator-agnostic render_aux_buffers the plain path tracer
-    # and BDPT use.
+    heads.free()
+    photons.free()
+    vps.free()
+    return Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]](
+        True, out_pixels, albedo_pixels)
+
+def sppm_render(
+    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    sd:       SceneDescriptor2_C,
+    n_passes: Int,
+    n_photons_per_pass: Int,
+    initial_radius: Float32,
+    no_denoise: Bool,
+    verbose:  Bool,
+) -> Int32:
+    """CLI-facing SPPM entry point: run the progressive photon-mapping
+    estimator (`_sppm_render_core`), then denoise (SPPMPixel.alb as the
+    albedo AOV, normals/depth from the same integrator-agnostic
+    render_aux_buffers the plain path tracer and BDPT use) and write. See
+    bdpt.mojo's `vcm_render` for the sibling entry point that blends this
+    with BDPT's connection-only estimate instead of writing
+    `_sppm_render_core`'s output directly."""
+    var (ok, out_pixels, albedo_pixels) = _sppm_render_core(
+        psc, sd, n_passes, n_photons_per_pass, initial_radius, verbose)
+    if not ok:
+        return Int32(-1)
+
+    var n_pix = Int(psc[0].film_w) * Int(psc[0].film_h)
     var normals = alloc[Float32](n_pix * 3)
     var depth = alloc[Float32](n_pix)
     var sd_local = sd
@@ -1761,9 +1791,6 @@ def sppm_render(
                     psc[0].film_filename, Int32(32), Int32(32))
 
     out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
-    heads.free()
-    photons.free()
-    vps.free()
     return Int32(0)
 
 

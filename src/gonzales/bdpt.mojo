@@ -29,7 +29,7 @@ from .sampling import power_heuristic
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell
+from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell, _sppm_render_core
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .gpu import GpuSceneHandle
@@ -1758,15 +1758,19 @@ def _connect(
 
 # ── Main BDPT render ──────────────────────────────────────────────────────────
 
-def bdpt_render(
+def _bdpt_render_core(
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sd:       SceneDescriptor2_C,
     n_spp:    Int,
-    no_denoise: Bool,
     verbose:  Bool,
-) -> Int32:
+) -> Tuple[UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
     """Bidirectional Path Tracing main loop (Light Vertex Cache architecture —
-    see the module docstring above) — one output EXR per pixel.
+    see the module docstring above), factored out of `bdpt_render` so
+    `vcm_render` (see below) can blend this connection-only estimate with a
+    separately-computed progressive SPPM merge estimate before the shared
+    aux-buffer/denoise/write tail runs once. Returns (pixels, albedo_pixels),
+    each a caller-owned `n_pix*3` Float32 buffer (iso-scaled, max_comp-
+    clamped, NOT yet denoised) — same contract `_sppm_render_core` follows.
 
     Each spp sample rebuilds a fresh shared Light Vertex Cache from
     `n_light_paths` independent light subpaths (not paired to any one
@@ -1881,7 +1885,8 @@ def bdpt_render(
     scratch_light.free(); scratch_cam.free(); lvc.free(); lvc_counter.free()
     merge_heads.free(); merge_next.free()
 
-    # Clamp and write image
+    # Clamp into caller-owned output buffers (no denoise/write here -- see
+    # bdpt_render/vcm_render, this function's two callers, for the tail).
     var inv_spp = iso_scale / Float32(n_spp)
     var pixels = alloc[Float32](n_pix * 3)
     for i in range(n_pix):
@@ -1895,11 +1900,6 @@ def bdpt_render(
         pixels[i*3+2] = c.b
     buf.free()
 
-    # Denoise (never wired up before -- no_denoise was a dead parameter):
-    # first-hit albedo (accumulated above) as the material guide, plus a
-    # fresh unjittered normals/depth pass via the SAME render_aux_buffers the
-    # plain path tracer uses (integrator-agnostic -- one primary ray per
-    # pixel against the BVH, no dependency on BDPT's own path state).
     var albedo_pixels = alloc[Float32](n_pix * 3)
     var inv_spp_alb = Float32(1) / Float32(n_spp)
     for i in range(n_pix):
@@ -1909,11 +1909,117 @@ def bdpt_render(
         albedo_pixels[i*3+2] = a.b
     albedo_buf.free()
 
+    return Tuple[UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]](pixels, albedo_pixels)
+
+def bdpt_render(
+    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    sd:       SceneDescriptor2_C,
+    n_spp:    Int,
+    no_denoise: Bool,
+    verbose:  Bool,
+) -> Int32:
+    """CLI-facing BDPT entry point: run the connection-only estimator
+    (`_bdpt_render_core`), then denoise (first-hit albedo AOV + a fresh
+    unjittered normals/depth pass via the SAME render_aux_buffers the plain
+    path tracer uses -- integrator-agnostic, no dependency on BDPT's own
+    path state) and write. See `vcm_render` for the sibling entry point that
+    blends this with a progressive SPPM merge estimate instead of writing
+    `_bdpt_render_core`'s output directly."""
+    var n_pix = Int(psc[0].film_w) * Int(psc[0].film_h)
+    var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, verbose)
+
     var normals = alloc[Float32](n_pix * 3)
     var depth = alloc[Float32](n_pix)
     var sd_local = sd
-    render_aux_buffers(r2c, c2w, Int32(0), Int32(0), psc[0].film_w, psc[0].film_h,
-                        UnsafePointer(to=sd_local), normals, depth)
+    render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
+                        psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+
+    var denoised = alloc[Float32](n_pix * 3)
+    if no_denoise:
+        for i in range(n_pix * 3): denoised[i] = pixels[i]
+    else:
+        denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+
+    _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+    pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+    return Int32(0)
+
+# ── VCM: pixel-level blend of BDPT connections + progressive SPPM merging ────
+# The REAL Georgiev et al. 2012 VCM combines connection and merging with one
+# continuous per-VERTEX MIS weight, inside a single shared bounce loop --
+# that requires deriving a correct weight for this codebase's non-standard
+# uniform-subsample LVC connection estimator (see the module docstring's
+# opening paragraphs), unresolved, and reconciling BDPT's per-sample-fresh
+# camera retrace with progressive merging's need for a query point that's
+# FIXED across passes for its radius-shrinkage convergence proof to hold
+# (see _VCM_MERGE_PROB's docstring: this is exactly why Stage 1's in-loop
+# fixed-radius merge doesn't converge to zero bias as spp -> infinity). Both
+# are real, open, multi-session problems -- not attempted here.
+#
+# This is the pragmatic middle ground: run BDPT's connection-only estimator
+# (`_bdpt_render_core`, unmodified, still the same correctness-verified code
+# `bdpt_render` uses) and SPPM's progressive photon-mapping estimator
+# (`_sppm_render_core`, likewise unmodified -- its progressive per-pixel
+# radius shrinkage across `n_passes` IS the real, proven fix for Stage 1's
+# non-convergent fixed-radius merge), each to completion as independent,
+# already-converging estimates of the same pixel value, then blend them
+# PER PIXEL: `final = alpha*merge + (1-alpha)*connect`. This is a valid,
+# unbiased combination for the same reason `_VCM_MERGE_PROB`'s per-vertex
+# stochastic selection is (E[final] = alpha*E[merge] + (1-alpha)*E[connect]
+# = alpha*I + (1-alpha)*I = I when both estimators target the same I) --
+# just applied once per pixel instead of once per vertex per sample, so it
+# needs no rescaling either. It captures VCM's practical payoff (SPPM's
+# noise-free caustics + BDPT's noise-free general glossy/indirect, combined
+# so neither technique's weakness dominates) without the vertex-level MIS
+# weight or the progressive-merge-inside-BDPT's-loop architecture change --
+# both remain open work for a real Stage 2/3.
+def vcm_render(
+    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    sd:       SceneDescriptor2_C,
+    n_spp:            Int,    # BDPT connection-pass sample count
+    n_passes:         Int,    # SPPM progressive merge-pass count
+    n_photons_per_pass: Int,
+    initial_radius:   Float32,
+    alpha:            Float32,  # 0 = pure BDPT, 1 = pure SPPM, blend between
+    no_denoise: Bool,
+    verbose:  Bool,
+) -> Int32:
+    """Combined-estimator entry point: see the module comment directly above
+    for the design. Runs BDPT and SPPM to completion independently, blends
+    per pixel, then denoises/writes once (same tail as bdpt_render/
+    sppm_render)."""
+    print("VCM: BDPT " + String(n_spp) + " spp (connect)  +  SPPM " + String(n_passes)
+          + " passes x " + String(n_photons_per_pass) + " photons (merge)  alpha=" + String(alpha))
+
+    var (bdpt_pixels, bdpt_albedo) = _bdpt_render_core(psc, sd, n_spp, verbose)
+    var (sppm_ok, sppm_pixels, sppm_albedo) = _sppm_render_core(
+        psc, sd, n_passes, n_photons_per_pass, initial_radius, verbose)
+
+    var n_pix = Int(psc[0].film_w) * Int(psc[0].film_h)
+    var pixels = alloc[Float32](n_pix * 3)
+    var albedo_pixels = alloc[Float32](n_pix * 3)
+    if sppm_ok:
+        var beta = Float32(1) - alpha
+        for i in range(n_pix * 3):
+            pixels[i] = alpha * sppm_pixels[i] + beta * bdpt_pixels[i]
+            albedo_pixels[i] = alpha * sppm_albedo[i] + beta * bdpt_albedo[i]
+        sppm_pixels.free(); sppm_albedo.free()
+    else:
+        # No lights for SPPM to trace photons from (shouldn't normally
+        # happen if BDPT itself found lights) -- fall back to pure BDPT
+        # rather than blending in garbage/dangling data.
+        print("VCM: SPPM found no lights, falling back to pure BDPT")
+        for i in range(n_pix * 3):
+            pixels[i] = bdpt_pixels[i]
+            albedo_pixels[i] = bdpt_albedo[i]
+    bdpt_pixels.free(); bdpt_albedo.free()
+
+    var normals = alloc[Float32](n_pix * 3)
+    var depth = alloc[Float32](n_pix)
+    var sd_local = sd
+    render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
+                        psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
 
     var denoised = alloc[Float32](n_pix * 3)
     if no_denoise:
