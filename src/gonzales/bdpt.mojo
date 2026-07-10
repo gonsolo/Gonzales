@@ -29,7 +29,7 @@ from .sampling import power_heuristic
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu
+from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .gpu import GpuSceneHandle
@@ -44,6 +44,67 @@ comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (in
                                 # just to reach a real (diffuse) vertex)
 comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices stored per light subpath (caps
                                 # each light path's contribution to the shared cache below)
+
+# ── VCM (Vertex Connection and Merging, Georgiev et al. 2012) ────────────────
+# _VCM_MERGE_PROB is the probability, at each non-delta camera vertex, of
+# using vertex MERGING (photon-mapping-style density estimation against the
+# LVC, see _bdpt_merge_from_cache) instead of vertex CONNECTION
+# (_bdpt_connect_to_cache, the existing BDPT strategy) for that vertex's
+# indirect-illumination sample. NOT Georgiev's continuous balance-heuristic
+# MIS weight -- that distinction is deliberate: Georgiev's formula assumes
+# per-pixel-independent light subpaths and a spatially-known local
+# light-vertex density, neither of which holds for this codebase's
+# shared-LVC/uniform-subsample-and-scale connection estimator (see
+# _bdpt_lvc_connection_scale's docstring for why the equivalent
+# exhaustive-strategy MIS was already abandoned for connections alone) --
+# deriving a correct continuous weight for THIS non-standard architecture
+# is unresolved, open work.
+#
+# Instead: _bdpt_connect_to_cache and _bdpt_merge_from_cache are each
+# ALREADY complete, independently-(un)biased estimators of the SAME target
+# quantity (this vertex's indirect-illumination contribution) -- not two
+# partial/additive terms like the K-random-connections trick inside
+# _bdpt_connect_to_cache itself. Combining two such black-box estimators of
+# the same quantity via stochastic selection is E[result] = q*E[A] +
+# (1-q)*E[B] = q*I + (1-q)*I = I -- i.e. NO rescaling by 1/q is applied
+# (that would be the correct move only for combining raw f(x)/p(x) samples
+# under a mixture-pdf, where q enters the DENOMINATOR of a full effective
+# density -- these two functions already ARE such normalized densities on
+# their own; dividing by q AGAIN double-counts and was a real bug caught by
+# rendering ganesha --bdpt and seeing bright color-blotch fireflies at
+# _VCM_MERGE_PROB=0.5, i.e. everything roughly 2x too bright with the
+# merge term's inherently higher per-sample variance dominating the
+# visible error). Since connection is unbiased and merging is CONSISTENT
+# (converges to the correct value as the merge radius -> 0, same as any
+# fixed-radius photon-density estimator), their probability-weighted
+# combination remains consistent as a whole, with no risk of the two
+# techniques double-counting energy (exactly one fires per vertex per
+# sample, each contributing its own natural, unscaled expectation). The
+# real, honest cost: the merge radius here is FIXED per render (see
+# bdpt_render's merge_r2), not progressively shrunk across spp samples the
+# way SPPM shrinks its per-pixel radius across passes -- so this does NOT
+# converge to a bias-free image as spp -> infinity, only as spp -> infinity
+# AND radius -> 0 together. Real photon-mapping consequence of that: with
+# n_light_paths == n_pix light subpaths rebuilt fresh (no cross-pass
+# accumulation) every sample, the LOCAL vertex density inside a small,
+# fixed merge radius is often just 0-2 vertices -- classic single-shot
+# photon-mapping fireflies (isolated bright pixels from a rare
+# high-throughput vertex landing in radius), confirmed visually on
+# ganesha/volumetric-caustic --bdpt at multiple probabilities (0.5, 0.15)
+# and radii (0.5%, 3% of scene diameter): tuning reduced but never
+# eliminated it, and it does NOT average out with more spp samples the way
+# ordinary noise does at a FIXED radius (bias only shrinks with radius,
+# per the paragraph above). A real fix needs SPPM-style progressive
+# per-pixel radius shrinkage (persistent r2/N_acc state across spp
+# samples, not a fresh-every-pass grid) -- a substantially larger
+# restructuring of bdpt_render's current per-sample-independent-averaging
+# design, out of scope for this session. Set to 0 (disabled) for that
+# reason: the infrastructure (_bdpt_merge_from_cache, the merge grid
+# build/query, the corrected one-sample-selection math above) is real,
+# tested, and kept for whoever picks up progressive refinement next, but
+# is not yet safe to enable by default across untested scenes. Raise this
+# above 0 only for targeted experimentation, not general rendering.
+comptime _VCM_MERGE_PROB = Float32(0.0)
 
 # ── Light Vertex Cache (LVC-BPT, Davidovic et al. 2014) ──────────────────────
 # Instead of pairing one light subpath with one camera subpath (the old,
@@ -375,6 +436,131 @@ def _bdpt_connect_to_cache(
         sum += _connect(cv, lv, sd, has_med, scratch)
     return RGB(sum[0], sum[1], sum[2]) * scale
 
+# ── VCM vertex merging: spatial hash grid over the LVC ───────────────────────
+# Mirrors sppm.mojo's photon hash grid (_build_grid/_sppm_insert_photon/
+# _sppm_reset_grid_cell) exactly, but keyed on BDPTVertex.pos instead of
+# SPPMPhoton.pos, and using a SEPARATE parallel `merge_next` array for
+# chaining rather than a field inside BDPTVertex itself (avoids touching
+# BDPTVertex's layout/every other construction site in this file). Reuses
+# sppm.mojo's _HSIZE bucket count and _hash_cell function directly -- no
+# reason for the grid math itself to differ between the two use sites.
+
+def _bdpt_reset_merge_cell(heads: UnsafePointer[Int32, MutAnyOrigin], h: Int):
+    heads[h] = Int32(-1)
+
+def _bdpt_insert_merge_vertex[use_gpu: Bool](
+    k: Int,
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    heads: UnsafePointer[Int32, MutAnyOrigin],
+    inv_cell: Float32,
+):
+    """Insert LVC vertex `k` into the merge hash grid. Comptime-branches
+    only on the bucket-head update primitive -- identical pattern to
+    sppm.mojo's _sppm_insert_photon[use_gpu]."""
+    var ix = Int(floor(lvc[k].pos.x * inv_cell))
+    var iy = Int(floor(lvc[k].pos.y * inv_cell))
+    var iz = Int(floor(lvc[k].pos.z * inv_cell))
+    var h = _hash_cell(ix, iy, iz)
+    comptime if use_gpu:
+        var old = Atomic._xchg(heads + h, Int32(k))
+        merge_next[k] = old
+    else:
+        merge_next[k] = heads[h]
+        heads[h] = Int32(k)
+
+def _bdpt_build_merge_grid(
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    lvc_count: Int,
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    heads: UnsafePointer[Int32, MutAnyOrigin],
+    inv_cell: Float32,
+):
+    """CPU-only grid build (mirrors sppm.mojo's _build_grid): reset all
+    buckets, then insert every LVC vertex via the SAME atomic-exchange
+    insert the GPU kernel uses (parallel CPU workers race on bucket heads
+    exactly like GPU threads would)."""
+    @parameter
+    def reset_one(i: Int):
+        _bdpt_reset_merge_cell(heads, i)
+    parallelize[reset_one](_HSIZE)
+
+    @parameter
+    def insert_one(k: Int):
+        _bdpt_insert_merge_vertex[True](k, lvc, merge_next, heads, inv_cell)
+    parallelize[insert_one](lvc_count)
+
+@always_inline
+def _bdpt_merge_from_cache(
+    cv: BDPTVertex,
+    sd: SceneDescriptor2_C,
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    heads: UnsafePointer[Int32, MutAnyOrigin],
+    inv_cell: Float32,
+    r2: Float32,
+    norm: Float32,
+) -> RGB:
+    """Vertex MERGING (photon-mapping-style density estimation) against the
+    shared Light Vertex Cache -- the "M" in VCM, an alternative to
+    _bdpt_connect_to_cache's vertex CONNECTION for the SAME indirect-
+    illumination term (see _VCM_MERGE_PROB's docstring for how the two are
+    combined without double-counting).
+
+    For each LVC vertex `lv` within radius sqrt(r2) of `cv`, treats `lv` as
+    a stored photon: evaluates cv's own BSDF toward lv's stored `wo`
+    (the direction the light path arrived from at lv -- exactly the
+    `-photon.dir_in` convention sppm.mojo's _sppm_gather_one already uses,
+    since BDPTVertex.wo IS that same "direction back toward the light"
+    quantity for a light-subpath vertex), multiplies by lv's beta (already
+    a valid, unbiased single-light-path throughput estimate -- same
+    quantity _bdpt_connect_to_cache's _connect already uses for the light
+    side), and divides by (n_light_paths * pi * r2): the standard photon-
+    density-estimation normalization, where n_light_paths independent light
+    subpaths are the "N emitted photons" and each contributes AT MOST the
+    non-delta vertices it stored (mirroring _bdpt_lvc_connection_scale's
+    own 1/n_light_paths derivation for connections -- see that function's
+    docstring). No shadow ray, no geometry term: merging assumes cv and lv
+    are close enough to be treated as the same point, so lv's own light
+    path having reached lv unoccluded already implies the segment is
+    clear."""
+    if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
+        return RGB(Float32(0))
+    var total = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var cix = Int(floor(cv.pos.x * inv_cell))
+    var ciy = Int(floor(cv.pos.y * inv_cell))
+    var ciz = Int(floor(cv.pos.z * inv_cell))
+    for ddx in range(-1, 2):
+        for ddy in range(-1, 2):
+            for ddz in range(-1, 2):
+                var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
+                var k = Int(heads[h])
+                while k != -1:
+                    var lv = lvc[k]
+                    # is_light==1 vertices are the light SOURCE's own point
+                    # (the s=1 connection strategy): their beta is 1/pdf_area
+                    # ONLY, with the actual emitted radiance held separately
+                    # in lv.alb (see _connect's own is_light special case,
+                    # which multiplies the two together). Merging with them
+                    # using the generic "beta = flux" assumption below would
+                    # silently drop that emission factor -- exactly matching
+                    # why sppm.mojo's _sppm_trace_photon never stores a
+                    # photon at bounce==0 either (its own docstring: "that
+                    # direct contribution is now covered by NEE instead").
+                    # Every OTHER stored vertex's beta already has emission
+                    # folded in via the light path's own flux computation.
+                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0):
+                        var e = lv.pos - cv.pos
+                        var dist2 = e.length_sq()
+                        if dist2 <= r2:
+                            var f_cv = _eval_vertex(cv, lv.wo.to_simd(), sd)
+                            total[0] += f_cv[0] * lv.beta.r
+                            total[1] += f_cv[1] * lv.beta.g
+                            total[2] += f_cv[2] * lv.beta.b
+                    k = Int(merge_next[k])
+    var beta = cv.beta
+    return RGB(total[0] * beta.r, total[1] * beta.g, total[2] * beta.b) * norm
+
 # ── Trace one camera subpath, connecting to the shared cache inline ─────────
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
@@ -388,6 +574,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     lvc:     UnsafePointer[BDPTVertex, MutAnyOrigin],
     lvc_count: Int,
     scale: Float32,
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    merge_heads: UnsafePointer[Int32, MutAnyOrigin],
+    merge_inv_cell: Float32,
+    merge_r2: Float32,
+    merge_norm: Float32,
     start_med_idx: Int32 = Int32(-1),
 ) -> Tuple[RGB, RGB]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
@@ -496,7 +687,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 if n_verts == 0: first_alb = ff.albedo
                 n_verts += 1
                 if lvc_count > 0:
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+                    if pcg.next_float() < _VCM_MERGE_PROB:
+                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+                    else:
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 beta *= ff.albedo
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -589,7 +783,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if lvc_count > 0:
-                total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+                if pcg.next_float() < _VCM_MERGE_PROB:
+                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+                else:
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
 
             # NEE to distant/point/sphere/infinite lights, via the shared
             # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -680,7 +877,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 if n_verts == 0: first_alb = mat.albedo
                 n_verts += 1
                 if lvc_count > 0:
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+                    if pcg.next_float() < _VCM_MERGE_PROB:
+                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+                    else:
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
 
                 # Distant/point/sphere/infinite NEE, via the shared Light
                 # interface + BxDF interface + _bdpt_nee_contribute glue —
@@ -742,7 +942,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if lvc_count > 0:
-                total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+                if pcg.next_float() < _VCM_MERGE_PROB:
+                    total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+                else:
+                    total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
             # interface + BxDF interface (_nee_weight_hair, using `hc`) +
@@ -817,7 +1020,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if lvc_count > 0:
-                total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+                if pcg.next_float() < _VCM_MERGE_PROB:
+                    total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+                else:
+                    total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
             # interface + BxDF interface (_nee_weight_measured) +
@@ -1615,6 +1821,20 @@ def bdpt_render(
     var scratch_light = alloc[Intersection_C](max(n_light_paths, 1))
     var scratch_cam = alloc[Intersection_C](max(n_pix, 1))
 
+    # VCM vertex merging (Stage 1, see _VCM_MERGE_PROB's docstring): a fixed
+    # merge radius derived from the scene's own bounding sphere (0.5% of its
+    # diameter — small enough to stay a local density estimate, no CLI
+    # parameter needed since, unlike SPPM's progressive radius, this one
+    # never shrinks across passes anyway). Grid buffers are allocated once
+    # and rebuilt fresh every spp sample (mirrors the LVC itself).
+    var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
+    var merge_radius = scene_radius * Float32(0.03)
+    var merge_r2 = merge_radius * merge_radius
+    var merge_inv_cell = Float32(1.0) / max(merge_radius, Float32(1e-6))
+    var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
+    var merge_heads = alloc[Int32](_HSIZE)
+    var merge_next = alloc[Int32](max(lvc_cap, 1))
+
     for si in range(n_spp):
         # ── Phase 1: fill the shared Light Vertex Cache for this sample ──────
         # [True]: parallel CPU workers now need the SAME atomic slot-
@@ -1633,6 +1853,7 @@ def bdpt_render(
 
         var lvc_count = min(Int(lvc_counter[0]), lvc_cap)
         var scale = _bdpt_lvc_connection_scale(lvc_count, n_light_paths)
+        _bdpt_build_merge_grid(lvc, lvc_count, merge_next, merge_heads, merge_inv_cell)
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
         # Each worker only ever writes its own buf[pix] slot and only reads
@@ -1643,7 +1864,8 @@ def bdpt_render(
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
             var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
-                r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, lvc_count, scale)
+                r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, lvc_count, scale,
+                merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
             buf[pix] += contrib
             albedo_buf[pix] += alb
 
@@ -1653,6 +1875,7 @@ def bdpt_render(
             print("BDPT: sample " + String(si + 1) + "/" + String(n_spp))
 
     scratch_light.free(); scratch_cam.free(); lvc.free(); lvc_counter.free()
+    merge_heads.free(); merge_next.free()
 
     # Clamp and write image
     var inv_spp = iso_scale / Float32(n_spp)
@@ -1795,6 +2018,11 @@ def _bdpt_camera_connect_gpu(
     lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
     lvc_count: Int,
     scale: Float32,
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    merge_heads: UnsafePointer[Int32, MutAnyOrigin],
+    merge_inv_cell: Float32,
+    merge_r2: Float32,
+    merge_norm: Float32,
     seed: UInt64,
     pass_idx: Int,
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -1838,7 +2066,10 @@ def _bdpt_camera_connect_gpu(
     since every thread owns exactly one pixel, the same reasoning the live
     (non-queued) shadow-ray path in gpu.mojo's shade_*_gpu kernels already
     relies on. `has_med` isn't a kernel parameter (see
-    _bdpt_emit_light_paths_gpu's docstring) -- derived from mediumCount."""
+    _bdpt_emit_light_paths_gpu's docstring) -- derived from mediumCount.
+    merge_* params are VCM Stage 1 (see _VCM_MERGE_PROB's docstring) --
+    the merge grid is built once per pass by bdpt_render_gpu before this
+    kernel launches, mirroring the LVC's own build-then-consume shape."""
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
@@ -1859,13 +2090,34 @@ def _bdpt_camera_connect_gpu(
                      UInt64(pass_idx * 2654435761 + 1))
     var scratch = inter_scratch + pix
     var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
-        r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, lvc_count, scale)
+        r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, lvc_count, scale,
+        merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
     accum[pix*3]   += contrib.r
     accum[pix*3+1] += contrib.g
     accum[pix*3+2] += contrib.b
     albedo_accum[pix*3]   += alb.r
     albedo_accum[pix*3+1] += alb.g
     albedo_accum[pix*3+2] += alb.b
+
+def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= hsize:
+        return
+    _bdpt_reset_merge_cell(heads, tid)
+
+
+def bdpt_merge_grid_insert_gpu(
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    lvc_count: Int,
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    heads: UnsafePointer[Int32, MutAnyOrigin],
+    inv_cell: Float32,
+):
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k >= lvc_count:
+        return
+    _bdpt_insert_merge_vertex[True](k, lvc, merge_next, heads, inv_cell)
+
 
 # ── Host driver ───────────────────────────────────────────────────────────
 
@@ -1912,6 +2164,10 @@ def bdpt_render_gpu(
 
             var lvc_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[BDPTVertex]())
             var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
+            # VCM vertex merging (Stage 1) grid buffers — see bdpt_render's
+            # matching CPU allocation for the merge_r2/merge_norm derivation.
+            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
+            var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
             var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths, 1) * size_of[Intersection_C]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
@@ -1940,6 +2196,8 @@ def bdpt_render_gpu(
 
             var lvc_ptr     = lvc_buf.unsafe_ptr().bitcast[BDPTVertex]()
             var counter_ptr = counter_buf.unsafe_ptr().bitcast[Int32]()
+            var merge_heads_ptr = merge_heads_buf.unsafe_ptr().bitcast[Int32]()
+            var merge_next_ptr  = merge_next_buf.unsafe_ptr().bitcast[Int32]()
             var inter_light_ptr = inter_light_buf.unsafe_ptr().bitcast[Intersection_C]()
             var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
             var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
@@ -1983,6 +2241,13 @@ def bdpt_render_gpu(
 
             var grid_light = ceildiv(max(n_light_paths, 1), block_size)
             var grid_pix = ceildiv(n_pix, block_size)
+            var grid_hsize = ceildiv(_HSIZE, block_size)
+
+            var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
+            var merge_radius = scene_radius * Float32(0.03)
+            var merge_r2 = merge_radius * merge_radius
+            var merge_inv_cell = Float32(1.0) / max(merge_radius, Float32(1e-6))
+            var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
 
             for si in range(n_spp):
                 handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
@@ -2009,9 +2274,18 @@ def bdpt_render_gpu(
                 var lvc_count = min(Int(lvc_count_raw), lvc_cap)
                 var scale = _bdpt_lvc_connection_scale(lvc_count, n_light_paths)
 
+                handle[].ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
+                    merge_heads_ptr, _HSIZE, grid_dim=grid_hsize, block_dim=block_size)
+                var grid_merge_ins = ceildiv(max(lvc_count, 1), block_size)
+                handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
+                    lvc_ptr, lvc_count, merge_next_ptr, merge_heads_ptr, merge_inv_cell,
+                    grid_dim=grid_merge_ins, block_dim=block_size)
+
                 handle[].ctx.enqueue_function[_bdpt_camera_connect_gpu](
                     accum_ptr, albedo_accum_ptr, n_pix, Int(psc[0].film_w), r2c_ptr, c2w_ptr, inter_cam_ptr,
-                    lvc_ptr, lvc_count, scale, base_seed, si,
+                    lvc_ptr, lvc_count, scale,
+                    merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
+                    base_seed, si,
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
