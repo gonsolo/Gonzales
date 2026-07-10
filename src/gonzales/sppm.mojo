@@ -25,6 +25,7 @@ from .bvh import (
     render_aux_buffers,
 )
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
+from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -683,6 +684,33 @@ def _sppm_trace_visible_point(
             vp.valid = Int32(1)
             break
 
+        elif mat.type == MatKind.measured:
+            # Tabulated Dupuy & Jakob MeasuredBxDF, no delta lobe -- same
+            # single-terminal-surface convention as diffuse/hair, via the
+            # shared bxdf.mojo/measured_bxdf_eval.mojo interface
+            # shading.mojo/bdpt.mojo already use.
+            var gn_m: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var sph_m = sd.spheres[Int(inter.primId.id1)]
+                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
+            else:
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn_m, ray_dir) > Float32(0.0):
+                gn_m = gn_m * Float32(-1.0)
+            if mat.measured_idx < Int32(0):
+                # Load failure fallback -- stop this path, matches
+                # shading.mojo's shade_measured.
+                break
+            vp.pos = hit
+            vp.normal = vec3f(gn_m)
+            vp.alb = mat.albedo
+            vp.mat_kind = Int32(3)
+            vp.wo = vec3f((-rd).to_simd())
+            vp.mat_idx = Int32(mat_idx)
+            vp.is_volume = Int32(0)
+            vp.valid = Int32(1)
+            break
+
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
@@ -1029,6 +1057,47 @@ def _sppm_trace_photon[use_gpu: Bool](
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
 
+        elif mat.type == MatKind.measured:
+            # No delta lobe, so always store (same depth-0 guard as the
+            # other branches) and always importance-sample a continuation
+            # direction -- mirrors bdpt.mojo's light-path measured
+            # treatment, via the same shared bxdf.mojo/measured_bxdf_eval.mojo
+            # interface.
+            var gn_m: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var sph_m = sd.spheres[Int(inter.primId.id1)]
+                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
+            else:
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn_m, ray_dir) > Float32(0.0):
+                gn_m = gn_m * Float32(-1.0)
+            if mat.measured_idx < Int32(0):
+                break
+            var wo_m = (-rd).to_simd()
+            var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
+            var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
+            var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+            var mb_m = sd.measuredBrdfs[Int(mat.measured_idx)]
+            var wo_l_m = SIMD[DType.float32, 3](dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
+            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
+            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            if not valid_m or pdf_m <= Float32(0):
+                break
+            if bounce > 0:
+                _sppm_store_photon[use_gpu](
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    photons, max_photons, counter)
+            var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
+            var wilen_m = dot(wi_m, wi_m)
+            if wilen_m > Float32(0):
+                wi_m = wi_m * (Float32(1.0) / sqrt(wilen_m))
+            var cos_wi_m = dot(wi_m, gn_m)
+            if cos_wi_m <= Float32(0):
+                break
+            flux *= f_m * (cos_wi_m / pdf_m)
+            rd = vec3f(wi_m)
+            ro = hit + rd * Float32(0.0002)
+
         elif mat.type == MatKind.interface:
             if has_media:
                 var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
@@ -1221,6 +1290,12 @@ def _sppm_gather_one(
                                 hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
                             )
                             phi += f_h * ph.flux
+                        elif vp.mat_kind == Int32(3):
+                            # Measured BxDF: same shared eval as
+                            # _sppm_vp_brdf's own mat_kind=3 branch, reused
+                            # here directly (photon-flux gather also just
+                            # needs raw f_r, no extra cosine).
+                            phi += _sppm_vp_brdf(vp, sd, vp.normal.to_simd(), (-ph.dir_in).to_simd()) * ph.flux
                         else:
                             phi += (vp.alb * (Float32(1.0) / PI)) * ph.flux
                         M += Float32(1.0)
@@ -1284,6 +1359,22 @@ def _sppm_vp_brdf(
             hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
         )
         return f_h
+    if vp.mat_kind == Int32(3):
+        # Measured BxDF is inherently spectral (tabulated `spectra` tensor
+        # indexed by wavelength) -- does its own spectral eval + RGB
+        # conversion internally using vp.wavelengths, same as bdpt.mojo's
+        # _eval_vertex mat_kind=3 branch.
+        var mat_m = sd.materials[Int(vp.mat_idx)]
+        var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
+        var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
+        var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+        var wo_m = vp.wo.to_simd()
+        var wo_l_m = SIMD[DType.float32, 3](dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, vn))
+        var wi_l_m = SIMD[DType.float32, 3](dot(wi, tangent_m), dot(wi, bitangent_m), dot(wi, vn))
+        var (fr_spec_m, _) = bxdf_eval_measured(mb_m, wo_l_m, wi_l_m, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+        var (r_m, g_m, b_m) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, fr_spec_m, vp.wavelengths)
+        return RGB(r_m, g_m, b_m)
     return vp.alb / PI
 
 @always_inline
@@ -1306,6 +1397,13 @@ def _sppm_nee_weight(
         var mat_h = sd.materials[Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         return _nee_weight_hair(ls, hc)
+    if vp.mat_kind == Int32(3):
+        var mat_m = sd.materials[Int(vp.mat_idx)]
+        var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
+        var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
+        var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+        return _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
     var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
     return _nee_weight_simple_via_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
 
@@ -1386,9 +1484,11 @@ def _sppm_nee_one(
                     # arbitrary-direction (no cosine fused) convention
                     # _sppm_vp_brdf's own bxdf_eval_conductor_ggx call already
                     # relies on, so this is a drop-in spectral replacement for
-                    # mat_kind in {diffuse(0), conductor(1)}. Hair (2) and the
+                    # mat_kind in {diffuse(0), conductor(1)}. Hair (2),
+                    # measured (3, always spectral internally regardless --
+                    # see _sppm_vp_brdf's own mat_kind=3 branch), and the
                     # no-table-loaded case fall back to the original RGB path.
-                    if vp.mat_kind == Int32(2) or sd.spectral.res <= 0:
+                    if vp.mat_kind == Int32(2) or vp.mat_kind == Int32(3) or sd.spectral.res <= 0:
                         var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
                         vps[i].ld += (brdf * al.emission) * geom
                     else:
