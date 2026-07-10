@@ -129,9 +129,23 @@ struct BDPTVertex(TrivialRegisterPassable):
     var normal: Vec3f    # geometric normal (0 for volume)
     var beta: RGB  # throughput to here
     var alb:  RGB  # BSDF albedo (F0 for conductor)
-    var pdf_fwd: Float32  # area PDF forward (from previous vertex)
-    var pdf_bwd: Float32  # unused by the equal-weight MIS scheme — repurposed to hold
-                           # the isotropic GGX alpha for mat_kind=1 (conductor) vertices
+    var pdf_fwd: Float32  # area PDF forward (from previous vertex) -- unused by the
+                           # dVCM/dVC/dVM MIS scheme below (kept for other callers)
+    var pdf_bwd: Float32  # repurposed to hold the isotropic GGX alpha for mat_kind=1
+                           # (conductor) vertices -- NOT a Veach reverse-pdf
+    # VCM Stage 2b (2026-07-10): real per-vertex MIS quantities, ported
+    # verbatim from Georgiev et al. 2012 ("Light Transport Simulation with
+    # Vertex Connection and Merging") / the SmallVCM reference
+    # implementation (github.com/SmallVCM/SmallVCM, src/vertexcm.hxx) --
+    # see project_vcm_stage2_mis_derivation memory for the full verified
+    # formulas this session grounded against the actual paper + that code.
+    # Recursively updated at every bounce on both light and camera
+    # subpaths; consumed by `_connect`'s and `_bdpt_merge_from_cache`'s MIS
+    # weights. Do NOT hand-derive these from scratch -- follow the memory's
+    # verbatim formulas; getting this wrong silently biases the image.
+    var dVCM: Float32  # MIS quantity used for BOTH connection and merging
+    var dVC:  Float32  # MIS quantity used for vertex connection
+    var dVM:  Float32  # MIS quantity used for vertex merging
     var is_surface: Int32  # 1 = surface hit, 0 = volume scatter
     var is_delta:   Int32  # 1 = specular (mirror conductor / dielectric) — cannot be connected
     var is_light:   Int32  # 1 = this is a light-source vertex (s=0 in BDPT notation)
@@ -168,6 +182,7 @@ def _null_vertex() -> BDPTVertex:
         beta=RGB(Float32(0)),
         alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0),
         wo=Vec3f(Float32(0)),
