@@ -8,7 +8,7 @@ from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.algorithm import parallelize
-from std.math import sqrt, cos, sin, floor, log, exp, max, abs, ceildiv
+from std.math import sqrt, cos, sin, tan, floor, log, exp, max, abs, ceildiv
 from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
@@ -31,7 +31,7 @@ from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell, _sppm_render_core
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
-from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
+from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
@@ -409,6 +409,7 @@ def _bdpt_connect_to_cache(
     lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
     lp_idx: Int,
     path_len: Int,
+    mis_vm_weight_factor: Float32,
 ) -> RGB:
     """VCM Stage 2b (2026-07-10): connect eye vertex `cv` to EVERY vertex of
     its deterministically PAIRED light path (`lp_idx` — standard Veach BDPT
@@ -425,7 +426,7 @@ def _bdpt_connect_to_cache(
     var sum = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     for local in range(path_len):
         var lv = lvc[lp_idx * _BDPT_MAX_VERTS + local]
-        sum += _connect(cv, lv, sd, has_med, scratch)
+        sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor)
     return RGB(sum[0], sum[1], sum[2])
 
 # ── VCM vertex merging: spatial hash grid over the LVC ───────────────────────
@@ -583,6 +584,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     merge_inv_cell: Float32,
     merge_r2: Float32,
     merge_norm: Float32,
+    px_scale: Float32,
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
+    n_light_paths_f: Float32,
     start_med_idx: Int32 = Int32(-1),
 ) -> Tuple[RGB, RGB]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
@@ -628,6 +633,23 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     if dl > Float32(0.0): rd = rd / dl
     var ro = Point3f(c2w[12], c2w[13], c2w[14])
 
+    # VCM Stage 2b: real per-vertex MIS state for the eye subpath (see
+    # project_vcm_stage2_mis_derivation memory). cameraPdfW derived by
+    # analogy with SmallVCM's pinhole-camera imageToSolidAngleFactor,
+    # using px_scale (world-space size of one pixel at unit distance along
+    # the camera forward axis — same quantity the plain path tracer's mip
+    # LOD already uses, pipeline.mojo) as the "pixel area at distance 1"
+    # convention: cameraPdfW = 1/(px_scale² × cosθ³), cosθ = angle between
+    # this ray and the camera forward axis. cz here is already normalized
+    # (post `cl` division above) so |cz| IS that cosine directly.
+    var cos_theta_at_camera = abs(cz)
+    var camera_pdf_w = Float32(1) / max(
+        px_scale * px_scale * cos_theta_at_camera * cos_theta_at_camera * cos_theta_at_camera,
+        Float32(1e-12))
+    var dvcm_carry = n_light_paths_f / camera_pdf_w
+    var dvc_carry = Float32(0)
+    var dvm_carry = Float32(0)
+
     var n_verts = 0
     var n_bounces = 0  # total surface hits including glass (for _dielectric_bounce entering logic)
     var beta = RGB(Float32(1))
@@ -670,6 +692,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         var t_hit = inter.tHit
         var ray_dir = rd.to_simd()
 
+        # VCM Stage 2b: distance-squared portion of the per-bounce MIS
+        # correction -- see _bdpt_trace_light_path's matching comment
+        # (project_vcm_stage2_mis_derivation memory). The eye subpath's
+        # origin is always "finite" (a real camera position), so the
+        # correction applies unconditionally here (unlike the light side's
+        # is_finite_origin check).
+        dvcm_carry *= t_hit * t_hit
+
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
@@ -689,11 +719,13 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 v.wavelengths = wavelengths
                 if n_verts == 0: first_alb = ff.albedo
                 n_verts += 1
+                # Volume: out of MIS scope this pass, same as the light side.
+                dvcm_carry = Float32(0)
                 if path_len > 0:
                     if pcg.next_float() < _VCM_MERGE_PROB:
                         total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
                     else:
-                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len)
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 beta *= ff.albedo
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -774,6 +806,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         elif mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+            # VCM Stage 2b: finish the per-bounce MIS correction (dist²
+            # portion already applied above) -- see
+            # _bdpt_trace_light_path's matching comment.
+            var cos_fix = abs(dot(-ray_dir, gn))
+            if cos_fix > Float32(1e-6):
+                dvcm_carry /= cos_fix
+                dvc_carry /= cos_fix
+                dvm_carry /= cos_fix
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
@@ -781,15 +821,17 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             v.alb = mat.albedo
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
+            v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
+            v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
                 if pcg.next_float() < _VCM_MERGE_PROB:
                     total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
                 else:
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len)
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # NEE to distant/point/sphere/infinite lights, via the shared
             # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -826,6 +868,16 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             last_bsdf_pdf = bxdf_pdf_diffuse(dot(gn, rd.to_simd()))
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
             beta *= mat.albedo
+            # VCM Stage 2b: recursive continuation for the NEXT bounce --
+            # see _bdpt_trace_light_path's matching diffuse-branch comment.
+            var cos_theta_out = abs(dot(rd.to_simd(), gn))
+            var bsdf_rev_pdf_w = cos_fix / PI
+            var dvc_new = PI * (dvc_carry * bsdf_rev_pdf_w + dvcm_carry + mis_vm_weight_factor)
+            var dvm_new = PI * (dvm_carry * bsdf_rev_pdf_w + dvcm_carry * mis_vc_weight_factor + Float32(1))
+            var bsdf_dir_pdf_w = cos_theta_out / PI
+            dvcm_carry = Float32(1) / bsdf_dir_pdf_w if bsdf_dir_pdf_w > Float32(1e-8) else Float32(0)
+            dvc_carry = dvc_new
+            dvm_carry = dvm_new
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c: SIMD[DType.float32, 3]
@@ -865,6 +917,13 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if bs_c.is_valid == Int8(0):
                 break
             var alpha_c = max(mat.roughU, mat.roughV)
+            # VCM Stage 2b: conductor has no real standalone pdf -- out of
+            # MIS scope this pass, same treatment as the light-path side
+            # (project_vcm_stage2_mis_derivation memory).
+            var cos_fix_c = abs(dot(-ray_dir, gn_c))
+            if cos_fix_c > Float32(1e-6):
+                dvc_carry /= cos_fix_c
+                dvm_carry /= cos_fix_c
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
                 v.pos = hit
@@ -883,7 +942,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                     if pcg.next_float() < _VCM_MERGE_PROB:
                         total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
                     else:
-                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len)
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
                 # Distant/point/sphere/infinite NEE, via the shared Light
                 # interface + BxDF interface + _bdpt_nee_contribute glue —
@@ -918,6 +977,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 last_bsdf_pdf = Float32(-1)  # mirror bounce: no infinite-light NEE done at this vertex
             else:
                 last_bsdf_pdf = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
+            var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
+            dvcm_carry = Float32(0)
+            dvc_carry *= cos_theta_out_c
+            dvm_carry *= cos_theta_out_c
 
         elif mat.type == MatKind.hair:
             # Marschner 3-lobe hair BSDF — no delta lobe, so always store a
@@ -928,6 +991,12 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
             var hair_eps = curve_offset_eps(hc.radius)
+            # VCM Stage 2b: hair has no real standalone pdf either -- same
+            # out-of-scope treatment as conductor.
+            var cos_fix_h = abs(dot(-ray_dir, hc.geo_normal))
+            if cos_fix_h > Float32(1e-6):
+                dvc_carry /= cos_fix_h
+                dvm_carry /= cos_fix_h
             var v_h = _null_vertex()
             v_h.pos = hit
             v_h.normal = vec3f(hc.geo_normal)
@@ -948,7 +1017,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 if pcg.next_float() < _VCM_MERGE_PROB:
                     total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
                 else:
-                    total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len)
+                    total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
             # interface + BxDF interface (_nee_weight_hair, using `hc`) +
@@ -982,6 +1051,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
             last_bsdf_pdf = pdf_hs * cos_ti_hs2  # solid-angle pdf (pdf_hs already has /cos_ti baked in)
+            var cos_theta_out_h = abs(dot(wi_hs, hc.geo_normal))
+            dvcm_carry = Float32(0)
+            dvc_carry *= cos_theta_out_h
+            dvm_carry *= cos_theta_out_h
 
         elif mat.type == MatKind.measured:
             # Tabulated Dupuy & Jakob MeasuredBxDF -- the real algorithm
@@ -1009,6 +1082,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
             var mb = sd.measuredBrdfs[Int(mat.measured_idx)]
 
+            # VCM Stage 2b: measured BxDF has a real standalone pdf -- in
+            # MIS scope this pass, same real treatment as diffuse.
+            var cos_fix_m = abs(dot(-ray_dir, gn_m))
+            if cos_fix_m > Float32(1e-6):
+                dvcm_carry /= cos_fix_m
+                dvc_carry /= cos_fix_m
+                dvm_carry /= cos_fix_m
+
             var v_m = _null_vertex()
             v_m.pos = hit
             v_m.normal = vec3f(gn_m)
@@ -1020,13 +1101,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             v_m.pdf_fwd = Float32(1)
             v_m.med_idx = cur_med_idx
             v_m.wavelengths = wavelengths
+            v_m.dVCM = dvcm_carry; v_m.dVC = dvc_carry; v_m.dVM = dvm_carry
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
                 if pcg.next_float() < _VCM_MERGE_PROB:
                     total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
                 else:
-                    total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len)
+                    total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
             # interface + BxDF interface (_nee_weight_measured) +
@@ -1065,6 +1147,16 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = pdf_m
+            # VCM Stage 2b: recursive continuation, real forward/reverse pdf
+            # from bxdf_pdf_measured -- see _bdpt_trace_light_path's
+            # matching measured-branch comment (reverse-pdf convention
+            # ASSUMED, not independently verified).
+            var pdf_rev_m = bxdf_pdf_measured(mb, wi_l_m, wo_l_m)
+            var dvc_new_m = (cos_wi_m / pdf_m) * (dvc_carry * pdf_rev_m + dvcm_carry + mis_vm_weight_factor)
+            var dvm_new_m = (cos_wi_m / pdf_m) * (dvm_carry * pdf_rev_m + dvcm_carry * mis_vc_weight_factor + Float32(1))
+            dvcm_carry = Float32(1) / pdf_m if pdf_m > Float32(1e-8) else Float32(0)
+            dvc_carry = dvc_new_m
+            dvm_carry = dvm_new_m
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
@@ -1086,12 +1178,24 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             rd = vec3f(new_dir)
             ro = point3f(new_org)
+            # VCM Stage 2b: genuinely delta/specular, matches SmallVCM's own
+            # specular-bounce handling directly.
+            var cos_fix_d = abs(dot(-ray_dir, gn))
+            if cos_fix_d > Float32(1e-6):
+                dvc_carry /= cos_fix_d
+                dvm_carry /= cos_fix_d
+            var cos_theta_out_d = abs(dot(new_dir, gn))
+            dvcm_carry = Float32(0)
+            dvc_carry *= cos_theta_out_d
+            dvm_carry *= cos_theta_out_d
 
         elif mat.type == MatKind.interface:
             if has_med:
                 var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
+            # VCM Stage 2b: pure pass-through, carry unchanged (see
+            # _bdpt_trace_light_path's matching interface-branch comment).
 
         else:
             break
@@ -1109,6 +1213,8 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     lvc:      UnsafePointer[BDPTVertex, MutAnyOrigin],
     lp_idx:   Int,
     lvc_path_len: UnsafePointer[Int32, MutAnyOrigin],
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
 ):
     """Emit a photon from a random light and trace a light subpath, storing
     every non-delta vertex (including the light-source point itself, the
@@ -1156,6 +1262,20 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var rd: Vec3f
     var flux: RGB
     var n_verts: Int
+    # VCM Stage 2b: real per-vertex MIS state, recursively carried along
+    # this light subpath (see project_vcm_stage2_mis_derivation memory for
+    # the verified formulas). Only AREA lights get a real, non-zero origin
+    # this pass — distant/infinite/point-seeded paths start at 0, a
+    # deliberately scoped simplification (their own MIS treatment needs
+    # the delta-light formulas Georgiev's tech report's (48)-(50) define,
+    # not yet ported). Only diffuse/measured vertices update these
+    # meaningfully; every other material resets them as if specular
+    # (dVCM=0, dVC/dVM *= cosThetaOut) since they don't have a real
+    # separate forward/reverse pdf today — see the memory file.
+    var dvcm_carry = Float32(0)
+    var dvc_carry = Float32(0)
+    var dvm_carry = Float32(0)
+    var is_finite_origin = False
     # One hero-wavelength sample per light subpath (see
     # _bdpt_trace_camera_and_connect's matching comment) — this subpath's own
     # NEE is done from the CAMERA side (this function's own docstring above),
@@ -1190,6 +1310,21 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         lv0_vert.pdf_fwd = Float32(1) / area_weight
         lv0_vert.med_idx = default_emit_med
         lv0_vert.wavelengths = wavelengths
+
+        # VCM Stage 2b: real MIS origin state for this (finite, area) light
+        # -- see project_vcm_stage2_mis_derivation memory for the verified
+        # derivation. cos_theta_emit cancels out of the flux formula above
+        # (Malley's method) but is needed again here, unrelated to flux.
+        is_finite_origin = True
+        var cos_theta_emit = max(dot(pdir, ln), Float32(0.0001))
+        var direct_pdf_a = Float32(1) / area_weight
+        var emission_pdf_w = direct_pdf_a * cos_theta_emit / PI
+        dvcm_carry = direct_pdf_a / emission_pdf_w
+        dvc_carry = cos_theta_emit / emission_pdf_w
+        dvm_carry = dvc_carry * mis_vm_weight_factor
+        lv0_vert.dVCM = dvcm_carry
+        lv0_vert.dVC = dvc_carry
+        lv0_vert.dVM = dvm_carry
         _bdpt_store_lvc_vertex(lv0_vert, lvc, lp_idx, 0)
 
         # For traced vertices: beta = Le × cos_θ / (p_A × p_ω) where p_ω = cos_θ/π
@@ -1270,6 +1405,15 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         var t_hit = inter.tHit
         var ray_dir = rd.to_simd()
 
+        # VCM Stage 2b: distance-squared portion of the per-bounce MIS
+        # correction (project_vcm_stage2_mis_derivation memory) -- shared
+        # across every material branch below, since it only depends on the
+        # travel distance, not the hit material. The |cosThetaFix| portion
+        # is applied separately inside each branch once its own local
+        # normal is known.
+        if n_verts >= 1 or is_finite_origin:
+            dvcm_carry *= t_hit * t_hit
+
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
@@ -1287,6 +1431,11 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 v.wavelengths = wavelengths
                 n_verts += 1
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                # Volume scatter is isotropic (no surface normal, no
+                # cosThetaFix) -- out of MIS scope this pass (like conductor/
+                # hair/dielectric), reset as if specular so a LATER
+                # diffuse/measured bounce still gets a well-defined carry.
+                dvcm_carry = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
                 flux *= ff.albedo
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -1316,6 +1465,15 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+            # VCM Stage 2b: finish the per-bounce MIS correction (the
+            # dist² portion was already applied above, shared across
+            # branches) -- cos_fix is the incoming ray's cosine against
+            # this vertex's own normal, matching SmallVCM's cosThetaFix.
+            var cos_fix = abs(dot(-ray_dir, gn))
+            if cos_fix > Float32(1e-6):
+                dvcm_carry /= cos_fix
+                dvc_carry /= cos_fix
+                dvm_carry /= cos_fix
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
@@ -1323,7 +1481,9 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             v.alb = mat.albedo
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
+            v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.wavelengths = wavelengths
+            v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             n_verts += 1
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
             # Scatter
@@ -1331,6 +1491,19 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
             ro = hit + rd*Float32(0.0002)
             flux *= mat.albedo
+            # VCM Stage 2b: recursive continuation for the NEXT bounce
+            # (cosThetaOut/bsdfDirPdfW simplifies to PI exactly for
+            # cosine-weighted diffuse sampling; bsdfRevPdfW reuses cos_fix,
+            # the same incoming cosine just used above -- see the memory
+            # file for the full derivation).
+            var cos_theta_out = abs(dot(rd.to_simd(), gn))
+            var bsdf_rev_pdf_w = cos_fix / PI
+            var dvc_new = PI * (dvc_carry * bsdf_rev_pdf_w + dvcm_carry + mis_vm_weight_factor)
+            var dvm_new = PI * (dvm_carry * bsdf_rev_pdf_w + dvcm_carry * mis_vc_weight_factor + Float32(1))
+            var bsdf_dir_pdf_w = cos_theta_out / PI
+            dvcm_carry = Float32(1) / bsdf_dir_pdf_w if bsdf_dir_pdf_w > Float32(1e-8) else Float32(0)
+            dvc_carry = dvc_new
+            dvm_carry = dvm_new
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c: SIMD[DType.float32, 3]
@@ -1359,6 +1532,18 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             if bs_c.is_valid == Int8(0):
                 break
+            # VCM Stage 2b: conductor/coated_conductor have no real standalone
+            # pdf today (bxdf_sample_conductor bakes the full VNDF importance
+            # weight into `f` with pdf=1.0 as a placeholder) -- out of MIS
+            # scope this pass (see project_vcm_stage2_mis_derivation memory).
+            # Finish the shared dist² correction, then reset as if specular
+            # so a LATER diffuse/measured bounce still gets a well-defined
+            # carry. Their own LVC vertex keeps dVCM=dVC=dVM=0 (never set
+            # below) -- _connect must skip the MIS weight for mat_kind=1.
+            var cos_fix_c = abs(dot(-ray_dir, gn_c))
+            if cos_fix_c > Float32(1e-6):
+                dvc_carry /= cos_fix_c
+                dvm_carry /= cos_fix_c
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
                 v.pos = hit
@@ -1376,11 +1561,22 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             flux *= bs_c.f
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
+            var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
+            dvcm_carry = Float32(0)
+            dvc_carry *= cos_theta_out_c
+            dvm_carry *= cos_theta_out_c
 
         elif mat.type == MatKind.hair:
             var curve_idx_h = Int(inter.primId.id1)
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
+            # VCM Stage 2b: hair has no real standalone pdf either -- same
+            # out-of-scope treatment as conductor (see that branch's comment
+            # + project_vcm_stage2_mis_derivation memory).
+            var cos_fix_h = abs(dot(-ray_dir, hc.geo_normal))
+            if cos_fix_h > Float32(1e-6):
+                dvc_carry /= cos_fix_h
+                dvm_carry /= cos_fix_h
             var v_h = _null_vertex()
             v_h.pos = hit
             v_h.normal = vec3f(hc.geo_normal)
@@ -1402,6 +1598,10 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
+            var cos_theta_out_h = abs(dot(wi_hs, hc.geo_normal))
+            dvcm_carry = Float32(0)
+            dvc_carry *= cos_theta_out_h
+            dvm_carry *= cos_theta_out_h
 
         elif mat.type == MatKind.measured:
             # Mirrors the camera-side measured branch above, minus the NEE
@@ -1427,6 +1627,15 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, uml1, uml2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
             if not valid_m or pdf_m <= Float32(0):
                 break
+            # VCM Stage 2b: measured BxDF DOES have a real standalone pdf
+            # (bxdf_pdf_measured, unlike conductor/hair) -- in MIS scope
+            # this pass, same real treatment as diffuse (see that branch's
+            # comments + project_vcm_stage2_mis_derivation memory).
+            var cos_fix_m = abs(dot(-ray_dir, gn_m))
+            if cos_fix_m > Float32(1e-6):
+                dvcm_carry /= cos_fix_m
+                dvc_carry /= cos_fix_m
+                dvm_carry /= cos_fix_m
             var v_m = _null_vertex()
             v_m.pos = hit
             v_m.normal = vec3f(gn_m)
@@ -1438,6 +1647,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             v_m.pdf_fwd = Float32(1)
             v_m.med_idx = cur_med_idx
             v_m.wavelengths = wavelengths
+            v_m.dVCM = dvcm_carry; v_m.dVC = dvc_carry; v_m.dVM = dvm_carry
             n_verts += 1
             _bdpt_store_lvc_vertex(v_m, lvc, lp_idx, n_verts - 1)
             var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
@@ -1450,6 +1660,17 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             flux *= f_m * (cos_wi_m / pdf_m)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
+            # VCM Stage 2b: recursive continuation, real forward/reverse pdf
+            # from bxdf_pdf_measured (reverse = same call with wo/wi swapped
+            # -- ASSUMED convention, not independently verified against
+            # measured_bxdf_eval.mojo's exact semantics; flag if results look
+            # wrong on sportscar/measured-material scenes).
+            var pdf_rev_m = bxdf_pdf_measured(mb, wi_l_m, wo_l_m)
+            var dvc_new_m = (cos_wi_m / pdf_m) * (dvc_carry * pdf_rev_m + dvcm_carry + mis_vm_weight_factor)
+            var dvm_new_m = (cos_wi_m / pdf_m) * (dvm_carry * pdf_rev_m + dvcm_carry * mis_vc_weight_factor + Float32(1))
+            dvcm_carry = Float32(1) / pdf_m if pdf_m > Float32(1e-8) else Float32(0)
+            dvc_carry = dvc_new_m
+            dvm_carry = dvm_new_m
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
@@ -1470,12 +1691,29 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             rd = vec3f(new_dir)
             ro = point3f(new_org)
+            # VCM Stage 2b: dielectric is genuinely delta/specular (true
+            # reflect-or-refract, not an approximation like conductor's
+            # VNDF sampling) -- matches SmallVCM's own specular-bounce
+            # handling directly (vertexcm.hxx:977-982), no LVC vertex
+            # stored either way.
+            var cos_fix_d = abs(dot(-ray_dir, gn))
+            if cos_fix_d > Float32(1e-6):
+                dvc_carry /= cos_fix_d
+                dvm_carry /= cos_fix_d
+            var cos_theta_out_d = abs(dot(new_dir, gn))
+            dvcm_carry = Float32(0)
+            dvc_carry *= cos_theta_out_d
+            dvm_carry *= cos_theta_out_d
 
         elif mat.type == MatKind.interface:
             if has_med:
                 var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
+            # VCM Stage 2b: pure medium-boundary pass-through, no direction
+            # change/BSDF event -- carry state passes through as already
+            # dist²-corrected above (the ray genuinely traveled t_hit), no
+            # cosFix/reset applied since there's no real "bounce" here.
 
         else:
             break
@@ -1685,11 +1923,25 @@ def _connect(
     sd: SceneDescriptor2_C,
     has_med: Bool,
     scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
+    mis_vm_weight_factor: Float32,
 ) -> SIMD[DType.float32, 3]:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
-    Returns raw colour contribution — caller (the LVC uniform-subsample
-    estimator) scales by cache_size/k_connections; this is no longer an
-    exhaustive same-length-strategy MIS weight (see bdpt_render's docstring)."""
+    Each connection is already a complete, self-normalized estimator of its
+    own depth-strategy's contribution (see the module's LVC-BPT docstring);
+    the caller sums over every vertex of the paired light path with no
+    further scaling.
+
+    VCM Stage 2b (2026-07-10): real per-vertex MIS weighting (Georgiev et
+    al. 2012 / SmallVCM, see project_vcm_stage2_mis_derivation memory) is
+    applied ONLY when both endpoints have a genuine standalone pdf --
+    diffuse (mat_kind=0) and light-source vertices (is_light=1, whose
+    cosine-weighted emission profile is mathematically the same shape as
+    diffuse). Conductor/hair (no real pdf, see that memory) and measured
+    (has a real pdf, but its connect-time reverse-pdf evaluation needs a
+    reconstructed local frame not yet wired here -- deferred, its carry
+    state is tracked but unused this pass) all fall through to `weight=1`,
+    today's plain unweighted behavior -- a deliberately scoped gap, not a
+    silent omission."""
     if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
 
@@ -1769,6 +2021,33 @@ def _connect(
     contrib[0] *= beta.r
     contrib[1] *= beta.g
     contrib[2] *= beta.b
+
+    # VCM Stage 2b: real MIS weight for diffuse/light-source connections
+    # (see this function's docstring + project_vcm_stage2_mis_derivation
+    # memory for the full derivation and its "not independently verified"
+    # caveats). cos_cv/cos_lv reuse the same geometry _geom_term computed
+    # internally, recomputed here since that helper doesn't expose them.
+    var cv_is_diffuse = cv.mat_kind == Int32(0)
+    var lv_is_diffuse_or_light = lv.is_light == Int32(1) or lv.mat_kind == Int32(0)
+    if cv_is_diffuse and lv_is_diffuse_or_light:
+        var cos_cv = abs(dot(dir, cv.normal.to_simd()))
+        var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
+        var camera_bsdf_dir_pdf_w = cos_cv / PI
+        var camera_bsdf_rev_pdf_w = abs(dot(cv.wo.to_simd(), cv.normal.to_simd())) / PI
+        # Light-source vertex: forward and reverse pdf are the SAME
+        # cosine-weighted-emission formula (no real "wo" to distinguish a
+        # direction from, unlike a genuine BSDF bounce) -- REASONED, not
+        # independently verified against a reference light-source-specific
+        # connect path.
+        var light_bsdf_dir_pdf_w = cos_lv / PI
+        var light_bsdf_rev_pdf_w = cos_lv / PI if lv.is_light == Int32(1) else abs(dot(lv.wo.to_simd(), lv.normal.to_simd())) / PI
+        var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
+        var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
+        var w_light = camera_bsdf_dir_pdf_a * (mis_vm_weight_factor + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
+        var w_camera = light_bsdf_dir_pdf_a * (mis_vm_weight_factor + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
+        var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
+        contrib *= mis_weight
+
     return contrib
 
 # ── Main BDPT render ──────────────────────────────────────────────────────────
@@ -1802,6 +2081,11 @@ def _bdpt_render_core(
     var n_pix = fw * fh
     var iso_scale = psc[0].film_iso / Float32(100)
     var max_comp  = psc[0].film_max_comp
+    # VCM Stage 2b: world-space size of one pixel at unit distance along the
+    # camera forward axis -- same quantity the plain path tracer's mip LOD
+    # uses (pipeline.mojo), reused here for the camera-origin cameraPdfW
+    # derivation (see project_vcm_stage2_mis_derivation memory).
+    var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
 
     print("BDPT: " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp")
 
@@ -1861,6 +2145,26 @@ def _bdpt_render_core(
     var merge_heads = alloc[Int32](_HSIZE)
     var merge_next = alloc[Int32](max(lvc_cap, 1))
 
+    # VCM Stage 2b: global per-iteration MIS weight-combination constants
+    # (Georgiev et al. 2012 / SmallVCM, see project_vcm_stage2_mis_derivation
+    # memory) -- reuse the existing FIXED Stage-1 merge_r2 for now
+    # (progressive radius is Stage 2c, not done yet).
+    var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
+    # mis_vm_weight_factor discounts connections by "how much of this
+    # path's probability mass the merge technique WOULD have covered" --
+    # correct only if merge is actually running and collecting that share.
+    # _VCM_MERGE_PROB is 0 this pass (Stage 1's fixed-radius merge stays
+    # disabled, see that constant's docstring), so merge contributes ZERO
+    # probability mass in practice: using the real eta_vcm-derived value
+    # here would discount connections for a competing technique that never
+    # fires, systematically losing energy (confirmed: an earlier version of
+    # this fix measured ~20-30% too dark vs the pbrt reference on ganesha
+    # before this correction). 0 here recovers a real (still correctly
+    # derived, still unbiased) connection-only MIS across depth-strategies.
+    # Revisit together with wiring up a real weighted merge contribution.
+    var mis_vm_weight_factor = Float32(0)
+    var mis_vc_weight_factor = Float32(1.0) / eta_vcm
+
     for si in range(n_spp):
         # ── Phase 1: trace each pixel's own paired light subpath ─────────────
         # No atomics needed: light path lp_idx writes only its own dedicated
@@ -1870,7 +2174,8 @@ def _bdpt_render_core(
             var lpcg = PCG32(base_seed ^ UInt64(lp_idx * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
             _bdpt_trace_light_path[True](sd, lpcg, has_med, default_emit_med,
-                                         scratch_light + lp_idx, lvc, lp_idx, lvc_path_len)
+                                         scratch_light + lp_idx, lvc, lp_idx, lvc_path_len,
+                                         mis_vc_weight_factor, mis_vm_weight_factor)
 
         parallelize[emit_light_path](n_light_paths)
 
@@ -1888,7 +2193,8 @@ def _bdpt_render_core(
                               UInt64(si * 2654435761 + 1))
             var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, pix, Int(lvc_path_len[pix]),
-                merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+                merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
+                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths))
             buf[pix] += contrib
             albedo_buf[pix] += alb
 
@@ -2069,6 +2375,8 @@ def vcm_render(
 def _bdpt_emit_light_paths_gpu(
     lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
     lvc_path_len: UnsafePointer[Int32, MutAnyOrigin],
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
     inter_scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
     n_light_paths: Int,
     default_emit_med: Int32,
@@ -2131,7 +2439,8 @@ def _bdpt_emit_light_paths_gpu(
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var scratch = inter_scratch + k
-    _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len)
+    _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
+                                 mis_vc_weight_factor, mis_vm_weight_factor)
 
 def _bdpt_camera_connect_gpu(
     accum: UnsafePointer[Float32, MutAnyOrigin],
@@ -2148,6 +2457,10 @@ def _bdpt_camera_connect_gpu(
     merge_inv_cell: Float32,
     merge_r2: Float32,
     merge_norm: Float32,
+    px_scale: Float32,
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
+    n_light_paths_f: Float32,
     seed: UInt64,
     pass_idx: Int,
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -2216,7 +2529,8 @@ def _bdpt_camera_connect_gpu(
     var scratch = inter_scratch + pix
     var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[pix]),
-        merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
+        merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
+        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f)
     accum[pix*3]   += contrib.r
     accum[pix*3+1] += contrib.g
     accum[pix*3+2] += contrib.b
@@ -2375,12 +2689,25 @@ def bdpt_render_gpu(
             var merge_inv_cell = Float32(1.0) / max(merge_radius, Float32(1e-6))
             var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
 
+            # VCM Stage 2b: same global constants as bdpt_render (CPU) --
+            # see that function's matching comment.
+            var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
+            # See bdpt_render (CPU)'s matching comment: merge never actually
+            # runs this pass (_VCM_MERGE_PROB=0), so its MIS discount must
+            # be 0 too, or connections systematically lose energy to a
+            # technique that never collects its share.
+            var mis_vm_weight_factor = Float32(0)
+            var mis_vc_weight_factor = Float32(1.0) / eta_vcm
+            var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
+            var n_light_paths_f = Float32(n_light_paths)
+
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
 
             for si in range(n_spp):
                 var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
                 handle[].ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
-                    lvc_ptr, path_len_ptr, inter_light_ptr, n_light_paths,
+                    lvc_ptr, path_len_ptr, mis_vc_weight_factor, mis_vm_weight_factor,
+                    inter_light_ptr, n_light_paths,
                     default_emit_med, pass_seed, si,
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
@@ -2407,6 +2734,7 @@ def bdpt_render_gpu(
                     accum_ptr, albedo_accum_ptr, n_pix, Int(psc[0].film_w), r2c_ptr, c2w_ptr, inter_cam_ptr,
                     lvc_ptr, path_len_ptr,
                     merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
+                    px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f,
                     base_seed, si,
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
