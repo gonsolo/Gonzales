@@ -1312,11 +1312,31 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     var (geo_normal, ray_dir, ray_org) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
     var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+
+    # Silhouette-grazing shading-normal fallback: geo_normal is guaranteed
+    # face-forwarded toward wo (_geom_normal_and_ray), but the INTERPOLATED
+    # shading normal isn't -- on a curved/low-poly mesh viewed near-edge-on
+    # (e.g. the car body silhouette), it can end up on the opposite side of
+    # wo from geo_normal even though _shading_normal aligned it to
+    # geo_normal's hemisphere overall. When that happens, wo lands on the
+    # "back" (z<0) side of the (tangent,bitangent,normal) frame while a
+    # perfectly valid, physically-illuminating light direction wi lands on
+    # the front (z>0) side -- MeasuredBxDF's same-hemisphere gate
+    # (wo.z*wi.z<=0) then hard-zeros f for every light sample, discarding
+    # all direct illumination at exactly these pixels (confirmed against the
+    # pbrt reference: gonzales renders solid black here, pbrt shows lit sky
+    # reflection). Falling back to geo_normal for shading removes the
+    # artifact at its root, matching the standard fix (pbrt determines
+    # reflect/transmit-side membership from the geometric, not shading,
+    # normal) without touching the general shading-normal interpolation
+    # path other materials still rely on for smooth appearance.
+    if dot(normal, wo) <= Float32(0.0):
+        normal = geo_normal
 
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
     var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
     var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
 
     if mat.measured_idx < Int32(0):
         # Load failure fallback (see material_builder.mojo) -- render as flat
