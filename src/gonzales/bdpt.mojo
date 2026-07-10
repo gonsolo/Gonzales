@@ -1161,7 +1161,6 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         # Cosine-weighted emission direction
         var du1 = pcg.next_float(); var du2 = pcg.next_float()
         var pdir = _cosine_hemisphere_sample(ln, du1, du2)
-        var ly = sqrt(max(Float32(0), Float32(1)-du1))  # cos_theta_emitted, reused below
 
         # Light vertex (the emission point, s=1 strategy connects here directly).
         # beta = 1/p_A = area × n_lights (area sampling PDF correction only).
@@ -1179,11 +1178,16 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         lv0_vert.wavelengths = wavelengths
         _bdpt_store_lvc_vertex[use_gpu](lv0_vert, lvc, lvc_cap, lvc_counter)
 
-        # For traced vertices: beta = Le / (p_A × p_ω) where p_ω = cos_θ/π for cosine-weighted emission.
-        # cos_θ_emitted = ly (the cosine of the sampled direction against the light normal).
-        # β = Le × area × n_lights × π / cos_θ_emitted
-        var cos_theta_emit = max(ly, Float32(0.01))
-        flux = al.emission * (area_weight * PI / cos_theta_emit)
+        # For traced vertices: beta = Le × cos_θ / (p_A × p_ω) where p_ω = cos_θ/π
+        # for cosine-weighted emission -- the cos_θ_emitted terms CANCEL exactly
+        # (Malley's method: this is the whole point of cosine-weighted emission
+        # sampling, see sppm.mojo's photon-emission flux for the same, correctly
+        # cos_θ-free formula). β = Le × area × n_lights × π, no cos_θ term.
+        # BUG FIX (2026-07-10): this previously divided by cos_θ_emitted instead
+        # of letting it cancel, inflating flux by up to 100x on near-grazing
+        # emission directions (clamped at cos_θ=0.01) -- root cause of BDPT's
+        # pre-existing indirect-bounce fireflies, see project_bdpt_todo memory.
+        flux = al.emission * (area_weight * PI)
         ro = point3f(lp) + vec3f(ln)*Float32(0.0001)
         rd = vec3f(pdir)
         n_verts = 1  # vertex 0 is the light point itself
