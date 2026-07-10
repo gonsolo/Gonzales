@@ -2,6 +2,8 @@ from std.ffi import external_call
 from std.time import perf_counter_ns
 from std.memory import alloc
 from std.math import tan, sqrt, abs
+from std.subprocess import run
+from std.os.path import exists
 from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_token, scanner_parse_quoted_string,
                     scanner_scan_char, scanner_scan_float,
@@ -922,7 +924,36 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                 inc_path[dlen + fi] = inc_name[fi]
                 fi += 1
             inc_path[dlen + fi] = UInt8(0)
-            var sub_handle = scanner_open(inc_path)
+
+            # `.pbrt.gz` includes (e.g. pbrt-v4-scenes' curve/hair geometry)
+            # are NOT decompressed by the tokenizer -- without this, the
+            # scanner opens the raw gzip bytes as if they were text and
+            # silently tokenizes garbage, producing zero shapes with no
+            # error at all. Auto-decompress once into a cached ".pbrt"
+            # sibling next to the source (mirrors the pre-existing ".ply.gz"
+            # sibling-file convention above), then open that instead.
+            var open_path: UnsafePointer[UInt8, MutUntrackedOrigin] = inc_path
+            var inc_path_len = dlen + fi
+            var ends_gz = (inc_path_len >= 3 and
+                           inc_path[inc_path_len-3] == UInt8(46) and
+                           inc_path[inc_path_len-2] == UInt8(103) and
+                           inc_path[inc_path_len-1] == UInt8(122))
+            var stripped = UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+            if ends_gz:
+                stripped = alloc[UInt8](inc_path_len - 2)
+                for ci in range(inc_path_len - 3):
+                    stripped[ci] = inc_path[ci]
+                stripped[inc_path_len - 3] = UInt8(0)
+                var stripped_str = String(unsafe_from_utf8_ptr=stripped.as_immutable())
+                if not exists(stripped_str):
+                    var inc_path_str = String(unsafe_from_utf8_ptr=inc_path.as_immutable())
+                    try:
+                        _ = run("gzip -dk '" + inc_path_str + "'")
+                    except:
+                        pass
+                open_path = stripped
+
+            var sub_handle = scanner_open(open_path)
             if scanner_is_at_end(sub_handle) == 0:
                 # Splice the included file's bytes in front of this scanner's
                 # remaining bytes so both halves form one continuous token
@@ -949,9 +980,13 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                 var inc_str = String(unsafe_from_utf8_ptr=inc_name.as_immutable())
                 if inc_str.endswith(".xz"):
                     print("Warning: cannot open include (decompress first with xz -dk):", inc_str)
+                elif inc_str.endswith(".gz"):
+                    print("Warning: cannot open include (gzip decompression failed):", inc_str)
                 else:
                     print("Warning: cannot open include:", inc_str)
             scanner_free(sub_handle)
+            if ends_gz:
+                stripped.free()
             inc_name.free(); inc_path.free()
         elif _psc_streq(kw_buf, "Material"):
             _psc_handle_make_named_material(handle, s, True)
