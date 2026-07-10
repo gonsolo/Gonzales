@@ -30,6 +30,7 @@ from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
+from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .gpu import GpuSceneHandle
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
@@ -775,6 +776,86 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
             last_bsdf_pdf = pdf_hs * cos_ti_hs2  # solid-angle pdf (pdf_hs already has /cos_ti baked in)
 
+        elif mat.type == MatKind.measured:
+            # Tabulated Dupuy & Jakob MeasuredBxDF -- the real algorithm
+            # (measured_bxdf_eval.mojo), not an approximation, via the same
+            # shared bxdf.mojo/measured_bxdf_eval.mojo interface
+            # shading.mojo's shade_measured already uses. Isotropic only (see
+            # the loader's scope note), so an arbitrary Frisvad tangent frame
+            # is fine -- no UV alignment needed, same reasoning as conductor.
+            var gn_m: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var si_m = Int(inter.primId.id1)
+                var sph_m = sd.spheres[si_m]
+                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
+            else:
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
+            if mat.measured_idx < Int32(0):
+                # Load failure fallback (see material_builder.mojo) -- matches
+                # shading.mojo's shade_measured: stop this path rather than
+                # dereferencing a nonexistent measuredBrdfs entry.
+                break
+            var wo_m = (-rd).to_simd()
+            var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
+            var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
+            var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+            var mb = sd.measuredBrdfs[Int(mat.measured_idx)]
+
+            var v_m = _null_vertex()
+            v_m.pos = hit
+            v_m.normal = vec3f(gn_m)
+            v_m.beta = beta
+            v_m.alb = mat.albedo
+            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = Int32(3)
+            v_m.wo = vec3f(wo_m)
+            v_m.mat_idx = Int32(mat_idx)
+            v_m.pdf_fwd = Float32(1)
+            v_m.med_idx = cur_med_idx
+            v_m.wavelengths = wavelengths
+            if n_verts == 0: first_alb = mat.albedo
+            n_verts += 1
+            if lvc_count > 0:
+                total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lvc_count, scale, pcg)
+
+            # Distant/point/sphere/infinite NEE, via the shared Light
+            # interface + BxDF interface (_nee_weight_measured) +
+            # _bdpt_nee_contribute glue -- same pattern as every other
+            # material branch above.
+            for dl_im in range(Int(sd.distantLightCount)):
+                var ls_dm = _sample_distant_light_nee(sd.distantLights[dl_im])
+                var w_dm = _nee_weight_measured(ls_dm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                total += _bdpt_nee_contribute(beta, w_dm, ls_dm, hit, gn_m, cur_med_idx, sd, scratch)
+            for pl_im in range(Int(sd.pointLightCount)):
+                var ls_pm = _sample_point_light_nee(sd.pointLights[pl_im], hit.to_simd())
+                var w_pm = _nee_weight_measured(ls_pm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                total += _bdpt_nee_contribute(beta, w_pm, ls_pm, hit, gn_m, cur_med_idx, sd, scratch)
+            for sph_im in range(Int(sd.sphereCount)):
+                var ls_sm = _sample_sphere_light_nee(sd.spheres[sph_im], Int(sd.sphereCount), hit.to_simd(), pcg)
+                var w_sm = _nee_weight_measured(ls_sm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                total += _bdpt_nee_contribute(beta, w_sm, ls_sm, hit, gn_m, cur_med_idx, sd, scratch)
+            for inf_im in range(Int(sd.infiniteLightCount)):
+                var ls_em = _sample_infinite_light_nee(sd.infiniteLights[inf_im], Point2f(pcg.next_float(), pcg.next_float()))
+                var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch)
+
+            var wo_l_m = SIMD[DType.float32, 3](dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
+            var um1 = pcg.next_float(); var um2 = pcg.next_float()
+            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, um1, um2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            if not valid_m or pdf_m <= Float32(0):
+                break
+            var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
+            var wilen_m = dot(wi_m, wi_m)
+            if wilen_m > Float32(0):
+                wi_m = wi_m * (Float32(1.0) / sqrt(wilen_m))
+            var cos_wi_m = dot(wi_m, gn_m)
+            if cos_wi_m <= Float32(0):
+                break
+            beta *= f_m * (cos_wi_m / pdf_m)
+            rd = vec3f(wi_m)
+            ro = hit + rd*Float32(0.0002)
+            last_bsdf_pdf = pdf_m
+
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
             if inter.primId.type == Int8(4):
@@ -1097,6 +1178,54 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
 
+        elif mat.type == MatKind.measured:
+            # Mirrors the camera-side measured branch above, minus the NEE
+            # loops (light subpaths don't do NEE against other lights) --
+            # see that branch's docstring for the shared-interface rationale.
+            var gn_m: SIMD[DType.float32, 3]
+            if inter.primId.type == Int8(4):
+                var si_m = Int(inter.primId.id1)
+                var sph_m = sd.spheres[si_m]
+                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
+            else:
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
+            if mat.measured_idx < Int32(0):
+                break
+            var wo_m = (-rd).to_simd()
+            var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
+            var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
+            var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+            var mb = sd.measuredBrdfs[Int(mat.measured_idx)]
+            var wo_l_m = SIMD[DType.float32, 3](dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
+            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
+            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, uml1, uml2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            if not valid_m or pdf_m <= Float32(0):
+                break
+            var v_m = _null_vertex()
+            v_m.pos = hit
+            v_m.normal = vec3f(gn_m)
+            v_m.beta = flux
+            v_m.alb = mat.albedo
+            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = Int32(3)
+            v_m.wo = vec3f(wo_m)
+            v_m.mat_idx = Int32(mat_idx)
+            v_m.pdf_fwd = Float32(1)
+            v_m.med_idx = cur_med_idx
+            v_m.wavelengths = wavelengths
+            n_verts += 1
+            _bdpt_store_lvc_vertex[use_gpu](v_m, lvc, lvc_cap, lvc_counter)
+            var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
+            var wilen_m = dot(wi_m, wi_m)
+            if wilen_m > Float32(0):
+                wi_m = wi_m * (Float32(1.0) / sqrt(wilen_m))
+            var cos_wi_m = dot(wi_m, gn_m)
+            if cos_wi_m <= Float32(0):
+                break
+            flux *= f_m * (cos_wi_m / pdf_m)
+            rd = vec3f(wi_m)
+            ro = hit + rd*Float32(0.0002)
+
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var gn: SIMD[DType.float32, 3]
             if inter.primId.type == Int8(4):
@@ -1193,6 +1322,25 @@ def _eval_vertex(
             hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
         )
         return SIMD[DType.float32, 3](f_val.r*cos_ti, f_val.g*cos_ti, f_val.b*cos_ti)
+    if v.mat_kind == Int32(3):
+        # Measured BxDF is inherently spectral (its tabulated `spectra`
+        # tensor is indexed by wavelength) -- bxdf_eval_measured always
+        # needs v.wavelengths + the spectral table regardless of whether
+        # the caller wanted the plain-RGB or spectral connection path, so
+        # this one branch serves both (see _connect's dispatch condition).
+        var vmat = sd.materials[Int(v.mat_idx)]
+        var mb = sd.measuredBrdfs[Int(vmat.measured_idx)]
+        var vwo_m = v.wo.to_simd()
+        var frm_ev = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tangent_ev = SIMD[DType.float32, 3](frm_ev.x.x, frm_ev.x.y, frm_ev.x.z)
+        var bitangent_ev = SIMD[DType.float32, 3](frm_ev.y.x, frm_ev.y.y, frm_ev.y.z)
+        var wo_l_ev = SIMD[DType.float32, 3](dot(vwo_m, tangent_ev), dot(vwo_m, bitangent_ev), dot(vwo_m, vn))
+        var wi_l_ev = SIMD[DType.float32, 3](dot(dir_to_other, tangent_ev), dot(dir_to_other, bitangent_ev), dot(dir_to_other, vn))
+        var (fr_spec_ev, _) = bxdf_eval_measured(mb, wo_l_ev, wi_l_ev, v.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+        var (r_ev, g_ev, b_ev) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, fr_spec_ev, v.wavelengths)
+        var cos_o_ev = dot(dir_to_other, vn)
+        if cos_o_ev < Float32(0): cos_o_ev = -cos_o_ev
+        return SIMD[DType.float32, 3](r_ev*cos_o_ev, g_ev*cos_o_ev, b_ev*cos_o_ev)
     # Surface: Lambertian f = alb/π × |cos(wo,n)|
     var cos_o = dot(dir_to_other, vn)
     if cos_o < Float32(0): cos_o = -cos_o
@@ -1348,7 +1496,12 @@ def _connect(
     # light subpaths, each with its own independent wavelength draw), then
     # convert the PRODUCT (not each factor separately) back to RGB — the
     # whole point of spectral rendering's product-of-spectra accuracy.
-    var is_hair_conn = cv.mat_kind == Int32(2) or (lv.is_light == Int32(0) and lv.mat_kind == Int32(2))
+    # mat_kind=3 (measured) is ALSO routed to the plain-RGB fallback below,
+    # same as hair — _eval_vertex's own mat_kind=3 branch already does the
+    # full spectral eval internally (bxdf_eval_measured needs v.wavelengths
+    # regardless), so there's no separate _eval_vertex_spectral variant to
+    # maintain for it.
+    var is_hair_conn = cv.mat_kind == Int32(2) or cv.mat_kind == Int32(3) or (lv.is_light == Int32(0) and (lv.mat_kind == Int32(2) or lv.mat_kind == Int32(3)))
     var f_combined: SIMD[DType.float32, 3]
     if is_hair_conn or sd.spectral.res <= 0:
         # BSDF at camera vertex (toward light)
