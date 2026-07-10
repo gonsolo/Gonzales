@@ -16,6 +16,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
+    MeasuredBRDF_C,
 )
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
@@ -1867,11 +1868,24 @@ def sppm_emit_photons_gpu(
     infiniteLightCount: Int64,
     pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
     pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
     _sppm_store_photon reserves its slot via an atomic fetch-add (CPU uses a
-    plain counter increment instead — no other difference)."""
+    plain counter increment instead — no other difference). The spectral/
+    measured params are new (measured BxDF support, see project_measured_bxdf
+    memory): _sppm_trace_photon's measured branch calls bxdf_sample_measured,
+    which needs both a valid spectral table (for the RGB conversion) and
+    the measured-BRDF array -- unlike this kernel's other materials, which
+    only draw a wavelength via PCG and never dereference sd.spectral."""
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0) and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)):
         return
@@ -1882,6 +1896,8 @@ def sppm_emit_photons_gpu(
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
         pointLights, pointLightCount,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med)
@@ -1920,11 +1936,22 @@ def sppm_gather_gpu(
     curveCount: Int64,
     instances: UnsafePointer[Instance_C, MutAnyOrigin],
     instanceCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
 ):
     """One thread per visible point. `sd` here only needs to be complete
-    enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) — the
-    other SceneDescriptor2_C fields it builds are unused by gather, so are
-    zeroed/dangling exactly like sppm_nee_gpu's own _mk_sd_full call."""
+    enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) —
+    plus, since measured BxDF support was added (see project_measured_bxdf
+    memory), its mat_kind=3 branch too (sd.measuredBrdfs + sd.spectral,
+    via _sppm_vp_brdf). Other SceneDescriptor2_C fields it builds are still
+    unused by gather, so stay zeroed/dangling exactly like sppm_nee_gpu's
+    own _mk_sd_full call."""
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
@@ -1939,6 +1966,9 @@ def sppm_gather_gpu(
         instances, instanceCount,
         UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
     )
     _sppm_gather_one(vps, i, photons, heads, inv_cell, sd)
 
@@ -1979,6 +2009,8 @@ def sppm_nee_gpu(
     spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
     driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
@@ -1999,6 +2031,7 @@ def sppm_nee_gpu(
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
         pointLights, pointLightCount,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
     _sppm_nee_one(vps, i, sd, pcg)
@@ -2151,6 +2184,8 @@ def sppm_render_gpu(
             var spectral_cie_z = handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32]()
             var spectral_d65 = handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32]()
             var spectral_res = handle[].spectral_res
+            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
+            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
 
             var grid_pix = ceildiv(n_pix, block_size)
             var grid_vps = ceildiv(n_vps, block_size)
@@ -2186,6 +2221,8 @@ def sppm_render_gpu(
                     blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     pointLights, n_point_lights,
+                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
                     grid_dim=grid_emit, block_dim=block_size)
 
                 handle[].ctx.synchronize()
@@ -2205,6 +2242,8 @@ def sppm_render_gpu(
                     handle[].ctx.enqueue_function[sppm_gather_gpu](
                         vps_ptr, n_vps, photons_ptr, heads_ptr, inv_cell,
                         bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
+                        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                        measured_brdfs, n_measured_brdfs,
                         grid_dim=grid_vps, block_dim=block_size)
 
                 var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
@@ -2217,6 +2256,7 @@ def sppm_render_gpu(
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     pointLights, n_point_lights,
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
                     grid_dim=grid_vps, block_dim=block_size)
 
                 if verbose or (pass_idx + 1) % 10 == 0:

@@ -15,6 +15,7 @@ from .geometry import (
     RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
+    MeasuredBRDF_C,
     dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, INV_PI,
 )
 from .bvh import (
@@ -1757,6 +1758,8 @@ def _bdpt_emit_light_paths_gpu(
     spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
 ):
     """One thread per light path. Thin wrapper: build sd, seed this thread's
     own PCG32, call the SAME _bdpt_trace_light_path bdpt_render's CPU driver
@@ -1774,6 +1777,7 @@ def _bdpt_emit_light_paths_gpu(
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
         pointLights, pointLightCount,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
@@ -1824,6 +1828,8 @@ def _bdpt_camera_connect_gpu(
     spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula bdpt_render's CPU driver uses, keyed by pixel
@@ -1844,6 +1850,7 @@ def _bdpt_camera_connect_gpu(
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
         pointLights, pointLightCount,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
     )
     var has_med = mediumCount > Int64(0)
     var px = pix % fw
@@ -1971,6 +1978,8 @@ def bdpt_render_gpu(
             var spectral_cie_z = handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32]()
             var spectral_d65 = handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32]()
             var spectral_res = handle[].spectral_res
+            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
+            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
 
             var grid_light = ceildiv(max(n_light_paths, 1), block_size)
             var grid_pix = ceildiv(n_pix, block_size)
@@ -1990,6 +1999,7 @@ def bdpt_render_gpu(
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     pointLights, n_point_lights,
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
                     grid_dim=grid_light, block_dim=block_size)
 
                 handle[].ctx.synchronize()
@@ -2009,6 +2019,7 @@ def bdpt_render_gpu(
                     distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                     pointLights, n_point_lights,
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
                     grid_dim=grid_pix, block_dim=block_size)
 
                 if verbose:
