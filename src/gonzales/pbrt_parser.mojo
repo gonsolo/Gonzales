@@ -15,7 +15,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
-                        LightSampler_C, Instance_C, MeasuredBRDF_C)
+                        LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .spectrum import SpectralHandle
@@ -2438,4 +2438,10 @@ def mojo_parsed_scene_descriptor(
     sd[0].measuredBrdfs      = psc[0].measured_brdfs
     sd[0].measuredBrdfCount  = Int64(psc[0].measured_count)
     sd[0].spectral        = spectral
+    # CPU path never needs the GPU-resident texture array (shading.mojo's
+    # _tex_lookup[False] branch uses sd.textures/textureCount above
+    # instead) -- dangling/0, same convention every other GPU-only field
+    # here would use if this were a GPU builder.
+    sd[0].gpuTextures      = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling()
+    sd[0].gpuTextureCount  = Int64(0)
     return sd

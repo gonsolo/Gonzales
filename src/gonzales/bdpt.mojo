@@ -15,7 +15,7 @@ from .geometry import (
     RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
-    MeasuredBRDF_C,
+    MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, INV_PI,
 )
 from .bvh import (
@@ -30,6 +30,7 @@ from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell, _sppm_render_core
+from .shading import _tex_lookup, _get_tri_verts
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle
@@ -596,10 +597,13 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     albedo at its first non-delta (stored) vertex — the same "first hit,
     skipping through mirrors/glass" convention shading.mojo's path.albedo AOV
     already uses, needed for the denoiser's albedo guide buffer (see
-    bdpt_render's docstring). `use_gpu` is unused inside
-    this function's own body today (no CPU/GPU divergence needed here beyond
-    what `_bdpt_connect_to_cache`'s `_connect`/`_visible_transmittance` calls
-    already share) — kept as a parameter so its signature matches
+    bdpt_render's docstring). `use_gpu` now genuinely matters: it selects
+    _tex_lookup's CPU (tex_filenames/OIIO) vs GPU (GpuTexture_C array)
+    texture-sampling branch for diffuse/coateddiffuse vertex albedo — CPU
+    and GPU callers MUST pass the value matching their own reality (the
+    CPU driver previously passed [False] here anyway, so this was already
+    correct; VCM Stage 2c's texture fix (task #150) is what makes it
+    load-bearing) — kept as a parameter so its signature matches
     `_bdpt_trace_light_path`'s and the two thin kernels wrapping this stay
     symmetric in Phase (b).
 
@@ -808,18 +812,30 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 dvcm_carry /= cos_fix
                 dvc_carry /= cos_fix
                 dvm_carry /= cos_fix
+            # Real image-texture reflectance (e.g. "texture reflectance" on
+            # coateddiffuse) — before this, bdpt.mojo always used the flat
+            # mat.albedo fallback (material_builder.mojo's own 0.5 grey
+            # default for any texture-backed material), silently washing
+            # out any textured diffuse/coateddiffuse surface. _tex_lookup
+            # itself returns mat.albedo unchanged when mat.tex_idx == -1
+            # (no texture), so this is a strict improvement, never a
+            # regression, for flat-color materials.
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
             v.beta = beta
-            v.alb = mat.albedo
+            v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-            if n_verts == 0: first_alb = mat.albedo
+            if n_verts == 0: first_alb = eff_alb
             n_verts += 1
             if path_len > 0:
                 total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
@@ -838,19 +854,19 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var wo_d = -ray_dir
             for dl_i in range(Int(sd.distantLightCount)):
                 var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
-                var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(0), mat.albedo, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_d, ls_d, hit, gn, cur_med_idx, sd, scratch)
             for pl_i in range(Int(sd.pointLightCount)):
                 var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
-                var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(0), mat.albedo, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_p, ls_p, hit, gn, cur_med_idx, sd, scratch)
             for sph_i in range(Int(sd.sphereCount)):
                 var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
-                var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(0), mat.albedo, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(0), mat.albedo, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch)
 
             # Cosine-weighted scatter direction
@@ -859,7 +875,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = bxdf_pdf_diffuse(dot(gn, rd.to_simd()))
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
-            beta *= mat.albedo
+            beta *= eff_alb
             # VCM Stage 2b: recursive continuation for the NEXT bounce --
             # see _bdpt_trace_light_path's matching diffuse-branch comment.
             var cos_theta_out = abs(dot(rd.to_simd(), gn))
@@ -1465,11 +1481,19 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 dvcm_carry /= cos_fix
                 dvc_carry /= cos_fix
                 dvm_carry /= cos_fix
+            # Real image-texture reflectance -- see the matching comment in
+            # _bdpt_trace_camera_and_connect's diffuse branch. Also feeds
+            # the continuation flux multiply below, not just the stored
+            # vertex, since both must agree on this bounce's actual albedo.
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
             v.beta = flux
-            v.alb = mat.albedo
+            v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
@@ -1481,7 +1505,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
             rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
             ro = hit + rd*Float32(0.0002)
-            flux *= mat.albedo
+            flux *= eff_alb
             # VCM Stage 2b: recursive continuation for the NEXT bounce
             # (cosThetaOut/bsdfDirPdfW simplifies to PI exactly for
             # cosine-weighted diffuse sampling; bsdfRevPdfW reuses cos_fix,
@@ -2169,7 +2193,7 @@ def _bdpt_render_core(
         def emit_light_path(lp_idx: Int):
             var lpcg = PCG32(base_seed ^ UInt64(lp_idx * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
-            _bdpt_trace_light_path[True](sd, lpcg, has_med, default_emit_med,
+            _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
                                          scratch_light + lp_idx, lvc, lp_idx, lvc_path_len,
                                          mis_vc_weight_factor, mis_vm_weight_factor)
 
@@ -2401,14 +2425,16 @@ def _bdpt_emit_light_paths_gpu(
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
 ):
     """One thread per light path, each writing only its own dedicated
     per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's
     docstring) -- no atomics/contention. Thin wrapper: build sd, seed this
     thread's own PCG32, call the SAME _bdpt_trace_light_path bdpt_render's
-    CPU driver calls with [True]. `has_med` isn't a kernel parameter
-    (`Bool` isn't a `DevicePassable` type `enqueue_function` accepts) --
-    derived here from `mediumCount`, which already is."""
+    CPU driver calls (with [False] on CPU, [True] here). `has_med` isn't a
+    kernel parameter (`Bool` isn't a `DevicePassable` type `enqueue_function`
+    accepts) -- derived here from `mediumCount`, which already is."""
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
@@ -2421,6 +2447,7 @@ def _bdpt_emit_light_paths_gpu(
         pointLights, pointLightCount,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
@@ -2482,6 +2509,8 @@ def _bdpt_camera_connect_gpu(
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula bdpt_render's CPU driver uses, keyed by pixel
@@ -2507,6 +2536,7 @@ def _bdpt_camera_connect_gpu(
         pointLights, pointLightCount,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
     )
     var has_med = mediumCount > Int64(0)
     var px = pix % fw
@@ -2665,6 +2695,8 @@ def bdpt_render_gpu(
             var spectral_res = handle[].spectral_res
             var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
             var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
+            var gpu_textures = handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C]()
+            var n_gpu_textures = Int64(handle[].n_textures)
 
             var grid_light = ceildiv(max(n_light_paths, 1), block_size)
             var grid_pix = ceildiv(n_pix, block_size)
@@ -2702,6 +2734,7 @@ def bdpt_render_gpu(
                     pointLights, n_point_lights,
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     measured_brdfs, n_measured_brdfs,
+                    gpu_textures, n_gpu_textures,
                     grid_dim=grid_light, block_dim=block_size)
 
                 # VCM Stage 2b: light paths are deterministically paired with
@@ -2729,6 +2762,7 @@ def bdpt_render_gpu(
                     pointLights, n_point_lights,
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     measured_brdfs, n_measured_brdfs,
+                    gpu_textures, n_gpu_textures,
                     grid_dim=grid_pix, block_dim=block_size)
 
                 if verbose:

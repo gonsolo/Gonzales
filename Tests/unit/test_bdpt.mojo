@@ -17,6 +17,7 @@ from gonzales.geometry import (
     RGB, Point3f, Vec3f, Intersection_C, LightSampler_C, INV_FOUR_PI, INV_PI,
     AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C,
     Medium_C, MediumInterface_C, Grid_C, PrimId_C, Instance_C, MeasuredBRDF_C,
+    GpuTexture_C,
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
 from gonzales.bxdf import ggx_D, ggx_G2
@@ -76,6 +77,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
+        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -275,6 +277,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
+        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
     )
 
     var cv = BDPTVertex(

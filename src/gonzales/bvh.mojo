@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from std.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -118,6 +118,17 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # loaded table.
     var spectral: SpectralHandle
 
+    # GPU-resident image textures (one GpuTexture_C per distinct file,
+    # mip-chained device buffers — see gpu.mojo's GpuSceneHandle.textures_buf,
+    # the only real producer of this array). `textures`/`textureCount` above
+    # are the CPU-only tex_filenames path (OIIO bridge lookups); this is the
+    # separate GPU-only path shading.mojo's _tex_lookup[True] branch needs.
+    # Dangling/0 for BDPT/SPPM CPU callers (scene.mojo's scene_descriptor(),
+    # which has no GPU buffers to offer) and any caller that never reaches a
+    # material with an image-texture reflectance.
+    var gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin]
+    var gpuTextureCount: Int64
+
 @always_inline
 def _mk_sd_full(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -161,6 +172,8 @@ def _mk_sd_full(
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -173,14 +186,19 @@ def _mk_sd_full(
     home neither of them owns; this is that home, next to
     SceneDescriptor2_C itself. Only the fields bdpt.mojo/sppm.mojo's shared
     functions actually dereference are filled from real device buffers;
-    textures, grids, and the light sampler CDF are never touched by either
-    module's code paths, so they stay dangling/zero-count, same convention
+    grids and the light sampler CDF are never touched by either module's
+    code paths, so they stay dangling/zero-count, same convention
     traverse_bvh2_core's own optional instancing args already use.
     distant/infinite/point lights default to the same dangling convention
     for backward compatibility, but callers that need distant/infinite/
     point-light NEE or light-path emission (both bdpt.mojo and sppm.mojo now
     do, see [[project_priority_backlog]] item 1) should pass the real device
-    buffers/counts explicitly."""
+    buffers/counts explicitly. `gpuTextures`/`gpuTextureCount` likewise
+    default to dangling/0 -- callers that need real image-texture
+    reflectance (bdpt.mojo's GPU kernels, since c9f7e20-era coateddiffuse/
+    diffuse materials with "texture reflectance" silently fell back to a
+    flat 0.5 grey default otherwise) should pass GpuSceneHandle's own
+    textures_buf/n_textures explicitly."""
     return SceneDescriptor2_C(
         bvh2Nodes=bvh2Nodes, primIds=primIds,
         meshes=meshes, meshCount=meshCount,
@@ -205,6 +223,7 @@ def _mk_sd_full(
         instances=instances, instanceCount=instanceCount,
         measuredBrdfs=measuredBrdfs, measuredBrdfCount=measuredBrdfCount,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
+        gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
