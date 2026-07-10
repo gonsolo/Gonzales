@@ -211,6 +211,7 @@ def _gpu_upload_scene(
         psc[0].mediums,         Int64(psc[0].medium_count),
         psc[0].medium_ifaces,   Int64(psc[0].medium_iface_count),
         psc[0].grids,           Int64(psc[0].grid_count),
+        psc[0].measured_brdfs, Int64(psc[0].measured_count),
         Int64(n_pixels),
         sobol,
         psc[0].raster_to_camera, psc[0].camera_to_world,

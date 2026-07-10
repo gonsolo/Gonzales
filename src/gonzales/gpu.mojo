@@ -11,7 +11,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2
 from .transform import transform_normal_by_instance
 from std.atomic import Atomic
 from .rng import PCG32
-from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface
+from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured
 from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
@@ -92,6 +92,9 @@ struct GpuSceneHandle(Movable):
     var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
     var n_grids: Int
     var grid_density_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's density array
+    var measured_brdfs_buf: DeviceBuffer[DType.uint8]  # n_measured_brdfs × sizeof(MeasuredBRDF_C); each entry's 12 pointer fields point into measured_field_bufs
+    var n_measured_brdfs: Int
+    var measured_field_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; 12 sub-array buffers per measured material
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × size_of[PathState_C]()
@@ -179,6 +182,8 @@ def gpu_upload_scene(
     medium_iface_count: Int64,
     grids: UnsafePointer[Grid_C, MutAnyOrigin],
     gridCount: Int64,
+    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin],
+    measuredBrdfCount: Int64,
     n_pixels: Int64,
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     r2c: UnsafePointer[Float32, MutAnyOrigin],
@@ -579,6 +584,153 @@ def gpu_upload_scene(
             if n_grids_int > 0:
                 print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
 
+            # Upload MeasuredBxDF tabulated-BRDF tensors ("measured" material,
+            # see project_measured_bxdf memory / lovely-dazzling-meteor plan
+            # Stage 3). Each measured material owns 12 flat Float32 arrays
+            # (theta_i/phi_i/wavelengths + ndf/sigma/vndf/luminance/spectra
+            # data+CDFs); each gets its own device buffer, mirroring the
+            # per-mesh points_bufs / per-grid grid_density_bufs pattern. The
+            # patched MeasuredBRDF_C struct array embeds device-resident
+            # pointers into those buffers -- loaded from the array *inside*
+            # the GPU kernel (a load, not a cross-call by-value pass) and
+            # handed only to @always_inline helpers, per the by-value
+            # pointer-struct hazard already documented on MeasuredBRDF_C.
+            var measured_field_bufs = List[DeviceBuffer[DType.uint8]]()
+            var n_measured_int = Int(measuredBrdfCount)
+            var measured_structs_host = alloc[MeasuredBRDF_C](max(n_measured_int, 1))
+            for mi in range(n_measured_int):
+                var hm = measured_brdfs[mi]
+                var n_theta_i = Int(hm.n_theta_i)
+                var n_phi_i = Int(hm.n_phi_i)
+                var n_wavelengths = Int(hm.n_wavelengths)
+                var slices2 = n_phi_i * n_theta_i
+                var slices3 = slices2 * n_wavelengths
+
+                var theta_i_buf = ctx.enqueue_create_buffer[DType.uint8](max(n_theta_i, 1) * 4)
+                with theta_i_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(n_theta_i):
+                        dst[k] = hm.theta_i[k]
+                var theta_i_dptr = theta_i_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(theta_i_buf^)
+
+                var phi_i_buf = ctx.enqueue_create_buffer[DType.uint8](max(n_phi_i, 1) * 4)
+                with phi_i_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(n_phi_i):
+                        dst[k] = hm.phi_i[k]
+                var phi_i_dptr = phi_i_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(phi_i_buf^)
+
+                var wavelengths_buf = ctx.enqueue_create_buffer[DType.uint8](max(n_wavelengths, 1) * 4)
+                with wavelengths_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(n_wavelengths):
+                        dst[k] = hm.wavelengths[k]
+                var wavelengths_dptr = wavelengths_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(wavelengths_buf^)
+
+                var ndf_n = Int(hm.ndf_xs) * Int(hm.ndf_ys)
+                var ndf_buf = ctx.enqueue_create_buffer[DType.uint8](max(ndf_n, 1) * 4)
+                with ndf_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(ndf_n):
+                        dst[k] = hm.ndf_data[k]
+                var ndf_dptr = ndf_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(ndf_buf^)
+
+                var sigma_n = Int(hm.sigma_xs) * Int(hm.sigma_ys)
+                var sigma_buf = ctx.enqueue_create_buffer[DType.uint8](max(sigma_n, 1) * 4)
+                with sigma_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(sigma_n):
+                        dst[k] = hm.sigma_data[k]
+                var sigma_dptr = sigma_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(sigma_buf^)
+
+                var vndf_n = slices2 * Int(hm.vndf_xs) * Int(hm.vndf_ys)
+                var vndf_buf = ctx.enqueue_create_buffer[DType.uint8](max(vndf_n, 1) * 4)
+                with vndf_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(vndf_n):
+                        dst[k] = hm.vndf_data[k]
+                var vndf_dptr = vndf_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(vndf_buf^)
+
+                var vndf_marg_n = slices2 * Int(hm.vndf_ys)
+                var vndf_marg_buf = ctx.enqueue_create_buffer[DType.uint8](max(vndf_marg_n, 1) * 4)
+                with vndf_marg_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(vndf_marg_n):
+                        dst[k] = hm.vndf_marg[k]
+                var vndf_marg_dptr = vndf_marg_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(vndf_marg_buf^)
+
+                var vndf_cond_buf = ctx.enqueue_create_buffer[DType.uint8](max(vndf_n, 1) * 4)
+                with vndf_cond_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(vndf_n):
+                        dst[k] = hm.vndf_cond[k]
+                var vndf_cond_dptr = vndf_cond_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(vndf_cond_buf^)
+
+                var lum_n = slices2 * Int(hm.lum_xs) * Int(hm.lum_ys)
+                var lum_buf = ctx.enqueue_create_buffer[DType.uint8](max(lum_n, 1) * 4)
+                with lum_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(lum_n):
+                        dst[k] = hm.lum_data[k]
+                var lum_dptr = lum_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(lum_buf^)
+
+                var lum_marg_n = slices2 * Int(hm.lum_ys)
+                var lum_marg_buf = ctx.enqueue_create_buffer[DType.uint8](max(lum_marg_n, 1) * 4)
+                with lum_marg_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(lum_marg_n):
+                        dst[k] = hm.lum_marg[k]
+                var lum_marg_dptr = lum_marg_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(lum_marg_buf^)
+
+                var lum_cond_buf = ctx.enqueue_create_buffer[DType.uint8](max(lum_n, 1) * 4)
+                with lum_cond_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(lum_n):
+                        dst[k] = hm.lum_cond[k]
+                var lum_cond_dptr = lum_cond_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(lum_cond_buf^)
+
+                var spectra_n = slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys)
+                var spectra_buf = ctx.enqueue_create_buffer[DType.uint8](max(spectra_n, 1) * 4)
+                with spectra_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Float32]()
+                    for k in range(spectra_n):
+                        dst[k] = hm.spectra_data[k]
+                var spectra_dptr = spectra_buf.unsafe_ptr().bitcast[Float32]()
+                measured_field_bufs.append(spectra_buf^)
+
+                measured_structs_host[mi] = MeasuredBRDF_C(
+                    hm.isotropic, hm.n_theta_i, hm.n_phi_i, hm.n_wavelengths,
+                    theta_i_dptr, phi_i_dptr, wavelengths_dptr,
+                    ndf_dptr, hm.ndf_xs, hm.ndf_ys,
+                    sigma_dptr, hm.sigma_xs, hm.sigma_ys,
+                    vndf_dptr, vndf_marg_dptr, vndf_cond_dptr, hm.vndf_xs, hm.vndf_ys,
+                    lum_dptr, lum_marg_dptr, lum_cond_dptr, hm.lum_xs, hm.lum_ys,
+                    hm.stride2_phi, hm.stride2_theta,
+                    spectra_dptr, hm.spectra_xs, hm.spectra_ys,
+                    hm.stride3_phi, hm.stride3_theta, hm.stride3_lambda,
+                )
+            var measured_struct_bytes = max(n_measured_int, 1) * size_of[MeasuredBRDF_C]()
+            var measured_brdfs_buf = ctx.enqueue_create_buffer[DType.uint8](measured_struct_bytes)
+            with measured_brdfs_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = measured_structs_host.bitcast[UInt8]()
+                for j in range(measured_struct_bytes):
+                    dst[j] = src[j]
+            measured_structs_host.free()
+            if n_measured_int > 0:
+                print("GPU: " + String(n_measured_int) + " measured BRDF(s) uploaded")
+
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState_C]() * WAVEFRONT_BATCH)
@@ -843,6 +995,9 @@ def gpu_upload_scene(
                 grids_buf=grids_buf^,
                 n_grids=n_grids_int,
                 grid_density_bufs=grid_density_bufs^,
+                measured_brdfs_buf=measured_brdfs_buf^,
+                n_measured_brdfs=n_measured_int,
+                measured_field_bufs=measured_field_bufs^,
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
@@ -1369,6 +1524,70 @@ def shade_conductor_gpu(
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
             spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
     shade_conductor[True, False](path_ptr, inter, ctx, mat)
+
+
+def shade_measured_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int,
+    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    n_textures: Int,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    n_distant_lights: Int,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    n_point_lights: Int,
+    lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
+    n_light_sampler: Int,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    n_infinite_lights: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    count: Int,
+    px_scale: Float32,
+    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var path_ptr = paths + tid
+    if path_ptr[].pending_mat != MatKind.measured:
+        return
+    path_ptr[].pending_mat = Int8(0)
+    var inter = intersections[tid]
+    var mat = materials[Int(inter.primId.materialIndex)]
+    var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+    var ctx = ShadeContext(
+        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=textures, n_textures=n_textures,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
+        measured_brdfs=measured_brdfs,
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=n_distant_lights,
+            point_lights=pointLights, point_count=n_point_lights,
+            infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
+            spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
+    shade_measured[True, False](path_ptr, inter, ctx, mat)
 
 
 def shade_dielectric_gpu(
@@ -2786,6 +3005,42 @@ def gpu_render_sample(
                     handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
                     grid_dim=grid_dim, block_dim=block_size,
                 )
+                handle[].ctx.enqueue_function[shade_measured_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_int, px_scale,
+                    handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+                    grid_dim=grid_dim, block_dim=block_size,
+                )
                 handle[].ctx.enqueue_function[shade_dielectric_gpu](
                     handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                     handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -3218,6 +3473,42 @@ def gpu_render_wavefront(
                     handle[].n_spheres,
                     handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
                     n_total, px_scale,
+                    handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_res,
+                    handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+                    grid_dim=grid_total, block_dim=block_size,
+                )
+                handle[].ctx.enqueue_function[shade_measured_gpu](
+                    handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+                    handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+                    handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+                    handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+                    handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                    handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                    handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+                    handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+                    handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
+                    handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                    handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
+                    handle[].n_area_lights,
+                    handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
+                    handle[].n_textures,
+                    handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+                    handle[].n_distant_lights,
+                    handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+                    handle[].n_point_lights,
+                    handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
+                    handle[].n_light_sampler,
+                    handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
+                    handle[].n_infinite_lights,
+                    handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                    handle[].n_spheres,
+                    handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+                    n_total, px_scale,
+                    handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
                     handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
                     handle[].spectral_res,
                     handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
