@@ -5,10 +5,10 @@
 # via a shadow ray. (power_heuristic itself is tested in test_sampling.mojo;
 # ggx_D/ggx_G2 primitives are tested in test_bxdf.mojo -- this file tests the
 # combination logic bdpt.mojo layers on top of them, not those primitives
-# themselves.) Also covers _bdpt_connect_to_cache's k-random-connections-then-
-# scale structure (the Light Vertex Cache rewrite's core new estimator),
-# using the shared TriangleSceneFixture for a real (if geometrically
-# irrelevant) BVH to satisfy _connect's visibility check.
+# themselves.) Also covers _bdpt_connect_to_cache's exhaustive-sum-over-the-
+# paired-light-path structure (VCM Stage 2b's standard-Veach-pairing
+# rewrite), using the shared TriangleSceneFixture for a real (if
+# geometrically irrelevant) BVH to satisfy _connect's visibility check.
 
 from std.math import abs
 from std.memory import alloc
@@ -19,11 +19,10 @@ from gonzales.geometry import (
     Medium_C, MediumInterface_C, Grid_C, PrimId_C, Instance_C, MeasuredBRDF_C,
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
-from gonzales.rng import PCG32
 from gonzales.bxdf import ggx_D, ggx_G2
 from gonzales.bdpt import (
     BDPTVertex, _pdf_solid_to_area, _geom_term, _eval_vertex, _eval_conductor_ggx,
-    _bdpt_connect_to_cache, _bdpt_lvc_connection_scale, _BDPT_K_CONNECTIONS,
+    _bdpt_connect_to_cache,
 )
 from gonzales.spectrum import SampledWavelengths, null_spectral_handle
 from _scene_fixture import make_triangle_scene
@@ -42,6 +41,7 @@ def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
     return BDPTVertex(
         pos=pos, normal=normal, beta=RGB(Float32(0)), alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=is_surface, is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -131,6 +131,7 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
         beta=RGB(Float32(0)), alb=RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(1), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -146,6 +147,7 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 1.0, 0.0),
         beta=RGB(Float32(0)), alb=RGB(Float32(0.3), Float32(0.4), Float32(0.5)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -162,6 +164,7 @@ def test_eval_vertex_lambertian_matches_closed_form() raises:
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
         beta=RGB(Float32(0)), alb=RGB(Float32(0.2), Float32(0.4), Float32(0.6)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -188,6 +191,7 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
         beta=RGB(Float32(0)), alb=f0,
         pdf_fwd=Float32(0), pdf_bwd=alpha,
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(1), wo=Vec3f(0.0, 0.0, 1.0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -230,44 +234,21 @@ def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     var result = _eval_conductor_ggx(n, n, n, alpha, f0)
     assert_true(_simd_close(result, expected))
 
-# ── _bdpt_lvc_connection_scale ────────────────────────────────────────────
-# Pins the exact formula (avg_light_path_len/k, i.e. (lvc_count/n_light_paths)
-# /_BDPT_K_CONNECTIONS) against the two wrong formulas this session actually
-# tried first: a bare 1/k (rendered ~3x too dim -- it estimates the MEAN
-# over a light path's depth-strategies where the target is their SUM) and
-# lvc_count/k with no n_light_paths division (rendered ~250000x too bright
-# -- it reconstructs "sum over the whole cache" instead of "sum over one
-# light path's depth-strategies").
+# ── _bdpt_connect_to_cache (VCM Stage 2b: standard Veach pairing) ───────────
+# Since Stage 2b.1, connection is an EXHAUSTIVE sum over the camera vertex's
+# own deterministically-paired light path (`lvc[lp_idx*_BDPT_MAX_VERTS +
+# local]` for `local in range(path_len)`), not a K-random-draw-from-a-
+# shared-pool-then-rescale estimator -- no RNG, no scale factor. This test
+# pins that "sum path_len connections, no rescale" structure: with a
+# single-vertex path (path_len=1) the expected total is exactly
+# _connect(cv, the_one_light_vertex, ..., mis_vm_weight_factor=0), computed
+# here independently via _connect's own constituent pieces (_eval_vertex,
+# _geom_term) rather than by re-deriving _connect's formula. mis_vm_weight_
+# factor=0 keeps _connect's own real-MIS weight (both endpoints are
+# diffuse/light-source here, so it would otherwise activate) at exactly 1,
+# since cv/lv's dVCM/dVC/dVM are all 0 here -- see _connect's docstring.
 
-def test_bdpt_lvc_connection_scale_matches_avg_path_len_over_k() raises:
-    var lvc_count = 300
-    var n_light_paths = 100
-    var result = _bdpt_lvc_connection_scale(lvc_count, n_light_paths)
-    var expected = (Float32(300.0) / Float32(100.0)) / Float32(_BDPT_K_CONNECTIONS)
-    assert_true(_close(result, expected))
-    # Sanity: neither of the two wrong formulas should match.
-    assert_true(not _close(result, Float32(1.0) / Float32(_BDPT_K_CONNECTIONS)))
-    assert_true(not _close(result, Float32(lvc_count) / Float32(_BDPT_K_CONNECTIONS)))
-
-def test_bdpt_lvc_connection_scale_zero_light_paths_returns_zero() raises:
-    """Guards the n_light_paths<=0 division; a scene with n_pix==0 (or any
-    other degenerate zero-light-path configuration) must not divide by zero."""
-    assert_true(_close(_bdpt_lvc_connection_scale(0, 0), Float32(0.0)))
-
-# ── _bdpt_connect_to_cache (Light Vertex Cache rewrite) ─────────────────────
-# The LVC rewrite replaced BDPT's old exhaustive per-pixel (camera x light)
-# vertex-pair enumeration with: pick _BDPT_K_CONNECTIONS random vertices from
-# a cache shared across the whole frame, sum their _connect(...) values, and
-# scale by a caller-supplied factor (avg_light_path_len / k -- see
-# _bdpt_trace_camera_and_connect's docstring for why that specific factor,
-# not lvc_count/k or a bare 1/k, is the correct one). This test pins the
-# "sum k draws, then multiply by scale" structure itself: with a
-# single-entry cache every draw is identical, so the expected total is
-# exactly k * _connect(cv, the_one_cached_vertex) * scale, computed here
-# independently via _connect's own constituent pieces (_eval_vertex,
-# _geom_term) rather than by re-deriving _connect's formula.
-
-def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
+def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     # A real (if geometrically irrelevant) BVH so _connect's internal
     # visibility check has something valid to traverse -- placed far from
     # the cv/lv segment below so the shadow ray is guaranteed unoccluded.
@@ -300,6 +281,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
         pos=Point3f(5.0, 5.0, 10.0), normal=Vec3f(0.0, 0.0, 1.0),
         beta=RGB(Float32(3.0)), alb=RGB(Float32(0.5)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -309,6 +291,7 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
         pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0),
         beta=RGB(Float32(2.0)), alb=RGB(Float32(1.0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(1),
         med_idx=Int32(-1), mat_kind=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -317,20 +300,18 @@ def test_bdpt_connect_to_cache_sums_k_draws_and_applies_scale() raises:
     var lvc = alloc[BDPTVertex](1)
     lvc[0] = lv
     var scratch = alloc[Intersection_C](1)
-    var pcg = PCG32(UInt64(1), UInt64(1))
-    var scale = Float32(1.5)
 
-    var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 1, scale, pcg)
+    var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0))
 
     # Independently compute the single-connection value _connect would
-    # produce, then verify the k-sum-and-scale wrapper against it directly.
+    # produce, then verify the exhaustive-sum-over-the-path wrapper against
+    # it directly.
     var dir_to_light = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
     var f_cam = _eval_vertex(cv, dir_to_light, sd)  # Lambertian: alb/pi * cos
     var f_lgt = SIMD[DType.float32, 3](lv.alb.r, lv.alb.g, lv.alb.b)  # is_light: Le, no cosine
     var g = _geom_term(cv, lv)  # 1*1/10^2
     var beta_prod = Float32(3.0) * Float32(2.0)
-    var one_connection = f_cam[0] * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
-    var expected = one_connection * Float32(_BDPT_K_CONNECTIONS) * scale
+    var expected = f_cam[0] * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
 
     assert_true(_close(result.r, expected))
     assert_true(_close(result.g, expected))

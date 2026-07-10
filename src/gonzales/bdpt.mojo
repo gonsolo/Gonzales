@@ -8,7 +8,7 @@ from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.algorithm import parallelize
-from std.math import sqrt, cos, sin, tan, floor, log, exp, max, abs, ceildiv
+from std.math import sqrt, cos, sin, tan, floor, log, exp, max, abs, ceildiv, pow
 from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
@@ -46,79 +46,57 @@ comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices stored per light subpath
                                 # each light path's contribution to the shared cache below)
 
 # ── VCM (Vertex Connection and Merging, Georgiev et al. 2012) ────────────────
-# _VCM_MERGE_PROB is the probability, at each non-delta camera vertex, of
-# using vertex MERGING (photon-mapping-style density estimation against the
-# LVC, see _bdpt_merge_from_cache) instead of vertex CONNECTION
-# (_bdpt_connect_to_cache, the existing BDPT strategy) for that vertex's
-# indirect-illumination sample. NOT Georgiev's continuous balance-heuristic
-# MIS weight -- that distinction is deliberate: Georgiev's formula assumes
-# per-pixel-independent light subpaths and a spatially-known local
-# light-vertex density, neither of which holds for this codebase's
-# shared-LVC/uniform-subsample-and-scale connection estimator (see
-# _bdpt_lvc_connection_scale's docstring for why the equivalent
-# exhaustive-strategy MIS was already abandoned for connections alone) --
-# deriving a correct continuous weight for THIS non-standard architecture
-# is unresolved, open work.
+# Real VCM combines vertex CONNECTION (_bdpt_connect_to_cache/_connect) and
+# vertex MERGING (_bdpt_merge_from_cache) by running BOTH, unconditionally,
+# at every non-delta camera vertex, and summing their contributions -- NOT a
+# stochastic either/or pick (that was this codebase's Stage 1 design,
+# retired VCM Stage 2c/2d; see project_vcm_stage2_mis_derivation memory and
+# git history for why: SmallVCM's own reference driver loop
+# (vertexcm.hxx's PathTracerEyeVertex, ConnectVertices + the RangeQuery
+# grid walk) does exactly this -- two separate loops per eye vertex, no
+# selection probability anywhere). Each technique's own per-candidate MIS
+# weight (Georgiev Eq. 9-10 / SmallVCM's ConnectVertices and
+# RangeQuery::Process, both verified against the reference source) already
+# makes the UNWEIGHTED SUM of both techniques' outputs a correct, lower-
+# variance combined estimator -- no rescaling by any selection probability
+# is needed or correct here.
 #
-# Instead: _bdpt_connect_to_cache and _bdpt_merge_from_cache are each
-# ALREADY complete, independently-(un)biased estimators of the SAME target
-# quantity (this vertex's indirect-illumination contribution) -- not two
-# partial/additive terms like the K-random-connections trick inside
-# _bdpt_connect_to_cache itself. Combining two such black-box estimators of
-# the same quantity via stochastic selection is E[result] = q*E[A] +
-# (1-q)*E[B] = q*I + (1-q)*I = I -- i.e. NO rescaling by 1/q is applied
-# (that would be the correct move only for combining raw f(x)/p(x) samples
-# under a mixture-pdf, where q enters the DENOMINATOR of a full effective
-# density -- these two functions already ARE such normalized densities on
-# their own; dividing by q AGAIN double-counts and was a real bug caught by
-# rendering ganesha --bdpt and seeing bright color-blotch fireflies at
-# _VCM_MERGE_PROB=0.5, i.e. everything roughly 2x too bright with the
-# merge term's inherently higher per-sample variance dominating the
-# visible error). Since connection is unbiased and merging is CONSISTENT
-# (converges to the correct value as the merge radius -> 0, same as any
-# fixed-radius photon-density estimator), their probability-weighted
-# combination remains consistent as a whole, with no risk of the two
-# techniques double-counting energy (exactly one fires per vertex per
-# sample, each contributing its own natural, unscaled expectation). The
-# real, honest cost: the merge radius here is FIXED per render (see
-# bdpt_render's merge_r2), not progressively shrunk across spp samples the
-# way SPPM shrinks its per-pixel radius across passes -- so this does NOT
-# converge to a bias-free image as spp -> infinity, only as spp -> infinity
-# AND radius -> 0 together. Real photon-mapping consequence of that: with
-# n_light_paths == n_pix light subpaths rebuilt fresh (no cross-pass
-# accumulation) every sample, the LOCAL vertex density inside a small,
-# fixed merge radius is often just 0-2 vertices -- classic single-shot
-# photon-mapping fireflies (isolated bright pixels from a rare
-# high-throughput vertex landing in radius), confirmed visually on
-# ganesha/volumetric-caustic --bdpt at multiple probabilities (0.5, 0.15)
-# and radii (0.5%, 3% of scene diameter): tuning reduced but never
-# eliminated it, and it does NOT average out with more spp samples the way
-# ordinary noise does at a FIXED radius (bias only shrinks with radius,
-# per the paragraph above). A real fix needs SPPM-style progressive
-# per-pixel radius shrinkage (persistent r2/N_acc state across spp
-# samples, not a fresh-every-pass grid) -- a substantially larger
-# restructuring of bdpt_render's current per-sample-independent-averaging
-# design, out of scope for this session. Set to 0 (disabled) for that
-# reason: the infrastructure (_bdpt_merge_from_cache, the merge grid
-# build/query, the corrected one-sample-selection math above) is real,
-# tested, and kept for whoever picks up progressive refinement next, but
-# is not yet safe to enable by default across untested scenes. Raise this
-# above 0 only for targeted experimentation, not general rendering.
-comptime _VCM_MERGE_PROB = Float32(0.0)
+# Both techniques' weights are scoped to diffuse (mat_kind=0, real surface)
+# cv/lv pairs only this pass -- conductor/hair/measured have no real
+# standalone BSDF pdf yet (or, for measured, a real pdf but no connect-time
+# reverse-pdf local frame wired up), so connections/merges touching them
+# fall through to weight=1 (today's plain unweighted behavior), a
+# deliberately scoped gap tracked in project_vcm_stage2_mis_derivation
+# memory, not a silent omission. See _connect's and
+# _bdpt_merge_from_cache's own docstrings for the exact scope condition.
+#
+# The merge radius is now progressive (Stage 2c, see _bdpt_render_core's
+# per-sample loop): a single global radius r_i = r_1/(i+1)^(0.5*(1-alpha))
+# shrinks every spp sample (Hachisuka & Jensen 2008's iteration-indexed
+# scheme, NOT sppm.mojo's per-pixel Knaus-Zwicker adaptive radius -- the
+# two are architecturally different and not interchangeable, see that
+# file's _sppm_gather_one for contrast). This is what makes enabling real
+# weighted merging safe: a FIXED radius merge is only CONSISTENT (converges
+# to zero bias as radius->0), never unbiased at any one radius, and a fixed
+# small radius on a freshly-rebuilt-every-sample LVC (no cross-pass photon
+# accumulation) produces classic single-shot photon-mapping fireflies --
+# confirmed by this session's Stage 1 predecessor. Progressive shrinkage
+# fixes that the same way SPPM's own progressive radius does.
 
-# ── Light Vertex Cache (LVC-BPT, Davidovic et al. 2014) ──────────────────────
-# Instead of pairing one light subpath with one camera subpath (the old,
-# CPU-only design this replaced), one *shared* cache of light-subpath vertices
-# is built once per spp sample — from many independently-traced light paths,
-# not tied to any one pixel — and every camera-subpath vertex connects to a
-# few uniformly-random vertices from that shared pool. This is what makes the
-# algorithm GPU-friendly (the light-tracing and camera-tracing+connect phases
-# are each embarrassingly parallel across independent threads, with no
-# per-pixel light-subpath pairing to serialize on) while remaining exactly the
-# same algorithm on CPU — see `_bdpt_trace_light_path`/
-# `_bdpt_trace_camera_and_connect` below, both `comptime[use_gpu: Bool]`
-# parameterized so CPU and GPU share one implementation.
-comptime _BDPT_K_CONNECTIONS = 2  # random light-vertex connections per non-delta camera vertex
+# ── Light Vertex Cache (LVC-BPT, Davidovic et al. 2014, restructured VCM ─────
+# Stage 2b for standard Veach pairing) ────────────────────────────────────────
+# One light subpath is traced per pixel (`n_light_paths == n_pix`), each into
+# its own dedicated slice of a shared `lvc` buffer (see
+# _bdpt_store_lvc_vertex's docstring) — standard Veach BDPT pairing, not a
+# shared-pool random-draw (that was this codebase's original LVC-BPT design;
+# replaced because Georgiev/SmallVCM's real per-vertex MIS weights assume
+# per-pixel-paired light subpaths, see project_vcm_stage2_mis_derivation
+# memory). Each pixel's camera subpath connects to EVERY vertex of its own
+# paired light path (`_bdpt_connect_to_cache`) and merges against ALL light
+# paths' vertices via a shared spatial grid (`_bdpt_merge_from_cache`) — see
+# `_bdpt_trace_light_path`/`_bdpt_trace_camera_and_connect` below, both
+# `comptime[use_gpu: Bool]` parameterized so CPU and GPU share one
+# implementation.
 
 # ── Vertex types ──────────────────────────────────────────────────────────────
 
@@ -505,12 +483,13 @@ def _bdpt_merge_from_cache(
     inv_cell: Float32,
     r2: Float32,
     norm: Float32,
+    mis_vc_weight_factor: Float32,
 ) -> RGB:
     """Vertex MERGING (photon-mapping-style density estimation) against the
-    shared Light Vertex Cache -- the "M" in VCM, an alternative to
-    _bdpt_connect_to_cache's vertex CONNECTION for the SAME indirect-
-    illumination term (see _VCM_MERGE_PROB's docstring for how the two are
-    combined without double-counting).
+    shared Light Vertex Cache -- the "M" in VCM, run UNCONDITIONALLY
+    alongside _bdpt_connect_to_cache's vertex CONNECTION for every non-delta
+    camera vertex (real VCM does both every time, not a stochastic either/or
+    -- see _bdpt_trace_camera_and_connect's call sites).
 
     For each LVC vertex `lv` within radius sqrt(r2) of `cv`, treats `lv` as
     a stored photon: evaluates cv's own BSDF toward lv's stored `wo`
@@ -528,7 +507,16 @@ def _bdpt_merge_from_cache(
     docstring). No shadow ray, no geometry term: merging assumes cv and lv
     are close enough to be treated as the same point, so lv's own light
     path having reached lv unoccluded already implies the segment is
-    clear."""
+    clear.
+
+    VCM Stage 2c: real per-candidate MIS weight (Georgiev et al. 2012 /
+    SmallVCM's RangeQuery::Process, vertexcm.hxx:129-166, verified against
+    the reference source) is applied ONLY when both cv and lv are diffuse
+    (mat_kind=0, cv also required to be a real surface -- excludes volume
+    vertices, which default to mat_kind=0 from _null_vertex() but have no
+    real BSDF pdf) -- the same scope _connect uses for its own connection
+    weight, for the same reason (no real standalone pdf for conductor/hair/
+    measured yet, see that function's docstring)."""
     if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
         return RGB(Float32(0))
     var total = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
@@ -559,9 +547,17 @@ def _bdpt_merge_from_cache(
                         var dist2 = e.length_sq()
                         if dist2 <= r2:
                             var f_cv = _eval_vertex(cv, lv.wo.to_simd(), sd)
-                            total[0] += f_cv[0] * lv.beta.r
-                            total[1] += f_cv[1] * lv.beta.g
-                            total[2] += f_cv[2] * lv.beta.b
+                            var w = Float32(1)
+                            if cv.mat_kind == Int32(0) and cv.is_surface == Int32(1) and lv.mat_kind == Int32(0):
+                                var cn = cv.normal.to_simd()
+                                var camera_bsdf_dir_pdf_w = abs(dot(lv.wo.to_simd(), cn)) / PI
+                                var camera_bsdf_rev_pdf_w = abs(dot(cv.wo.to_simd(), cn)) / PI
+                                var w_light = lv.dVCM * mis_vc_weight_factor + lv.dVM * camera_bsdf_dir_pdf_w
+                                var w_camera = cv.dVCM * mis_vc_weight_factor + cv.dVM * camera_bsdf_rev_pdf_w
+                                w = Float32(1) / (w_light + Float32(1) + w_camera)
+                            total[0] += f_cv[0] * lv.beta.r * w
+                            total[1] += f_cv[1] * lv.beta.g * w
+                            total[2] += f_cv[2] * lv.beta.b * w
                     k = Int(merge_next[k])
     var beta = cv.beta
     return RGB(total[0] * beta.r, total[1] * beta.g, total[2] * beta.b) * norm
@@ -722,10 +718,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 # Volume: out of MIS scope this pass, same as the light side.
                 dvcm_carry = Float32(0)
                 if path_len > 0:
-                    if pcg.next_float() < _VCM_MERGE_PROB:
-                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
-                    else:
-                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 beta *= ff.albedo
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -828,10 +822,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
-                if pcg.next_float() < _VCM_MERGE_PROB:
-                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
-                else:
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # NEE to distant/point/sphere/infinite lights, via the shared
             # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -939,10 +931,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 if n_verts == 0: first_alb = mat.albedo
                 n_verts += 1
                 if path_len > 0:
-                    if pcg.next_float() < _VCM_MERGE_PROB:
-                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
-                    else:
-                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
                 # Distant/point/sphere/infinite NEE, via the shared Light
                 # interface + BxDF interface + _bdpt_nee_contribute glue —
@@ -1014,10 +1004,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
-                if pcg.next_float() < _VCM_MERGE_PROB:
-                    total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
-                else:
-                    total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
             # interface + BxDF interface (_nee_weight_hair, using `hc`) +
@@ -1105,10 +1093,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
-                if pcg.next_float() < _VCM_MERGE_PROB:
-                    total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm)
-                else:
-                    total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
             # interface + BxDF interface (_nee_weight_measured) +
@@ -1321,7 +1307,12 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         var emission_pdf_w = direct_pdf_a * cos_theta_emit / PI
         dvcm_carry = direct_pdf_a / emission_pdf_w
         dvc_carry = cos_theta_emit / emission_pdf_w
-        dvm_carry = dvc_carry * mis_vm_weight_factor
+        # SmallVCM vertexcm.hxx:856 -- light-origin dVM uses mMisVcWeightFactor,
+        # NOT mMisVmWeightFactor (verified against the reference source; a
+        # variable-name mix-up here was silently inert while merge stayed
+        # disabled -- lv.dVM was never read by the connect-only weight, only
+        # by RangeQuery::Process's real merge weight, added below).
+        dvm_carry = dvc_carry * mis_vc_weight_factor
         lv0_vert.dVCM = dvcm_carry
         lv0_vert.dVC = dvc_carry
         lv0_vert.dVM = dvm_carry
@@ -2027,8 +2018,13 @@ def _connect(
     # memory for the full derivation and its "not independently verified"
     # caveats). cos_cv/cos_lv reuse the same geometry _geom_term computed
     # internally, recomputed here since that helper doesn't expose them.
-    var cv_is_diffuse = cv.mat_kind == Int32(0)
-    var lv_is_diffuse_or_light = lv.is_light == Int32(1) or lv.mat_kind == Int32(0)
+    # is_surface==1 required in addition to mat_kind==0: volume vertices
+    # default to mat_kind=0 (Lambertian) from _null_vertex() too (never
+    # explicitly overridden -- see _bdpt_merge_from_cache's matching
+    # comment), but have no real diffuse BSDF pdf; excluding them here
+    # keeps this weight scoped to genuine diffuse surfaces only.
+    var cv_is_diffuse = cv.mat_kind == Int32(0) and cv.is_surface == Int32(1)
+    var lv_is_diffuse_or_light = lv.is_light == Int32(1) or (lv.mat_kind == Int32(0) and lv.is_surface == Int32(1))
     if cv_is_diffuse and lv_is_diffuse_or_light:
         var cos_cv = abs(dot(dir, cv.normal.to_simd()))
         var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
@@ -2058,24 +2054,24 @@ def _bdpt_render_core(
     n_spp:    Int,
     verbose:  Bool,
 ) -> Tuple[UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
-    """Bidirectional Path Tracing main loop (Light Vertex Cache architecture —
-    see the module docstring above), factored out of `bdpt_render` so
-    `vcm_render` (see below) can blend this connection-only estimate with a
-    separately-computed progressive SPPM merge estimate before the shared
-    aux-buffer/denoise/write tail runs once. Returns (pixels, albedo_pixels),
-    each a caller-owned `n_pix*3` Float32 buffer (iso-scaled, max_comp-
-    clamped, NOT yet denoised) — same contract `_sppm_render_core` follows.
+    """Bidirectional Path Tracing main loop with real VCM connect+merge MIS
+    (Light Vertex Cache architecture — see the module docstring above),
+    factored out of `bdpt_render` so `vcm_render` (see below) can blend this
+    estimate with a separately-computed progressive SPPM merge estimate
+    before the shared aux-buffer/denoise/write tail runs once. Returns
+    (pixels, albedo_pixels), each a caller-owned `n_pix*3` Float32 buffer
+    (iso-scaled, max_comp-clamped, NOT yet denoised) — same contract
+    `_sppm_render_core` follows.
 
-    Each spp sample rebuilds a fresh shared Light Vertex Cache from
-    `n_light_paths` independent light subpaths (not paired to any one
-    pixel), then traces every pixel's camera subpath and connects each of
-    its non-delta vertices to `_BDPT_K_CONNECTIONS` random cache entries.
-    This replaced the old per-(pixel,sample) design that retraced an
-    independent, unshared light subpath for every single pixel×sample pair
-    — and, with it, the old exhaustive same-total-length strategy-count MIS
-    (which doesn't compose once light vertices come from a cache shared
-    across the whole frame): see `_bdpt_connect_to_cache`'s docstring for
-    the uniform-subsample-and-scale estimator that replaces it."""
+    Each spp sample traces `n_light_paths == n_pix` light subpaths, one per
+    pixel and deterministically paired with that pixel's own camera
+    subpath (see _bdpt_store_lvc_vertex's docstring), then traces every
+    pixel's camera subpath and, at each non-delta vertex, both connects to
+    every vertex of its paired light path AND merges against all light
+    paths' vertices within the current sample's progressive merge radius —
+    see this file's opening VCM comment for the combined estimator and
+    `_bdpt_connect_to_cache`/`_bdpt_merge_from_cache`'s own docstrings for
+    each technique's per-candidate MIS weight."""
     var fw = Int(psc[0].film_w)
     var fh = Int(psc[0].film_h)
     var n_pix = fw * fh
@@ -2131,41 +2127,41 @@ def _bdpt_render_core(
     var scratch_light = alloc[Intersection_C](max(n_light_paths, 1))
     var scratch_cam = alloc[Intersection_C](max(n_pix, 1))
 
-    # VCM vertex merging (Stage 1, see _VCM_MERGE_PROB's docstring): a fixed
-    # merge radius derived from the scene's own bounding sphere (0.5% of its
-    # diameter — small enough to stay a local density estimate, no CLI
-    # parameter needed since, unlike SPPM's progressive radius, this one
-    # never shrinks across passes anyway). Grid buffers are allocated once
-    # and rebuilt fresh every spp sample (mirrors the LVC itself).
+    # VCM vertex merging: grid buffers allocated once, rebuilt fresh every
+    # spp sample (mirrors the LVC itself). Stage 2c: the radius itself is
+    # now progressive (Hachisuka & Jensen 2008's global, per-iteration
+    # scheme -- see this file's opening VCM comment for why that's the
+    # right choice here, not SPPM's per-pixel adaptive radius), recomputed
+    # each `si` below from `merge_radius_1`, the same initial 3%-of-scene-
+    # diameter value Stage 1 used as its (then-fixed) radius.
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-    var merge_radius = scene_radius * Float32(0.03)
-    var merge_r2 = merge_radius * merge_radius
-    var merge_inv_cell = Float32(1.0) / max(merge_radius, Float32(1e-6))
-    var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
+    var merge_radius_1 = scene_radius * Float32(0.03)
+    comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
     var merge_heads = alloc[Int32](_HSIZE)
     var merge_next = alloc[Int32](max(lvc_cap, 1))
 
-    # VCM Stage 2b: global per-iteration MIS weight-combination constants
-    # (Georgiev et al. 2012 / SmallVCM, see project_vcm_stage2_mis_derivation
-    # memory) -- reuse the existing FIXED Stage-1 merge_r2 for now
-    # (progressive radius is Stage 2c, not done yet).
-    var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
-    # mis_vm_weight_factor discounts connections by "how much of this
-    # path's probability mass the merge technique WOULD have covered" --
-    # correct only if merge is actually running and collecting that share.
-    # _VCM_MERGE_PROB is 0 this pass (Stage 1's fixed-radius merge stays
-    # disabled, see that constant's docstring), so merge contributes ZERO
-    # probability mass in practice: using the real eta_vcm-derived value
-    # here would discount connections for a competing technique that never
-    # fires, systematically losing energy (confirmed: an earlier version of
-    # this fix measured ~20-30% too dark vs the pbrt reference on ganesha
-    # before this correction). 0 here recovers a real (still correctly
-    # derived, still unbiased) connection-only MIS across depth-strategies.
-    # Revisit together with wiring up a real weighted merge contribution.
-    var mis_vm_weight_factor = Float32(0)
-    var mis_vc_weight_factor = Float32(1.0) / eta_vcm
-
     for si in range(n_spp):
+        # Stage 2c progressive radius: r_i = r_1 / (i+1)^(0.5*(1-alpha))
+        # (Hachisuka & Jensen 2008 via Georgiev et al. 2012 Eq. 11), a
+        # single GLOBAL radius shared by every pixel this sample, shrinking
+        # monotonically across samples -- distinct from sppm.mojo's
+        # per-pixel Knaus-Zwicker scheme (see this file's opening comment).
+        var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
+        var merge_r2 = radius_i * radius_i
+        var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
+        var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
+
+        # VCM Stage 2b/2c: global per-iteration MIS weight-combination
+        # constants (Georgiev et al. 2012 / SmallVCM, see
+        # project_vcm_stage2_mis_derivation memory), recomputed every
+        # sample since they depend on the now-progressive radius. Merge
+        # runs unconditionally alongside connect (see this file's opening
+        # VCM comment), so mis_vm_weight_factor uses its real,
+        # non-discounted eta_vcm-derived value.
+        var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
+        var mis_vm_weight_factor = eta_vcm
+        var mis_vc_weight_factor = Float32(1.0) / eta_vcm
+
         # ── Phase 1: trace each pixel's own paired light subpath ─────────────
         # No atomics needed: light path lp_idx writes only its own dedicated
         # slice of lvc (see _bdpt_store_lvc_vertex's docstring).
@@ -2267,34 +2263,24 @@ def bdpt_render(
     return Int32(0)
 
 # ── VCM: pixel-level blend of BDPT connections + progressive SPPM merging ────
-# The REAL Georgiev et al. 2012 VCM combines connection and merging with one
-# continuous per-VERTEX MIS weight, inside a single shared bounce loop --
-# that requires deriving a correct weight for this codebase's non-standard
-# uniform-subsample LVC connection estimator (see the module docstring's
-# opening paragraphs), unresolved, and reconciling BDPT's per-sample-fresh
-# camera retrace with progressive merging's need for a query point that's
-# FIXED across passes for its radius-shrinkage convergence proof to hold
-# (see _VCM_MERGE_PROB's docstring: this is exactly why Stage 1's in-loop
-# fixed-radius merge doesn't converge to zero bias as spp -> infinity). Both
-# are real, open, multi-session problems -- not attempted here.
+# Historical note: `_bdpt_render_core` (used by both `bdpt_render` and this
+# function) now has REAL per-vertex connect+merge MIS built in (VCM Stage
+# 2b/2c -- see the module's opening VCM comment), so this pixel-level blend
+# is no longer the only way to combine connection and merging; it remains
+# as a separate, simpler `--vcm` CLI path that additionally pulls in SPPM's
+# independently-converging progressive photon map (a genuinely different
+# estimator from BDPT's own now-real merge term, still useful as a second
+# opinion / fallback blend):
 #
-# This is the pragmatic middle ground: run BDPT's connection-only estimator
-# (`_bdpt_render_core`, unmodified, still the same correctness-verified code
+# Runs BDPT's estimator (`_bdpt_render_core`, unmodified, the same code
 # `bdpt_render` uses) and SPPM's progressive photon-mapping estimator
-# (`_sppm_render_core`, likewise unmodified -- its progressive per-pixel
-# radius shrinkage across `n_passes` IS the real, proven fix for Stage 1's
-# non-convergent fixed-radius merge), each to completion as independent,
-# already-converging estimates of the same pixel value, then blend them
-# PER PIXEL: `final = alpha*merge + (1-alpha)*connect`. This is a valid,
-# unbiased combination for the same reason `_VCM_MERGE_PROB`'s per-vertex
-# stochastic selection is (E[final] = alpha*E[merge] + (1-alpha)*E[connect]
-# = alpha*I + (1-alpha)*I = I when both estimators target the same I) --
-# just applied once per pixel instead of once per vertex per sample, so it
-# needs no rescaling either. It captures VCM's practical payoff (SPPM's
-# noise-free caustics + BDPT's noise-free general glossy/indirect, combined
-# so neither technique's weakness dominates) without the vertex-level MIS
-# weight or the progressive-merge-inside-BDPT's-loop architecture change --
-# both remain open work for a real Stage 2/3.
+# (`_sppm_render_core`, likewise unmodified), each to completion as
+# independent, already-converging estimates of the same pixel value, then
+# blends them PER PIXEL: `final = alpha*merge + (1-alpha)*connect`. This is
+# a valid, unbiased combination (E[final] = alpha*E[merge] +
+# (1-alpha)*E[connect] = alpha*I + (1-alpha)*I = I when both estimators
+# target the same I) applied once per pixel rather than once per vertex,
+# so it needs no rescaling either.
 def vcm_render(
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sd:       SceneDescriptor2_C,
@@ -2505,9 +2491,10 @@ def _bdpt_camera_connect_gpu(
     (non-queued) shadow-ray path in gpu.mojo's shade_*_gpu kernels already
     relies on. `has_med` isn't a kernel parameter (see
     _bdpt_emit_light_paths_gpu's docstring) -- derived from mediumCount.
-    merge_* params are VCM Stage 1 (see _VCM_MERGE_PROB's docstring) --
-    the merge grid is built once per pass by bdpt_render_gpu before this
-    kernel launches, mirroring the LVC's own build-then-consume shape."""
+    merge_* params carry this pass's progressive-radius merge grid (VCM
+    Stage 2c, see the module's opening VCM comment) -- the grid is built
+    once per pass by bdpt_render_gpu before this kernel launches, mirroring
+    the LVC's own build-then-consume shape."""
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
@@ -2684,26 +2671,24 @@ def bdpt_render_gpu(
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-            var merge_radius = scene_radius * Float32(0.03)
-            var merge_r2 = merge_radius * merge_radius
-            var merge_inv_cell = Float32(1.0) / max(merge_radius, Float32(1e-6))
-            var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
-
-            # VCM Stage 2b: same global constants as bdpt_render (CPU) --
-            # see that function's matching comment.
-            var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
-            # See bdpt_render (CPU)'s matching comment: merge never actually
-            # runs this pass (_VCM_MERGE_PROB=0), so its MIS discount must
-            # be 0 too, or connections systematically lose energy to a
-            # technique that never collects its share.
-            var mis_vm_weight_factor = Float32(0)
-            var mis_vc_weight_factor = Float32(1.0) / eta_vcm
+            var merge_radius_1 = scene_radius * Float32(0.03)
+            comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
             var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var n_light_paths_f = Float32(n_light_paths)
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
 
             for si in range(n_spp):
+                # Stage 2c progressive radius -- see bdpt_render (CPU)'s
+                # matching per-sample loop for the full derivation comment.
+                var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
+                var merge_r2 = radius_i * radius_i
+                var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
+                var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
+                var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
+                var mis_vm_weight_factor = eta_vcm
+                var mis_vc_weight_factor = Float32(1.0) / eta_vcm
+
                 var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
                 handle[].ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
                     lvc_ptr, path_len_ptr, mis_vc_weight_factor, mis_vm_weight_factor,
