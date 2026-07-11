@@ -510,14 +510,13 @@ def _bdpt_merge_from_cache(
     path having reached lv unoccluded already implies the segment is
     clear.
 
-    VCM Stage 2c: real per-candidate MIS weight (Georgiev et al. 2012 /
+    VCM Stage 2c/2d: real per-candidate MIS weight (Georgiev et al. 2012 /
     SmallVCM's RangeQuery::Process, vertexcm.hxx:129-166, verified against
-    the reference source) is applied ONLY when both cv and lv are diffuse
-    (mat_kind=0, cv also required to be a real surface -- excludes volume
-    vertices, which default to mat_kind=0 from _null_vertex() but have no
-    real BSDF pdf) -- the same scope _connect uses for its own connection
-    weight, for the same reason (no real standalone pdf for conductor/hair/
-    measured yet, see that function's docstring)."""
+    the reference source) is applied when both cv and lv are diffuse or
+    rough conductor/coated_conductor (_bdpt_vertex_mis_scoped) -- the same
+    scope _connect uses for its own connection weight, for the same reason
+    (no real standalone pdf for hair/measured yet, see that function's
+    docstring)."""
     if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
         return RGB(Float32(0))
     var total = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
@@ -549,10 +548,8 @@ def _bdpt_merge_from_cache(
                         if dist2 <= r2:
                             var f_cv = _eval_vertex(cv, lv.wo.to_simd(), sd)
                             var w = Float32(1)
-                            if cv.mat_kind == Int32(0) and cv.is_surface == Int32(1) and lv.mat_kind == Int32(0):
-                                var cn = cv.normal.to_simd()
-                                var camera_bsdf_dir_pdf_w = abs(dot(lv.wo.to_simd(), cn)) / PI
-                                var camera_bsdf_rev_pdf_w = abs(dot(cv.wo.to_simd(), cn)) / PI
+                            if _bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv):
+                                var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd())
                                 var w_light = lv.dVCM * mis_vc_weight_factor + lv.dVM * camera_bsdf_dir_pdf_w
                                 var w_camera = cv.dVCM * mis_vc_weight_factor + cv.dVM * camera_bsdf_rev_pdf_w
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
@@ -925,9 +922,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if bs_c.is_valid == Int8(0):
                 break
             var alpha_c = max(mat.roughU, mat.roughV)
-            # VCM Stage 2b: conductor has no real standalone pdf -- out of
-            # MIS scope this pass, same treatment as the light-path side
-            # (project_vcm_stage2_mis_derivation memory).
+            # VCM Stage 2d: rough conductor DOES have a real standalone pdf
+            # (bxdf_pdf_conductor_ggx, the same Heitz 2018 VNDF density
+            # bxdf_sample_conductor's glossy branch itself samples from) --
+            # finish the per-bounce MIS correction the same way diffuse
+            # does (dist² portion already applied above).
             var cos_fix_c = abs(dot(-ray_dir, gn_c))
             if cos_fix_c > Float32(1e-6):
                 dvc_carry /= cos_fix_c
@@ -944,6 +943,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
+                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 if n_verts == 0: first_alb = mat.albedo
                 n_verts += 1
                 if path_len > 0:
@@ -979,14 +979,37 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             beta *= bs_c.f
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
+            var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
             if bxdf_is_delta(bs_c.flags):
                 last_bsdf_pdf = Float32(-1)  # mirror bounce: no infinite-light NEE done at this vertex
+                # VCM: specular bounce -- same dVCM=0/cosine-rescale reset
+                # SmallVCM's own delta-bounce case uses (vertexcm.hxx's
+                # SampleScattering, kSpecular branch); matches this file's
+                # diffuse/dielectric specular handling elsewhere.
+                dvcm_carry = Float32(0)
+                dvc_carry *= cos_theta_out_c
+                dvm_carry *= cos_theta_out_c
             else:
-                last_bsdf_pdf = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
-            var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
-            dvcm_carry = Float32(0)
-            dvc_carry *= cos_theta_out_c
-            dvm_carry *= cos_theta_out_c
+                # VCM Stage 2d: real non-specular recursive update using the
+                # actual VNDF sampling density -- see
+                # _bdpt_trace_light_path's matching comment for the general
+                # (cosThetaOut/bsdfDirPdfW) form (doesn't simplify to a
+                # constant like diffuse's PI does, since GGX's pdf isn't
+                # proportional to cos_theta_out).
+                var bsdf_dir_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
+                last_bsdf_pdf = bsdf_dir_pdf_w_c
+                if bsdf_dir_pdf_w_c > Float32(1e-8):
+                    var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
+                    var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
+                    var dvc_new_c = inv_pdf_c * (dvc_carry * bsdf_rev_pdf_w_c + dvcm_carry + mis_vm_weight_factor)
+                    var dvm_new_c = inv_pdf_c * (dvm_carry * bsdf_rev_pdf_w_c + dvcm_carry * mis_vc_weight_factor + Float32(1))
+                    dvcm_carry = Float32(1) / bsdf_dir_pdf_w_c
+                    dvc_carry = dvc_new_c
+                    dvm_carry = dvm_new_c
+                else:
+                    dvcm_carry = Float32(0)
+                    dvc_carry = Float32(0)
+                    dvm_carry = Float32(0)
 
         elif mat.type == MatKind.hair:
             # Marschner 3-lobe hair BSDF — no delta lobe, so always store a
@@ -1547,14 +1570,11 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             if bs_c.is_valid == Int8(0):
                 break
-            # VCM Stage 2b: conductor/coated_conductor have no real standalone
-            # pdf today (bxdf_sample_conductor bakes the full VNDF importance
-            # weight into `f` with pdf=1.0 as a placeholder) -- out of MIS
-            # scope this pass (see project_vcm_stage2_mis_derivation memory).
-            # Finish the shared dist² correction, then reset as if specular
-            # so a LATER diffuse/measured bounce still gets a well-defined
-            # carry. Their own LVC vertex keeps dVCM=dVC=dVM=0 (never set
-            # below) -- _connect must skip the MIS weight for mat_kind=1.
+            # VCM Stage 2d: rough conductor DOES have a real standalone pdf
+            # (bxdf_pdf_conductor_ggx) -- finish the shared dist² correction
+            # the same way diffuse does, mirroring
+            # _bdpt_trace_camera_and_connect's matching conductor branch.
+            var alpha_c = max(mat.roughU, mat.roughV)
             var cos_fix_c = abs(dot(-ray_dir, gn_c))
             if cos_fix_c > Float32(1e-6):
                 dvc_carry /= cos_fix_c
@@ -1566,20 +1586,38 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 v.beta = flux
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
-                v.pdf_bwd = max(mat.roughU, mat.roughV)
+                v.pdf_bwd = alpha_c
                 v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
+                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 n_verts += 1
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
             flux *= bs_c.f
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
             var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
-            dvcm_carry = Float32(0)
-            dvc_carry *= cos_theta_out_c
-            dvm_carry *= cos_theta_out_c
+            if bxdf_is_delta(bs_c.flags):
+                # VCM: specular bounce -- same reset SmallVCM's own delta-
+                # bounce case uses, matches the camera-side conductor branch.
+                dvcm_carry = Float32(0)
+                dvc_carry *= cos_theta_out_c
+                dvm_carry *= cos_theta_out_c
+            else:
+                var bsdf_dir_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, wo_c, bs_c.wi, alpha_c)
+                if bsdf_dir_pdf_w_c > Float32(1e-8):
+                    var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
+                    var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
+                    var dvc_new_c = inv_pdf_c * (dvc_carry * bsdf_rev_pdf_w_c + dvcm_carry + mis_vm_weight_factor)
+                    var dvm_new_c = inv_pdf_c * (dvm_carry * bsdf_rev_pdf_w_c + dvcm_carry * mis_vc_weight_factor + Float32(1))
+                    dvcm_carry = Float32(1) / bsdf_dir_pdf_w_c
+                    dvc_carry = dvc_new_c
+                    dvm_carry = dvm_new_c
+                else:
+                    dvcm_carry = Float32(0)
+                    dvc_carry = Float32(0)
+                    dvm_carry = Float32(0)
 
         elif mat.type == MatKind.hair:
             var curve_idx_h = Int(inter.primId.id1)
@@ -1930,6 +1968,60 @@ def _geom_term(
         cos_b = Float32(1)
     return cos_a * cos_b / dist2
 
+@always_inline
+def _bdpt_vertex_pdfs(
+    v: BDPTVertex, dir_to_other: SIMD[DType.float32, 3],
+) -> Tuple[Float32, Float32]:
+    """Real forward/reverse solid-angle BSDF pdfs for a VCM-MIS-scoped
+    vertex (diffuse mat_kind=0, rough conductor/coated_conductor
+    mat_kind=1 -- light-source vertices use their own cosine-weighted-
+    emission formula at the call site instead, see _connect's docstring;
+    hair/measured stay out of scope, see this function's own docstring
+    below). Returns (dir_pdf_w, rev_pdf_w):
+
+    - dir_pdf_w: the pdf of v's own BSDF sampling `dir_to_other` as the
+      outgoing direction, continuing FROM v.
+    - rev_pdf_w: the pdf of sampling v's own `wo` (back toward its
+      predecessor) as if the path had instead been traced starting FROM
+      `dir_to_other` -- i.e. bxdf_pdf_conductor_ggx with wo/wi swapped,
+      matching SmallVCM's Pdf(..., adjoint=true) reverse-evaluation
+      convention (vertexcm.hxx's SampleScattering).
+
+    For conductor, both directions route through bxdf_pdf_conductor_ggx
+    (Heitz 2018 VNDF sampling pdf, already used standalone by shading.mojo's
+    NEE-MIS path) -- v.wo/v.normal/v.pdf_bwd (GGX alpha) are exactly the
+    fields _eval_vertex's own mat_kind=1 branch already reads, so no new
+    per-vertex state is needed. Diffuse's cos/π formula is unchanged from
+    Stage 2b. Only ever called on vertices already known non-delta (both
+    _connect and _bdpt_merge_from_cache reject cv.is_delta/lv.is_delta
+    before reaching any weight computation), so bxdf_pdf_conductor_ggx's
+    own cos_o<=0/cos_i<=0 guard is the only "this direction is impossible
+    under VNDF sampling" case it needs to handle."""
+    if v.mat_kind == Int32(1):
+        var n = v.normal.to_simd()
+        var wo = v.wo.to_simd()
+        var alpha = v.pdf_bwd
+        return (
+            bxdf_pdf_conductor_ggx(n, wo, dir_to_other, alpha),
+            bxdf_pdf_conductor_ggx(n, dir_to_other, wo, alpha),
+        )
+    var cos_dir = abs(dot(dir_to_other, v.normal.to_simd()))
+    var cos_wo = abs(dot(v.wo.to_simd(), v.normal.to_simd()))
+    return (cos_dir * INV_PI, cos_wo * INV_PI)
+
+@always_inline
+def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
+    """True for vertex kinds _bdpt_vertex_pdfs has a real pdf for: diffuse
+    (mat_kind=0, real surface -- excludes volume vertices, which default
+    to mat_kind=0 too, see _connect's matching comment) and rough
+    conductor/coated_conductor (mat_kind=1, always non-delta by
+    construction -- delta conductor bounces are never stored as
+    connectible vertices at all, see _bdpt_trace_camera_and_connect's
+    conductor branch)."""
+    if v.is_surface != Int32(1):
+        return False
+    return v.mat_kind == Int32(0) or v.mat_kind == Int32(1)
+
 # ── Connect one camera vertex to one light vertex ─────────────────────────────
 
 def _connect(
@@ -2037,30 +2129,30 @@ def _connect(
     contrib[1] *= beta.g
     contrib[2] *= beta.b
 
-    # VCM Stage 2b: real MIS weight for diffuse/light-source connections
-    # (see this function's docstring + project_vcm_stage2_mis_derivation
-    # memory for the full derivation and its "not independently verified"
-    # caveats). cos_cv/cos_lv reuse the same geometry _geom_term computed
-    # internally, recomputed here since that helper doesn't expose them.
-    # is_surface==1 required in addition to mat_kind==0: volume vertices
-    # default to mat_kind=0 (Lambertian) from _null_vertex() too (never
-    # explicitly overridden -- see _bdpt_merge_from_cache's matching
-    # comment), but have no real diffuse BSDF pdf; excluding them here
-    # keeps this weight scoped to genuine diffuse surfaces only.
-    var cv_is_diffuse = cv.mat_kind == Int32(0) and cv.is_surface == Int32(1)
-    var lv_is_diffuse_or_light = lv.is_light == Int32(1) or (lv.mat_kind == Int32(0) and lv.is_surface == Int32(1))
-    if cv_is_diffuse and lv_is_diffuse_or_light:
+    # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
+    # connections (see this function's docstring + _bdpt_vertex_pdfs'/
+    # project_vcm_stage2_mis_derivation memory for the full derivation and
+    # its "not independently verified" caveats). cos_cv/cos_lv reuse the
+    # same geometry _geom_term computed internally, recomputed here since
+    # that helper doesn't expose them.
+    if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
         var cos_cv = abs(dot(dir, cv.normal.to_simd()))
         var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
-        var camera_bsdf_dir_pdf_w = cos_cv / PI
-        var camera_bsdf_rev_pdf_w = abs(dot(cv.wo.to_simd(), cv.normal.to_simd())) / PI
+        var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, dir)
         # Light-source vertex: forward and reverse pdf are the SAME
         # cosine-weighted-emission formula (no real "wo" to distinguish a
         # direction from, unlike a genuine BSDF bounce) -- REASONED, not
         # independently verified against a reference light-source-specific
         # connect path.
-        var light_bsdf_dir_pdf_w = cos_lv / PI
-        var light_bsdf_rev_pdf_w = cos_lv / PI if lv.is_light == Int32(1) else abs(dot(lv.wo.to_simd(), lv.normal.to_simd())) / PI
+        var light_bsdf_dir_pdf_w: Float32
+        var light_bsdf_rev_pdf_w: Float32
+        if lv.is_light == Int32(1):
+            light_bsdf_dir_pdf_w = cos_lv / PI
+            light_bsdf_rev_pdf_w = cos_lv / PI
+        else:
+            var (ldp, lrp) = _bdpt_vertex_pdfs(lv, neg_dir)
+            light_bsdf_dir_pdf_w = ldp
+            light_bsdf_rev_pdf_w = lrp
         var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
         var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
         var w_light = camera_bsdf_dir_pdf_a * (mis_vm_weight_factor + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
