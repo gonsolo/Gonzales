@@ -719,7 +719,23 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 # Volume: out of MIS scope this pass, same as the light side.
                 dvcm_carry = Float32(0)
                 if path_len > 0:
-                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                    # BUG FIX (found investigating volumetric-caustic's
+                    # colored-blob fireflies): merge is only safe to run
+                    # unconditionally alongside connect when BOTH already
+                    # carry a real per-candidate MIS weight that makes their
+                    # SUM correct (see this file's opening VCM comment).
+                    # Volume vertices are out of _bdpt_vertex_mis_scoped's
+                    # scope, so _bdpt_merge_from_cache's own weight defaults
+                    # to 1 -- summing merge(w=1) + connect(w=1) here would
+                    # double the correct answer (E[merge]+E[connect] = 2I,
+                    # not I), exactly the double-counting the module's
+                    # original Stage-1 stochastic-pick design was built to
+                    # avoid. Only call merge when this vertex is actually
+                    # MIS-scoped; otherwise connect alone (unweighted) is
+                    # already the complete, correct estimate -- Stage 2b's
+                    # original, verified behavior for out-of-scope kinds.
+                    if _bdpt_vertex_mis_scoped(v):
+                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 beta *= ff.albedo
@@ -1043,7 +1059,12 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
-                total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                # Hair is out of MIS scope -- see the volume branch's
+                # matching comment above for why merge must be skipped
+                # (not just unweighted) when connect already fires
+                # unconditionally, to avoid double-counting.
+                if _bdpt_vertex_mis_scoped(v_h):
+                    total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
@@ -1132,7 +1153,12 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
-                total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                # Measured is out of MIS scope (connect-time reverse-pdf
+                # local-frame gap, see this branch's docstring above) -- see
+                # the volume branch's matching comment for why merge must be
+                # skipped, not just unweighted, to avoid double-counting.
+                if _bdpt_vertex_mis_scoped(v_m):
+                    total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
