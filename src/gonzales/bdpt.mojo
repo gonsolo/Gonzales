@@ -62,13 +62,13 @@ comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices stored per light subpath
 # variance combined estimator -- no rescaling by any selection probability
 # is needed or correct here.
 #
-# Both techniques' weights are scoped to diffuse (mat_kind=0, real surface)
-# cv/lv pairs only this pass -- conductor/hair/measured have no real
-# standalone BSDF pdf yet (or, for measured, a real pdf but no connect-time
-# reverse-pdf local frame wired up), so connections/merges touching them
-# fall through to weight=1 (today's plain unweighted behavior), a
-# deliberately scoped gap tracked in project_vcm_stage2_mis_derivation
-# memory, not a silent omission. See _connect's and
+# Both techniques' weights are real for diffuse/conductor/coated_conductor/
+# hair/measured (mat_kind 0/1/2/3, real surface) cv/lv pairs -- everything
+# with a genuine standalone BSDF pdf, see _bdpt_vertex_pdfs. Only volume
+# (isotropic phase, no surface normal) and dielectric/thin_dielectric
+# (genuinely delta/specular, never even stored as LVC vertices) fall
+# through to weight=1 / are unreachable here, a deliberately scoped
+# architectural boundary, not a silent omission -- see _connect's and
 # _bdpt_merge_from_cache's own docstrings for the exact scope condition.
 #
 # The merge radius is now progressive (Stage 2c, see _bdpt_render_core's
@@ -510,13 +510,12 @@ def _bdpt_merge_from_cache(
     path having reached lv unoccluded already implies the segment is
     clear.
 
-    VCM Stage 2c/2d: real per-candidate MIS weight (Georgiev et al. 2012 /
-    SmallVCM's RangeQuery::Process, vertexcm.hxx:129-166, verified against
-    the reference source) is applied when both cv and lv are diffuse or
-    rough conductor/coated_conductor (_bdpt_vertex_mis_scoped) -- the same
-    scope _connect uses for its own connection weight, for the same reason
-    (no real standalone pdf for hair/measured yet, see that function's
-    docstring)."""
+    VCM Stage 2c/2d/153/hair: real per-candidate MIS weight (Georgiev et
+    al. 2012 / SmallVCM's RangeQuery::Process, vertexcm.hxx:129-166,
+    verified against the reference source) is applied when both cv and lv
+    are `_bdpt_vertex_mis_scoped` (diffuse/conductor/coated_conductor/
+    hair/measured) -- the same scope _connect uses for its own connection
+    weight, for the same reason (see that function's docstring)."""
     if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
         return RGB(Float32(0))
     var total = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
@@ -1036,8 +1035,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
             var hair_eps = curve_offset_eps(hc.radius)
-            # VCM Stage 2b: hair has no real standalone pdf either -- same
-            # out-of-scope treatment as conductor.
+            # VCM: hair DOES have a real standalone pdf (_hair_eval_lobes,
+            # same one _nee_weight_hair already trusts for NEE MIS) -- see
+            # _bdpt_vertex_pdfs' mat_kind=2 branch, which closes the
+            # connect/merge-time weighting. This cos_fix is the same
+            # distance²/area-measure correction diffuse/conductor apply.
             var cos_fix_h = abs(dot(-ray_dir, hc.geo_normal))
             if cos_fix_h > Float32(1e-6):
                 dvc_carry /= cos_fix_h
@@ -1056,15 +1058,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             v_h.pdf_fwd = Float32(1)
             v_h.med_idx = cur_med_idx
             v_h.wavelengths = wavelengths
+            v_h.dVCM = dvcm_carry; v_h.dVC = dvc_carry; v_h.dVM = dvm_carry
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
             if path_len > 0:
-                # Hair is out of MIS scope -- see the volume branch's
-                # matching comment above for why merge must be skipped
-                # (not just unweighted) when connect already fires
-                # unconditionally, to avoid double-counting.
-                if _bdpt_vertex_mis_scoped(v_h):
-                    total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
@@ -1100,9 +1098,36 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
             last_bsdf_pdf = pdf_hs * cos_ti_hs2  # solid-angle pdf (pdf_hs already has /cos_ti baked in)
             var cos_theta_out_h = abs(dot(wi_hs, hc.geo_normal))
-            dvcm_carry = Float32(0)
-            dvc_carry *= cos_theta_out_h
-            dvm_carry *= cos_theta_out_h
+            # VCM: real non-specular recursive update, mirroring conductor's
+            # Stage 2d treatment -- see _bdpt_trace_light_path's matching
+            # branch for the general (cosThetaOut/bsdfDirPdfW) form.
+            # bsdf_dir_pdf_w_h is exactly last_bsdf_pdf, just computed
+            # already above; the REVERSE pdf needs hair's lobes
+            # re-evaluated with wo_h/wi_hs swapped -- same "second
+            # precompute with wo=dir_to_other" pattern _bdpt_vertex_pdfs'
+            # own hair branch uses, since hair's "wo" is baked into the
+            # precomputed HairLobeConstants rather than passed per-call.
+            var bsdf_dir_pdf_w_h = last_bsdf_pdf
+            if bsdf_dir_pdf_w_h > Float32(1e-8):
+                var hc_rev_h = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wi_hs)
+                var (cos_ti_rev_h, _, pdf_oc_rev_h) = _hair_eval_lobes(
+                    wo_h, hc_rev_h.tangent, hc_rev_h.b_perp, hc_rev_h.n_perp, hc_rev_h.phi_o,
+                    hc_rev_h.dphi0, hc_rev_h.dphi1, hc_rev_h.dphi2,
+                    hc_rev_h.cos_tp0_o, hc_rev_h.sin_tp0_o, hc_rev_h.cos_tp1_o, hc_rev_h.sin_tp1_o, hc_rev_h.cos_tp2_o, hc_rev_h.sin_tp2_o,
+                    hc_rev_h.cos_theta_o, hc_rev_h.sin_theta_o, hc_rev_h.inv_vm0, hc_rev_h.inv_vm1, hc_rev_h.inv_vm2, hc_rev_h.mp_c0, hc_rev_h.mp_c1, hc_rev_h.mp_c2, hc_rev_h.s,
+                    hc_rev_h.A0, hc_rev_h.A1, hc_rev_h.A2, hc_rev_h.A3, hc_rev_h.lum0, hc_rev_h.lum1, hc_rev_h.lum2, hc_rev_h.lum3, hc_rev_h.total_lum,
+                )
+                var bsdf_rev_pdf_w_h = cos_ti_rev_h * pdf_oc_rev_h
+                var inv_pdf_h = cos_theta_out_h / bsdf_dir_pdf_w_h
+                var dvc_new_h = inv_pdf_h * (dvc_carry * bsdf_rev_pdf_w_h + dvcm_carry + mis_vm_weight_factor)
+                var dvm_new_h = inv_pdf_h * (dvm_carry * bsdf_rev_pdf_w_h + dvcm_carry * mis_vc_weight_factor + Float32(1))
+                dvcm_carry = Float32(1) / bsdf_dir_pdf_w_h
+                dvc_carry = dvc_new_h
+                dvm_carry = dvm_new_h
+            else:
+                dvcm_carry = Float32(0)
+                dvc_carry = Float32(0)
+                dvm_carry = Float32(0)
 
         elif mat.type == MatKind.measured:
             # Tabulated Dupuy & Jakob MeasuredBxDF -- the real algorithm
@@ -1156,9 +1181,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 # Measured is now IN MIS scope (task #153 closed the
                 # connect/merge-time reverse-pdf local-frame gap -- see
                 # _bdpt_vertex_pdfs' mat_kind=3 branch), so this check is
-                # always True here; kept for symmetry with the volume/hair
-                # branches' matching guard against merge+connect double-
-                # counting for any future out-of-scope kind.
+                # always True here; kept for symmetry with the volume
+                # branch's matching guard against merge+connect double-
+                # counting for any future out-of-scope kind (only volume
+                # and delta dielectric remain out of scope now that hair
+                # is closed too).
                 if _bdpt_vertex_mis_scoped(v_m):
                     total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
@@ -1490,9 +1517,9 @@ def _bdpt_trace_light_path[use_gpu: Bool](
                 n_verts += 1
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
                 # Volume scatter is isotropic (no surface normal, no
-                # cosThetaFix) -- out of MIS scope this pass (like hair/
-                # dielectric), reset as if specular so a LATER
-                # diffuse/conductor/measured bounce still gets a well-defined carry.
+                # cosThetaFix) -- out of MIS scope (like delta dielectric),
+                # reset as if specular so a LATER diffuse/conductor/hair/
+                # measured bounce still gets a well-defined carry.
                 dvcm_carry = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
                 flux *= ff.albedo
@@ -1651,9 +1678,9 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             var curve_idx_h = Int(inter.primId.id1)
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
-            # VCM Stage 2b: hair has no real standalone pdf either -- same
-            # out-of-scope treatment as conductor (see that branch's comment
-            # + project_vcm_stage2_mis_derivation memory).
+            # VCM: hair DOES have a real standalone pdf -- see the camera-
+            # side hair branch's matching comment and _bdpt_vertex_pdfs'
+            # mat_kind=2 branch for the full derivation.
             var cos_fix_h = abs(dot(-ray_dir, hc.geo_normal))
             if cos_fix_h > Float32(1e-6):
                 dvc_carry /= cos_fix_h
@@ -1672,17 +1699,40 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             v_h.pdf_fwd = Float32(1)
             v_h.med_idx = cur_med_idx
             v_h.wavelengths = wavelengths
+            v_h.dVCM = dvcm_carry; v_h.dVC = dvc_carry; v_h.dVM = dvm_carry
             n_verts += 1
             _bdpt_store_lvc_vertex(v_h, lvc, lp_idx, n_verts - 1)
-            var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
+            var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
             flux *= f_hs / pdf_hs
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
             var cos_theta_out_h = abs(dot(wi_hs, hc.geo_normal))
-            dvcm_carry = Float32(0)
-            dvc_carry *= cos_theta_out_h
-            dvm_carry *= cos_theta_out_h
+            # VCM: real non-specular recursive update -- see the camera-side
+            # hair branch's matching comment for the full derivation (same
+            # formula, light-path variant: no last_bsdf_pdf bookkeeping here
+            # since light paths don't do infinite-light-miss MIS).
+            var bsdf_dir_pdf_w_h = pdf_hs * cos_ti_hs2
+            if bsdf_dir_pdf_w_h > Float32(1e-8):
+                var hc_rev_h = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wi_hs)
+                var (cos_ti_rev_h, _, pdf_oc_rev_h) = _hair_eval_lobes(
+                    wo_h, hc_rev_h.tangent, hc_rev_h.b_perp, hc_rev_h.n_perp, hc_rev_h.phi_o,
+                    hc_rev_h.dphi0, hc_rev_h.dphi1, hc_rev_h.dphi2,
+                    hc_rev_h.cos_tp0_o, hc_rev_h.sin_tp0_o, hc_rev_h.cos_tp1_o, hc_rev_h.sin_tp1_o, hc_rev_h.cos_tp2_o, hc_rev_h.sin_tp2_o,
+                    hc_rev_h.cos_theta_o, hc_rev_h.sin_theta_o, hc_rev_h.inv_vm0, hc_rev_h.inv_vm1, hc_rev_h.inv_vm2, hc_rev_h.mp_c0, hc_rev_h.mp_c1, hc_rev_h.mp_c2, hc_rev_h.s,
+                    hc_rev_h.A0, hc_rev_h.A1, hc_rev_h.A2, hc_rev_h.A3, hc_rev_h.lum0, hc_rev_h.lum1, hc_rev_h.lum2, hc_rev_h.lum3, hc_rev_h.total_lum,
+                )
+                var bsdf_rev_pdf_w_h = cos_ti_rev_h * pdf_oc_rev_h
+                var inv_pdf_h = cos_theta_out_h / bsdf_dir_pdf_w_h
+                var dvc_new_h = inv_pdf_h * (dvc_carry * bsdf_rev_pdf_w_h + dvcm_carry + mis_vm_weight_factor)
+                var dvm_new_h = inv_pdf_h * (dvm_carry * bsdf_rev_pdf_w_h + dvcm_carry * mis_vc_weight_factor + Float32(1))
+                dvcm_carry = Float32(1) / bsdf_dir_pdf_w_h
+                dvc_carry = dvc_new_h
+                dvm_carry = dvm_new_h
+            else:
+                dvcm_carry = Float32(0)
+                dvc_carry = Float32(0)
+                dvm_carry = Float32(0)
 
         elif mat.type == MatKind.measured:
             # Mirrors the camera-side measured branch above, minus the NEE
@@ -2002,10 +2052,9 @@ def _bdpt_vertex_pdfs(
 ) -> Tuple[Float32, Float32]:
     """Real forward/reverse solid-angle BSDF pdfs for a VCM-MIS-scoped
     vertex (diffuse mat_kind=0, rough conductor/coated_conductor mat_kind=1,
-    measured mat_kind=3 -- light-source vertices use their own cosine-
-    weighted-emission formula at the call site instead, see _connect's
-    docstring; hair stays out of scope, no VNDF-equivalent pdf exists to
-    reuse). Returns (dir_pdf_w, rev_pdf_w):
+    measured mat_kind=3, hair mat_kind=2 -- light-source vertices use their
+    own cosine-weighted-emission formula at the call site instead, see
+    _connect's docstring). Returns (dir_pdf_w, rev_pdf_w):
 
     - dir_pdf_w: the pdf of v's own BSDF sampling `dir_to_other` as the
       outgoing direction, continuing FROM v.
@@ -2030,12 +2079,26 @@ def _bdpt_vertex_pdfs(
     real pdf since Stage 2b (see _bdpt_trace_camera_and_connect's/
     _bdpt_trace_light_path's measured branches) -- this was the one
     remaining gap, connect/merge-TIME weighting, not the recursive update
-    itself. Diffuse's cos/π formula is unchanged from Stage 2b. Only ever
-    called on vertices already known non-delta (both _connect and
-    _bdpt_merge_from_cache reject cv.is_delta/lv.is_delta before reaching
-    any weight computation), so bxdf_pdf_conductor_ggx's/bxdf_pdf_measured's
-    own internal guards are the only "this direction is impossible under
-    the sampling scheme" cases they need to handle."""
+    itself. For hair, `_hair_precompute` rebuilds the Marschner fiber-frame
+    constants (HairLobeConstants) from the vertex's own small persisted
+    state (mat_idx/hair_curve_idx/hair_h/hair_v/wo) -- the SAME reconstruct
+    _eval_vertex's own mat_kind=2 branch already does -- then
+    `_hair_eval_lobes` gives back `(cos_ti, f, pdf_over_cos)`, where
+    `cos_ti * pdf_over_cos` is the real solid-angle pdf (per that
+    function's own docstring, and exactly the quantity _nee_weight_hair
+    already trusts for NEE MIS in bxdf.mojo). Unlike conductor/measured
+    (whose underlying pdf functions take wo/wi as plain arguments, so the
+    reverse direction is just a swapped call), hair's "wo" is baked INTO
+    the precomputed constants at reconstruction time -- so the reverse
+    pdf needs a SECOND `_hair_precompute` call with dir_to_other in wo's
+    role, then evaluates at v.wo. Diffuse's cos/π formula is unchanged
+    from Stage 2b. Only ever called on vertices already known non-delta
+    (both _connect and _bdpt_merge_from_cache reject cv.is_delta/
+    lv.is_delta before reaching any weight computation, and hair itself
+    has no delta lobe at all -- Marschner is a 3-lobe glossy model), so
+    bxdf_pdf_conductor_ggx's/bxdf_pdf_measured's/_hair_eval_lobes' own
+    internal guards are the only "this direction is impossible under the
+    sampling scheme" cases they need to handle."""
     if v.mat_kind == Int32(1):
         var n = v.normal.to_simd()
         var wo = v.wo.to_simd()
@@ -2044,6 +2107,25 @@ def _bdpt_vertex_pdfs(
             bxdf_pdf_conductor_ggx(n, wo, dir_to_other, alpha),
             bxdf_pdf_conductor_ggx(n, dir_to_other, wo, alpha),
         )
+    if v.mat_kind == Int32(2):
+        var mat_h = sd.materials[Int(v.mat_idx)]
+        var hc_fwd = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
+        var (cos_ti_fwd, _, pdf_oc_fwd) = _hair_eval_lobes(
+            dir_to_other, hc_fwd.tangent, hc_fwd.b_perp, hc_fwd.n_perp, hc_fwd.phi_o,
+            hc_fwd.dphi0, hc_fwd.dphi1, hc_fwd.dphi2,
+            hc_fwd.cos_tp0_o, hc_fwd.sin_tp0_o, hc_fwd.cos_tp1_o, hc_fwd.sin_tp1_o, hc_fwd.cos_tp2_o, hc_fwd.sin_tp2_o,
+            hc_fwd.cos_theta_o, hc_fwd.sin_theta_o, hc_fwd.inv_vm0, hc_fwd.inv_vm1, hc_fwd.inv_vm2, hc_fwd.mp_c0, hc_fwd.mp_c1, hc_fwd.mp_c2, hc_fwd.s,
+            hc_fwd.A0, hc_fwd.A1, hc_fwd.A2, hc_fwd.A3, hc_fwd.lum0, hc_fwd.lum1, hc_fwd.lum2, hc_fwd.lum3, hc_fwd.total_lum,
+        )
+        var hc_rev = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, dir_to_other)
+        var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
+            v.wo.to_simd(), hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
+            hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
+            hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
+            hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
+            hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
+        )
+        return (cos_ti_fwd * pdf_oc_fwd, cos_ti_rev * pdf_oc_rev)
     if v.mat_kind == Int32(3):
         var n_m = v.normal.to_simd()
         var frm_m = Frame.from_z(Vec3f(n_m[0], n_m[1], n_m[2]))
@@ -2070,10 +2152,18 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
     conductor/coated_conductor (mat_kind=1, always non-delta by
     construction -- delta conductor bounces are never stored as
     connectible vertices at all, see _bdpt_trace_camera_and_connect's
-    conductor branch), and measured (mat_kind=3)."""
+    conductor branch), hair (mat_kind=2, Marschner 3-lobe -- also always
+    non-delta, no specular lobe exists in this model), and measured
+    (mat_kind=3). Dielectric/thin_dielectric are NOT in this list and
+    never will be without first adding rough-dielectric support -- they're
+    genuinely delta/specular in this codebase (true reflect-or-refract,
+    not an approximation), so they're never even stored as LVC vertices
+    at all (see _bdpt_trace_camera_and_connect's/_bdpt_trace_light_path's
+    dielectric branches), making this function unreachable for them by
+    construction, not merely False."""
     if v.is_surface != Int32(1):
         return False
-    return v.mat_kind == Int32(0) or v.mat_kind == Int32(1) or v.mat_kind == Int32(3)
+    return v.mat_kind == Int32(0) or v.mat_kind == Int32(1) or v.mat_kind == Int32(2) or v.mat_kind == Int32(3)
 
 # ── Connect one camera vertex to one light vertex ─────────────────────────────
 
@@ -2091,17 +2181,21 @@ def _connect(
     the caller sums over every vertex of the paired light path with no
     further scaling.
 
-    VCM Stage 2b/2d/153 (2026-07-10/11): real per-vertex MIS weighting
+    VCM Stage 2b/2d/153/hair (2026-07-10/11): real per-vertex MIS weighting
     (Georgiev et al. 2012 / SmallVCM, see project_vcm_stage2_mis_derivation
     memory) is applied when both endpoints have a genuine standalone pdf --
     diffuse (mat_kind=0), light-source vertices (is_light=1, whose
     cosine-weighted emission profile is mathematically the same shape as
     diffuse), rough conductor/coated_conductor (mat_kind=1, GGX-VNDF pdf),
-    and measured (mat_kind=3, tabulated-BRDF pdf via a reconstructed local
-    frame). Hair (no VNDF-equivalent pdf for Marschner) and volume
-    (isotropic phase, no surface normal) fall through to `weight=1`,
-    today's plain unweighted behavior -- a deliberately scoped gap, not a
-    silent omission."""
+    hair (mat_kind=2, Marschner 3-lobe pdf via _hair_eval_lobes -- the same
+    pdf machinery _nee_weight_hair already trusts for NEE MIS), and
+    measured (mat_kind=3, tabulated-BRDF pdf via a reconstructed local
+    frame). Only volume (isotropic phase, no surface normal) falls through
+    to `weight=1`, today's plain unweighted behavior; dielectric/
+    thin_dielectric are genuinely delta/specular and never even reach here
+    at all (never stored as LVC vertices, see this file's opening VCM
+    comment) -- both deliberately scoped boundaries, not silent
+    omissions."""
     if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
         return SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
 
