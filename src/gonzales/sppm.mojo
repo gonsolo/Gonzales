@@ -16,7 +16,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
-    MeasuredBRDF_C,
+    MeasuredBRDF_C, GpuTexture_C,
 )
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
@@ -27,6 +27,7 @@ from .bvh import (
 )
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
+from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -447,7 +448,7 @@ def _sppm_update_medium(
     var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
 
-def _sppm_trace_visible_point(
+def _sppm_trace_visible_point[use_gpu: Bool](
     sd:       SceneDescriptor2_C,
     mut pcg:  PCG32,
     r2c:      UnsafePointer[Float32, MutAnyOrigin],
@@ -458,12 +459,15 @@ def _sppm_trace_visible_point(
     scratch:  UnsafePointer[Intersection_C, MutAnyOrigin],
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
-    Shared verbatim between the CPU driver (_sppm_camera_pass, one reused
-    `scratch` slot) and the GPU kernel (sppm_gen_vp_gpu, one slot per
-    thread) — no comptime[use_gpu] split needed here, the bounce loop
-    itself has zero CPU/GPU divergence. `scratch` is caller-owned (no
-    internal alloc/free) so this is safe to call from a GPU kernel thread,
-    same convention as bdpt.mojo's shared subpath tracers."""
+    Shared verbatim between the CPU driver (_sppm_camera_pass, [False]) and
+    the GPU kernel (sppm_gen_vp_gpu, one slot per thread, [True]) — the
+    bounce loop itself has zero CPU/GPU divergence EXCEPT `_tex_lookup`'s
+    own CPU-filename vs GPU-texture-array dispatch for diffuse/coateddiffuse
+    albedo (task #150/#151: bdpt.mojo/sppm.mojo previously never evaluated
+    image textures at all, always falling back to a flat grey default).
+    `scratch` is caller-owned (no internal alloc/free) so this is safe to
+    call from a GPU kernel thread, same convention as bdpt.mojo's shared
+    subpath tracers."""
     var org = Point3f(c2w[12], c2w[13], c2w[14])
     var has_media = Int(sd.mediumCount) > 0
 
@@ -596,9 +600,17 @@ def _sppm_trace_visible_point(
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
+            # Real image-texture reflectance -- see bdpt.mojo's matching
+            # diffuse-branch comment (task #150/#151): before this,
+            # mat.albedo's flat 0.5-grey scaffolding default was always
+            # used, even for materials with a "texture reflectance".
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             vp.pos = hit
             vp.normal = vec3f(gn)
-            vp.alb = mat.albedo
+            vp.alb = eff_alb
             vp.is_volume = Int32(0)
             vp.valid = Int32(1)
             break
@@ -759,7 +771,7 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[combined] = _sppm_trace_visible_point(sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch + combined)
+        vps[combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch + combined)
 
     parallelize[trace_one](n_pix * vp_samples)
 
@@ -790,7 +802,7 @@ def _sppm_store_photon[use_gpu: Bool](
             photons[slot] = ph
 
 
-def _sppm_trace_photon[use_gpu: Bool](
+def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     sd:               SceneDescriptor2_C,
     mut pcg:          PCG32,
     scratch:          UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -811,6 +823,15 @@ def _sppm_trace_photon[use_gpu: Bool](
     (_sppm_photon_pass, one reused `scratch`/plain counter) and the GPU
     kernel (sppm_emit_photons_gpu, one scratch slot + atomic counter per
     thread) — only _sppm_store_photon's comptime branch differs.
+
+    `use_gpu` and `tex_gpu` are DELIBERATELY separate comptime params, not
+    one reused symbol: `use_gpu` means "use the atomic-safe photon-slot
+    reservation" (both CPU and GPU pass True — parallel CPU workers race on
+    the shared `photons` buffer/`counter` too, see _sppm_photon_pass's own
+    comment), while `tex_gpu` means "actually running on a GPU device"
+    (real CPU/GPU divergence for _tex_lookup's texture-format dispatch,
+    task #151). Conflating them would make the CPU driver wrongly try to
+    read a GPU-only GpuTexture_C array.
 
     Lights are chosen uniformly across ALL light types (area + distant +
     infinite) — `n_lights` below is this combined total. Distant/infinite
@@ -970,19 +991,28 @@ def _sppm_trace_photon[use_gpu: Bool](
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
+            # Real image-texture reflectance -- see bdpt.mojo's matching
+            # light-side comment (task #150/#151). Affects the RR
+            # continuation probability AND the flux multiply below, since a
+            # wrong (flat-grey) albedo here would corrupt every subsequent
+            # bounce's stored photon flux, not just this vertex.
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[tex_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — without this, photons always
             # terminated at the first diffuse hit, so light could never
             # bounce off one diffuse surface onto another (e.g. a red
             # wall tinting a nearby box's facing side).
-            var rr_prob = max(mat.albedo.r, max(mat.albedo.g, mat.albedo.b))
+            var rr_prob = max(eff_alb.r, max(eff_alb.g, eff_alb.b))
             if rr_prob <= Float32(0.0) or pcg.next_float() >= rr_prob:
                 break
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
-            flux *= mat.albedo / rr_prob
+            flux *= eff_alb / rr_prob
             rd = vec3f(new_dir)
             ro = hit + vec3f(gn) * Float32(0.0001)
             continue
@@ -1160,14 +1190,16 @@ def _sppm_photon_pass(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    # [True]: parallel CPU workers now need the SAME atomic slot-reservation
-    # _sppm_store_photon uses for GPU threads (concurrent racing writers to
-    # the shared `photons` buffer/`counter`), regardless of which backend
-    # is actually running.
+    # use_gpu=True: parallel CPU workers now need the SAME atomic slot-
+    # reservation _sppm_store_photon uses for GPU threads (concurrent
+    # racing writers to the shared `photons` buffer/`counter`), regardless
+    # of which backend is actually running. tex_gpu=False: this driver IS
+    # actually CPU, so _tex_lookup must use the CPU tex_filenames path
+    # (see _sppm_trace_photon's docstring for why these are separate params).
     @parameter
     def emit_one(k: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-        _sppm_trace_photon[True](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med)
+        _sppm_trace_photon[True, False](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med)
 
     parallelize[emit_one](n_emit)
 
@@ -1841,9 +1873,12 @@ def sppm_gen_vp_gpu(
     distantLightCount: Int64,
     infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
     infiniteLightCount: Int64,
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
 ):
     """One thread per (pixel, vp_sample). Calls the SAME
-    _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls."""
+    _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls,
+    with use_gpu=True (task #151: real image-texture reflectance)."""
     var combined = Int(block_idx.x * block_dim.x + thread_idx.x)
     if combined >= n_pix * vp_samples:
         return
@@ -1856,9 +1891,10 @@ def sppm_gen_vp_gpu(
         mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[combined] = _sppm_trace_visible_point(sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined)
+    vps[combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined)
 
 
 def sppm_emit_photons_gpu(
@@ -1903,16 +1939,21 @@ def sppm_emit_photons_gpu(
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
     _sppm_store_photon reserves its slot via an atomic fetch-add (CPU uses a
-    plain counter increment instead — no other difference). The spectral/
-    measured params are new (measured BxDF support, see project_measured_bxdf
-    memory): _sppm_trace_photon's measured branch calls bxdf_sample_measured,
-    which needs both a valid spectral table (for the RGB conversion) and
-    the measured-BRDF array -- unlike this kernel's other materials, which
-    only draw a wavelength via PCG and never dereference sd.spectral."""
+    plain counter increment instead — no other difference), and tex_gpu=True
+    since this kernel genuinely runs on the GPU (task #151 -- see
+    _sppm_trace_photon's docstring for why these are separate params). The
+    spectral/measured params are new (measured BxDF support, see
+    project_measured_bxdf memory): _sppm_trace_photon's measured branch
+    calls bxdf_sample_measured, which needs both a valid spectral table
+    (for the RGB conversion) and the measured-BRDF array -- unlike this
+    kernel's other materials, which only draw a wavelength via PCG and
+    never dereference sd.spectral."""
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0) and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)):
         return
@@ -1925,9 +1966,10 @@ def sppm_emit_photons_gpu(
         pointLights, pointLightCount,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    _sppm_trace_photon[True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med)
+    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med)
 
 
 def sppm_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
@@ -2213,6 +2255,8 @@ def sppm_render_gpu(
             var spectral_res = handle[].spectral_res
             var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
             var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
+            var gpu_textures = handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C]()
+            var n_gpu_textures = Int64(handle[].n_textures)
 
             var grid_pix = ceildiv(n_pix, block_size)
             var grid_vps = ceildiv(n_vps, block_size)
@@ -2231,6 +2275,7 @@ def sppm_render_gpu(
                 mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
                 blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
                 distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                gpu_textures, n_gpu_textures,
                 grid_dim=grid_vps, block_dim=block_size)
 
             for pass_idx in range(n_passes):
@@ -2250,6 +2295,7 @@ def sppm_render_gpu(
                     pointLights, n_point_lights,
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     measured_brdfs, n_measured_brdfs,
+                    gpu_textures, n_gpu_textures,
                     grid_dim=grid_emit, block_dim=block_size)
 
                 handle[].ctx.synchronize()
