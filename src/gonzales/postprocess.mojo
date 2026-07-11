@@ -4,6 +4,71 @@ from std.memory import alloc
 from std.collections import List
 from .geometry import RGB
 
+comptime _FIREFLY_CLAMP_K = Float32(4.0)  # isolated-pixel threshold multiplier, see _clamp_fireflies
+
+# Firefly pre-clamp: without this, the bilateral filter below smears a
+# single extreme-radiance pixel across its whole (2r+1)x(2r+1) window,
+# since the filter's edge-stopping terms are guided by albedo/normal/depth
+# only -- all of which can look identical on a smooth caustic-lit surface,
+# so a hot pixel's huge beauty value passes through with near-full weight
+# and gets blurred into a visible, blocky square the exact size of the
+# filter kernel (found while investigating task #152's decoupled photon
+# budget -- --no-denoise renders show ordinary fine-grained MC speckle,
+# confirming the squares are a denoiser artifact, not a merge/grid one).
+#
+# Classic isolated-pixel despeckle: flag a pixel whose luminance exceeds
+# _FIREFLY_CLAMP_K times the MAX luminance of its own 8 immediate
+# neighbors (not a blurred/averaged threshold -- a single legitimately
+# bright neighbor is enough to prove the region isn't isolated), and
+# scale it down to that threshold, preserving hue/chroma (scale all three
+# channels equally). A genuine bright but spatially-coherent feature
+# (light source, specular highlight, caustic focus) has bright neighbors
+# too, so the local max stays high and it's untouched; only a true
+# single-pixel spike -- no coherent neighbor to back it up -- gets
+# clamped. Biased (slightly dims genuine isolated micro-highlights), but
+# this is the standard practical mitigation production renderers use for
+# exactly this failure mode.
+def _clamp_fireflies(
+    beauty: UnsafePointer[Float32, MutAnyOrigin],
+    width: Int32, height: Int32,
+) -> UnsafePointer[Float32, MutAnyOrigin]:
+    var w = Int(width)
+    var h = Int(height)
+    var out = alloc[Float32](w * h * 3)
+    for py in range(h):
+        for px in range(w):
+            var ci = (py * w + px) * 3
+            var lum0 = Float32(0.2126) * beauty[ci] + Float32(0.7152) * beauty[ci + 1] + Float32(0.0722) * beauty[ci + 2]
+            var max_n = Float32(0)
+            var has_neighbor = False
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
+                    if dx == 0 and dy == 0:
+                        continue
+                    var nx = px + dx
+                    var ny = py + dy
+                    if nx < 0 or nx >= w or ny < 0 or ny >= h:
+                        continue
+                    has_neighbor = True
+                    var ni = (ny * w + nx) * 3
+                    var lum_n = Float32(0.2126) * beauty[ni] + Float32(0.7152) * beauty[ni + 1] + Float32(0.0722) * beauty[ni + 2]
+                    if lum_n > max_n:
+                        max_n = lum_n
+            var threshold = _FIREFLY_CLAMP_K * max_n
+            # No in-bounds neighbor at all (e.g. a 1x1 image) -- "isolated"
+            # is meaningless without anything to compare against, so pass
+            # the pixel through unchanged rather than clamping to 0.
+            if has_neighbor and lum0 > threshold and lum0 > Float32(1e-6):
+                var scale = threshold / lum0
+                out[ci + 0] = beauty[ci + 0] * scale
+                out[ci + 1] = beauty[ci + 1] * scale
+                out[ci + 2] = beauty[ci + 2] * scale
+            else:
+                out[ci + 0] = beauty[ci + 0]
+                out[ci + 1] = beauty[ci + 1]
+                out[ci + 2] = beauty[ci + 2]
+    return out
+
 # Joint bilateral denoiser guided by albedo, normals, and depth.
 # beauty/albedo: width*height*3 floats, R,G,B interleaved, row-major.
 # normals: width*height*3 unit-vector floats (Nx,Ny,Nz) from unjittered first-hit geometry.
@@ -33,6 +98,8 @@ def denoise(
     var inv_sn = Float32(1) / sigma_n
     var inv2sd = Float32(1) / (Float32(2) * sigma_d * sigma_d)
     var diam = 2 * r + 1
+
+    var clamped = _clamp_fireflies(beauty, width, height)
 
     # Precompute spatial weights for the (2r+1)×(2r+1) window.
     var sw = List[Float32](capacity=diam * diam)
@@ -76,13 +143,14 @@ def denoise(
                     var wt = sw[(dy + r) * diam + (dx + r)] * exp(
                         -(albedo_dist2 * inv2sr + normal_diff * inv_sn + rel_depth2 * inv2sd)
                     )
-                    acc += RGB(beauty[ni + 0], beauty[ni + 1], beauty[ni + 2]) * wt
+                    acc += RGB(clamped[ni + 0], clamped[ni + 1], clamped[ni + 2]) * wt
                     acc_w += wt
 
-            var result = (acc / acc_w) if acc_w > Float32(0) else RGB(beauty[ci + 0], beauty[ci + 1], beauty[ci + 2])
+            var result = (acc / acc_w) if acc_w > Float32(0) else RGB(clamped[ci + 0], clamped[ci + 1], clamped[ci + 2])
             output[ci + 0] = result.r
             output[ci + 1] = result.g
             output[ci + 2] = result.b
+    clamped.free()
     # sw freed automatically when it goes out of scope
 
 
