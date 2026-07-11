@@ -37,6 +37,20 @@ def _resolve_sppm_params(
             photons = psc[0].film_w * psc[0].film_h
     return (photons, radius)
 
+# Resolve the VCM merge side's light-path budget for the current pass
+# (task #152's fix): an explicit `--vcm-photons` CLI value (sentinel <=0 =
+# not passed) wins if it's at least n_pix; otherwise falls back to n_pix,
+# today's default (one light path per pixel, deterministically paired with
+# that pixel's own camera subpath for CONNECTION -- see bdpt.mojo's VCM
+# module comment). A value below n_pix would starve the per-pixel
+# connect pairing of a light path to pair with, so it's clamped up, not
+# silently accepted -- unlike SPPM's photon count, which has no such
+# lower bound because SPPM has no per-pixel light-path pairing at all.
+def _resolve_vcm_photons(vcm_photons_cli: Int32, n_pix: Int) -> Int:
+    if vcm_photons_cli > Int32(0):
+        return max(Int(vcm_photons_cli), n_pix)
+    return n_pix
+
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
 def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutAnyOrigin]]:
@@ -479,6 +493,7 @@ def parse_and_render(
     use_guide: Bool = False,
     use_vcm: Bool = False,
     vcm_spp: Int32 = Int32(64),
+    vcm_photons: Int32 = Int32(-1),
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -533,7 +548,8 @@ def parse_and_render(
             sd.free()
             mojo_parsed_free(psc)
             return Int32(-1)
-        var ret = vcm_render_gpu(handle, psc, sd[0], Int(vcm_spp), no_denoise, verbose)
+        var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
+        var ret = vcm_render_gpu(handle, psc, sd[0], Int(vcm_spp), n_photons, no_denoise, verbose)
         gpu_free_scene(handle)
         sd.free()
         mojo_parsed_free(psc)
@@ -603,7 +619,8 @@ def parse_and_render(
         return Int32(0)
     elif use_vcm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var ret = vcm_render(psc, sd[0], Int(vcm_spp), no_denoise, verbose)
+        var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
+        var ret = vcm_render(psc, sd[0], Int(vcm_spp), n_photons, no_denoise, verbose)
         sd.free()
         mojo_parsed_free(psc)
         return ret

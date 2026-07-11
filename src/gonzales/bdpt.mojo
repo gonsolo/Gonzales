@@ -2221,6 +2221,7 @@ def _bdpt_render_core(
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sd:       SceneDescriptor2_C,
     n_spp:    Int,
+    n_photons_req: Int,
     verbose:  Bool,
 ) -> Tuple[UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
     """Bidirectional Path Tracing main loop with real VCM connect+merge MIS
@@ -2231,12 +2232,25 @@ def _bdpt_render_core(
     (iso-scaled, max_comp-clamped, NOT yet denoised) — same contract
     `_sppm_render_core` follows.
 
-    Each spp sample traces `n_light_paths == n_pix` light subpaths, one per
-    pixel and deterministically paired with that pixel's own camera
-    subpath (see _bdpt_store_lvc_vertex's docstring), then traces every
-    pixel's camera subpath and, at each non-delta vertex, both connects to
-    every vertex of its paired light path AND merges against all light
-    paths' vertices within the current sample's progressive merge radius —
+    Each spp sample traces `n_light_paths_merge = max(n_photons_req, n_pix)`
+    light subpaths (task #152's fix — decouples the MERGE side's photon
+    budget from n_pix, like SPPM's own `--sppm-photons`; see
+    project_vcm_stage2_mis_derivation memory). The first `n_pix` of them
+    are, as before, deterministically paired one-per-pixel with that
+    pixel's own camera subpath for CONNECTION (see
+    _bdpt_store_lvc_vertex's docstring) — this pairing is untouched by
+    `n_photons_req`, since `_bdpt_connect_to_cache` only ever reads
+    `lvc[pix]`, never `n_light_paths_merge`. Any EXTRA light paths beyond
+    n_pix exist purely to densify the merge side's spatial hash grid — the
+    merge normalization (`merge_norm`/`eta_vcm` below) uses the TRUE total
+    `n_light_paths_merge`, so the per-vertex MIS weights stay correct (the
+    balance heuristic only needs each technique's real sampling density,
+    which is well-defined for any n_light_paths_merge >= n_pix, not
+    specifically n_light_paths_merge == n_pix). Then traces every pixel's
+    camera subpath and, at each non-delta vertex, both connects to every
+    vertex of its paired light path AND merges against all light paths'
+    vertices (now including the extra merge-only ones) within the current
+    sample's progressive merge radius —
     see this file's opening VCM comment for the combined estimator and
     `_bdpt_connect_to_cache`/`_bdpt_merge_from_cache`'s own docstrings for
     each technique's per-candidate MIS weight."""
@@ -2251,7 +2265,9 @@ def _bdpt_render_core(
     # derivation (see project_vcm_stage2_mis_derivation memory).
     var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
 
-    print("VCM: " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp")
+    var n_light_paths_merge = max(n_photons_req, n_pix)
+    print("VCM: " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
+          + String(n_light_paths_merge) + " light paths/pass")
 
     var has_med = Int(sd.mediumCount) > 0
 
@@ -2276,23 +2292,25 @@ def _bdpt_render_core(
     var c2w = psc[0].camera_to_world
     var base_seed = psc[0].rng_seed
 
-    # One light path per pixel (VCM Stage 2b: DETERMINISTICALLY paired with
-    # that pixel's eye subpath, standard Veach BDPT pairing -- see
+    # The first n_pix light paths are DETERMINISTICALLY paired with that
+    # pixel's eye subpath, standard Veach BDPT pairing -- see
     # _bdpt_store_lvc_vertex's docstring and project_vcm_stage2_mis_derivation
-    # memory). Each light path owns its own dedicated _BDPT_MAX_VERTS-sized
-    # slice of `lvc` (no shared-pool contention, no atomics);
-    # `lvc_path_len[lp_idx]` records how many of those slots it actually
-    # filled.
-    var n_light_paths = n_pix
-    var lvc_cap = n_light_paths * _BDPT_MAX_VERTS
+    # memory. Any paths beyond n_pix (n_light_paths_merge > n_pix, task
+    # #152's photon-budget decoupling) exist only to densify the merge
+    # grid -- they're never read by any pixel's connect step, only by
+    # _bdpt_merge_from_cache's spatial-grid walk. Each light path owns its
+    # own dedicated _BDPT_MAX_VERTS-sized slice of `lvc` (no shared-pool
+    # contention, no atomics); `lvc_path_len[lp_idx]` records how many of
+    # those slots it actually filled.
+    var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
     var lvc = alloc[BDPTVertex](max(lvc_cap, 1))
-    var lvc_path_len = alloc[Int32](max(n_light_paths, 1))
+    var lvc_path_len = alloc[Int32](max(n_light_paths_merge, 1))
     # One scratch Intersection_C per concurrent worker (light path / pixel)
     # instead of one shared slot — CPU threads now race on this exactly like
     # GPU threads already do (see _bdpt_emit_light_paths_gpu/
     # _bdpt_camera_connect_gpu's own per-thread inter_light_ptr+k/
     # inter_cam_ptr+pix), so it can no longer be a single reused buffer.
-    var scratch_light = alloc[Intersection_C](max(n_light_paths, 1))
+    var scratch_light = alloc[Intersection_C](max(n_light_paths_merge, 1))
     var scratch_cam = alloc[Intersection_C](max(n_pix, 1))
 
     # VCM vertex merging: grid buffers allocated once, rebuilt fresh every
@@ -2317,7 +2335,7 @@ def _bdpt_render_core(
         var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
         var merge_r2 = radius_i * radius_i
         var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
-        var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
+        var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
 
         # VCM Stage 2b/2c: global per-iteration MIS weight-combination
         # constants (Georgiev et al. 2012 / SmallVCM, see
@@ -2325,12 +2343,18 @@ def _bdpt_render_core(
         # sample since they depend on the now-progressive radius. Merge
         # runs unconditionally alongside connect (see this file's opening
         # VCM comment), so mis_vm_weight_factor uses its real,
-        # non-discounted eta_vcm-derived value.
-        var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
+        # non-discounted eta_vcm-derived value. Task #152: eta_vcm must use
+        # the TRUE total merge-candidate pool size (n_light_paths_merge),
+        # not n_pix -- the balance heuristic weight is only correct if it
+        # reflects each technique's actual sampling density, and merge's
+        # density scales with however many light paths actually feed its
+        # grid, independent of how many camera pixels exist.
+        var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
         var mis_vm_weight_factor = eta_vcm
         var mis_vc_weight_factor = Float32(1.0) / eta_vcm
 
-        # ── Phase 1: trace each pixel's own paired light subpath ─────────────
+        # ── Phase 1: trace every light subpath (n_light_paths_merge total,
+        # the first n_pix of them pixel-paired, see above) ───────────────────
         # No atomics needed: light path lp_idx writes only its own dedicated
         # slice of lvc (see _bdpt_store_lvc_vertex's docstring).
         @parameter
@@ -2341,15 +2365,17 @@ def _bdpt_render_core(
                                          scratch_light + lp_idx, lvc, lp_idx, lvc_path_len,
                                          mis_vc_weight_factor, mis_vm_weight_factor)
 
-        parallelize[emit_light_path](n_light_paths)
+        parallelize[emit_light_path](n_light_paths_merge)
 
-        _bdpt_build_merge_grid(lvc, lvc_path_len, n_light_paths, merge_next, merge_heads, merge_inv_cell)
+        _bdpt_build_merge_grid(lvc, lvc_path_len, n_light_paths_merge, merge_next, merge_heads, merge_inv_cell)
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
         # Each worker only ever writes its own buf[pix] slot and only reads
         # (never mutates) the now-fully-built lvc cache — no atomics needed.
         # pix doubles as this pixel's PAIRED light path index (VCM Stage 2b,
-        # n_light_paths == n_pix, one dedicated light path per pixel).
+        # the first n_pix of n_light_paths_merge total light paths, one
+        # dedicated light path per pixel -- unaffected by task #152's extra
+        # merge-only paths beyond n_pix).
         @parameter
         def camera_connect(pix: Int):
             var px = pix % fw; var py = pix // fw
@@ -2358,7 +2384,7 @@ def _bdpt_render_core(
             var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, pix, Int(lvc_path_len[pix]),
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths))
+                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge))
             buf[pix] += contrib
             albedo_buf[pix] += alb
 
@@ -2400,6 +2426,7 @@ def vcm_render(
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sd:       SceneDescriptor2_C,
     n_spp:    Int,
+    n_photons: Int,
     no_denoise: Bool,
     verbose:  Bool,
 ) -> Int32:
@@ -2408,9 +2435,13 @@ def vcm_render(
     opening VCM comment), then denoise (first-hit albedo AOV + a fresh
     unjittered normals/depth pass via the SAME render_aux_buffers the plain
     path tracer uses -- integrator-agnostic, no dependency on this
-    estimator's own path state) and write."""
+    estimator's own path state) and write. `n_photons` (task #152,
+    already resolved by pipeline.mojo's `_resolve_vcm_photons` --
+    `--vcm-photons` if given, else n_pix) is the merge side's light-path
+    budget per pass, decoupled from n_pix; see _bdpt_render_core's
+    docstring."""
     var n_pix = Int(psc[0].film_w) * Int(psc[0].film_h)
-    var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, verbose)
+    var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
 
     var normals = alloc[Float32](n_pix * 3)
     var depth = alloc[Float32](n_pix)
@@ -2649,6 +2680,7 @@ def vcm_render_gpu(
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
     sd:       SceneDescriptor2_C,
     n_spp:    Int,
+    n_photons_req: Int,
     no_denoise: Bool,
     verbose:  Bool,
 ) -> Int32:
@@ -2657,14 +2689,20 @@ def vcm_render_gpu(
     _bdpt_trace_camera_and_connect functions, parallelized: one thread per
     light path for the light pass, one thread per pixel for the camera+
     connect pass. Mirrors sppm.mojo's sppm_render_gpu per-pass
-    reset-counter -> emit -> sync+readback+clamp -> consume shape."""
+    reset-counter -> emit -> sync+readback+clamp -> consume shape.
+    `n_photons_req` (task #152) is the merge side's requested light-path
+    budget, decoupled from n_pix -- see _bdpt_render_core's (CPU)
+    docstring for the full derivation; this function mirrors that same
+    n_light_paths_merge = max(n_photons_req, n_pix) split."""
     var fw = Int(psc[0].film_w)
     var fh = Int(psc[0].film_h)
     var n_pix = fw * fh
     var iso_scale = psc[0].film_iso / Float32(100)
     var max_comp  = psc[0].film_max_comp
+    var n_light_paths_merge = max(n_photons_req, n_pix)
 
-    print("VCM (GPU): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp")
+    print("VCM (GPU): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
+          + String(n_light_paths_merge) + " light paths/pass")
 
     var has_med = Int(sd.mediumCount) > 0
     var default_emit_med = Int32(-1)
@@ -2675,8 +2713,7 @@ def vcm_render_gpu(
                 default_emit_med = iface.outside_medium_idx
                 break
 
-    var n_light_paths = n_pix
-    var lvc_cap = n_light_paths * _BDPT_MAX_VERTS
+    var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
     var base_seed = psc[0].rng_seed
 
     var ret = Int32(0)
@@ -2686,12 +2723,12 @@ def vcm_render_gpu(
             comptime block_size = 256
 
             var lvc_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[BDPTVertex]())
-            var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths, 1) * size_of[Int32]())
+            var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Int32]())
             # VCM vertex merging (Stage 1) grid buffers — see vcm_render's
             # matching CPU allocation for the merge_r2/merge_norm derivation.
             var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
-            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths, 1) * size_of[Intersection_C]())
+            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection_C]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
@@ -2764,7 +2801,7 @@ def vcm_render_gpu(
             var gpu_textures = handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C]()
             var n_gpu_textures = Int64(handle[].n_textures)
 
-            var grid_light = ceildiv(max(n_light_paths, 1), block_size)
+            var grid_light = ceildiv(max(n_light_paths_merge, 1), block_size)
             var grid_pix = ceildiv(n_pix, block_size)
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
@@ -2772,7 +2809,7 @@ def vcm_render_gpu(
             var merge_radius_1 = scene_radius * Float32(0.03)
             comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
             var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
-            var n_light_paths_f = Float32(n_light_paths)
+            var n_light_paths_f = Float32(n_light_paths_merge)
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
 
@@ -2782,15 +2819,15 @@ def vcm_render_gpu(
                 var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
                 var merge_r2 = radius_i * radius_i
                 var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
-                var merge_norm = Float32(1.0) / (Float32(n_light_paths) * PI * max(merge_r2, Float32(1e-12)))
-                var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths)
+                var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
+                var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
                 var mis_vm_weight_factor = eta_vcm
                 var mis_vc_weight_factor = Float32(1.0) / eta_vcm
 
                 var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
                 handle[].ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
                     lvc_ptr, path_len_ptr, mis_vc_weight_factor, mis_vm_weight_factor,
-                    inter_light_ptr, n_light_paths,
+                    inter_light_ptr, n_light_paths_merge,
                     default_emit_med, pass_seed, si,
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
@@ -2804,10 +2841,11 @@ def vcm_render_gpu(
                     grid_dim=grid_light, block_dim=block_size)
 
                 # VCM Stage 2b: light paths are deterministically paired with
-                # pixels (n_light_paths == n_pix), so no host readback of a
-                # total vertex count is needed anymore -- lvc_cap is already
-                # known at compile/host time. Kernels stay ordered on one
-                # stream without an explicit synchronize() here.
+                # pixels (the first n_pix of n_light_paths_merge total light
+                # paths, task #152), so no host readback of a total vertex
+                # count is needed anymore -- lvc_cap is already known at
+                # compile/host time. Kernels stay ordered on one stream
+                # without an explicit synchronize() here.
                 handle[].ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
                     merge_heads_ptr, _HSIZE, grid_dim=grid_hsize, block_dim=block_size)
                 handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](

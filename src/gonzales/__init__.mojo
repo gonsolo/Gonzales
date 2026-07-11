@@ -74,6 +74,7 @@ def main() raises:
     var use_guide = False
     var use_vcm = False
     var vcm_spp = Int32(64)
+    var vcm_photons = Int32(-1)  # -1 = not passed on CLI; fall back to n_pix (today's default)
     var i = 1
     while i < len(args):
         var arg = String(args[i])
@@ -123,6 +124,9 @@ def main() raises:
         elif arg == "--vcm-spp" and i + 1 < len(args):
             i += 1
             vcm_spp = _parse_int32(String(args[i]), 0)
+        elif arg == "--vcm-photons" and i + 1 < len(args):
+            i += 1
+            vcm_photons = _parse_int32(String(args[i]), 0)
         elif arg == "--sppm":
             use_sppm = True
         elif arg == "--sppm-passes" and i + 1 < len(args):
@@ -195,7 +199,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):
