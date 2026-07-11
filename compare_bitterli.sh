@@ -74,12 +74,12 @@ for scene in "${SCENES[@]}"; do
     # volumetric-caustic's glass-sphere caustic and glass-of-water's nested
     # dielectric/conductor surfaces are SDS-ish light paths that plain
     # unidirectional NEE path tracing cannot resolve at any sample count —
-    # route them through gonzales's --bdpt renderer instead of --gpu.
+    # route them through gonzales's --vcm renderer instead of --gpu.
     # veach-bidir renders fine under either and is left on --gpu (its
     # previously-verified path).
-    use_bdpt=false
+    use_vcm=false
     case "$scene" in
-        volumetric-caustic|glass-of-water) use_bdpt=true ;;
+        volumetric-caustic|glass-of-water) use_vcm=true ;;
     esac
 
     # water-caustic declares "Integrator sppm" — same underlying reason as the
@@ -100,13 +100,13 @@ for scene in "${SCENES[@]}"; do
         g_exr="$OUT/images/${scene}-gonzales.exr"
         g_log="$OUT/images/${scene}-gonzales.log"
         g_label=""
-        if $use_bdpt; then
-            if (cd ~/work/gonzales && "$GONZALES" --bdpt --bdpt-spp "$SPP" \
+        if $use_vcm; then
+            if (cd ~/work/gonzales && "$GONZALES" --vcm --vcm-spp "$SPP" \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \
                 [ -f ~/work/gonzales/"$exr_name" ] && \
                 { $is_png && mv ~/work/gonzales/"$exr_name" "$g_png" \
                            || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
-                g_label="BDPT"
+                g_label="VCM"
             fi
         elif $use_sppm; then
             # GPU SPPM port (2026-07-04, commit cf49e366): ~25-30x faster than
@@ -136,7 +136,7 @@ for scene in "${SCENES[@]}"; do
                        || { mv ~/work/gonzales/"$exr_name" "$g_exr" && tonemap "$g_exr" "$g_png"; }; }; then
             g_label="GPU"
         fi
-        if [ -z "$g_label" ] && ! $use_bdpt && ! $use_sppm; then
+        if [ -z "$g_label" ] && ! $use_vcm && ! $use_sppm; then
             echo "  ! gonzales GPU failed, trying CPU..."
             if (cd ~/work/gonzales && "$GONZALES" --spp "$SPP" \
                 --resolution "${scale_w}x${scale_h}" "$scene_file") > "$g_log" 2>&1 && \

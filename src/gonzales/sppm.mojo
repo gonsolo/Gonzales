@@ -1685,13 +1685,12 @@ def _sppm_render_core(
     verbose:  Bool,
 ) -> Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
     """Stochastic Progressive Photon Mapping main loop, factored out of
-    `sppm_render` so `vcm_render` (bdpt.mojo) can blend this progressive
-    merge estimate with BDPT's connection-only estimate before the shared
-    aux-buffer/denoise/write tail runs once. Returns (ok, pixels,
-    albedo_pixels) -- `ok=False` (both pointers null/unusable) when the
-    scene has no lights, mirroring the old function's `Int32(-1)` early
-    return. Same buffer contract as `_bdpt_render_core`: caller-owned
-    `n_pix*3` Float32 arrays, iso-scaled/max_comp-clamped, NOT yet denoised."""
+    `sppm_render` so the CPU driver's aux-buffer/denoise/write tail is a
+    separate, reusable step. Returns (ok, pixels, albedo_pixels) --
+    `ok=False` (both pointers null/unusable) when the scene has no lights,
+    mirroring the old function's `Int32(-1)` early return. Same buffer
+    contract as `_bdpt_render_core` (bdpt.mojo): caller-owned `n_pix*3`
+    Float32 arrays, iso-scaled/max_comp-clamped, NOT yet denoised."""
     var fw = Int(psc[0].film_w)
     var fh = Int(psc[0].film_h)
     var n_pix = fw * fh
@@ -1796,10 +1795,7 @@ def sppm_render(
     """CLI-facing SPPM entry point: run the progressive photon-mapping
     estimator (`_sppm_render_core`), then denoise (SPPMPixel.alb as the
     albedo AOV, normals/depth from the same integrator-agnostic
-    render_aux_buffers the plain path tracer and BDPT use) and write. See
-    bdpt.mojo's `vcm_render` for the sibling entry point that blends this
-    with BDPT's connection-only estimate instead of writing
-    `_sppm_render_core`'s output directly."""
+    render_aux_buffers the plain path tracer and VCM use) and write."""
     var (ok, out_pixels, albedo_pixels) = _sppm_render_core(
         psc, sd, n_passes, n_photons_per_pass, initial_radius, verbose)
     if not ok:
@@ -2149,7 +2145,7 @@ def sppm_render_gpu(
     as sppm_render, parallelized: one thread per visible-point sample for the
     camera pass/gather/NEE/finalize, one thread per emitted photon for the
     photon pass, atomic-exchange hash-grid build (classic parallel linked-list
-    insertion). Mirrors bdpt_render_gpu's per-pass reset-counter -> emit ->
+    insertion). Mirrors vcm_render_gpu's per-pass reset-counter -> emit ->
     sync+readback+clamp -> consume shape."""
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
         print("SPPM: no lights in scene, cannot emit photons")
