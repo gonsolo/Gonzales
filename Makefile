@@ -147,17 +147,34 @@ $(VULKANRT_LIB): $(VULKANRT_SRC) $(VULKANRT_INC)/vulkanrt.h $(VULKANRT_GEN)/smok
 	g++ -fPIC -shared -std=c++20 -I$(VULKANRT_INC) -I$(VULKANRT_GEN) \
 		$(VULKANRT_SRC) -lvulkan -o $(VULKANRT_LIB)
 
+# Task #163 stage 1: CUDA/Vulkan GPU-side interop foundation (real CUDA
+# external-memory/semaphore import, no CPU round trip) -- the prerequisite
+# for a Vulkan RT backend that's actually faster than gonzales's existing
+# software-BVH GPU path, not just a correctness proof (--vulkan-rt-shade's
+# naive host-round-trip approach is ~94x slower). See
+# project_vulkan_rt_backend memory.
+CUDA_HOME ?= /opt/cuda
+VULKANINTEROP_SRC = src/vulkaninterop/vulkaninterop.cpp
+VULKANINTEROP_INC = src/vulkaninterop
+VULKANINTEROP_GEN = src/vulkaninterop/generated
+VULKANINTEROP_LIB = $(BUILD_DIR)/libvulkaninterop.so
+
+$(VULKANINTEROP_LIB): $(VULKANINTEROP_SRC) $(VULKANINTEROP_INC)/vulkaninterop.h $(VULKANINTEROP_GEN)/interop_double_comp_spv.h
+	@mkdir -p $(BUILD_DIR)
+	g++ -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) -I$(VULKANINTEROP_GEN) -I$(CUDA_HOME)/include \
+		$(VULKANINTEROP_SRC) -lvulkan -L$(CUDA_HOME)/lib64 -lcudart -o $(VULKANINTEROP_LIB)
+
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
 else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
-                  -Xlinker -lvulkanrt \
+                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
@@ -192,7 +209,7 @@ ut: unittest
 # stays readable/deterministic despite running out of order. Fails if any
 # file failed (checked after all finish, not fail-fast, so a run tells you
 # everything that broke in one pass).
-unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB)
+unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
 	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
 	@i=0; \
 	for f in $(UNIT_TEST_SRCS); do \

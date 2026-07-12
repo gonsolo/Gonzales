@@ -1,0 +1,24 @@
+#version 460
+
+// Task #163 stage 1: trivial stand-in for real ray tracing, isolating the
+// CUDA/Vulkan interop handoff mechanics (memory + semaphore import, GPU-side
+// synchronization) from any actual RT-core work. Doubles every element of
+// the shared interop buffer -- a Mojo kernel writes it, this shader
+// transforms it, a Mojo kernel reads it back, all without a CPU sync point
+// in between (see vulkaninterop.h).
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) buffer InteropBuffer {
+    float data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint count;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+    data[i] = data[i] * 2.0;
+}
