@@ -5035,6 +5035,411 @@ def _bdpt_camera_connect_gpu(
     albedo_accum[pix*3+1] += alb.g
     albedo_accum[pix*3+2] += alb.b
 
+
+# ── Task #163 stage 4, part 3: wavefront-staged GPU kernels ─────────────────
+# Thin per-bounce wrappers around _bdpt_light_path_init/_bounce and
+# _bdpt_camera_path_init/_bounce (this file, above), the counterpart to
+# _bdpt_emit_light_paths_gpu/_bdpt_camera_connect_gpu's single-mega-kernel
+# design. Each subpath type gets 3 kernels (init once, then intersect+bounce
+# once per depth level, host-loop driven -- see vcm_render_gpu_wavefront's
+# docstring below) plus a final accumulate kernel for the camera side (whose
+# `total`/`first_alb` only get written into accum/albedo_accum once, after
+# the whole subpath is done, unlike the light side which has no equivalent
+# accumulator). `results`/`inter_*_ptr` intentionally double as BOTH this
+# bounce's primary-ray intersection storage AND the scratch buffer
+# `_bdpt_camera_path_bounce`'s internal shadow-ray probes reuse -- same
+# single-scratch-slot-per-thread convention `_bdpt_camera_connect_gpu`
+# already used. The intersect kernels use plain `traverse_bvh2_core`/
+# `test_spheres` (NOT gpu.mojo's curve-deferred `traverse_bvh2_core_defer_
+# curves`/`traverse_paths_gpu` machinery) -- matching exactly what
+# `_bdpt_light_path_bounce`/`_bdpt_camera_path_bounce` themselves expect
+# (a single resolved Intersection_C, no deferred-curve candidate list) and
+# what the CPU-side split functions' own equivalence tests already verified
+# against. This is a deliberate, first-pass scope match to
+# `_bdpt_emit_light_paths_gpu`'s existing intersect behavior -- swapping
+# this specific step for Vulkan RT (stages 1-3's interop mechanism) is the
+# next piece of work once this staging is itself verified correct.
+
+def _bdpt_light_path_init_gpu(
+    states: UnsafePointer[VCMLightPathState_C, MutAnyOrigin],
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    lvc_path_len: UnsafePointer[Int32, MutAnyOrigin],
+    mis_vc_weight_factor: Float32,
+    n_light_paths: Int,
+    default_emit_med: Int32,
+    seed: UInt64,
+    pass_idx: Int,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediumCount: Int64,
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    mediumIfaceCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
+):
+    """One thread per light path: seed this thread's own PCG32 (same seed
+    formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,
+    store the resulting VCMLightPathState_C. Mirrors
+    _bdpt_emit_light_paths_gpu's docstring for why `has_med` isn't a kernel
+    parameter -- not needed here since init doesn't touch media."""
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k >= n_light_paths:
+        return
+    var sd = _mk_sd_full(
+        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
+        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
+        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
+        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
+    )
+    var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
+    states[k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor)
+
+def _bdpt_light_path_intersect_gpu(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    states: UnsafePointer[VCMLightPathState_C, MutAnyOrigin],
+    results: UnsafePointer[Intersection_C, MutAnyOrigin],
+    count: Int,
+):
+    """Batched-per-thread primary/bounce-ray intersect for one light-path
+    depth level -- separated from the material dispatch in
+    _bdpt_light_path_bounce_gpu so this specific step (and only this step)
+    is the eventual Vulkan RT swap point, matching the plain wavefront path
+    tracer's traverse_paths_gpu/shade_*_gpu split."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    if states[tid].active == Int8(0):
+        return
+    var ray = Ray_C(states[tid].ro, states[tid].rd)
+    results[tid].hit = Int8(0)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results + tid,
+                        blasNodesArr, blasPrimIdsArr, instances)
+    test_spheres(spheres, n_spheres, ray, results + tid)
+
+def _bdpt_light_path_bounce_gpu(
+    states: UnsafePointer[VCMLightPathState_C, MutAnyOrigin],
+    results: UnsafePointer[Intersection_C, MutAnyOrigin],
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    lvc_path_len: UnsafePointer[Int32, MutAnyOrigin],
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
+    n_light_paths: Int,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediumCount: Int64,
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    mediumIfaceCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
+):
+    """One bounce's material dispatch for one light path, reading the
+    Intersection_C _bdpt_light_path_intersect_gpu already computed this
+    depth level instead of tracing it inline -- see this section's opening
+    comment."""
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k >= n_light_paths:
+        return
+    if states[k].active == Int8(0):
+        return
+    var sd = _mk_sd_full(
+        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
+        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
+        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
+        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
+    )
+    var has_med = mediumCount > Int64(0)
+    var pcg = PCG32(UInt64(0), UInt64(0))
+    pcg.state = states[k].pcg_state
+    pcg.inc = states[k].pcg_inc
+    var ro = states[k].ro
+    var rd = states[k].rd
+    var flux = states[k].flux
+    var n_verts = Int(states[k].n_verts)
+    var dvcm_carry = states[k].dvcm
+    var dvc_carry = states[k].dvc
+    var dvm_carry = states[k].dvm
+    var is_finite_origin = states[k].is_finite_origin == Int8(1)
+    var cur_med_idx = states[k].cur_med_idx
+    var n_lbounces = Int(states[k].n_lbounces)
+    var wavelengths = SampledWavelengths(states[k].wl0, states[k].wl1, states[k].wl2, states[k].wl3, states[k].wl_pdf)
+
+    var cont = _bdpt_light_path_bounce[True](
+        sd, pcg, has_med, results[k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
+        ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
+        is_finite_origin, cur_med_idx, n_lbounces, wavelengths,
+    )
+    lvc_path_len[k] = Int32(n_verts)
+    states[k].active = Int8(1) if cont else Int8(0)
+    states[k].ro = ro
+    states[k].rd = rd
+    states[k].flux = flux
+    states[k].n_verts = Int32(n_verts)
+    states[k].dvcm = dvcm_carry
+    states[k].dvc = dvc_carry
+    states[k].dvm = dvm_carry
+    states[k].cur_med_idx = cur_med_idx
+    states[k].n_lbounces = Int32(n_lbounces)
+    states[k].pcg_state = pcg.state
+    states[k].pcg_inc = pcg.inc
+
+def _bdpt_camera_path_init_gpu(
+    states: UnsafePointer[VCMCameraPathState_C, MutAnyOrigin],
+    r2c: UnsafePointer[Float32, MutAnyOrigin],
+    c2w: UnsafePointer[Float32, MutAnyOrigin],
+    n_pix: Int,
+    fw: Int,
+    px_scale: Float32,
+    n_light_paths_f: Float32,
+    seed: UInt64,
+    pass_idx: Int,
+):
+    """One thread per pixel: seed this thread's own PCG32 (same seed formula
+    _bdpt_camera_connect_gpu uses), call _bdpt_camera_path_init, store the
+    resulting VCMCameraPathState_C. No scene params needed -- camera-ray
+    generation doesn't touch the scene."""
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    var px = pix % fw
+    var py = pix // fw
+    var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
+                     UInt64(pass_idx * 2654435761 + 1))
+    states[pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f)
+
+def _bdpt_camera_path_intersect_gpu(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    states: UnsafePointer[VCMCameraPathState_C, MutAnyOrigin],
+    results: UnsafePointer[Intersection_C, MutAnyOrigin],
+    count: Int,
+):
+    """Camera-path counterpart to _bdpt_light_path_intersect_gpu -- see its
+    docstring."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    if states[tid].active == Int8(0):
+        return
+    var ray = Ray_C(states[tid].ro, states[tid].rd)
+    results[tid].hit = Int8(0)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results + tid,
+                        blasNodesArr, blasPrimIdsArr, instances)
+    test_spheres(spheres, n_spheres, ray, results + tid)
+
+def _bdpt_camera_path_bounce_gpu(
+    states: UnsafePointer[VCMCameraPathState_C, MutAnyOrigin],
+    results: UnsafePointer[Intersection_C, MutAnyOrigin],
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    lvc_path_len: UnsafePointer[Int32, MutAnyOrigin],
+    merge_next: UnsafePointer[Int32, MutAnyOrigin],
+    merge_heads: UnsafePointer[Int32, MutAnyOrigin],
+    merge_inv_cell: Float32,
+    merge_r2: Float32,
+    merge_norm: Float32,
+    mis_vc_weight_factor: Float32,
+    mis_vm_weight_factor: Float32,
+    n_pix: Int,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediumCount: Int64,
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    mediumIfaceCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
+):
+    """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
+    still on the existing software-BVH `results + pix` scratch slot -- see
+    this section's opening comment) for one camera path, reading the
+    Intersection_C _bdpt_camera_path_intersect_gpu already computed this
+    depth level."""
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    if states[pix].active == Int8(0):
+        return
+    var sd = _mk_sd_full(
+        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
+        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
+        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
+        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
+    )
+    var has_med = mediumCount > Int64(0)
+    var pcg = PCG32(UInt64(0), UInt64(0))
+    pcg.state = states[pix].pcg_state
+    pcg.inc = states[pix].pcg_inc
+    var ro = states[pix].ro
+    var rd = states[pix].rd
+    var beta = states[pix].beta
+    var total = states[pix].total
+    var first_alb = states[pix].first_alb
+    var n_verts = Int(states[pix].n_verts)
+    var n_bounces = Int(states[pix].n_bounces)
+    var cur_med_idx = states[pix].cur_med_idx
+    var dvcm_carry = states[pix].dvcm
+    var dvc_carry = states[pix].dvc
+    var dvm_carry = states[pix].dvm
+    var last_bsdf_pdf = states[pix].last_bsdf_pdf
+    var wavelengths = SampledWavelengths(states[pix].wl0, states[pix].wl1, states[pix].wl2, states[pix].wl3, states[pix].wl_pdf)
+
+    var cont = _bdpt_camera_path_bounce[True](
+        sd, pcg, has_med, results[pix], results + pix, lvc, pix, Int(lvc_path_len[pix]),
+        merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
+        mis_vc_weight_factor, mis_vm_weight_factor,
+        ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
+        dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, wavelengths,
+    )
+    states[pix].active = Int8(1) if cont else Int8(0)
+    states[pix].ro = ro
+    states[pix].rd = rd
+    states[pix].beta = beta
+    states[pix].total = total
+    states[pix].first_alb = first_alb
+    states[pix].n_verts = Int32(n_verts)
+    states[pix].n_bounces = Int32(n_bounces)
+    states[pix].cur_med_idx = cur_med_idx
+    states[pix].dvcm = dvcm_carry
+    states[pix].dvc = dvc_carry
+    states[pix].dvm = dvm_carry
+    states[pix].last_bsdf_pdf = last_bsdf_pdf
+    states[pix].pcg_state = pcg.state
+    states[pix].pcg_inc = pcg.inc
+
+def _bdpt_camera_path_accumulate_gpu(
+    states: UnsafePointer[VCMCameraPathState_C, MutAnyOrigin],
+    accum: UnsafePointer[Float32, MutAnyOrigin],
+    albedo_accum: UnsafePointer[Float32, MutAnyOrigin],
+    n_pix: Int,
+):
+    """Runs once per `si` sample, after the camera-path bounce loop has
+    fully terminated for every lane -- writes each pixel's now-complete
+    `total`/`first_alb` (accumulated across every bounce inside the state
+    struct) into the persistent per-pixel accum buffers, exactly once,
+    matching what _bdpt_camera_connect_gpu's own single `accum[...] +=
+    contrib...` did at the end of its one-shot whole-subpath trace."""
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    accum[pix*3]   += states[pix].total.r
+    accum[pix*3+1] += states[pix].total.g
+    accum[pix*3+2] += states[pix].total.b
+    albedo_accum[pix*3]   += states[pix].first_alb.r
+    albedo_accum[pix*3+1] += states[pix].first_alb.g
+    albedo_accum[pix*3+2] += states[pix].first_alb.b
+
 def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
@@ -5304,5 +5709,318 @@ def vcm_render_gpu(
             ret = Int32(-1)
     else:
         print("VCM GPU: no accelerator")
+        ret = Int32(-1)
+    return ret
+
+def vcm_render_gpu_wavefront(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    sd:       SceneDescriptor2_C,
+    n_spp:    Int,
+    n_photons_req: Int,
+    no_denoise: Bool,
+    verbose:  Bool,
+) -> Int32:
+    """Task #163 stage 4 part 3: wavefront-staged variant of vcm_render_gpu,
+    using _bdpt_light_path_init/_intersect/_bounce_gpu and
+    _bdpt_camera_path_init/_intersect/_bounce_gpu instead of the single
+    _bdpt_emit_light_paths_gpu/_bdpt_camera_connect_gpu mega-kernels --
+    same algorithm, same LVC-then-connect ordering (light pass runs to
+    full completion before the camera pass starts, since camera vertices
+    connect/merge against the COMPLETE light-path cache, not a
+    partially-built one), same output. The only behavioral difference is
+    control-flow SHAPE: many small kernel launches (one intersect+bounce
+    pair per _BDPT_MAX_DEPTH depth level, per subpath) instead of two
+    single-kernel-traces-a-whole-subpath launches. This is deliberately
+    NOT expected to be faster than vcm_render_gpu yet -- both still use
+    the same software-BVH `traverse_bvh2_core`/`test_spheres` intersect;
+    this function exists to prove the staging is correct BEFORE swapping
+    the intersect step for Vulkan RT (the stage-1/2/3 interop mechanism),
+    matching this whole task's own established discipline of proving one
+    variable at a time. See vcm_render_gpu's own docstring for the shared
+    algorithm-level documentation (n_photons_req/n_light_paths_merge
+    derivation etc.), not repeated here."""
+    var fw = Int(psc[0].film_w)
+    var fh = Int(psc[0].film_h)
+    var n_pix = fw * fh
+    var iso_scale = psc[0].film_iso / Float32(100)
+    var max_comp  = psc[0].film_max_comp
+    var n_light_paths_merge = max(n_photons_req, n_pix)
+
+    print("VCM (GPU wavefront): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
+          + String(n_light_paths_merge) + " light paths/pass")
+
+    var has_med = Int(sd.mediumCount) > 0
+    var default_emit_med = Int32(-1)
+    if has_med and Int(sd.mediumIfaceCount) > 0:
+        for mi in range(Int(sd.mediumIfaceCount)):
+            var iface = sd.mediumInterfaces[mi]
+            if Int(iface.outside_medium_idx) >= 0:
+                default_emit_med = iface.outside_medium_idx
+                break
+
+    var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
+    var base_seed = psc[0].rng_seed
+
+    var ret = Int32(0)
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            comptime block_size = 256
+
+            var lvc_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[BDPTVertex]())
+            var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Int32]())
+            # VCM vertex merging (Stage 1) grid buffers — see vcm_render's
+            # matching CPU allocation for the merge_r2/merge_norm derivation.
+            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
+            var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
+            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection_C]())
+            var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
+            var light_states_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[VCMLightPathState_C]())
+            var cam_states_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VCMCameraPathState_C]())
+            var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            with accum_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                for i in range(n_pix * 3):
+                    dst[i] = Float32(0)
+            var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            with albedo_accum_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                for i in range(n_pix * 3):
+                    dst[i] = Float32(0)
+
+            var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
+            with r2c_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = psc[0].raster_to_camera.bitcast[UInt8]()
+                for i in range(16 * size_of[Float32]()):
+                    dst[i] = src[i]
+            var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
+            with c2w_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = psc[0].camera_to_world.bitcast[UInt8]()
+                for i in range(16 * size_of[Float32]()):
+                    dst[i] = src[i]
+
+            var lvc_ptr     = lvc_buf.unsafe_ptr().bitcast[BDPTVertex]()
+            var path_len_ptr = path_len_buf.unsafe_ptr().bitcast[Int32]()
+            var merge_heads_ptr = merge_heads_buf.unsafe_ptr().bitcast[Int32]()
+            var merge_next_ptr  = merge_next_buf.unsafe_ptr().bitcast[Int32]()
+            var inter_light_ptr = inter_light_buf.unsafe_ptr().bitcast[Intersection_C]()
+            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
+            var light_states_ptr = light_states_buf.unsafe_ptr().bitcast[VCMLightPathState_C]()
+            var cam_states_ptr   = cam_states_buf.unsafe_ptr().bitcast[VCMCameraPathState_C]()
+            var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
+            var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
+            var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
+            var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
+
+            var bvh2Nodes = handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node]()
+            var primIds = handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C]()
+            var meshes = handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C]()
+            var curves = handle[].curves_buf.unsafe_ptr().bitcast[Curve_C]()
+            var blasNodesArr = handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]]()
+            var blasPrimIdsArr = handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]]()
+            var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
+            var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
+            var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
+            var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
+            var areaLights = handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C]()
+            var distantLights = handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C]()
+            var infiniteLights = handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C]()
+            var pointLights = handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C]()
+            var n_mediums = Int64(handle[].n_mediums)
+            var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
+            var n_spheres = Int64(handle[].n_spheres)
+            var n_curves = Int64(handle[].n_curves)
+            var n_area_lights = Int64(handle[].n_area_lights)
+            var n_distant_lights = Int64(handle[].n_distant_lights)
+            var n_infinite_lights = Int64(handle[].n_infinite_lights)
+            var n_point_lights = Int64(handle[].n_point_lights)
+            var n_blas = Int64(handle[].n_blas)
+            var n_instances = Int64(handle[].n_instances)
+            var spectral_coeffs = handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_cie_x = handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_cie_y = handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_cie_z = handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_d65 = handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32]()
+            var spectral_res = handle[].spectral_res
+            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
+            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
+            var gpu_textures = handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C]()
+            var n_gpu_textures = Int64(handle[].n_textures)
+
+            var grid_light = ceildiv(max(n_light_paths_merge, 1), block_size)
+            var grid_pix = ceildiv(n_pix, block_size)
+            var grid_hsize = ceildiv(_HSIZE, block_size)
+
+            var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
+            var merge_radius_1 = scene_radius * Float32(0.03)
+            comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
+            var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
+            var n_light_paths_f = Float32(n_light_paths_merge)
+
+            var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
+
+            for si in range(n_spp):
+                # Stage 2c progressive radius -- see vcm_render (CPU)'s
+                # matching per-sample loop for the full derivation comment.
+                var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
+                var merge_r2 = radius_i * radius_i
+                var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
+                var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
+                var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
+                var mis_vm_weight_factor = eta_vcm
+                var mis_vc_weight_factor = Float32(1.0) / eta_vcm
+
+                var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
+
+                # Task #163 stage 4 part 3: wavefront-staged light pass --
+                # init once, then intersect+bounce once per depth level,
+                # instead of _bdpt_emit_light_paths_gpu's single mega-kernel.
+                # Every kernel internally skips lanes whose state has already
+                # gone inactive (mirrors gpu.mojo's traverse_paths_gpu/
+                # shade_*_gpu `if paths[tid].active == 0: return` convention)
+                # -- running the full _BDPT_MAX_DEPTH iterations regardless
+                # of how many lanes are still active is the same fixed-
+                # iteration-count wavefront shape the plain path tracer uses.
+                handle[].ctx.enqueue_function[_bdpt_light_path_init_gpu](
+                    light_states_ptr, lvc_ptr, path_len_ptr, mis_vc_weight_factor,
+                    n_light_paths_merge, default_emit_med, pass_seed, si,
+                    bvh2Nodes, primIds, meshes, materials,
+                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                    pointLights, n_point_lights,
+                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
+                    gpu_textures, n_gpu_textures,
+                    grid_dim=grid_light, block_dim=block_size)
+
+                for _bounce_i in range(_BDPT_MAX_DEPTH):
+                    handle[].ctx.enqueue_function[_bdpt_light_path_intersect_gpu](
+                        bvh2Nodes, primIds, meshes, curves,
+                        blasNodesArr, blasPrimIdsArr, instances,
+                        spheres, Int(n_spheres),
+                        light_states_ptr, inter_light_ptr, n_light_paths_merge,
+                        grid_dim=grid_light, block_dim=block_size)
+                    handle[].ctx.enqueue_function[_bdpt_light_path_bounce_gpu](
+                        light_states_ptr, inter_light_ptr, lvc_ptr, path_len_ptr,
+                        mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_merge,
+                        bvh2Nodes, primIds, meshes, materials,
+                        areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                        mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                        blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                        distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                        pointLights, n_point_lights,
+                        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                        measured_brdfs, n_measured_brdfs,
+                        gpu_textures, n_gpu_textures,
+                        grid_dim=grid_light, block_dim=block_size)
+
+                # VCM Stage 2b: light paths are deterministically paired with
+                # pixels (the first n_pix of n_light_paths_merge total light
+                # paths, task #152), so no host readback of a total vertex
+                # count is needed anymore -- lvc_cap is already known at
+                # compile/host time. Kernels stay ordered on one stream
+                # without an explicit synchronize() here.
+                handle[].ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
+                    merge_heads_ptr, _HSIZE, grid_dim=grid_hsize, block_dim=block_size)
+                handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
+                    lvc_ptr, path_len_ptr, lvc_cap, merge_next_ptr, merge_heads_ptr, merge_inv_cell,
+                    grid_dim=grid_merge_ins, block_dim=block_size)
+
+                # Task #163 stage 4 part 3: wavefront-staged camera pass --
+                # same shape as the light pass above. Connect/merge (still
+                # software-BVH shadow rays, per the user-confirmed stage 4
+                # scope) run inline inside _bdpt_camera_path_bounce_gpu at
+                # every non-delta vertex, exactly where
+                # _bdpt_camera_connect_gpu's single mega-kernel already ran
+                # them -- only the primary/bounce ray intersect moved out.
+                handle[].ctx.enqueue_function[_bdpt_camera_path_init_gpu](
+                    cam_states_ptr, r2c_ptr, c2w_ptr, n_pix, Int(psc[0].film_w),
+                    px_scale, n_light_paths_f, base_seed, si,
+                    grid_dim=grid_pix, block_dim=block_size)
+
+                for _bounce_i in range(_BDPT_MAX_DEPTH):
+                    handle[].ctx.enqueue_function[_bdpt_camera_path_intersect_gpu](
+                        bvh2Nodes, primIds, meshes, curves,
+                        blasNodesArr, blasPrimIdsArr, instances,
+                        spheres, Int(n_spheres),
+                        cam_states_ptr, inter_cam_ptr, n_pix,
+                        grid_dim=grid_pix, block_dim=block_size)
+                    handle[].ctx.enqueue_function[_bdpt_camera_path_bounce_gpu](
+                        cam_states_ptr, inter_cam_ptr, lvc_ptr, path_len_ptr,
+                        merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
+                        mis_vc_weight_factor, mis_vm_weight_factor, n_pix,
+                        bvh2Nodes, primIds, meshes, materials,
+                        areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                        mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                        blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                        distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                        pointLights, n_point_lights,
+                        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                        measured_brdfs, n_measured_brdfs,
+                        gpu_textures, n_gpu_textures,
+                        grid_dim=grid_pix, block_dim=block_size)
+
+                handle[].ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
+                    cam_states_ptr, accum_ptr, albedo_accum_ptr, n_pix,
+                    grid_dim=grid_pix, block_dim=block_size)
+
+                if verbose:
+                    print("VCM (GPU wavefront): sample " + String(si + 1) + "/" + String(n_spp))
+
+            handle[].ctx.synchronize()
+
+            var pixels = alloc[Float32](n_pix * 3)
+            with accum_buf.map_to_host() as host_buf:
+                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var inv_spp = iso_scale / Float32(n_spp)
+                for i in range(n_pix):
+                    var r = src[i*3]   * inv_spp
+                    var g = src[i*3+1] * inv_spp
+                    var b = src[i*3+2] * inv_spp
+                    if max_comp > Float32(0):
+                        r = r if r < max_comp else max_comp
+                        g = g if g < max_comp else max_comp
+                        b = b if b < max_comp else max_comp
+                    pixels[i*3] = r; pixels[i*3+1] = g; pixels[i*3+2] = b
+
+            # Denoise (never wired up before -- no_denoise was a dead
+            # parameter): read back the albedo AOV accumulated above, run
+            # a fresh normals/depth pass via the host-side sd (same
+            # render_aux_buffers the CPU path/plain tracer use -- host-only,
+            # so it runs on the CPU here too, not as a GPU kernel), then the
+            # same CPU denoise() the CPU BDPT path uses.
+            var albedo_pixels = alloc[Float32](n_pix * 3)
+            with albedo_accum_buf.map_to_host() as host_buf:
+                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var inv_spp_alb = Float32(1) / Float32(n_spp)
+                for i in range(n_pix * 3):
+                    albedo_pixels[i] = src[i] * inv_spp_alb
+
+            var normals = alloc[Float32](n_pix * 3)
+            var depth = alloc[Float32](n_pix)
+            var sd_local = sd
+            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
+                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+
+            var denoised = alloc[Float32](n_pix * 3)
+            if no_denoise:
+                for i in range(n_pix * 3): denoised[i] = pixels[i]
+            else:
+                denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                        denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+
+            _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+            pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+        except e:
+            print("VCM GPU wavefront render failed: " + String(e))
+            ret = Int32(-1)
+    else:
+        print("VCM GPU wavefront: no accelerator")
         ret = Int32(-1)
     return ret

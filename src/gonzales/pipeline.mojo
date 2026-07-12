@@ -11,7 +11,7 @@ from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
 from .sppm import sppm_render, sppm_render_gpu
-from .bdpt import vcm_render, vcm_render_gpu
+from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront
 from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
@@ -746,6 +746,13 @@ def parse_and_render(
     # docstring in gpu.mojo) -- falls back to CUDA traversal with a
     # warning otherwise.
     use_vulkan_rt_shade: Bool = False,
+    # Task #163 stage 4 part 3: route --vcm --gpu through
+    # vcm_render_gpu_wavefront (staged intersect+bounce kernels, one launch
+    # per depth level) instead of vcm_render_gpu's single-mega-kernel-per-
+    # subpath design. Same software-BVH intersect either way -- this only
+    # exercises the staging itself, a prerequisite for a future Vulkan RT
+    # swap, not yet a speed win. See vcm_render_gpu_wavefront's docstring.
+    use_vcm_wavefront: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -802,7 +809,11 @@ def parse_and_render(
             return Int32(-1)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
         var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
-        var ret = vcm_render_gpu(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
+        var ret: Int32
+        if use_vcm_wavefront:
+            ret = vcm_render_gpu_wavefront(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
+        else:
+            ret = vcm_render_gpu(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         gpu_free_scene(handle)
         sd.free()
         mojo_parsed_free(psc)
