@@ -1021,13 +1021,30 @@ def intersect_triangle(
     var tvec = ray_org - p0
     var u = dot(tvec, pvec) * invDet
 
-    if u < 0.0 or u > 1.0:
+    # Watertight edge tolerance: Moller-Trumbore's barycentric tests are not
+    # guaranteed watertight at a shared edge between two adjacent triangles
+    # under floating-point rounding -- a ray passing extremely close to a
+    # shared edge/vertex can compute u/v/u+v just outside [0,1] for BOTH
+    # triangles independently (each rejects, neither accepts), producing a
+    # real miss (hit=0) despite the ray genuinely crossing the mesh's
+    # surface. Reproduced concretely: cornell-box's back wall and floor
+    # (each a quad split into 2 triangles via "integer indices [0 1 2 0 2
+    # 3]") showed a diagonal line of missed-intersection pixels exactly
+    # along that shared diagonal, visible even in the raw albedo AOV (pure
+    # geometry/material lookup, no lighting math involved at all) --
+    # confirming this was a primary-ray intersection gap, not a shading
+    # bug. A small epsilon tolerance on the edge tests (growing each
+    # triangle by a negligible sliver in barycentric space) is the standard
+    # pragmatic fix for this class of crack, short of a full watertight
+    # (Woop et al. 2013) rewrite of the intersection algorithm.
+    comptime _EDGE_EPS = Float32(1e-5)
+    if u < -_EDGE_EPS or u > 1.0 + _EDGE_EPS:
         return (False, tMax, 0.0, 0.0)
 
     var qvec = cross(tvec, e1)
     var v = dot(ray_dir, qvec) * invDet
 
-    if v < 0.0 or u + v > 1.0:
+    if v < -_EDGE_EPS or u + v > 1.0 + _EDGE_EPS:
         return (False, tMax, 0.0, 0.0)
 
     var t = dot(e2, qvec) * invDet
