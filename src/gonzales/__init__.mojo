@@ -73,7 +73,7 @@ def main() raises:
     var sppm_radius = Float32(-1)  # -1 = not passed on CLI; fall back to scene/pbrt-matching default
     var use_guide = False
     var use_vcm = False
-    var vcm_spp = Int32(64)
+    var vcm_spp = Int32(-1)  # -1 = not passed on CLI; fall back to scene pixelsamples
     var vcm_photons = Int32(-1)  # -1 = not passed on CLI; fall back to n_pix (today's default)
     var i = 1
     while i < len(args):

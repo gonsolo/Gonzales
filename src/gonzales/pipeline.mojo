@@ -51,6 +51,15 @@ def _resolve_vcm_photons(vcm_photons_cli: Int32, n_pix: Int) -> Int:
         return max(Int(vcm_photons_cli), n_pix)
     return n_pix
 
+def _resolve_vcm_spp(vcm_spp_cli: Int32, scene_spp: Int32) -> Int:
+    """--vcm-spp not passed on CLI (sentinel -1) falls back to the scene's
+    own Sampler "pixelsamples" (psc[0].samples_per_pixel) -- same pattern
+    _resolve_vcm_photons/_resolve_sppm_params already use for their own
+    CLI-vs-scene-default fallbacks."""
+    if vcm_spp_cli > Int32(0):
+        return Int(vcm_spp_cli)
+    return Int(scene_spp)
+
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
 def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutAnyOrigin]]:
@@ -492,7 +501,7 @@ def parse_and_render(
     sppm_radius: Float32 = Float32(-1),
     use_guide: Bool = False,
     use_vcm: Bool = False,
-    vcm_spp: Int32 = Int32(64),
+    vcm_spp: Int32 = Int32(-1),  # -1 = not passed on CLI; fall back to scene pixelsamples
     vcm_photons: Int32 = Int32(-1),
 ) -> Int32:
     if use_gpu and not gpu_available():
@@ -549,7 +558,8 @@ def parse_and_render(
             mojo_parsed_free(psc)
             return Int32(-1)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
-        var ret = vcm_render_gpu(handle, psc, sd[0], Int(vcm_spp), n_photons, no_denoise, verbose)
+        var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
+        var ret = vcm_render_gpu(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         gpu_free_scene(handle)
         sd.free()
         mojo_parsed_free(psc)
@@ -620,7 +630,8 @@ def parse_and_render(
     elif use_vcm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
-        var ret = vcm_render(psc, sd[0], Int(vcm_spp), n_photons, no_denoise, verbose)
+        var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
+        var ret = vcm_render(psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         sd.free()
         mojo_parsed_free(psc)
         return ret
