@@ -1,4 +1,5 @@
-// Task #162 step 1: headless Vulkan ray-query smoke test.
+// Task #162: Vulkan ray-tracing (VK_KHR_ray_query) bridge for gonzales's
+// second GPU intersection backend.
 //
 // Unlike src/viewer/viewer.cpp (GLFW-tied, built for the interactive window
 // and swapchain presentation), this bridge creates its OWN headless
@@ -6,6 +7,13 @@
 // batch renders run headless (--gpu --vcm etc, no window), so the
 // ray-tracing backend can't piggyback on the viewer's device. See
 // project_vulkan_rt_backend memory for the full architecture rationale.
+//
+// Step 1 (vulkanrt_smoke_test): a fixed single-triangle scene + fixed ray,
+// proving the Mojo -> C++ bridge -> Vulkan -> RT-core round trip works at
+// all.
+// Step 2 (vulkanrt_build_scene / vulkanrt_trace_ray / vulkanrt_destroy_scene):
+// a real multi-mesh scene built from gonzales's own TriangleMesh_C data,
+// traced with runtime (push-constant) rays.
 
 #include <vulkan/vulkan.h>
 
@@ -15,6 +23,7 @@
 
 #include "vulkanrt.h"
 #include "smoke_comp_spv.h"
+#include "trace_ray_comp_spv.h"
 
 // ---------------------------------------------------------------------------
 // Error checking macro (mirrors viewer.cpp's VK_CHECK, adapted to this
@@ -48,8 +57,8 @@ uint32_t findMemoryType(VkPhysicalDevice pd, uint32_t typeBits,
 }
 
 // A simple device-local (or host-visible, if requested) buffer with an
-// optional device address -- every buffer this smoke test needs (vertex,
-// index, instance, scratch, AS storage, result) fits this one shape.
+// optional device address -- every buffer this bridge needs (vertex, index,
+// instance, scratch, AS storage, result) fits this one shape.
 struct Buffer {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -113,6 +122,17 @@ void destroyBuffer(VkDevice device, Buffer* b) {
     *b = Buffer{};
 }
 
+bool uploadToBuffer(VkDevice device, const Buffer& buf, const void* data, VkDeviceSize bytes) {
+    void* p;
+    if (vkMapMemory(device, buf.memory, 0, bytes, 0, &p) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkMapMemory failed\n");
+        return false;
+    }
+    memcpy(p, data, (size_t)bytes);
+    vkUnmapMemory(device, buf.memory);
+    return true;
+}
+
 // Manually-loaded KHR ray-tracing entry points -- these are extension
 // functions, not part of the core 1.0-1.2 API, so they must be resolved via
 // vkGetDeviceProcAddr rather than linked directly (portable across loader
@@ -126,8 +146,6 @@ struct RtFunctions {
 };
 
 bool loadRtFunctions(VkDevice device, RtFunctions* fns) {
-    #define LOAD(name) \
-        fns->name = nullptr
     fns->getBuildSizes = (PFN_vkGetAccelerationStructureBuildSizesKHR)
         vkGetDeviceProcAddr(device, "vkGetAccelerationStructureBuildSizesKHR");
     fns->create = (PFN_vkCreateAccelerationStructureKHR)
@@ -138,7 +156,6 @@ bool loadRtFunctions(VkDevice device, RtFunctions* fns) {
         vkGetDeviceProcAddr(device, "vkCmdBuildAccelerationStructuresKHR");
     fns->getDeviceAddress = (PFN_vkGetAccelerationStructureDeviceAddressKHR)
         vkGetDeviceProcAddr(device, "vkGetAccelerationStructureDeviceAddressKHR");
-    #undef LOAD
     if (!fns->getBuildSizes || !fns->create || !fns->destroy ||
         !fns->cmdBuild || !fns->getDeviceAddress) {
         fprintf(stderr, "vulkanrt: failed to load one or more KHR acceleration structure entry points\n");
@@ -147,10 +164,131 @@ bool loadRtFunctions(VkDevice device, RtFunctions* fns) {
     return true;
 }
 
-// Builds either a BLAS (from a single hardcoded triangle) or a TLAS (from a
-// single instance referencing that BLAS), sharing the same
-// query-size/allocate/scratch/build/submit sequence -- the two only differ
-// in the VkAccelerationStructureGeometryKHR contents and the AS `type`.
+// Creates a headless VkInstance + VkDevice (first physical device supporting
+// VK_KHR_ray_query + VK_KHR_acceleration_structure + deferred host ops) with
+// one compute-capable queue and its command pool. Shared by
+// vulkanrt_smoke_test and vulkanrt_build_scene so the two stay consistent
+// with each other's device requirements by construction, not by convention.
+// On failure, whatever was created before the failing step is left non-null
+// in its output param (matches every other function in this file's
+// goto-cleanup style, and every caller here recovers via
+// vulkanrt_destroy_scene-style cleanup that only touches non-null handles).
+bool createHeadlessDevice(VkInstance* outInstance, VkPhysicalDevice* outPhysicalDevice,
+                           VkDevice* outDevice, VkQueue* outQueue,
+                           VkCommandPool* outCmdPool, RtFunctions* outFns) {
+    VkApplicationInfo app{};
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.pApplicationName = "gonzales-vulkanrt";
+    app.apiVersion = VK_API_VERSION_1_2;
+    VkInstanceCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    ici.pApplicationInfo = &app;
+    if (vkCreateInstance(&ici, nullptr, outInstance) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateInstance failed\n");
+        return false;
+    }
+
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    {
+        uint32_t count = 0;
+        vkEnumeratePhysicalDevices(*outInstance, &count, nullptr);
+        if (count == 0) {
+            fprintf(stderr, "vulkanrt: no Vulkan physical devices found\n");
+            return false;
+        }
+        std::vector<VkPhysicalDevice> devices(count);
+        vkEnumeratePhysicalDevices(*outInstance, &count, devices.data());
+        for (auto pd : devices) {
+            uint32_t extCount = 0;
+            vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, nullptr);
+            std::vector<VkExtensionProperties> exts(extCount);
+            vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, exts.data());
+            bool hasRQ = false, hasAS = false, hasDHO = false;
+            for (auto& e : exts) {
+                if (strcmp(e.extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0) hasRQ = true;
+                if (strcmp(e.extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0) hasAS = true;
+                if (strcmp(e.extensionName, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0) hasDHO = true;
+            }
+            if (hasRQ && hasAS && hasDHO) {
+                physicalDevice = pd;
+                break;
+            }
+        }
+        if (!physicalDevice) {
+            fprintf(stderr, "vulkanrt: no device supports VK_KHR_ray_query + VK_KHR_acceleration_structure\n");
+            return false;
+        }
+    }
+    *outPhysicalDevice = physicalDevice;
+
+    uint32_t qfCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &qfCount, nullptr);
+    std::vector<VkQueueFamilyProperties> qfs(qfCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &qfCount, qfs.data());
+    uint32_t queueFamily = UINT32_MAX;
+    for (uint32_t i = 0; i < qfCount; i++) {
+        if (qfs[i].queueFlags & VK_QUEUE_COMPUTE_BIT) { queueFamily = i; break; }
+    }
+    if (queueFamily == UINT32_MAX) {
+        fprintf(stderr, "vulkanrt: no compute-capable queue family\n");
+        return false;
+    }
+
+    float priority = 1.0f;
+    VkDeviceQueueCreateInfo qci{};
+    qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qci.queueFamilyIndex = queueFamily;
+    qci.queueCount = 1;
+    qci.pQueuePriorities = &priority;
+
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{};
+    rqFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    rqFeatures.rayQuery = VK_TRUE;
+
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.accelerationStructure = VK_TRUE;
+    asFeatures.pNext = &rqFeatures;
+
+    VkPhysicalDeviceVulkan12Features vk12Features{};
+    vk12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vk12Features.bufferDeviceAddress = VK_TRUE;
+    vk12Features.pNext = &asFeatures;
+
+    const char* deviceExts[] = {
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+    };
+    VkDeviceCreateInfo dci{};
+    dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dci.pNext = &vk12Features;
+    dci.queueCreateInfoCount = 1;
+    dci.pQueueCreateInfos = &qci;
+    dci.enabledExtensionCount = 3;
+    dci.ppEnabledExtensionNames = deviceExts;
+    if (vkCreateDevice(physicalDevice, &dci, nullptr, outDevice) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateDevice failed\n");
+        return false;
+    }
+    vkGetDeviceQueue(*outDevice, queueFamily, 0, outQueue);
+
+    VkCommandPoolCreateInfo cpci{};
+    cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    cpci.queueFamilyIndex = queueFamily;
+    if (vkCreateCommandPool(*outDevice, &cpci, nullptr, outCmdPool) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateCommandPool failed\n");
+        return false;
+    }
+
+    return loadRtFunctions(*outDevice, outFns);
+}
+
+// Builds either a BLAS (triangle geometry) or a TLAS (instance geometry),
+// sharing the same query-size/allocate/scratch/build/submit sequence -- the
+// two only differ in the VkAccelerationStructureGeometryKHR contents and the
+// AS `type`.
 bool buildAccelerationStructure(
     VkDevice device, VkPhysicalDevice physicalDevice,
     VkCommandPool cmdPool, VkQueue queue, const RtFunctions& fns,
@@ -255,107 +393,8 @@ extern "C" int vulkanrt_smoke_test(void) {
     RtFunctions fns{};
     int result = 0;
 
-    // ---- Instance (headless -- no windowing extensions) ----
-    VkApplicationInfo app{};
-    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app.pApplicationName = "gonzales-vulkanrt-smoke";
-    app.apiVersion = VK_API_VERSION_1_2;
-    VkInstanceCreateInfo ici{};
-    ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    ici.pApplicationInfo = &app;
-    VK_CHECK_GOTO(vkCreateInstance(&ici, nullptr, &instance), cleanup);
-
-    // ---- Physical device: first one supporting the RT extensions ----
-    {
-        uint32_t count = 0;
-        vkEnumeratePhysicalDevices(instance, &count, nullptr);
-        if (count == 0) {
-            fprintf(stderr, "vulkanrt: no Vulkan physical devices found\n");
-            goto cleanup;
-        }
-        std::vector<VkPhysicalDevice> devices(count);
-        vkEnumeratePhysicalDevices(instance, &count, devices.data());
-        for (auto pd : devices) {
-            uint32_t extCount = 0;
-            vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, nullptr);
-            std::vector<VkExtensionProperties> exts(extCount);
-            vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, exts.data());
-            bool hasRQ = false, hasAS = false, hasDHO = false;
-            for (auto& e : exts) {
-                if (strcmp(e.extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0) hasRQ = true;
-                if (strcmp(e.extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0) hasAS = true;
-                if (strcmp(e.extensionName, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0) hasDHO = true;
-            }
-            if (hasRQ && hasAS && hasDHO) {
-                physicalDevice = pd;
-                break;
-            }
-        }
-        if (!physicalDevice) {
-            fprintf(stderr, "vulkanrt: no device supports VK_KHR_ray_query + VK_KHR_acceleration_structure\n");
-            goto cleanup;
-        }
-    }
-
-    // ---- Logical device: one compute-capable queue + RT feature chain ----
-    {
-        uint32_t qfCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &qfCount, nullptr);
-        std::vector<VkQueueFamilyProperties> qfs(qfCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &qfCount, qfs.data());
-        uint32_t queueFamily = UINT32_MAX;
-        for (uint32_t i = 0; i < qfCount; i++) {
-            if (qfs[i].queueFlags & VK_QUEUE_COMPUTE_BIT) { queueFamily = i; break; }
-        }
-        if (queueFamily == UINT32_MAX) {
-            fprintf(stderr, "vulkanrt: no compute-capable queue family\n");
-            goto cleanup;
-        }
-
-        float priority = 1.0f;
-        VkDeviceQueueCreateInfo qci{};
-        qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        qci.queueFamilyIndex = queueFamily;
-        qci.queueCount = 1;
-        qci.pQueuePriorities = &priority;
-
-        VkPhysicalDeviceRayQueryFeaturesKHR rqFeatures{};
-        rqFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-        rqFeatures.rayQuery = VK_TRUE;
-
-        VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
-        asFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-        asFeatures.accelerationStructure = VK_TRUE;
-        asFeatures.pNext = &rqFeatures;
-
-        VkPhysicalDeviceVulkan12Features vk12Features{};
-        vk12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        vk12Features.bufferDeviceAddress = VK_TRUE;
-        vk12Features.pNext = &asFeatures;
-
-        const char* deviceExts[] = {
-            VK_KHR_RAY_QUERY_EXTENSION_NAME,
-            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-        };
-        VkDeviceCreateInfo dci{};
-        dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        dci.pNext = &vk12Features;
-        dci.queueCreateInfoCount = 1;
-        dci.pQueueCreateInfos = &qci;
-        dci.enabledExtensionCount = 3;
-        dci.ppEnabledExtensionNames = deviceExts;
-        VK_CHECK_GOTO(vkCreateDevice(physicalDevice, &dci, nullptr, &device), cleanup);
-        vkGetDeviceQueue(device, queueFamily, 0, &queue);
-
-        VkCommandPoolCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        cpci.queueFamilyIndex = queueFamily;
-        VK_CHECK_GOTO(vkCreateCommandPool(device, &cpci, nullptr, &cmdPool), cleanup);
-    }
-
-    if (!loadRtFunctions(device, &fns)) goto cleanup;
+    if (!createHeadlessDevice(&instance, &physicalDevice, &device, &queue, &cmdPool, &fns))
+        goto cleanup;
 
     // ---- Triangle geometry: (0,0,0), (1,0,0), (0,1,0); ray at (0.25,0.25) ----
     {
@@ -370,13 +409,8 @@ extern "C" int vulkanrt_smoke_test(void) {
                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            true, &indexBuf)) goto cleanup;
-        void* p;
-        vkMapMemory(device, vertexBuf.memory, 0, sizeof(vertices), 0, &p);
-        memcpy(p, vertices, sizeof(vertices));
-        vkUnmapMemory(device, vertexBuf.memory);
-        vkMapMemory(device, indexBuf.memory, 0, sizeof(indices), 0, &p);
-        memcpy(p, indices, sizeof(indices));
-        vkUnmapMemory(device, indexBuf.memory);
+        if (!uploadToBuffer(device, vertexBuf, vertices, sizeof(vertices))) goto cleanup;
+        if (!uploadToBuffer(device, indexBuf, indices, sizeof(indices))) goto cleanup;
 
         VkAccelerationStructureGeometryKHR geom{};
         geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -405,9 +439,7 @@ extern "C" int vulkanrt_smoke_test(void) {
                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            true, &instanceBuf)) goto cleanup;
-        vkMapMemory(device, instanceBuf.memory, 0, sizeof(inst), 0, &p);
-        memcpy(p, &inst, sizeof(inst));
-        vkUnmapMemory(device, instanceBuf.memory);
+        if (!uploadToBuffer(device, instanceBuf, &inst, sizeof(inst))) goto cleanup;
 
         VkAccelerationStructureGeometryKHR tlasGeom{};
         tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -576,4 +608,399 @@ cleanup:
     if (device) vkDestroyDevice(device, nullptr);
     if (instance) vkDestroyInstance(instance, nullptr);
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: real multi-mesh scene, runtime-ray tracing.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Owns every Vulkan object a built scene needs, including its own headless
+// instance/device (mirrors vulkanrt_smoke_test's self-contained style --
+// simplest correct thing; sharing one device across many built scenes is a
+// later optimization, not needed for step 2 to be real and useful).
+struct Scene {
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue queue = VK_NULL_HANDLE;
+    VkCommandPool cmdPool = VK_NULL_HANDLE;
+    RtFunctions fns{};
+
+    std::vector<Buffer> blasVertexBufs;
+    std::vector<Buffer> blasIndexBufs;
+    std::vector<VkAccelerationStructureKHR> blas;
+    std::vector<Buffer> blasBufs;
+
+    Buffer instanceBuf{};
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+    Buffer tlasBuf{};
+
+    Buffer resultBuf{};
+    VkShaderModule shaderModule = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dsLayout = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkDescriptorPool descPool = VK_NULL_HANDLE;
+    VkDescriptorSet descSet = VK_NULL_HANDLE;
+};
+
+} // namespace
+
+extern "C" void vulkanrt_destroy_scene(void* sceneHandle) {
+    if (!sceneHandle) return;
+    Scene* scene = (Scene*)sceneHandle;
+
+    if (scene->descPool) vkDestroyDescriptorPool(scene->device, scene->descPool, nullptr);
+    if (scene->pipeline) vkDestroyPipeline(scene->device, scene->pipeline, nullptr);
+    if (scene->pipelineLayout) vkDestroyPipelineLayout(scene->device, scene->pipelineLayout, nullptr);
+    if (scene->dsLayout) vkDestroyDescriptorSetLayout(scene->device, scene->dsLayout, nullptr);
+    if (scene->shaderModule) vkDestroyShaderModule(scene->device, scene->shaderModule, nullptr);
+    destroyBuffer(scene->device, &scene->resultBuf);
+
+    if (scene->tlas) scene->fns.destroy(scene->device, scene->tlas, nullptr);
+    destroyBuffer(scene->device, &scene->tlasBuf);
+    destroyBuffer(scene->device, &scene->instanceBuf);
+
+    for (size_t i = 0; i < scene->blas.size(); i++) {
+        if (scene->blas[i]) scene->fns.destroy(scene->device, scene->blas[i], nullptr);
+        destroyBuffer(scene->device, &scene->blasBufs[i]);
+        destroyBuffer(scene->device, &scene->blasVertexBufs[i]);
+        destroyBuffer(scene->device, &scene->blasIndexBufs[i]);
+    }
+
+    if (scene->cmdPool) vkDestroyCommandPool(scene->device, scene->cmdPool, nullptr);
+    if (scene->device) vkDestroyDevice(scene->device, nullptr);
+    if (scene->instance) vkDestroyInstance(scene->instance, nullptr);
+
+    delete scene;
+}
+
+extern "C" void* vulkanrt_build_scene(
+    const VulkanRtMesh* meshes,
+    int64_t mesh_count,
+    const int64_t* point_counts,
+    const int64_t* vertex_index_counts) {
+
+    if (mesh_count <= 0) {
+        fprintf(stderr, "vulkanrt: vulkanrt_build_scene called with mesh_count <= 0\n");
+        return nullptr;
+    }
+
+    Scene* scene = new Scene();
+    scene->blas.resize((size_t)mesh_count, VK_NULL_HANDLE);
+    scene->blasBufs.resize((size_t)mesh_count);
+    scene->blasVertexBufs.resize((size_t)mesh_count);
+    scene->blasIndexBufs.resize((size_t)mesh_count);
+
+    if (!createHeadlessDevice(&scene->instance, &scene->physicalDevice, &scene->device,
+                               &scene->queue, &scene->cmdPool, &scene->fns)) {
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    std::vector<VkDeviceAddress> blasAddresses((size_t)mesh_count);
+
+    for (int64_t i = 0; i < mesh_count; i++) {
+        int64_t nVerts = point_counts[i];
+        int64_t nIdx = vertex_index_counts[i];
+        if (nVerts <= 0 || nIdx <= 0 || nIdx % 3 != 0) {
+            fprintf(stderr, "vulkanrt: mesh %lld has invalid vertex/index count (%lld/%lld)\n",
+                    (long long)i, (long long)nVerts, (long long)nIdx);
+            vulkanrt_destroy_scene(scene);
+            return nullptr;
+        }
+        uint32_t triCount = (uint32_t)(nIdx / 3);
+
+        // Vertex buffer: gonzales's points are xyzw (stride 16B); Vulkan
+        // reads a 3-float position out of that stride directly via
+        // vertexStride, no repacking needed.
+        VkDeviceSize vbBytes = (VkDeviceSize)nVerts * 4 * sizeof(float);
+        if (!createBuffer(scene->device, scene->physicalDevice, vbBytes,
+                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           true, &scene->blasVertexBufs[i])) {
+            vulkanrt_destroy_scene(scene);
+            return nullptr;
+        }
+        if (!uploadToBuffer(scene->device, scene->blasVertexBufs[i], meshes[i].points, vbBytes)) {
+            vulkanrt_destroy_scene(scene);
+            return nullptr;
+        }
+
+        // Index buffer: gonzales stores vertexIndices as int64; Vulkan AS
+        // builds only accept 8/16/32-bit index types, so narrow to uint32
+        // here (real gonzales meshes never approach 2^32 vertices).
+        std::vector<uint32_t> indices32((size_t)nIdx);
+        for (int64_t j = 0; j < nIdx; j++) {
+            indices32[(size_t)j] = (uint32_t)meshes[i].vertexIndices[j];
+        }
+        VkDeviceSize ibBytes = (VkDeviceSize)nIdx * sizeof(uint32_t);
+        if (!createBuffer(scene->device, scene->physicalDevice, ibBytes,
+                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           true, &scene->blasIndexBufs[i])) {
+            vulkanrt_destroy_scene(scene);
+            return nullptr;
+        }
+        if (!uploadToBuffer(scene->device, scene->blasIndexBufs[i], indices32.data(), ibBytes)) {
+            vulkanrt_destroy_scene(scene);
+            return nullptr;
+        }
+
+        VkAccelerationStructureGeometryKHR geom{};
+        geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geom.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        geom.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        geom.geometry.triangles.vertexData.deviceAddress = scene->blasVertexBufs[i].address;
+        geom.geometry.triangles.vertexStride = sizeof(float) * 4;
+        geom.geometry.triangles.maxVertex = (uint32_t)(nVerts - 1);
+        geom.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
+        geom.geometry.triangles.indexData.deviceAddress = scene->blasIndexBufs[i].address;
+
+        if (!buildAccelerationStructure(scene->device, scene->physicalDevice, scene->cmdPool,
+                                         scene->queue, scene->fns,
+                                         VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+                                         geom, triCount,
+                                         &scene->blas[i], &scene->blasBufs[i], &blasAddresses[i])) {
+            vulkanrt_destroy_scene(scene);
+            return nullptr;
+        }
+    }
+
+    // TLAS: one instance per mesh, identity transform (gonzales already
+    // bakes each mesh's CTM into world-space point coordinates at parse
+    // time -- see pbrt_parser.mojo's store_mesh). instanceCustomIndex =
+    // mesh index, so trace_ray.comp can report which input mesh was hit.
+    std::vector<VkAccelerationStructureInstanceKHR> instances((size_t)mesh_count);
+    for (int64_t i = 0; i < mesh_count; i++) {
+        VkAccelerationStructureInstanceKHR inst{};
+        inst.transform.matrix[0][0] = 1; inst.transform.matrix[1][1] = 1; inst.transform.matrix[2][2] = 1;
+        inst.instanceCustomIndex = (uint32_t)i;
+        inst.mask = 0xFF;
+        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        inst.accelerationStructureReference = blasAddresses[i];
+        instances[i] = inst;
+    }
+    VkDeviceSize instBytes = (VkDeviceSize)mesh_count * sizeof(VkAccelerationStructureInstanceKHR);
+    if (!createBuffer(scene->device, scene->physicalDevice, instBytes,
+                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       true, &scene->instanceBuf)) {
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+    if (!uploadToBuffer(scene->device, scene->instanceBuf, instances.data(), instBytes)) {
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkAccelerationStructureGeometryKHR tlasGeom{};
+    tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    tlasGeom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    tlasGeom.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    tlasGeom.geometry.instances.arrayOfPointers = VK_FALSE;
+    tlasGeom.geometry.instances.data.deviceAddress = scene->instanceBuf.address;
+
+    VkDeviceAddress tlasAddress;
+    if (!buildAccelerationStructure(scene->device, scene->physicalDevice, scene->cmdPool,
+                                     scene->queue, scene->fns,
+                                     VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+                                     tlasGeom, (uint32_t)mesh_count,
+                                     &scene->tlas, &scene->tlasBuf, &tlasAddress)) {
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    // Result buffer, reused across every vulkanrt_trace_ray call against
+    // this scene.
+    if (!createBuffer(scene->device, scene->physicalDevice,
+                       sizeof(float) + 2 * sizeof(int32_t) + sizeof(uint32_t),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       false, &scene->resultBuf)) {
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    // Compute pipeline: trace_ray.comp takes the ray as push constants, so
+    // this same pipeline/descriptor set is reused unchanged by every
+    // vulkanrt_trace_ray call.
+    VkShaderModuleCreateInfo smci{};
+    smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = sizeof(trace_ray_comp_spv);
+    smci.pCode = trace_ray_comp_spv;
+    if (vkCreateShaderModule(scene->device, &smci, nullptr, &scene->shaderModule) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateShaderModule failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo dslci{};
+    dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslci.bindingCount = 2;
+    dslci.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(scene->device, &dslci, nullptr, &scene->dsLayout) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateDescriptorSetLayout failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkPushConstantRange pcRange{};
+    pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcRange.offset = 0;
+    pcRange.size = sizeof(float) * 8; // vec4 originAndTMin + vec4 dirAndTMax
+
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &scene->dsLayout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcRange;
+    if (vkCreatePipelineLayout(scene->device, &plci, nullptr, &scene->pipelineLayout) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreatePipelineLayout failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = scene->shaderModule;
+    stage.pName = "main";
+
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage = stage;
+    cpci.layout = scene->pipelineLayout;
+    if (vkCreateComputePipelines(scene->device, VK_NULL_HANDLE, 1, &cpci, nullptr, &scene->pipeline) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateComputePipelines failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    poolSizes[0].descriptorCount = 1;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[1].descriptorCount = 1;
+    VkDescriptorPoolCreateInfo dpci{};
+    dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets = 1;
+    dpci.poolSizeCount = 2;
+    dpci.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(scene->device, &dpci, nullptr, &scene->descPool) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateDescriptorPool failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkDescriptorSetAllocateInfo dsai{};
+    dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool = scene->descPool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts = &scene->dsLayout;
+    if (vkAllocateDescriptorSets(scene->device, &dsai, &scene->descSet) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkAllocateDescriptorSets failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
+    asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    asWrite.accelerationStructureCount = 1;
+    asWrite.pAccelerationStructures = &scene->tlas;
+
+    VkDescriptorBufferInfo bufInfo{};
+    bufInfo.buffer = scene->resultBuf.buffer;
+    bufInfo.range = scene->resultBuf.size;
+
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].pNext = &asWrite;
+    writes[0].dstSet = scene->descSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = scene->descSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[1].pBufferInfo = &bufInfo;
+    vkUpdateDescriptorSets(scene->device, 2, writes, 0, nullptr);
+
+    return scene;
+}
+
+extern "C" int vulkanrt_trace_ray(
+    void* sceneHandle,
+    float ox, float oy, float oz,
+    float dx, float dy, float dz,
+    float t_min, float t_max,
+    float* out_t, int32_t* out_mesh, int32_t* out_triangle) {
+
+    if (!sceneHandle) return 0;
+    Scene* scene = (Scene*)sceneHandle;
+
+    float pushConstants[8] = {ox, oy, oz, t_min, dx, dy, dz, t_max};
+
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = scene->cmdPool;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    if (vkAllocateCommandBuffers(scene->device, &cbai, &cmd) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkAllocateCommandBuffers failed in vulkanrt_trace_ray\n");
+        return 0;
+    }
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scene->pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scene->pipelineLayout, 0, 1, &scene->descSet, 0, nullptr);
+    vkCmdPushConstants(cmd, scene->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), pushConstants);
+    vkCmdDispatch(cmd, 1, 1, 1);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(scene->queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(scene->queue);
+    vkFreeCommandBuffers(scene->device, scene->cmdPool, 1, &cmd);
+
+    struct { float hitT; int32_t hitMesh; int32_t hitTriangle; uint32_t hitFlag; } readback;
+    void* p;
+    vkMapMemory(scene->device, scene->resultBuf.memory, 0, sizeof(readback), 0, &p);
+    memcpy(&readback, p, sizeof(readback));
+    vkUnmapMemory(scene->device, scene->resultBuf.memory);
+
+    if (readback.hitFlag == 1) {
+        if (out_t) *out_t = readback.hitT;
+        if (out_mesh) *out_mesh = readback.hitMesh;
+        if (out_triangle) *out_triangle = readback.hitTriangle;
+        return 1;
+    }
+    if (out_t) *out_t = -1.0f;
+    if (out_mesh) *out_mesh = -1;
+    if (out_triangle) *out_triangle = -1;
+    return 0;
 }

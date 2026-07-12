@@ -1,0 +1,55 @@
+#version 460
+#extension GL_EXT_ray_query : require
+
+// Task #162 step 2: trace a single push-constant-supplied ray against a real
+// multi-mesh scene (built by vulkanrt_build_scene) and report which mesh/
+// triangle it hit. Unlike smoke.comp (fixed ray + fixed single-triangle
+// scene, used only to prove the FFI/Vulkan/RT-core chain works at all), this
+// shader is reused across many vulkanrt_trace_ray calls against one built
+// scene -- the ray is a runtime input, not baked into the SPIR-V.
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, std430) buffer ResultBuffer {
+    float hitT;
+    int hitMesh;
+    int hitTriangle;
+    uint hitFlag;
+} result;
+
+layout(push_constant) uniform PushConstants {
+    vec4 originAndTMin;  // xyz = ray origin, w = tMin
+    vec4 dirAndTMax;     // xyz = ray direction, w = tMax
+} pc;
+
+void main() {
+    vec3 origin = pc.originAndTMin.xyz;
+    float tMin = pc.originAndTMin.w;
+    vec3 direction = pc.dirAndTMax.xyz;
+    float tMax = pc.dirAndTMax.w;
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                           origin, tMin, direction, tMax);
+
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) ==
+            gl_RayQueryCandidateIntersectionTriangleEXT) {
+            rayQueryConfirmIntersectionEXT(rq);
+        }
+    }
+
+    if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+        gl_RayQueryCommittedIntersectionTriangleEXT) {
+        result.hitT = rayQueryGetIntersectionTEXT(rq, true);
+        result.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        result.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        result.hitFlag = 1u;
+    } else {
+        result.hitT = -1.0;
+        result.hitMesh = -1;
+        result.hitTriangle = -1;
+        result.hitFlag = 0u;
+    }
+}
