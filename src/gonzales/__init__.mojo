@@ -76,6 +76,7 @@ def main() raises:
     var vcm_spp = Int32(-1)  # -1 = not passed on CLI; fall back to scene pixelsamples
     var vcm_photons = Int32(-1)  # -1 = not passed on CLI; fall back to n_pix (today's default)
     var use_vulkan_rt = False
+    var use_vulkan_rt_shade = False
     var i = 1
     while i < len(args):
         var arg = String(args[i])
@@ -122,6 +123,8 @@ def main() raises:
             use_guide = True
         elif arg == "--vulkan-rt":
             use_vulkan_rt = True
+        elif arg == "--vulkan-rt-shade":
+            use_vulkan_rt_shade = True
         elif arg == "--vcm":
             use_vcm = True
         elif arg == "--vcm-spp" and i + 1 < len(args):
@@ -204,7 +207,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

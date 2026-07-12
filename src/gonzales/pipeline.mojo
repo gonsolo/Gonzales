@@ -14,6 +14,7 @@ from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge,
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
+from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene
 
 # Resolve effective SPPM radius/photons-per-pass: an explicit CLI flag
 # (sentinel -1 = not passed) wins; otherwise fall back to what the scene's
@@ -250,6 +251,55 @@ def _gpu_upload_scene(
 
 def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
     return sqrt(x*x + y*y + z*z)
+
+# Task #163: gonzales assigns exactly one material per mesh at parse time
+# (see pbrt_parser.mojo's store_mesh/MeshAccum), but that mapping is only
+# recorded per-triangle inside PrimId_C entries, not as a standalone
+# per-mesh array -- vulkanrt_traverse_paths_gpu needs the latter (it gets
+# a (mesh, triangle) hit back from Vulkan RT, not a PrimId_C).
+#
+# Area-light meshes need special handling: finalize_scene (pbrt_parser.mojo)
+# encodes their triangles with PrimId_C.type == 3 (not the ordinary
+# type == 0), where id1 is the AREA-LIGHT index (not the mesh index) and
+# materialIndex points at a synthetic per-light material -- shade_nee_core's
+# direct-emission-credit path (shading.mojo ~2744) keys off exactly this
+# type==3/id1==al_idx encoding. Reconstructing type==0 for a light mesh's
+# hits (the obvious-looking thing to do) silently loses all direct-hit
+# light emission -- caught via a real cornell-box regression (Vulkan render
+# ~40% dimmer, light strip rendering as unlit) before this fix.
+#
+# Recovers both mappings with one pass over the CPU-safe prim_ids array:
+# for each mesh index not yet seen, records its first primitive's type,
+# materialIndex, and (if type==3) area-light index -- every triangle of a
+# given mesh shares the same encoding by construction, so any one is
+# representative. Returns (mesh_material_idx, mesh_al_idx); the latter is
+# -1 for ordinary (non-light) meshes.
+def _build_mesh_light_info(
+    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+) -> Tuple[UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin]]:
+    var n_meshes = Int(psc[0].mesh_count)
+    var mat_idx = alloc[Int64](max(n_meshes, 1))
+    var al_idx = alloc[Int32](max(n_meshes, 1))
+    var seen = alloc[UInt8](max(n_meshes, 1))
+    for i in range(max(n_meshes, 1)):
+        mat_idx[i] = Int64(0)
+        al_idx[i] = Int32(-1)
+        seen[i] = UInt8(0)
+    for i in range(Int(psc[0].prim_count)):
+        var p = psc[0].prim_ids[i]
+        if p.type == Int8(0):
+            var mi = Int(p.id1)
+            if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
+                mat_idx[mi] = p.materialIndex
+                seen[mi] = UInt8(1)
+        elif p.type == Int8(3):
+            var mi = Int(p.id2 >> 32)
+            if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
+                mat_idx[mi] = p.materialIndex
+                al_idx[mi] = Int32(p.id1)
+                seen[mi] = UInt8(1)
+    seen.free()
+    return (mat_idx, al_idx)
 
 def debug_trace_pixel(
     path: UnsafePointer[UInt8, MutAnyOrigin],
@@ -681,6 +731,14 @@ def parse_and_render(
     use_vcm: Bool = False,
     vcm_spp: Int32 = Int32(-1),  # -1 = not passed on CLI; fall back to scene pixelsamples
     vcm_photons: Int32 = Int32(-1),
+    # Task #163: route the plain --gpu wavefront path tracer's per-bounce
+    # primary intersection test through the Vulkan RT backend instead of
+    # the CUDA software-BVH kernel. Only wired into the plain --gpu path
+    # (not --sppm/--vcm) and only takes effect for scenes with no curves/
+    # spheres/object instancing (see vulkanrt_traverse_paths_gpu's
+    # docstring in gpu.mojo) -- falls back to CUDA traversal with a
+    # warning otherwise.
+    use_vulkan_rt_shade: Bool = False,
 ) -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -751,6 +809,38 @@ def parse_and_render(
         if Int(handle) <= 8:
             mojo_parsed_free(psc)
             return Int32(-1)
+
+        # Task #163: build the Vulkan RT scene once (if requested and the
+        # scene is within scope) and reuse it across every bounce of every
+        # sample -- mirrors _gpu_upload_scene's one-time-per-render setup.
+        var use_vk = use_vulkan_rt_shade
+        var vk_scene = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+        var mesh_material_idx = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
+        var mesh_al_idx = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+        var n_meshes_vk = 0
+        if use_vk:
+            if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0) or psc[0].instance_count > Int32(0):
+                print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
+                use_vk = False
+            else:
+                n_meshes_vk = Int(psc[0].mesh_count)
+                var vmeshes = alloc[TriangleMesh_C](max(n_meshes_vk, 1))
+                var point_counts = alloc[Int64](max(n_meshes_vk, 1))
+                var vidx_counts = alloc[Int64](max(n_meshes_vk, 1))
+                for i in range(n_meshes_vk):
+                    vmeshes[i] = psc[0].meshes[i]
+                    point_counts[i] = Int64(psc[0].mesh_n_verts[i])
+                    vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+                vk_scene = vulkanrt_build_scene(vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts)
+                vmeshes.free(); point_counts.free(); vidx_counts.free()
+                if Int(vk_scene) == 0:
+                    print("WARNING: vulkanrt_build_scene FAILED -- falling back to CUDA intersection")
+                    use_vk = False
+                else:
+                    var light_info = _build_mesh_light_info(psc)
+                    mesh_material_idx = light_info[0]
+                    mesh_al_idx = light_info[1]
+
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         var seed_dim1 = UInt32(0)
@@ -769,6 +859,7 @@ def parse_and_render(
                 UInt32(psc[0].rng_seed >> UInt64(32)),
                 Int64(n_pixels), psc[0].max_depth,
                 px_scale,
+                use_vk, vk_scene, mesh_material_idx, mesh_al_idx, n_meshes_vk,
             )
             si += actual_batch
             var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
@@ -776,6 +867,10 @@ def parse_and_render(
         var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
         print("Rendering: " + String(spp) + " / " + String(spp)
             + " spp (100.0%) | Done: " + fmt_time(gpu_total_s) + "                ")
+        if use_vk:
+            vulkanrt_destroy_scene(vk_scene)
+            mesh_material_idx.free()
+            mesh_al_idx.free()
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)
         for _ in range(n_pixels * 3): denoised_gpu.append(Float32(0)); albedo_gpu.append(Float32(0))
