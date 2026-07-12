@@ -15,7 +15,8 @@ from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, sha
 from .guide import null_guide
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
-from .vulkanrt import VulkanRtSceneHandle, vulkanrt_trace_rays
+from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
+from std.gpu.host._nvidia_cuda import CUDA
 
 # Number of samples per pixel processed together in one wavefront bounce loop.
 # path_buf and inter_buf are pre-allocated at n_pixels × WAVEFRONT_BATCH.
@@ -2344,102 +2345,136 @@ def traverse_paths_gpu(
     test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
 
 
-# Task #163: drop-in replacement for the `traverse_paths_gpu` dispatch in
-# gpu_render_wavefront's per-bounce loop, routing the primary per-bounce
-# intersection test through hardware ray tracing (vulkanrt_trace_rays)
-# instead of the CUDA software-BVH kernel above. Every other wavefront
-# stage (medium sampling, all shade_*_gpu kernels, film accumulation) is
-# completely unchanged -- they only ever read path_buf/inter_buf, never
-# re-run primary-hit traversal themselves (shadow/NEE rays are a separate
-# code path inside the shade kernels and stay on the CUDA/software BVH,
-# not touched here). See project_vulkan_rt_backend memory for the full
-# scope/architecture notes.
+# Task #163 stage 3: GPU-resident replacement for the `traverse_paths_gpu`
+# dispatch in gpu_render_wavefront's per-bounce loop, routing the primary
+# per-bounce intersection test through hardware ray tracing via the real
+# CUDA/Vulkan interop mechanism (src/vulkaninterop -- zero CPU
+# synchronization) instead of vulkanrt.mojo's host-round-trip
+# vulkanrt_trace_rays (measured ~94x slower in an earlier version of this
+# integration; see project_vulkan_rt_backend memory). Every other
+# wavefront stage (medium sampling, all shade_*_gpu kernels, film
+# accumulation) is completely unchanged -- they only ever read
+# path_buf/inter_buf, never re-run primary-hit traversal themselves
+# (shadow/NEE rays are a separate code path inside the shade kernels and
+# stay on the CUDA/software BVH, not touched here).
 #
-# This is a HOST function (not a GPU kernel): it downloads path_buf's rays
-# to host memory, calls the Vulkan RT backend (which does its own
-# host<->device round trip internally), and uploads the results back into
-# inter_buf in Intersection_C's exact layout. `ctx.synchronize()` up front
-# guarantees the ray data this reads was fully written by the preceding
-# GPU work (primary-ray generation or the previous bounce's shading
-# kernels) before the host touches it.
-#
-# Scope: triangle geometry only, matching vulkanrt_build_scene -- caller
-# must only invoke this for scenes with no curves/spheres/object
-# instancing (mirrors debug_render_vulkanrt's own scope boundary).
-# Untraced/inactive paths still get fresh (possibly wasted) results
-# written -- harmless, since every shade_*_gpu kernel already gates on
-# `path.active` before reading inter_buf, same as if traverse_paths_gpu
-# had run.
-def vulkanrt_traverse_paths_gpu(
-    ctx: DeviceContext,
-    path_buf: DeviceBuffer[DType.uint8],
-    inter_buf: DeviceBuffer[DType.uint8],
-    vk_scene: VulkanRtSceneHandle,
+# Pack ray data from path_buf directly into the interop-shared rays buffer
+# -- no host copy, this kernel writes straight into CUDA-mapped memory
+# that a Vulkan compute shader also reads.
+def vulkaninterop_pack_rays_kernel(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    rays: UnsafePointer[Float32, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var ray = paths[tid].ray
+    var idx = tid * 8
+    rays[idx + 0] = ray.origin.x
+    rays[idx + 1] = ray.origin.y
+    rays[idx + 2] = ray.origin.z
+    rays[idx + 3] = Float32(1e-4)
+    rays[idx + 4] = ray.direction.x
+    rays[idx + 5] = ray.direction.y
+    rays[idx + 6] = ray.direction.z
+    rays[idx + 7] = Float32(1.0e8)
+
+# Unpack the interop-shared results buffer (written by Vulkan's ray-query
+# dispatch) directly into inter_buf's Intersection_C layout -- no host
+# copy. Same materialIndex/area-light lookup and PrimId_C.type==3 encoding
+# as the retired host-loop version (see finalize_scene in pbrt_parser.mojo
+# for why area-light triangles need that special encoding, and
+# project_vulkan_rt_backend memory for the real-bug story behind it) --
+# now done per-thread on the GPU instead of a Mojo host loop, so
+# mesh_material_idx/mesh_al_idx must be GPU-resident buffers here (see
+# _build_mesh_light_info + the upload step in pipeline.mojo).
+def vulkaninterop_unpack_results_kernel(
+    results: UnsafePointer[Float32, MutAnyOrigin],
+    inter: UnsafePointer[Intersection_C, MutAnyOrigin],
     mesh_material_idx: UnsafePointer[Int64, MutAnyOrigin],
     mesh_al_idx: UnsafePointer[Int32, MutAnyOrigin],
     n_meshes: Int,
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var idx = tid * 8
+    var iresults = results.bitcast[Int32]()
+    var hitFlag = iresults[idx + 6]
+    if hitFlag == Int32(1):
+        var mi = Int(iresults[idx + 4])
+        var tri = iresults[idx + 5]
+        var mat_idx = Int64(0)
+        var al = Int32(-1)
+        if mi >= 0 and mi < n_meshes:
+            mat_idx = mesh_material_idx[mi]
+            al = mesh_al_idx[mi]
+        var hitT = results[idx + 0]
+        var u = results[idx + 1]
+        var v = results[idx + 2]
+        if al >= Int32(0):
+            inter[tid] = Intersection_C(
+                PrimId_C(Int64(al), (Int64(mi) << 32) | Int64(tri), mat_idx, Int32(-1),
+                         Int8(3), Int8(0), Int8(0), Int8(0)),
+                hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
+            )
+        else:
+            inter[tid] = Intersection_C(
+                PrimId_C(Int64(mi), Int64(tri) * 3, mat_idx, Int32(-1),
+                         Int8(0), Int8(0), Int8(0), Int8(0)),
+                hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
+            )
+    else:
+        inter[tid].hit = Int8(0)
+
+# Host driver: enqueues pack -> interop ray-query dispatch -> unpack, ALL
+# on ctx.stream() in strict program order, with NO ctx.synchronize()
+# anywhere -- vulkaninterop_rt_trace's internal CUDA-signal/Vulkan-submit/
+# CUDA-wait handoff (see vulkaninterop.h) is what keeps the Vulkan
+# dispatch correctly ordered relative to the pack/unpack kernels on either
+# side of it, entirely on the GPU timeline. This is what makes stage 3
+# fast where the retired host-round-trip version was ~94x slower: no CPU
+# stall, no host-memory copy, anywhere in this function.
+#
+# Scope: triangle geometry only, matching vulkaninterop_rt_create_scene --
+# caller must only invoke this for scenes with no curves/spheres/object
+# instancing (mirrors debug_render_vulkanrt's own scope boundary).
+def vulkaninterop_rt_traverse_paths_gpu(
+    ctx: DeviceContext,
+    path_buf: DeviceBuffer[DType.uint8],
+    inter_buf: DeviceBuffer[DType.uint8],
+    interop_scene: VulkanInteropRtSceneHandle,
+    interop_rays_buf: DeviceBuffer[DType.float32],
+    interop_results_buf: DeviceBuffer[DType.float32],
+    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
+    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
     n_total: Int,
 ) raises:
-    ctx.synchronize()
+    comptime block_size = 256
+    var grid = ceildiv(n_total, block_size)
 
-    var rays = alloc[Float32](n_total * 8)
-    with path_buf.map_to_host() as h:
-        var paths = h.unsafe_ptr().bitcast[PathState_C]()
-        for i in range(n_total):
-            var ray = paths[i].ray
-            var idx = i * 8
-            rays[idx + 0] = ray.origin.x
-            rays[idx + 1] = ray.origin.y
-            rays[idx + 2] = ray.origin.z
-            rays[idx + 3] = Float32(1e-4)
-            rays[idx + 4] = ray.direction.x
-            rays[idx + 5] = ray.direction.y
-            rays[idx + 6] = ray.direction.z
-            rays[idx + 7] = Float32(1.0e8)
+    ctx.enqueue_function[vulkaninterop_pack_rays_kernel](
+        path_buf.unsafe_ptr().bitcast[PathState_C](),
+        interop_rays_buf.unsafe_ptr(),
+        n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
 
-    var out_t = alloc[Float32](n_total)
-    var out_u = alloc[Float32](n_total)
-    var out_v = alloc[Float32](n_total)
-    var out_mesh = alloc[Int32](n_total)
-    var out_tri = alloc[Int32](n_total)
-    var out_hit = alloc[UInt8](n_total)
-    _ = vulkanrt_trace_rays(vk_scene, Int32(n_total), rays, out_t, out_u, out_v,
-                             out_mesh, out_tri, out_hit)
+    var cuda_stream = CUDA(ctx.stream())
+    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
 
-    with inter_buf.map_to_host() as h2:
-        var inters = h2.unsafe_ptr().bitcast[Intersection_C]()
-        for i in range(n_total):
-            if out_hit[i] == UInt8(1):
-                var mi = Int(out_mesh[i])
-                var mat_idx = Int64(0)
-                var al = Int32(-1)
-                if mi >= 0 and mi < n_meshes:
-                    mat_idx = mesh_material_idx[mi]
-                    al = mesh_al_idx[mi]
-                if al >= Int32(0):
-                    # Area-light triangle: matches finalize_scene's type==3
-                    # encoding exactly (id1 = area-light index, id2 = mesh
-                    # index packed in the high 32 bits + local triangle
-                    # index in the low 32 bits) -- shade_nee_core's direct-
-                    # emission credit (shading.mojo ~2744) requires this
-                    # exact shape, not the ordinary type==0 one below.
-                    inters[i] = Intersection_C(
-                        PrimId_C(Int64(al), (Int64(mi) << 32) | Int64(out_tri[i]), mat_idx, Int32(-1),
-                                 Int8(3), Int8(0), Int8(0), Int8(0)),
-                        out_t[i], out_u[i], out_v[i], Int8(1), Int8(0), Int8(0), Int8(0),
-                    )
-                else:
-                    inters[i] = Intersection_C(
-                        PrimId_C(Int64(mi), Int64(out_tri[i]) * 3, mat_idx, Int32(-1),
-                                 Int8(0), Int8(0), Int8(0), Int8(0)),
-                        out_t[i], out_u[i], out_v[i], Int8(1), Int8(0), Int8(0), Int8(0),
-                    )
-            else:
-                inters[i].hit = Int8(0)
-
-    rays.free()
-    out_t.free(); out_u.free(); out_v.free()
-    out_mesh.free(); out_tri.free(); out_hit.free()
+    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+        interop_results_buf.unsafe_ptr(),
+        inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64](),
+        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
+        n_meshes,
+        n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
 
 
 # ── Curve-divergence-mitigation kernels (companions to traverse_paths_gpu) ────
@@ -3243,16 +3278,19 @@ def gpu_render_wavefront(
     n: Int64,
     maxDepth: Int32,
     px_scale: Float32 = Float32(0.0),
-    # Task #163: when use_vulkan_rt, every bounce's primary intersection
-    # test is routed through the Vulkan RT backend (vulkanrt_traverse_paths_gpu)
-    # instead of the traverse_paths_gpu CUDA kernel below -- caller must
-    # only set this for scenes with no curves/spheres/instancing (see
-    # vulkanrt_traverse_paths_gpu's docstring). vk_scene/mesh_material_idx/
-    # n_meshes_vk are ignored when use_vulkan_rt is False.
+    # Task #163 stage 3: when use_vulkan_rt, every bounce's primary
+    # intersection test is routed through the CUDA/Vulkan interop RT
+    # backend (vulkaninterop_rt_traverse_paths_gpu, zero CPU sync) instead
+    # of the traverse_paths_gpu CUDA kernel below -- caller must only set
+    # this for scenes with no curves/spheres/instancing (see
+    # vulkaninterop_rt_traverse_paths_gpu's docstring). The interop_*/
+    # mesh_*_buf/n_meshes_vk params are ignored when use_vulkan_rt is False.
     use_vulkan_rt: Bool = False,
-    vk_scene: VulkanRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling(),
-    mesh_material_idx: UnsafePointer[Int64, MutAnyOrigin] = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(),
-    mesh_al_idx: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+    interop_scene: VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling(),
+    interop_rays_buf: Optional[DeviceBuffer[DType.float32]] = None,
+    interop_results_buf: Optional[DeviceBuffer[DType.float32]] = None,
+    mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
 ):
     var n_pix = Int(n)
@@ -3287,13 +3325,15 @@ def gpu_render_wavefront(
             )
             for _ in range(Int(maxDepth)):
                 if use_vulkan_rt:
-                    vulkanrt_traverse_paths_gpu(
+                    vulkaninterop_rt_traverse_paths_gpu(
                         handle[].ctx,
                         handle[].path_buf,
                         handle[].inter_buf,
-                        vk_scene,
-                        mesh_material_idx,
-                        mesh_al_idx,
+                        interop_scene,
+                        interop_rays_buf.value(),
+                        interop_results_buf.value(),
+                        mesh_material_idx_buf.value(),
+                        mesh_al_idx_buf.value(),
                         n_meshes_vk,
                         n_total,
                     )

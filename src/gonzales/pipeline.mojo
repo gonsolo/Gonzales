@@ -1,6 +1,8 @@
 from std.memory import alloc, OwnedPointer
 from std.collections import List
 from std.math import sqrt, tan, ceil
+from std.sys.info import size_of
+from std.gpu.host import DeviceBuffer
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
@@ -15,6 +17,11 @@ from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scen
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene
+from .vulkaninterop import (
+    VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
+    vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
+    vulkaninterop_rt_destroy_scene,
+)
 
 # Resolve effective SPPM radius/photons-per-pass: an explicit CLI flag
 # (sentinel -1 = not passed) wins; otherwise fall back to what the scene's
@@ -739,7 +746,7 @@ def parse_and_render(
     # docstring in gpu.mojo) -- falls back to CUDA traversal with a
     # warning otherwise.
     use_vulkan_rt_shade: Bool = False,
-) -> Int32:
+) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return Int32(-1)
@@ -810,14 +817,23 @@ def parse_and_render(
             mojo_parsed_free(psc)
             return Int32(-1)
 
-        # Task #163: build the Vulkan RT scene once (if requested and the
-        # scene is within scope) and reuse it across every bounce of every
-        # sample -- mirrors _gpu_upload_scene's one-time-per-render setup.
+        # Task #163 stage 3: build the interop-AND-ray-query-capable Vulkan
+        # RT scene once (if requested and the scene is within scope) and
+        # reuse it across every bounce of every sample -- mirrors
+        # _gpu_upload_scene's one-time-per-render setup. Unlike the
+        # retired vulkanrt_build_scene-based version, this also uploads
+        # mesh_material_idx/mesh_al_idx as GPU device buffers (the new
+        # unpack kernel runs on the GPU, not a Mojo host loop) and wraps
+        # the interop rays/results CUDA pointers as Mojo DeviceBuffers
+        # once, reused unchanged across every bounce.
         var use_vk = use_vulkan_rt_shade
-        var vk_scene = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
-        var mesh_material_idx = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
-        var mesh_al_idx = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+        var interop_scene = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+        var interop_rays_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
+        var interop_results_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
+        var mesh_material_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
+        var mesh_al_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var n_meshes_vk = 0
+        var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
             if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0) or psc[0].instance_count > Int32(0):
                 print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
@@ -831,15 +847,38 @@ def parse_and_render(
                     vmeshes[i] = psc[0].meshes[i]
                     point_counts[i] = Int64(psc[0].mesh_n_verts[i])
                     vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
-                vk_scene = vulkanrt_build_scene(vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts)
+                interop_scene = vulkaninterop_rt_create_scene(vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts, max_rays_vk)
                 vmeshes.free(); point_counts.free(); vidx_counts.free()
-                if Int(vk_scene) == 0:
-                    print("WARNING: vulkanrt_build_scene FAILED -- falling back to CUDA intersection")
+                if Int(interop_scene) == 0:
+                    print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                     use_vk = False
                 else:
+                    var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
+                    var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
+                    interop_rays_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, raysPtr, Int(max_rays_vk) * 8, owning=False)
+                    interop_results_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, resultsPtr, Int(max_rays_vk) * 8, owning=False)
+
                     var light_info = _build_mesh_light_info(psc)
-                    mesh_material_idx = light_info[0]
-                    mesh_al_idx = light_info[1]
+                    var mesh_material_idx = light_info[0]
+                    var mesh_al_idx = light_info[1]
+                    var n_meshes_alloc = max(n_meshes_vk, 1)
+
+                    var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int64]())
+                    with mmi_buf.map_to_host() as h:
+                        var dst = h.unsafe_ptr().bitcast[Int64]()
+                        for i in range(n_meshes_vk):
+                            dst[i] = mesh_material_idx[i]
+                    mesh_material_idx_buf_opt = mmi_buf^
+
+                    var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int32]())
+                    with mai_buf.map_to_host() as h2:
+                        var dst2 = h2.unsafe_ptr().bitcast[Int32]()
+                        for i in range(n_meshes_vk):
+                            dst2[i] = mesh_al_idx[i]
+                    mesh_al_idx_buf_opt = mai_buf^
+
+                    mesh_material_idx.free()
+                    mesh_al_idx.free()
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -859,7 +898,8 @@ def parse_and_render(
                 UInt32(psc[0].rng_seed >> UInt64(32)),
                 Int64(n_pixels), psc[0].max_depth,
                 px_scale,
-                use_vk, vk_scene, mesh_material_idx, mesh_al_idx, n_meshes_vk,
+                use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
+                mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
             )
             si += actual_batch
             var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
@@ -868,9 +908,7 @@ def parse_and_render(
         print("Rendering: " + String(spp) + " / " + String(spp)
             + " spp (100.0%) | Done: " + fmt_time(gpu_total_s) + "                ")
         if use_vk:
-            vulkanrt_destroy_scene(vk_scene)
-            mesh_material_idx.free()
-            mesh_al_idx.free()
+            vulkaninterop_rt_destroy_scene(interop_scene)
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)
         for _ in range(n_pixels * 3): denoised_gpu.append(Float32(0)); albedo_gpu.append(Float32(0))
