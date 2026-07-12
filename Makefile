@@ -132,16 +132,32 @@ $(VIEWER_LIB): $(VIEWER_SRC) $(VIEWER_INC)/viewer.h
 	g++ -fPIC -shared -std=c++20 -I$(VIEWER_INC) -I$(VIEWER_GEN) \
 		$(VIEWER_SRC) -lvulkan -lglfw -o $(VIEWER_LIB)
 
+# Task #162: headless Vulkan ray-query backend (2nd GPU intersection
+# backend, alongside the existing software-BVH CUDA path) -- separate
+# bridge from VIEWER_LIB since it needs its own headless VkInstance/
+# VkDevice (no GLFW/swapchain dependency; most gonzales renders run
+# without a window at all). See project_vulkan_rt_backend memory.
+VULKANRT_SRC = src/vulkanrt/vulkanrt.cpp
+VULKANRT_INC = src/vulkanrt
+VULKANRT_GEN = src/vulkanrt/generated
+VULKANRT_LIB = $(BUILD_DIR)/libvulkanrt.so
+
+$(VULKANRT_LIB): $(VULKANRT_SRC) $(VULKANRT_INC)/vulkanrt.h $(VULKANRT_GEN)/smoke_comp_spv.h
+	@mkdir -p $(BUILD_DIR)
+	g++ -fPIC -shared -std=c++20 -I$(VULKANRT_INC) -I$(VULKANRT_GEN) \
+		$(VULKANRT_SRC) -lvulkan -o $(VULKANRT_LIB)
+
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
 else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
+                  -Xlinker -lvulkanrt \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
@@ -176,7 +192,7 @@ ut: unittest
 # stays readable/deterministic despite running out of order. Fails if any
 # file failed (checked after all finish, not fail-fast, so a run tells you
 # everything that broke in one pass).
-unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB)
+unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB)
 	@rm -rf build/unittest-logs && mkdir -p build/unittest-logs
 	@i=0; \
 	for f in $(UNIT_TEST_SRCS); do \
