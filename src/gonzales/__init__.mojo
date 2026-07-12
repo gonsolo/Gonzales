@@ -2,7 +2,7 @@ from std.sys import argv, exit
 from std.time import perf_counter_ns
 from std.os import getenv
 from std.memory import alloc
-from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel
+from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt
 from gonzales.spectrum import load_spectral_context, spectral_handle
 
 def _parse_int32(s: String, start: Int) -> Int32:
@@ -75,11 +75,12 @@ def main() raises:
     var use_vcm = False
     var vcm_spp = Int32(-1)  # -1 = not passed on CLI; fall back to scene pixelsamples
     var vcm_photons = Int32(-1)  # -1 = not passed on CLI; fall back to n_pix (today's default)
+    var use_vulkan_rt = False
     var i = 1
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -119,6 +120,8 @@ def main() raises:
             pixel_y = Int32(atol(String(args[i])))
         elif arg == "--guide":
             use_guide = True
+        elif arg == "--vulkan-rt":
+            use_vulkan_rt = True
         elif arg == "--vcm":
             use_vcm = True
         elif arg == "--vcm-spp" and i + 1 < len(args):
@@ -196,6 +199,8 @@ def main() raises:
 
     if pixel_x >= 0 and pixel_y >= 0:
         debug_trace_pixel(path_cstr, pixel_x, pixel_y)
+    elif use_vulkan_rt:
+        debug_render_vulkanrt(path_cstr, verbose)
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose)
     else:

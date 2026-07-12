@@ -4,7 +4,7 @@ from std.math import sqrt, tan, ceil
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C
 from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
@@ -483,6 +483,184 @@ def debug_trace_pixel(
             print("        STOP (non-glass material)")
             break
     inter.free()
+    mojo_parsed_free(psc)
+
+
+def debug_render_vulkanrt(
+    path: UnsafePointer[UInt8, MutAnyOrigin],
+    verbose: Bool = False,
+):
+    """Task #162 step 4: build a real Vulkan RT scene from the parsed
+    scene's own triangle meshes, batch-trace one primary ray per pixel
+    through hardware ray tracing (one vulkanrt_trace_rays dispatch for the
+    whole image), cross-check every pixel's hit/miss and hit distance
+    against the CPU software BVH tracing the identical ray, and write a
+    simple N.V-shaded visibility image from the Vulkan RT result to
+    vulkanrt_debug.exr.
+
+    Scope: triangle geometry only (spheres/curves are never uploaded to
+    the Vulkan scene, matching vulkanrt_build_scene's own scope) and no
+    object instancing (Instance_C placements are not applied -- an
+    ObjectInstance template's mesh would appear once at its raw local-space
+    location instead of at each placed instance's transform). Scenes using
+    either feature will show real disagreement in the printed CPU-vs-GPU
+    stats below -- an honest, known limitation of this validation pass,
+    not a bug to chase; see project_vulkan_rt_backend memory."""
+    from .bvh import traverse_bvh2_core
+    from .geometry import Intersection_C
+    from .vulkanrt import vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene
+    from std.math import abs
+
+    var psc = mojo_parse_scene(path, verbose)
+    if Int(psc) == 0:
+        print("parse failed"); return
+
+    var w = Int(psc[0].film_w)
+    var h = Int(psc[0].film_h)
+    var n_meshes = Int(psc[0].mesh_count)
+    if n_meshes == 0:
+        print("Scene has no triangle meshes -- nothing for Vulkan RT to trace.")
+        mojo_parsed_free(psc)
+        return
+    if psc[0].instance_count > Int32(0):
+        print("WARNING: scene uses ObjectInstance -- the Vulkan RT scene will be missing instanced geometry placements (see project_vulkan_rt_backend memory)")
+
+    # Build the Vulkan RT scene directly from the parsed meshes -- points/
+    # vertexIndices pointers passed through as-is (vulkanrt.h's
+    # VulkanRtMesh is a field-for-field mirror of TriangleMesh_C).
+    var vmeshes = alloc[TriangleMesh_C](n_meshes)
+    var point_counts = alloc[Int64](n_meshes)
+    var vidx_counts = alloc[Int64](n_meshes)
+    for i in range(n_meshes):
+        vmeshes[i] = psc[0].meshes[i]
+        point_counts[i] = Int64(psc[0].mesh_n_verts[i])
+        vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+
+    var scene = vulkanrt_build_scene(vmeshes, Int64(n_meshes), point_counts, vidx_counts)
+    if Int(scene) == 0:
+        print("vulkanrt_build_scene FAILED -- see stderr for diagnostics")
+        vmeshes.free(); point_counts.free(); vidx_counts.free()
+        mojo_parsed_free(psc)
+        return
+
+    # One centre-ray (no AA jitter) per pixel, same raster_to_camera /
+    # camera_to_world math as debug_trace_pixel above -- packed straight
+    # into vulkanrt_trace_rays's flat 8-floats-per-ray layout.
+    var n_pix = w * h
+    var rays = alloc[Float32](n_pix * 8)
+    var r2c = psc[0].raster_to_camera
+    var c2w = psc[0].camera_to_world
+    for py in range(h):
+        for px in range(w):
+            var fX = Float32(px) + Float32(0.5)
+            var fY = Float32(py) + Float32(0.5)
+            var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
+            var cy = r2c[1]*fX + r2c[5]*fY + r2c[13]
+            var cz = r2c[2]*fX + r2c[6]*fY + r2c[14]
+            var cw = r2c[3]*fX + r2c[7]*fY + r2c[15]
+            if cw != Float32(0.0) and cw != Float32(1.0):
+                cx /= cw; cy /= cw; cz /= cw
+            var cl = sqrt(cx*cx + cy*cy + cz*cz)
+            if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
+            var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
+            var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
+            var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+            var dl = sqrt(dx*dx + dy*dy + dz*dz)
+            if dl > Float32(0.0): dx /= dl; dy /= dl; dz /= dl
+            var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+            var idx = (py * w + px) * 8
+            rays[idx+0] = ox; rays[idx+1] = oy; rays[idx+2] = oz; rays[idx+3] = Float32(0.001)
+            rays[idx+4] = dx; rays[idx+5] = dy; rays[idx+6] = dz; rays[idx+7] = Float32(1.0e8)
+
+    var out_t = alloc[Float32](n_pix)
+    var out_u = alloc[Float32](n_pix)
+    var out_v = alloc[Float32](n_pix)
+    var out_mesh = alloc[Int32](n_pix)
+    var out_tri = alloc[Int32](n_pix)
+    var out_hit = alloc[UInt8](n_pix)
+
+    var rc = vulkanrt_trace_rays(scene, Int32(n_pix), rays, out_t, out_u, out_v,
+                                  out_mesh, out_tri, out_hit)
+    if Int(rc) == 0:
+        print("vulkanrt_trace_rays FAILED -- see stderr for diagnostics")
+        out_t.free(); out_u.free(); out_v.free(); out_mesh.free(); out_tri.free(); out_hit.free()
+        rays.free()
+        vulkanrt_destroy_scene(scene)
+        vmeshes.free(); point_counts.free(); vidx_counts.free()
+        mojo_parsed_free(psc)
+        return
+
+    # Cross-check every pixel against the CPU software BVH tracing the
+    # identical ray (step 5's image-level validation, folded into step 4),
+    # and build an N.V-shaded visibility image from the GPU hits.
+    var img = alloc[Float32](n_pix * 3)
+    var inter = alloc[Intersection_C](1)
+    var cpu_hits = 0
+    var gpu_hits = 0
+    var both_hit = 0
+    var agree = 0
+    var depth_err_sum = Float64(0)
+    var depth_err_max = Float32(0)
+    for py in range(h):
+        for px in range(w):
+            var pi = py * w + px
+            var idx = pi * 8
+            var ray = Ray_C(Point3f(rays[idx+0], rays[idx+1], rays[idx+2]),
+                             Vec3f(rays[idx+4], rays[idx+5], rays[idx+6]))
+            inter[0].hit = Int8(0)
+            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, ray, Float32(1.0e8), inter,
+                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
+            var cpu_hit = inter[0].hit != Int8(0)
+            var gpu_hit = out_hit[pi] == UInt8(1)
+            if cpu_hit: cpu_hits += 1
+            if gpu_hit: gpu_hits += 1
+            if cpu_hit == gpu_hit: agree += 1
+            if cpu_hit and gpu_hit:
+                both_hit += 1
+                var derr = abs(inter[0].tHit - out_t[pi])
+                depth_err_sum += Float64(derr)
+                if derr > depth_err_max: depth_err_max = derr
+
+            var shade = Float32(0)
+            if gpu_hit:
+                var mi = Int(out_mesh[pi])
+                var ti = Int(out_tri[pi]) * 3
+                if mi >= 0 and mi < n_meshes:
+                    var mesh = psc[0].meshes[mi]
+                    var v0 = Int(mesh.vertexIndices[ti]); var v1 = Int(mesh.vertexIndices[ti+1]); var v2 = Int(mesh.vertexIndices[ti+2])
+                    var p0x = mesh.points[v0*4]; var p0y = mesh.points[v0*4+1]; var p0z = mesh.points[v0*4+2]
+                    var p1x = mesh.points[v1*4]; var p1y = mesh.points[v1*4+1]; var p1z = mesh.points[v1*4+2]
+                    var p2x = mesh.points[v2*4]; var p2y = mesh.points[v2*4+1]; var p2z = mesh.points[v2*4+2]
+                    var gnx = (p1y-p0y)*(p2z-p0z) - (p1z-p0z)*(p2y-p0y)
+                    var gny = (p1z-p0z)*(p2x-p0x) - (p1x-p0x)*(p2z-p0z)
+                    var gnz = (p1x-p0x)*(p2y-p0y) - (p1y-p0y)*(p2x-p0x)
+                    var gnl = sqrt(gnx*gnx + gny*gny + gnz*gnz)
+                    if gnl > Float32(0): gnx /= gnl; gny /= gnl; gnz /= gnl
+                    shade = abs(rays[idx+4]*gnx + rays[idx+5]*gny + rays[idx+6]*gnz)
+            img[pi*3+0] = shade; img[pi*3+1] = shade; img[pi*3+2] = shade
+
+    var hit_agree_pct = Float64(agree) * 100.0 / Float64(max(n_pix, 1))
+    var mean_depth_err = depth_err_sum / Float64(max(both_hit, 1))
+    print("vulkanrt visibility check:", w, "x", h, "pixels")
+    print("  CPU hits:", cpu_hits, " GPU hits:", gpu_hits, " both-hit:", both_hit)
+    print("  hit/miss agreement:", hit_agree_pct, "%")
+    print("  depth error (both-hit pixels): mean", mean_depth_err, " max", depth_err_max)
+
+    var out_path = String("vulkanrt_debug.exr")
+    var out_cstr = alloc[UInt8](out_path.byte_length() + 1)
+    for k in range(out_path.byte_length()):
+        out_cstr[k] = out_path.as_bytes()[k]
+    out_cstr[out_path.byte_length()] = UInt8(0)
+    _ = write_image(img, Int32(w), Int32(h), out_cstr, Int32(32), Int32(32))
+    print("  wrote", out_path)
+    out_cstr.free()
+
+    inter.free()
+    img.free()
+    out_t.free(); out_u.free(); out_v.free(); out_mesh.free(); out_tri.free(); out_hit.free()
+    rays.free()
+    vulkanrt_destroy_scene(scene)
+    vmeshes.free(); point_counts.free(); vidx_counts.free()
     mojo_parsed_free(psc)
 
 
