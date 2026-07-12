@@ -330,6 +330,180 @@ def _psc_handle_attribute_end(s: UnsafePointer[SceneParseState, MutAnyOrigin]):
         s[0].cur_attr = s[0].attr_stack[len(s[0].attr_stack) - 1]
         _ = s[0].attr_stack.pop()
 
+# ── Loop subdivision surface tessellation (task #159) ─────────────────────────
+# `Shape "loopsubdiv"` (unlike trianglemesh/plymesh) gives a COARSE control
+# mesh ("point3 P" + "integer indices") plus an "integer levels" subdivision
+# count -- pbrt refines it via Loop's (1987) triangle subdivision scheme
+# before rendering. Previously this shape type fell through handle_shape's
+# catch-all `_psc_skip_params` (any type that isn't trianglemesh/plymesh/
+# curve/sphere is silently dropped, no warning) -- found while investigating
+# contemporary-bathroom's missing bathtub shell (its "bathtube" material's
+# shape is a loopsubdiv control mesh with no plymesh fallback).
+
+def _loopsubdiv_edge_index(
+    mut edge_key_to_idx: Dict[Int64, Int32],
+    mut edge_v0: List[Int32], mut edge_v1: List[Int32],
+    mut edge_opp0: List[Int32], mut edge_opp1: List[Int32],
+    mut edge_tri_count: List[Int32],
+    va: Int32, vb: Int32, vopp: Int32,
+) -> Int32:
+    """Look up (or create) the undirected-edge record for (va,vb), and
+    record `vopp` (the triangle's third vertex) as that edge's 1st or 2nd
+    incident-triangle opposite vertex -- the two "opposite" vertices are
+    what the interior odd-vertex mask (3/8, 3/8, 1/8, 1/8) needs. A 3rd+
+    incident triangle (non-manifold edge) just overwrites edge_opp1,
+    keeping only the first two -- a defensive fallback, not expected for a
+    well-formed subdivision control mesh."""
+    var lo = va if va < vb else vb
+    var hi = vb if va < vb else va
+    var key = Int64(lo) * Int64(1_000_000) + Int64(hi)
+    var existing = edge_key_to_idx.get(key, Int32(-1))
+    if existing >= Int32(0):
+        edge_opp1[Int(existing)] = vopp
+        edge_tri_count[Int(existing)] = Int32(2)
+        return existing
+    var idx = Int32(len(edge_v0))
+    edge_key_to_idx[key] = idx
+    edge_v0.append(lo); edge_v1.append(hi)
+    edge_opp0.append(vopp); edge_opp1.append(Int32(-1))
+    edge_tri_count.append(Int32(1))
+    return idx
+
+def _loopsubdiv_one_level(
+    p_in: List[Float32], i_in: List[Int32],
+) -> Tuple[List[Float32], List[Int32]]:
+    """One level of Loop (1987) triangle subdivision: p_in is n_verts*3 flat
+    object-space positions, i_in is n_tris*3 flat vertex indices. Returns a
+    refined mesh with (n_verts + n_edges) vertices and n_tris*4 triangles.
+    Interior edge midpoints (odd vertices) use the classic 3/8-3/8-1/8-1/8
+    mask against the edge's two endpoints + the two triangles' opposite
+    vertices; boundary edges (only one incident triangle) use a plain
+    midpoint. Existing (even) vertices are repositioned: interior vertices
+    via beta=3/(8n) (3/16 for valence n=3 -- pbrt's own LoopSubdiv::beta
+    special-cases this the same way) against all neighbors; boundary
+    vertices via the 3/4-1/8-1/8 mask against ONLY their two boundary-edge
+    neighbors."""
+    var n_verts = len(p_in) // 3
+    var n_tris = len(i_in) // 3
+
+    var edge_key_to_idx = Dict[Int64, Int32]()
+    var edge_v0 = List[Int32]()
+    var edge_v1 = List[Int32]()
+    var edge_opp0 = List[Int32]()
+    var edge_opp1 = List[Int32]()
+    var edge_tri_count = List[Int32]()
+    var tri_edge0 = List[Int32]()
+    var tri_edge1 = List[Int32]()
+    var tri_edge2 = List[Int32]()
+
+    for t in range(n_tris):
+        var v0 = i_in[t*3+0]
+        var v1 = i_in[t*3+1]
+        var v2 = i_in[t*3+2]
+        var e0 = _loopsubdiv_edge_index(edge_key_to_idx, edge_v0, edge_v1, edge_opp0, edge_opp1, edge_tri_count, v0, v1, v2)
+        var e1 = _loopsubdiv_edge_index(edge_key_to_idx, edge_v0, edge_v1, edge_opp0, edge_opp1, edge_tri_count, v1, v2, v0)
+        var e2 = _loopsubdiv_edge_index(edge_key_to_idx, edge_v0, edge_v1, edge_opp0, edge_opp1, edge_tri_count, v2, v0, v1)
+        tri_edge0.append(e0); tri_edge1.append(e1); tri_edge2.append(e2)
+
+    var n_edges = len(edge_v0)
+
+    # Vertex adjacency (all neighbors, for interior smoothing) + the two
+    # boundary-edge neighbors specifically (for boundary smoothing).
+    var vert_neighbors = List[List[Int32]]()
+    var vert_boundary_a = List[Int32]()
+    var vert_boundary_b = List[Int32]()
+    for _ in range(n_verts):
+        vert_neighbors.append(List[Int32]())
+        vert_boundary_a.append(Int32(-1))
+        vert_boundary_b.append(Int32(-1))
+    for e in range(n_edges):
+        var a = edge_v0[e]
+        var b = edge_v1[e]
+        vert_neighbors[Int(a)].append(b)
+        vert_neighbors[Int(b)].append(a)
+        if edge_tri_count[e] == Int32(1):
+            if vert_boundary_a[Int(a)] < Int32(0):
+                vert_boundary_a[Int(a)] = b
+            else:
+                vert_boundary_b[Int(a)] = b
+            if vert_boundary_a[Int(b)] < Int32(0):
+                vert_boundary_a[Int(b)] = a
+            else:
+                vert_boundary_b[Int(b)] = a
+
+    var out_p = List[Float32]()
+    out_p.reserve((n_verts + n_edges) * 3)
+
+    # Even (repositioned original) vertices, same index order as input.
+    for v in range(n_verts):
+        var px = p_in[v*3+0]; var py = p_in[v*3+1]; var pz = p_in[v*3+2]
+        if vert_boundary_a[v] >= Int32(0) and vert_boundary_b[v] >= Int32(0):
+            var ba = Int(vert_boundary_a[v]); var bb = Int(vert_boundary_b[v])
+            out_p.append(Float32(0.75)*px + Float32(0.125)*(p_in[ba*3+0] + p_in[bb*3+0]))
+            out_p.append(Float32(0.75)*py + Float32(0.125)*(p_in[ba*3+1] + p_in[bb*3+1]))
+            out_p.append(Float32(0.75)*pz + Float32(0.125)*(p_in[ba*3+2] + p_in[bb*3+2]))
+        else:
+            var n = len(vert_neighbors[v])
+            if n == 0:
+                out_p.append(px); out_p.append(py); out_p.append(pz)
+            else:
+                var beta: Float32
+                if n == 3:
+                    beta = Float32(3.0) / Float32(16.0)
+                else:
+                    beta = Float32(3.0) / (Float32(8.0) * Float32(n))
+                var sx = Float32(0); var sy = Float32(0); var sz = Float32(0)
+                for k in range(n):
+                    var nb = Int(vert_neighbors[v][k])
+                    sx += p_in[nb*3+0]; sy += p_in[nb*3+1]; sz += p_in[nb*3+2]
+                var w = Float32(1) - Float32(n)*beta
+                out_p.append(w*px + beta*sx)
+                out_p.append(w*py + beta*sy)
+                out_p.append(w*pz + beta*sz)
+
+    # Odd (new edge-midpoint) vertices, index n_verts + e.
+    for e in range(n_edges):
+        var a = Int(edge_v0[e]); var b = Int(edge_v1[e])
+        if edge_tri_count[e] == Int32(2):
+            var o0 = Int(edge_opp0[e]); var o1 = Int(edge_opp1[e])
+            out_p.append(Float32(0.375)*(p_in[a*3+0]+p_in[b*3+0]) + Float32(0.125)*(p_in[o0*3+0]+p_in[o1*3+0]))
+            out_p.append(Float32(0.375)*(p_in[a*3+1]+p_in[b*3+1]) + Float32(0.125)*(p_in[o0*3+1]+p_in[o1*3+1]))
+            out_p.append(Float32(0.375)*(p_in[a*3+2]+p_in[b*3+2]) + Float32(0.125)*(p_in[o0*3+2]+p_in[o1*3+2]))
+        else:
+            out_p.append(Float32(0.5)*(p_in[a*3+0]+p_in[b*3+0]))
+            out_p.append(Float32(0.5)*(p_in[a*3+1]+p_in[b*3+1]))
+            out_p.append(Float32(0.5)*(p_in[a*3+2]+p_in[b*3+2]))
+
+    # New connectivity: each original triangle (v0,v1,v2) -> 4 new triangles,
+    # via its 3 edge midpoints (m01,m12,m20), preserving winding order.
+    var out_i = List[Int32]()
+    out_i.reserve(n_tris * 4 * 3)
+    for t in range(n_tris):
+        var v0 = i_in[t*3+0]; var v1 = i_in[t*3+1]; var v2 = i_in[t*3+2]
+        var m01 = Int32(n_verts) + tri_edge0[t]
+        var m12 = Int32(n_verts) + tri_edge1[t]
+        var m20 = Int32(n_verts) + tri_edge2[t]
+        out_i.append(v0); out_i.append(m01); out_i.append(m20)
+        out_i.append(v1); out_i.append(m12); out_i.append(m01)
+        out_i.append(v2); out_i.append(m20); out_i.append(m12)
+        out_i.append(m01); out_i.append(m12); out_i.append(m20)
+
+    return (out_p^, out_i^)
+
+def _loopsubdiv_tessellate(
+    var p_in: List[Float32], var i_in: List[Int32], levels: Int32,
+) -> Tuple[List[Float32], List[Int32]]:
+    """Run `levels` iterations of _loopsubdiv_one_level, refining a Loop
+    subdivision control mesh into the final triangle mesh passed to
+    store_mesh -- same object-space contract trianglemesh's own "P"/
+    "indices" params already have (CTM world-transform happens in
+    store_mesh, not here)."""
+    for _ in range(Int(levels)):
+        var next_level = _loopsubdiv_one_level(p_in, i_in)
+        p_in = next_level[0].copy()
+        i_in = next_level[1].copy()
+    return (p_in^, i_in^)
+
 # ── Mesh accumulation ─────────────────────────────────────────────────────────
 
 def store_mesh(
@@ -554,6 +728,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     var is_ply = _psc_streq(shape_type, "plymesh")
     var is_curve = _psc_streq(shape_type, "curve")
     var is_sphere = _psc_streq(shape_type, "sphere")
+    var is_loopsubdiv = _psc_streq(shape_type, "loopsubdiv")
     shape_type.free()
 
     if is_curve:
@@ -574,6 +749,26 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
             # Same rationale as the curve case above — sphere instancing
             # inside ObjectBegin/ObjectEnd isn't supported yet.
             _psc_skip_params(handle)
+        return
+
+    if is_loopsubdiv:
+        # Task #159: coarse control mesh ("point3 P" + "integer indices") +
+        # "integer levels" subdivision count -- see _loopsubdiv_tessellate
+        # above. pbrt's own default when "levels" is omitted is 3.
+        var ls_params = _psc_collect_params(handle)
+        var levels = Int32(ls_params.get_int("levels", 3))
+        var p_ctrl = ls_params.take_floats("P")
+        var i_ctrl = ls_params.take_ints("indices")
+        var n_ctrl_verts = Int32(len(p_ctrl) // 3)
+        var n_ctrl_tris = Int32(len(i_ctrl) // 3)
+        if n_ctrl_verts <= 0 or n_ctrl_tris <= 0:
+            return
+        var fin = _loopsubdiv_tessellate(p_ctrl^, i_ctrl^, levels)
+        var fin_p = fin[0].copy()
+        var fin_i = fin[1].copy()
+        var n_verts = Int32(len(fin_p) // 3)
+        var n_tris = Int32(len(fin_i) // 3)
+        store_mesh(s, fin_p.unsafe_ptr(), fin_i.unsafe_ptr(), n_verts, n_tris)
         return
 
     if not is_tri and not is_ply:
