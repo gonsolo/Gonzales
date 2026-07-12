@@ -30,7 +30,7 @@ from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell, _sppm_render_core
-from .shading import _tex_lookup, _get_tri_verts
+from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle
@@ -344,6 +344,223 @@ def _bdpt_nee_contribute(
     if Tr[0] > Float32(0) or Tr[1] > Float32(0) or Tr[2] > Float32(0):
         return beta * w * RGB(Tr[0], Tr[1], Tr[2])
     return RGB(Float32(0))
+
+def _bdpt_mnee_diffuse_area_light(
+    sd: SceneDescriptor2_C, hit: Point3f, gn: SIMD[DType.float32, 3], eff_alb: RGB,
+    beta: RGB, mut pcg: PCG32,
+) -> RGB:
+    """Real MNEE (manifold next-event estimation, task #161): for a diffuse
+    camera vertex, probe whether a straight line toward a randomly-picked
+    area light first hits dielectric glass, and if so solve for the true
+    refracted connection via Newton iteration -- reusing shading.mojo's
+    _mnee_walk/_mnee_walk2, the exact technique the plain path tracer's own
+    _nee_area_lights already uses. This is WHY the plain path tracer
+    correctly lights barcelona-pavilion (night) while bdpt.mojo's VCM
+    connect/merge cannot: dielectric bounces are never stored as LVC
+    vertices (see project_vcm_stage2_mis_derivation memory), so a light
+    behind glass is structurally invisible to connect/merge, and its tiny
+    solid angle makes unassisted BSDF-sampling hit it by pure luck only.
+
+    Deliberately scoped to ONLY the glass-detected case. An earlier attempt
+    added plain straight-line NEE for ALL area lights (not just
+    glass-obscured ones) and was reverted: it double-counted with the
+    EXISTING connect/merge estimator on ordinary, unobstructed lights
+    (confirmed via git-stash A/B on cornell-box, ~38% over pbrt's
+    reference). MNEE only ever fires for paths connect/merge structurally
+    cannot represent anyway (a delta dielectric bounce in the middle of the
+    connecting path), so there is no matching double-count risk here --
+    when the probe does NOT hit glass first, this returns black and
+    connect/merge (already correct for that ordinary case) are untouched.
+
+    Diffuse-only, matching shading.mojo's own _nee_area_lights scope
+    exactly -- no material in this codebase does MNEE for conductor/hair/
+    measured/coateddiffuse today (extending that is separately-scoped
+    future work). Curve-shaped area lights are skipped (no well-defined
+    surface tangents for a swept tube), same as shading.mojo."""
+    var n_area = Int(sd.areaLightCount)
+    if n_area <= 0:
+        return RGB(Float32(0))
+    var li = Int(pcg.next_uint() % UInt32(n_area))
+    var al = sd.areaLights[li]
+    if al.kind == Int8(1):
+        return RGB(Float32(0))
+    var lmesh = sd.meshes[Int(al.meshIdx)]
+    var n_tris = Int(max(Int(al.n_tris), 1))
+    var ti = Int(pcg.next_uint() % UInt32(n_tris))
+    var lb = ti * 3
+    var lv0 = Int(lmesh.vertexIndices[lb]); var lv1 = Int(lmesh.vertexIndices[lb+1]); var lv2 = Int(lmesh.vertexIndices[lb+2])
+    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
+    var light_point = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
+    var ldp_du = lp1 - lp0
+    var ldp_dv = lp2 - lp0
+
+    var hit_v = hit.to_simd()
+    var to_light = light_point - hit_v
+    var dist_sq = dot(to_light, to_light)
+    if dist_sq < Float32(1e-8) or al.total_area <= Float32(0):
+        return RGB(Float32(0))
+    var dist = sqrt(dist_sq)
+    var shadow_dir = to_light * (Float32(1) / dist)
+
+    var probe_org = hit_v + shadow_dir * Float32(0.0002)
+    var probe_ray = Ray_C(Point3f(probe_org[0], probe_org[1], probe_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+    var probe_tmax = dist * Float32(0.9995)
+    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    var probe_inter = probe_store[0]
+    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
+        return RGB(Float32(0))
+    var probe_mat = sd.materials[Int(probe_inter.primId.materialIndex)]
+    if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
+        return RGB(Float32(0))
+
+    var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
+    if not ptok:
+        return RGB(Float32(0))
+    var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
+    var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
+    var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+    var pdp_du = pp1 - pp0
+    var pdp_dv = pp2 - pp0
+    var pgeo_n3 = cross(pdp_du, pdp_dv)
+    var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
+    if pgeo_n_len <= Float32(1e-10):
+        return RGB(Float32(0))
+    var pgeo_n_raw = pgeo_n3 * (Float32(1) / pgeo_n_len)
+    var ior1 = probe_mat.albedo.r
+    var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior1)
+    var pgeo_n = pgeo_n_raw
+    if dot(pgeo_n, shadow_dir) > Float32(0):
+        pgeo_n = -pgeo_n
+    var pu = probe_inter.u; var pvb = probe_inter.v
+    var x1_init = pp0*(Float32(1)-pu-pvb) + pp1*pu + pp2*pvb
+
+    var pdf_sel = Float32(1) / Float32(n_area)  # uniform light+point pick, matches this file's own convention
+
+    var probe2_t0 = probe_inter.tHit
+    var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
+    var probe2_org = x1_init + shadow_dir * Float32(0.0005)
+    var probe2_inter = dummy_inter
+    if probe2_rem > Float32(0.001):
+        var probe2_ray = Ray_C(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        probe2_inter = probe2_store[0]
+
+    if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
+        var probe2_mat = sd.materials[Int(probe2_inter.primId.materialIndex)]
+        if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
+            # --- 2-vertex MNEE ---
+            var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
+            if not p2ok:
+                return RGB(Float32(0))
+            var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
+            var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
+            var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+            var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
+            var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
+            var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
+            if pgeo_n_len2 <= Float32(1e-10):
+                return RGB(Float32(0))
+            var pgeo_n2_raw = pgeo_n3_2 * (Float32(1) / pgeo_n_len2)
+            var ior2 = probe2_mat.albedo.r
+            var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior2)
+            var pgeo_n2 = pgeo_n2_raw
+            if dot(pgeo_n2, shadow_dir) > Float32(0):
+                pgeo_n2 = -pgeo_n2
+            var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
+            var x2_init = p2p0*(Float32(1)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
+            var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
+                hit_v, light_point,
+                x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
+                x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
+                ldp_du, ldp_dv)
+            if not ok2:
+                return RGB(Float32(0))
+            var wi2f = hit_v - x1_f2
+            var wi2fl = sqrt(dot(wi2f, wi2f))
+            if wi2fl <= Float32(1e-8):
+                return RGB(Float32(0))
+            var wi2fn = wi2f * (Float32(1) / wi2fl)
+            var cos_s_x0 = dot(gn, -wi2fn)
+            if cos_s_x0 <= Float32(0):
+                return RGB(Float32(0))
+            var G2 = min(abs(dot(wi2fn, pgeo_n)) / (wi2fl*wi2fl) * dx1_dxl2, Float32(2))
+            var pdf_area2 = pdf_sel / al.total_area
+            var wo2f = light_point - x2_f2
+            var wo2fl = sqrt(dot(wo2f, wo2f))
+            if wo2fl <= Float32(1e-8):
+                return RGB(Float32(0))
+            var wo2fn = wo2f * (Float32(1) / wo2fl)
+            var vis2_org = x2_f2 + wo2fn * Float32(0.001)
+            var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
+            if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                return RGB(Float32(0))
+            return beta * bxdf_eval_diffuse(eff_alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
+        return RGB(Float32(0))
+    else:
+        # --- 1-vertex MNEE ---
+        var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(hit_v, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
+        if not mnee_ok:
+            return RGB(Float32(0))
+        var wi_f = hit_v - x1_f
+        var wi_len2_f = dot(wi_f, wi_f)
+        var wo_f = light_point - x1_f
+        var wo_len2_f = dot(wo_f, wo_f)
+        if wi_len2_f <= Float32(1e-8) or wo_len2_f <= Float32(1e-8):
+            return RGB(Float32(0))
+        var wi_len_f = sqrt(wi_len2_f)
+        var wo_len_f = sqrt(wo_len2_f)
+        var wi_fn = wi_f * (Float32(1) / wi_len_f)
+        var wo_fn = wo_f * (Float32(1) / wo_len_f)
+        var cos_s_x0 = dot(gn, -wi_fn)
+        if cos_s_x0 <= Float32(0):
+            return RGB(Float32(0))
+        var H3_f = -(wi_fn + wo_fn * eta_f)
+        var H_len2_f = dot(H3_f, H3_f)
+        if H_len2_f <= Float32(1e-10):
+            return RGB(Float32(0))
+        var H_len_f = sqrt(H_len2_f)
+        var H_f = H3_f * (Float32(1) / H_len_f)
+        var dp_du_dot_n = dot(pdp_du, pgeo_n)
+        var s3_f = pdp_du - pgeo_n * dp_du_dot_n
+        var s_len2_f = dot(s3_f, s3_f)
+        if s_len2_f <= Float32(1e-10):
+            return RGB(Float32(0))
+        var s_f = s3_f * (Float32(1) / sqrt(s_len2_f))
+        var t_f = cross(pgeo_n, s_f)
+        var ilo_l = eta_f / (H_len_f * wo_len_f)
+        var dHdu_l = (ldp_du - wo_fn * dot(wo_fn, ldp_du)) * ilo_l
+        var dHdv_l = (ldp_dv - wo_fn * dot(wo_fn, ldp_dv)) * ilo_l
+        dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
+        dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
+        var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
+        var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
+        var det_dc = dc00*dc11 - dc01*dc10
+        var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
+        var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / wi_len2_f
+        var G = min(dw0_dx1 * dx1_dxl, Float32(2))
+        var cosNI = abs(dot(pgeo_n, wi_fn))
+        var cosHI = abs(dot(H_f, wi_fn))
+        var cosTM = abs(dot(pgeo_n, H_f))
+        var F_r = fr_dielectric(cosNI, eta_f)
+        var T_f = Float32(1) - F_r
+        var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
+        var pdf_area_x2 = pdf_sel / al.total_area
+        var vis_org = x1_f + wo_fn * Float32(0.001)
+        var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
+                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+            return RGB(Float32(0))
+        return beta * bxdf_eval_diffuse(eff_alb) * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
 
 # ── Cosine-area PDF conversion ────────────────────────────────────────────────
 
@@ -880,6 +1097,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch)
+            # Real MNEE for area lights behind glass (task #161) -- see
+            # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
+            # area lights are deliberately left to connect/merge, unchanged.
+            total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg)
 
             # Cosine-weighted scatter direction
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
