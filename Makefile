@@ -142,7 +142,7 @@ VULKANRT_INC = src/vulkanrt
 VULKANRT_GEN = src/vulkanrt/generated
 VULKANRT_LIB = $(BUILD_DIR)/libvulkanrt.so
 
-$(VULKANRT_LIB): $(VULKANRT_SRC) $(VULKANRT_INC)/vulkanrt.h $(VULKANRT_GEN)/smoke_comp_spv.h $(VULKANRT_GEN)/trace_ray_comp_spv.h
+$(VULKANRT_LIB): $(VULKANRT_SRC) $(VULKANRT_INC)/vulkanrt.h $(VULKANRT_GEN)/smoke_comp_spv.h $(VULKANRT_GEN)/trace_ray_comp_spv.h $(VULKANRT_GEN)/intersect_batch_comp_spv.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(VULKANRT_INC) -I$(VULKANRT_GEN) \
 		$(VULKANRT_SRC) -lvulkan -o $(VULKANRT_LIB)

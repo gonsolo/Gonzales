@@ -68,3 +68,35 @@ def vulkanrt_trace_ray(
 # Destroys a scene built by vulkanrt_build_scene.
 def vulkanrt_destroy_scene(scene: VulkanRtSceneHandle):
     external_call["vulkanrt_destroy_scene", NoneType, VulkanRtSceneHandle](scene)
+
+# Task #162 step 3: trace many rays in ONE dispatch, instead of
+# vulkanrt_trace_ray's one queue-submit-and-wait per ray (far too slow to
+# ever back a real renderer). `rays` is a flat array of ray_count * 8
+# floats, 8 per ray in order (ox, oy, oz, t_min, dx, dy, dz, t_max). Each
+# out_* array must have ray_count elements; out_hit[i] is 1 on a hit, 0 on
+# a miss (matching Intersection_C.hit's convention), with
+# out_t/out_u/out_v/out_mesh/out_triangle only meaningful when out_hit[i]
+# is 1. out_u/out_v use the same barycentric convention as gonzales's own
+# Moller-Trumbore intersect_triangle (verified in
+# Tests/unit/test_vulkanrt_batch.mojo).
+#
+# Returns 1 if the dispatch executed, 0 on failure (null scene, allocation
+# failure) -- per-ray hit/miss is conveyed via out_hit, not this return
+# value.
+def vulkanrt_trace_rays(
+    scene: VulkanRtSceneHandle,
+    ray_count: Int32,
+    rays: UnsafePointer[Float32, MutAnyOrigin],
+    out_t: UnsafePointer[Float32, MutAnyOrigin],
+    out_u: UnsafePointer[Float32, MutAnyOrigin],
+    out_v: UnsafePointer[Float32, MutAnyOrigin],
+    out_mesh: UnsafePointer[Int32, MutAnyOrigin],
+    out_triangle: UnsafePointer[Int32, MutAnyOrigin],
+    out_hit: UnsafePointer[UInt8, MutAnyOrigin],
+) -> Int32:
+    return external_call["vulkanrt_trace_rays", Int32,
+        VulkanRtSceneHandle, Int32, UnsafePointer[Float32, MutAnyOrigin],
+        UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin],
+        UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
+        UnsafePointer[Int32, MutAnyOrigin], UnsafePointer[UInt8, MutAnyOrigin]](
+        scene, ray_count, rays, out_t, out_u, out_v, out_mesh, out_triangle, out_hit)

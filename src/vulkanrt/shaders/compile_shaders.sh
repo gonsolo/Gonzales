@@ -24,5 +24,6 @@ compile_shader() {
 
 compile_shader "$SCRIPT_DIR/smoke.comp" "smoke_comp_spv"
 compile_shader "$SCRIPT_DIR/trace_ray.comp" "trace_ray_comp_spv"
+compile_shader "$SCRIPT_DIR/intersect_batch.comp" "intersect_batch_comp_spv"
 
 echo "Done. Generated headers in $OUT_DIR/"

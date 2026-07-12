@@ -72,6 +72,32 @@ int vulkanrt_trace_ray(
 // Destroys a scene built by vulkanrt_build_scene.
 void vulkanrt_destroy_scene(void* scene);
 
+// Task #162 step 3: trace many rays in ONE dispatch, instead of
+// vulkanrt_trace_ray's one queue-submit-and-wait per ray (far too slow to
+// ever back a real renderer -- this is the batching step that makes Vulkan
+// RT usable as an actual gonzales intersection backend).
+//
+// `rays` is a flat array of ray_count * 8 floats, 8 per ray in the order
+// (ox, oy, oz, t_min, dx, dy, dz, t_max) -- the same layout
+// vulkanrt_trace_ray takes as separate scalar args, just packed. Each
+// out_* array must have ray_count elements; out_hit[i] is 1 on a hit, 0 on
+// a miss (matching gonzales's own Intersection_C.hit convention), with
+// out_t/out_u/out_v/out_mesh/out_triangle only meaningful when out_hit[i]
+// is 1. out_u/out_v are the hardware's committed-intersection barycentric
+// coordinates -- same (u, v) = (weight of vertex 1, weight of vertex 2)
+// convention as gonzales's own Moller-Trumbore intersect_triangle, verified
+// against it in Tests/unit/test_vulkanrt_batch.mojo.
+//
+// Returns 1 if the dispatch executed, 0 on failure (null scene, allocation
+// failure) -- per-ray hit/miss is conveyed via out_hit, not this return
+// value.
+int vulkanrt_trace_rays(
+    void* scene,
+    int32_t ray_count,
+    const float* rays,
+    float* out_t, float* out_u, float* out_v,
+    int32_t* out_mesh, int32_t* out_triangle, uint8_t* out_hit);
+
 #ifdef __cplusplus
 }
 #endif

@@ -24,6 +24,7 @@
 #include "vulkanrt.h"
 #include "smoke_comp_spv.h"
 #include "trace_ray_comp_spv.h"
+#include "intersect_batch_comp_spv.h"
 
 // ---------------------------------------------------------------------------
 // Error checking macro (mirrors viewer.cpp's VK_CHECK, adapted to this
@@ -644,6 +645,20 @@ struct Scene {
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkDescriptorPool descPool = VK_NULL_HANDLE;
     VkDescriptorSet descSet = VK_NULL_HANDLE;
+
+    // Step 3: batch ray tracing (intersect_batch.comp) -- separate pipeline
+    // from the single-ray one above (3 bindings: AS + rays-in + results-out,
+    // vs. the single-ray pipeline's 2), sharing the same TLAS. rays/results
+    // buffers are created fresh per vulkanrt_trace_rays call (ray_count
+    // varies call to call) and the descriptor set's bindings 1/2 are
+    // rewritten to point at them each time; binding 0 (the TLAS) is written
+    // once here at build time and never changes.
+    VkShaderModule batchShaderModule = VK_NULL_HANDLE;
+    VkDescriptorSetLayout batchDsLayout = VK_NULL_HANDLE;
+    VkPipelineLayout batchPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline batchPipeline = VK_NULL_HANDLE;
+    VkDescriptorPool batchDescPool = VK_NULL_HANDLE;
+    VkDescriptorSet batchDescSet = VK_NULL_HANDLE;
 };
 
 } // namespace
@@ -651,6 +666,12 @@ struct Scene {
 extern "C" void vulkanrt_destroy_scene(void* sceneHandle) {
     if (!sceneHandle) return;
     Scene* scene = (Scene*)sceneHandle;
+
+    if (scene->batchDescPool) vkDestroyDescriptorPool(scene->device, scene->batchDescPool, nullptr);
+    if (scene->batchPipeline) vkDestroyPipeline(scene->device, scene->batchPipeline, nullptr);
+    if (scene->batchPipelineLayout) vkDestroyPipelineLayout(scene->device, scene->batchPipelineLayout, nullptr);
+    if (scene->batchDsLayout) vkDestroyDescriptorSetLayout(scene->device, scene->batchDsLayout, nullptr);
+    if (scene->batchShaderModule) vkDestroyShaderModule(scene->device, scene->batchShaderModule, nullptr);
 
     if (scene->descPool) vkDestroyDescriptorPool(scene->device, scene->descPool, nullptr);
     if (scene->pipeline) vkDestroyPipeline(scene->device, scene->pipeline, nullptr);
@@ -943,6 +964,119 @@ extern "C" void* vulkanrt_build_scene(
     writes[1].pBufferInfo = &bufInfo;
     vkUpdateDescriptorSets(scene->device, 2, writes, 0, nullptr);
 
+    // ---- Batch compute pipeline (intersect_batch.comp) ----
+    // 3 bindings (AS + rays-in + results-out), reusing the same TLAS as the
+    // single-ray pipeline above. Only binding 0 (the TLAS) is written now;
+    // bindings 1/2 point at per-call buffers, rewritten in
+    // vulkanrt_trace_rays.
+    VkShaderModuleCreateInfo batchSmci{};
+    batchSmci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    batchSmci.codeSize = sizeof(intersect_batch_comp_spv);
+    batchSmci.pCode = intersect_batch_comp_spv;
+    if (vkCreateShaderModule(scene->device, &batchSmci, nullptr, &scene->batchShaderModule) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateShaderModule (batch) failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkDescriptorSetLayoutBinding batchBindings[3]{};
+    batchBindings[0].binding = 0;
+    batchBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    batchBindings[0].descriptorCount = 1;
+    batchBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    batchBindings[1].binding = 1;
+    batchBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    batchBindings[1].descriptorCount = 1;
+    batchBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    batchBindings[2].binding = 2;
+    batchBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    batchBindings[2].descriptorCount = 1;
+    batchBindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo batchDslci{};
+    batchDslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    batchDslci.bindingCount = 3;
+    batchDslci.pBindings = batchBindings;
+    if (vkCreateDescriptorSetLayout(scene->device, &batchDslci, nullptr, &scene->batchDsLayout) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateDescriptorSetLayout (batch) failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkPushConstantRange batchPcRange{};
+    batchPcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    batchPcRange.offset = 0;
+    batchPcRange.size = sizeof(uint32_t); // rayCount
+
+    VkPipelineLayoutCreateInfo batchPlci{};
+    batchPlci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    batchPlci.setLayoutCount = 1;
+    batchPlci.pSetLayouts = &scene->batchDsLayout;
+    batchPlci.pushConstantRangeCount = 1;
+    batchPlci.pPushConstantRanges = &batchPcRange;
+    if (vkCreatePipelineLayout(scene->device, &batchPlci, nullptr, &scene->batchPipelineLayout) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreatePipelineLayout (batch) failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkPipelineShaderStageCreateInfo batchStage{};
+    batchStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    batchStage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    batchStage.module = scene->batchShaderModule;
+    batchStage.pName = "main";
+
+    VkComputePipelineCreateInfo batchCpci{};
+    batchCpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    batchCpci.stage = batchStage;
+    batchCpci.layout = scene->batchPipelineLayout;
+    if (vkCreateComputePipelines(scene->device, VK_NULL_HANDLE, 1, &batchCpci, nullptr, &scene->batchPipeline) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateComputePipelines (batch) failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkDescriptorPoolSize batchPoolSizes[2]{};
+    batchPoolSizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    batchPoolSizes[0].descriptorCount = 1;
+    batchPoolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    batchPoolSizes[1].descriptorCount = 2; // rays-in + results-out
+    VkDescriptorPoolCreateInfo batchDpci{};
+    batchDpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    batchDpci.maxSets = 1;
+    batchDpci.poolSizeCount = 2;
+    batchDpci.pPoolSizes = batchPoolSizes;
+    if (vkCreateDescriptorPool(scene->device, &batchDpci, nullptr, &scene->batchDescPool) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkCreateDescriptorPool (batch) failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkDescriptorSetAllocateInfo batchDsai{};
+    batchDsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    batchDsai.descriptorPool = scene->batchDescPool;
+    batchDsai.descriptorSetCount = 1;
+    batchDsai.pSetLayouts = &scene->batchDsLayout;
+    if (vkAllocateDescriptorSets(scene->device, &batchDsai, &scene->batchDescSet) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkAllocateDescriptorSets (batch) failed\n");
+        vulkanrt_destroy_scene(scene);
+        return nullptr;
+    }
+
+    VkWriteDescriptorSetAccelerationStructureKHR batchAsWrite{};
+    batchAsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    batchAsWrite.accelerationStructureCount = 1;
+    batchAsWrite.pAccelerationStructures = &scene->tlas;
+
+    VkWriteDescriptorSet batchAsSetWrite{};
+    batchAsSetWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    batchAsSetWrite.pNext = &batchAsWrite;
+    batchAsSetWrite.dstSet = scene->batchDescSet;
+    batchAsSetWrite.dstBinding = 0;
+    batchAsSetWrite.descriptorCount = 1;
+    batchAsSetWrite.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    vkUpdateDescriptorSets(scene->device, 1, &batchAsSetWrite, 0, nullptr);
+
     return scene;
 }
 
@@ -1003,4 +1137,119 @@ extern "C" int vulkanrt_trace_ray(
     if (out_mesh) *out_mesh = -1;
     if (out_triangle) *out_triangle = -1;
     return 0;
+}
+
+extern "C" int vulkanrt_trace_rays(
+    void* sceneHandle,
+    int32_t ray_count,
+    const float* rays,
+    float* out_t, float* out_u, float* out_v,
+    int32_t* out_mesh, int32_t* out_triangle, uint8_t* out_hit) {
+
+    if (!sceneHandle || ray_count <= 0) return 0;
+    Scene* scene = (Scene*)sceneHandle;
+
+    struct Result { float hitT, u, v, _pad0; int32_t hitMesh, hitTriangle; uint32_t hitFlag, _pad1; };
+
+    VkDeviceSize raysBytes = (VkDeviceSize)ray_count * 8 * sizeof(float);
+    Buffer raysBuf{};
+    if (!createBuffer(scene->device, scene->physicalDevice, raysBytes,
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       false, &raysBuf)) {
+        return 0;
+    }
+    if (!uploadToBuffer(scene->device, raysBuf, rays, raysBytes)) {
+        destroyBuffer(scene->device, &raysBuf);
+        return 0;
+    }
+
+    VkDeviceSize resultsBytes = (VkDeviceSize)ray_count * sizeof(Result);
+    Buffer resultsBuf{};
+    if (!createBuffer(scene->device, scene->physicalDevice, resultsBytes,
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       false, &resultsBuf)) {
+        destroyBuffer(scene->device, &raysBuf);
+        return 0;
+    }
+
+    VkDescriptorBufferInfo raysInfo{};
+    raysInfo.buffer = raysBuf.buffer;
+    raysInfo.range = raysBuf.size;
+    VkDescriptorBufferInfo resultsInfo{};
+    resultsInfo.buffer = resultsBuf.buffer;
+    resultsInfo.range = resultsBuf.size;
+
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = scene->batchDescSet;
+    writes[0].dstBinding = 1;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].pBufferInfo = &raysInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = scene->batchDescSet;
+    writes[1].dstBinding = 2;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[1].pBufferInfo = &resultsInfo;
+    vkUpdateDescriptorSets(scene->device, 2, writes, 0, nullptr);
+
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = scene->cmdPool;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    if (vkAllocateCommandBuffers(scene->device, &cbai, &cmd) != VK_SUCCESS) {
+        fprintf(stderr, "vulkanrt: vkAllocateCommandBuffers failed in vulkanrt_trace_rays\n");
+        destroyBuffer(scene->device, &raysBuf);
+        destroyBuffer(scene->device, &resultsBuf);
+        return 0;
+    }
+
+    uint32_t rayCountU32 = (uint32_t)ray_count;
+    // Matches intersect_batch.comp's local_size_x = 64.
+    uint32_t groupCount = (rayCountU32 + 63) / 64;
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scene->batchPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scene->batchPipelineLayout, 0, 1, &scene->batchDescSet, 0, nullptr);
+    vkCmdPushConstants(cmd, scene->batchPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rayCountU32), &rayCountU32);
+    vkCmdDispatch(cmd, groupCount, 1, 1);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(scene->queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(scene->queue);
+    vkFreeCommandBuffers(scene->device, scene->cmdPool, 1, &cmd);
+
+    std::vector<Result> readback((size_t)ray_count);
+    {
+        void* p;
+        vkMapMemory(scene->device, resultsBuf.memory, 0, resultsBytes, 0, &p);
+        memcpy(readback.data(), p, (size_t)resultsBytes);
+        vkUnmapMemory(scene->device, resultsBuf.memory);
+    }
+
+    for (int32_t i = 0; i < ray_count; i++) {
+        const Result& r = readback[(size_t)i];
+        if (out_t) out_t[i] = r.hitT;
+        if (out_u) out_u[i] = r.u;
+        if (out_v) out_v[i] = r.v;
+        if (out_mesh) out_mesh[i] = r.hitMesh;
+        if (out_triangle) out_triangle[i] = r.hitTriangle;
+        if (out_hit) out_hit[i] = (uint8_t)(r.hitFlag == 1 ? 1 : 0);
+    }
+
+    destroyBuffer(scene->device, &raysBuf);
+    destroyBuffer(scene->device, &resultsBuf);
+    return 1;
 }
