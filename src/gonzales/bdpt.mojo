@@ -16,7 +16,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
-    dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, INV_PI,
+    dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
 )
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
@@ -25,13 +25,13 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .sampling import power_heuristic
+from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, sppm_reset_i32_gpu, _HSIZE, _hash_cell, _sppm_render_core
 from .shading import _tex_lookup, _get_tri_verts
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle
 from .spectrum import (
@@ -813,7 +813,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 total += beta * al_hit.emission * mis_w_al_hit
             break
 
-        elif mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
+        elif mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
@@ -898,6 +898,187 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             dvcm_carry = Float32(1) / bsdf_dir_pdf_w if bsdf_dir_pdf_w > Float32(1e-8) else Float32(0)
             dvc_carry = dvc_new
             dvm_carry = dvm_new
+
+        elif mat.type == MatKind.coated_diffuse:
+            # VCM: coateddiffuse is a stochastic multi-bounce recycling walk
+            # (see shading.mojo's shade_coated_diffuse, ported here almost
+            # verbatim) with no closed-form joint pdf -- task #158, user
+            # chose "full multi-tap recycling walk, left unweighted": ported
+            # exactly so VCM's appearance matches the plain path tracer, but
+            # every outcome (coat reflect, rough or smooth, and the base
+            # exit) is stored/continued as mat_kind=4, which
+            # _bdpt_vertex_mis_scoped deliberately excludes (same documented
+            # gap as dielectric/volume) -- connect/merge still reach these
+            # vertices via _eval_vertex's generic Lambertian fallback
+            # (weight=1, no real MIS), never a full "no connection at all"
+            # exclusion.
+            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+            var cos_fix = abs(dot(-ray_dir, gn))
+            if cos_fix > Float32(1e-6):
+                dvcm_carry /= cos_fix
+                dvc_carry /= cos_fix
+                dvm_carry /= cos_fix
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+
+            var ior = mat.emission.r
+            var inv_ior = Float32(1) / ior
+            var coat_alpha = max(mat.roughU, mat.roughV)
+            var is_rough_coat = coat_alpha > Float32(0.001)
+            var wo = -ray_dir
+            var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
+            var tangent = SIMD[DType.float32, 3](frm.x.x, frm.x.y, frm.x.z)
+            var bitangent = SIMD[DType.float32, 3](frm.y.x, frm.y.y, frm.y.z)
+
+            var wm = gn
+            if is_rough_coat:
+                var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, gn))
+                var wm_l = sample_ggx_vndf(wo_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
+                wm = tangent * wm_l.x + bitangent * wm_l.y + gn * wm_l.z
+                var wmlen = dot(wm, wm)
+                if wmlen > Float32(0):
+                    wm = wm * (Float32(1) / sqrt(wmlen))
+            var cos_wm = dot(wo, wm)
+            var f_entry = fr_dielectric(cos_wm, ior)
+            var cos_o = dot(wo, gn)
+
+            # Coat's own glossy dielectric lobe NEE -- fired unconditionally
+            # for a rough coat (independent of the reflect/transmit coin
+            # flip below), matching shade_coated_diffuse's own rationale:
+            # gating on the coin flip would double-count the interface
+            # Fresnel term. Area lights skipped (LVC connect/merge already
+            # covers them, same scope as every other NEE block in this
+            # function).
+            if is_rough_coat and cos_o > Float32(0):
+                for dl_ic in range(Int(sd.distantLightCount)):
+                    var ls_dlc = _sample_distant_light_nee(sd.distantLights[dl_ic])
+                    var w_dlc = _nee_weight_coated_coat_lobe(ls_dlc, ior, coat_alpha, gn, wo)
+                    total += _bdpt_nee_contribute(beta, w_dlc, ls_dlc, hit, gn, cur_med_idx, sd, scratch)
+                for pl_ic in range(Int(sd.pointLightCount)):
+                    var ls_plc = _sample_point_light_nee(sd.pointLights[pl_ic], hit.to_simd())
+                    var w_plc = _nee_weight_coated_coat_lobe(ls_plc, ior, coat_alpha, gn, wo)
+                    total += _bdpt_nee_contribute(beta, w_plc, ls_plc, hit, gn, cur_med_idx, sd, scratch)
+                for sph_ic in range(Int(sd.sphereCount)):
+                    var ls_sphc = _sample_sphere_light_nee(sd.spheres[sph_ic], Int(sd.sphereCount), hit.to_simd(), pcg)
+                    var w_sphc = _nee_weight_coated_coat_lobe(ls_sphc, ior, coat_alpha, gn, wo)
+                    total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn, cur_med_idx, sd, scratch)
+                for inf_ic in range(Int(sd.infiniteLightCount)):
+                    var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
+                    var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo)
+                    total += _bdpt_nee_contribute(beta, w_infc, ls_infc, hit, gn, cur_med_idx, sd, scratch)
+
+            if pcg.next_float() < f_entry:
+                # Glossy reflection off the coat (rough => GGX lobe, smooth => mirror).
+                var refl = wm * (Float32(2) * cos_wm) - wo
+                var rlen = dot(refl, refl)
+                if rlen > Float32(0):
+                    refl = refl * (Float32(1) / sqrt(rlen))
+                if dot(refl, gn) <= Float32(0):
+                    break  # reflected below the surface -- discard, like shading.mojo
+                rd = vec3f(refl)
+                ro = hit + rd*Float32(0.0002)
+                if is_rough_coat:
+                    var d_sampled = ggx_D(dot(gn, wm), coat_alpha)
+                    last_bsdf_pdf = ggx_vndf_pdf(cos_o, cos_wm, d_sampled, coat_alpha)
+                    var v = _null_vertex()
+                    v.pos = hit
+                    v.normal = vec3f(gn)
+                    v.beta = beta
+                    v.alb = eff_alb
+                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+                    v.wo = vec3f(wo)
+                    v.pdf_fwd = Float32(1)
+                    v.med_idx = cur_med_idx
+                    v.wavelengths = wavelengths
+                    v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+                    if n_verts == 0: first_alb = eff_alb
+                    n_verts += 1
+                else:
+                    last_bsdf_pdf = Float32(-1)  # smooth mirror coat: delta, no MIS at destination
+                dvcm_carry = Float32(0)  # out of MIS scope, same reset convention as volume scatter
+                continue
+
+            # Transmitted into the coat: random-walk the base/coat-underside layers.
+            var walk_beta = RGB(Float32(1))
+            var exited = False
+            var exit_dir = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+            comptime MAX_COAT_DEPTH = 10
+            for depth in range(MAX_COAT_DEPTH):
+                if depth > 3:
+                    var beta_max = max(walk_beta.r, max(walk_beta.g, walk_beta.b))
+                    if beta_max < Float32(0.25):
+                        var q_rr = max(Float32(0), Float32(1) - beta_max)
+                        if pcg.next_float() < q_rr:
+                            break
+                        walk_beta = walk_beta * (Float32(1) / (Float32(1) - q_rr))
+
+                for dl_i in range(Int(sd.distantLightCount)):
+                    var ls_dl = _sample_distant_light_nee(sd.distantLights[dl_i])
+                    var w_dl = _nee_weight_coated_diffuse_base(ls_dl, eff_alb, ior, gn)
+                    total += _bdpt_nee_contribute(beta * walk_beta, w_dl, ls_dl, hit, gn, cur_med_idx, sd, scratch)
+                for pl_i in range(Int(sd.pointLightCount)):
+                    var ls_pl = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
+                    var w_pl = _nee_weight_coated_diffuse_base(ls_pl, eff_alb, ior, gn)
+                    total += _bdpt_nee_contribute(beta * walk_beta, w_pl, ls_pl, hit, gn, cur_med_idx, sd, scratch)
+                for sph_i in range(Int(sd.sphereCount)):
+                    var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
+                    var w_sph = _nee_weight_coated_diffuse_base(ls_sph, eff_alb, ior, gn)
+                    total += _bdpt_nee_contribute(beta * walk_beta, w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch)
+                for inf_i in range(Int(sd.infiniteLightCount)):
+                    var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+                    var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
+                    total += _bdpt_nee_contribute(beta * walk_beta, w_inf, ls_inf, hit, gn, cur_med_idx, sd, scratch)
+
+                var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
+                var w_up = _w_up_sample[0]
+                walk_beta *= eff_alb
+
+                var wm_e = gn
+                if is_rough_coat:
+                    var wup_l = Vec3f(dot(w_up, tangent), dot(w_up, bitangent), dot(w_up, gn))
+                    var wm_e_l = sample_ggx_vndf(wup_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
+                    wm_e = tangent * wm_e_l.x + bitangent * wm_e_l.y + gn * wm_e_l.z
+                    var wmelen = dot(wm_e, wm_e)
+                    if wmelen > Float32(0):
+                        wm_e = wm_e * (Float32(1) / sqrt(wmelen))
+                var cos_up = dot(w_up, wm_e)
+                var f_exit = fr_dielectric(cos_up, inv_ior)
+                if pcg.next_float() < (Float32(1) - f_exit):
+                    var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]), Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), ior)
+                    if rr[0]:
+                        var wt = rr[1]
+                        exit_dir = SIMD[DType.float32, 3](wt.x, wt.y, wt.z)
+                        var elen = dot(exit_dir, exit_dir)
+                        if elen > Float32(0):
+                            exit_dir = exit_dir * (Float32(1) / sqrt(elen))
+                        if dot(exit_dir, gn) > Float32(0):
+                            exited = True
+                            break
+
+            if not exited:
+                break  # walk absorbed -- terminate this camera path, like shading.mojo
+
+            rd = vec3f(exit_dir)
+            ro = hit + rd*Float32(0.0002)
+            last_bsdf_pdf = Float32(0)  # NEE-only: exit ray's true pdf is intractable
+            beta *= walk_beta
+            var v = _null_vertex()
+            v.pos = hit
+            v.normal = vec3f(gn)
+            v.beta = beta
+            v.alb = eff_alb
+            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+            v.wo = vec3f(wo)
+            v.pdf_fwd = Float32(1)
+            v.med_idx = cur_med_idx
+            v.wavelengths = wavelengths
+            v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+            if n_verts == 0: first_alb = eff_alb
+            n_verts += 1
+            dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c: SIMD[DType.float32, 3]
@@ -1547,7 +1728,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
@@ -1597,6 +1778,134 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             dvcm_carry = Float32(1) / bsdf_dir_pdf_w if bsdf_dir_pdf_w > Float32(1e-8) else Float32(0)
             dvc_carry = dvc_new
             dvm_carry = dvm_new
+
+        elif mat.type == MatKind.coated_diffuse:
+            # VCM light-side coateddiffuse (task #158) -- same sampling
+            # geometry as the camera-side branch above (coat reflect vs
+            # transmit-into-coat recycling walk), but WITHOUT any NEE: light
+            # subpaths in this LVC architecture never do their own NEE (see
+            # every other light-side material branch in this function --
+            # only camera vertices call _bdpt_nee_contribute), so only the
+            # walk's continuation direction + flux attenuation matter here.
+            # Stored vertices use mat_kind=4, same unweighted scope as the
+            # camera side.
+            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+            var cos_fix = abs(dot(-ray_dir, gn))
+            if cos_fix > Float32(1e-6):
+                dvcm_carry /= cos_fix
+                dvc_carry /= cos_fix
+                dvm_carry /= cos_fix
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+
+            var ior = mat.emission.r
+            var inv_ior = Float32(1) / ior
+            var coat_alpha = max(mat.roughU, mat.roughV)
+            var is_rough_coat = coat_alpha > Float32(0.001)
+            var wo = -ray_dir
+            var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
+            var tangent = SIMD[DType.float32, 3](frm.x.x, frm.x.y, frm.x.z)
+            var bitangent = SIMD[DType.float32, 3](frm.y.x, frm.y.y, frm.y.z)
+
+            var wm = gn
+            if is_rough_coat:
+                var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, gn))
+                var wm_l = sample_ggx_vndf(wo_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
+                wm = tangent * wm_l.x + bitangent * wm_l.y + gn * wm_l.z
+                var wmlen = dot(wm, wm)
+                if wmlen > Float32(0):
+                    wm = wm * (Float32(1) / sqrt(wmlen))
+            var cos_wm = dot(wo, wm)
+            var f_entry = fr_dielectric(cos_wm, ior)
+
+            if pcg.next_float() < f_entry:
+                var refl = wm * (Float32(2) * cos_wm) - wo
+                var rlen = dot(refl, refl)
+                if rlen > Float32(0):
+                    refl = refl * (Float32(1) / sqrt(rlen))
+                if dot(refl, gn) <= Float32(0):
+                    break
+                rd = vec3f(refl)
+                ro = hit + rd*Float32(0.0002)
+                if is_rough_coat:
+                    var v = _null_vertex()
+                    v.pos = hit
+                    v.normal = vec3f(gn)
+                    v.beta = flux
+                    v.alb = eff_alb
+                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+                    v.wo = vec3f(wo)
+                    v.pdf_fwd = Float32(1)
+                    v.med_idx = cur_med_idx
+                    v.wavelengths = wavelengths
+                    v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+                    n_verts += 1
+                    _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                dvcm_carry = Float32(0)
+                continue
+
+            var walk_flux = RGB(Float32(1))
+            var exited = False
+            var exit_dir = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+            comptime MAX_COAT_DEPTH = 10
+            for depth in range(MAX_COAT_DEPTH):
+                if depth > 3:
+                    var beta_max = max(walk_flux.r, max(walk_flux.g, walk_flux.b))
+                    if beta_max < Float32(0.25):
+                        var q_rr = max(Float32(0), Float32(1) - beta_max)
+                        if pcg.next_float() < q_rr:
+                            break
+                        walk_flux = walk_flux * (Float32(1) / (Float32(1) - q_rr))
+
+                var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
+                var w_up = _w_up_sample[0]
+                walk_flux *= eff_alb
+
+                var wm_e = gn
+                if is_rough_coat:
+                    var wup_l = Vec3f(dot(w_up, tangent), dot(w_up, bitangent), dot(w_up, gn))
+                    var wm_e_l = sample_ggx_vndf(wup_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
+                    wm_e = tangent * wm_e_l.x + bitangent * wm_e_l.y + gn * wm_e_l.z
+                    var wmelen = dot(wm_e, wm_e)
+                    if wmelen > Float32(0):
+                        wm_e = wm_e * (Float32(1) / sqrt(wmelen))
+                var cos_up = dot(w_up, wm_e)
+                var f_exit = fr_dielectric(cos_up, inv_ior)
+                if pcg.next_float() < (Float32(1) - f_exit):
+                    var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]), Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), ior)
+                    if rr[0]:
+                        var wt = rr[1]
+                        exit_dir = SIMD[DType.float32, 3](wt.x, wt.y, wt.z)
+                        var elen = dot(exit_dir, exit_dir)
+                        if elen > Float32(0):
+                            exit_dir = exit_dir * (Float32(1) / sqrt(elen))
+                        if dot(exit_dir, gn) > Float32(0):
+                            exited = True
+                            break
+
+            if not exited:
+                break
+
+            rd = vec3f(exit_dir)
+            ro = hit + rd*Float32(0.0002)
+            flux *= walk_flux
+            var v = _null_vertex()
+            v.pos = hit
+            v.normal = vec3f(gn)
+            v.beta = flux
+            v.alb = eff_alb
+            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+            v.wo = vec3f(wo)
+            v.pdf_fwd = Float32(1)
+            v.med_idx = cur_med_idx
+            v.wavelengths = wavelengths
+            v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+            n_verts += 1
+            _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+            dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c: SIMD[DType.float32, 3]
