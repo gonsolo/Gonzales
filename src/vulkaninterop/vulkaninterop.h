@@ -58,6 +58,67 @@ int vulkaninterop_round_trip(void* interop, void* cuda_stream);
 // Destroys an interop context built by vulkaninterop_create.
 void vulkaninterop_destroy(void* interop);
 
+// ---------------------------------------------------------------------------
+// Stage 2: real VK_KHR_ray_query tracing through the same GPU-side interop
+// mechanism proven above -- replaces interop_double.comp's trivial "double
+// every element" shader with intersect_batch.comp (the same ray-query
+// compute shader vulkanrt.cpp's vulkanrt_trace_rays uses), reusing the SAME
+// external-memory/semaphore handoff so a full render's per-bounce
+// intersection can run with zero CPU synchronization, unlike
+// --vulkan-rt-shade's vulkanrt_trace_rays (which syncs the whole GPU and
+// copies through host memory every call -- see project_vulkan_rt_backend
+// memory for the ~94x-slower measurement that motivated this).
+// ---------------------------------------------------------------------------
+
+// Mirrors gonzales/geometry.mojo's TriangleMesh_C field-for-field (see
+// vulkanrt.h's VulkanRtMesh for the full explanation -- redefined here
+// rather than shared across bridge libraries, matching this codebase's
+// existing per-bridge independence convention).
+typedef struct {
+    const float* points;
+    const int64_t* faceIndices;
+    const int64_t* vertexIndices;
+    const float* uvs;
+    const float* normals;
+} VulkanInteropMesh;
+
+// Builds an interop-AND-ray-query-capable Vulkan device, a real BLAS-per-
+// mesh + TLAS scene (same construction as vulkanrt_build_scene), and two
+// CUDA-importable buffers sized for up to `max_rays` rays/results at once:
+// a rays buffer (max_rays * 8 floats, same (ox,oy,oz,tmin,dx,dy,dz,tmax)
+// layout vulkanrt_trace_rays takes) and a results buffer (max_rays * 32
+// bytes, matching intersect_batch.comp's Result struct: float hitT,u,v,pad;
+// int32 hitMesh,hitTriangle; uint32 hitFlag,pad). Returns NULL on failure.
+void* vulkaninterop_rt_create_scene(
+    const VulkanInteropMesh* meshes,
+    int64_t mesh_count,
+    const int64_t* point_counts,
+    const int64_t* vertex_index_counts,
+    int64_t max_rays);
+
+// CUDA device pointer for the shared rays buffer -- a Mojo kernel writes
+// ray data directly into this (no host copy) before calling
+// vulkaninterop_rt_trace.
+void* vulkaninterop_rt_get_rays_ptr(void* scene);
+
+// CUDA device pointer for the shared results buffer -- a Mojo kernel reads
+// hit results directly from this (no host copy) after
+// vulkaninterop_rt_trace's GPU-side handoff completes (ordering is
+// guaranteed by enqueuing that read on the same cuda_stream, same as
+// vulkaninterop_round_trip -- no ctx.synchronize() needed).
+void* vulkaninterop_rt_get_results_ptr(void* scene);
+
+// Enqueues one GPU-side ray-query dispatch on `cuda_stream`, tracing the
+// first `ray_count` rays (<= max_rays) from the rays buffer into the
+// results buffer -- same async CUDA-signal -> Vulkan-dispatch-wait ->
+// CUDA-wait handoff as vulkaninterop_round_trip, just running
+// intersect_batch.comp instead of interop_double.comp. Returns 1 on
+// success, 0 on failure. Does not block on GPU completion.
+int vulkaninterop_rt_trace(void* scene, int32_t ray_count, void* cuda_stream);
+
+// Destroys a scene built by vulkaninterop_rt_create_scene.
+void vulkaninterop_rt_destroy_scene(void* scene);
+
 #ifdef __cplusplus
 }
 #endif

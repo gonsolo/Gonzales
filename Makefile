@@ -159,7 +159,7 @@ VULKANINTEROP_INC = src/vulkaninterop
 VULKANINTEROP_GEN = src/vulkaninterop/generated
 VULKANINTEROP_LIB = $(BUILD_DIR)/libvulkaninterop.so
 
-$(VULKANINTEROP_LIB): $(VULKANINTEROP_SRC) $(VULKANINTEROP_INC)/vulkaninterop.h $(VULKANINTEROP_GEN)/interop_double_comp_spv.h
+$(VULKANINTEROP_LIB): $(VULKANINTEROP_SRC) $(VULKANINTEROP_INC)/vulkaninterop.h $(VULKANINTEROP_GEN)/interop_double_comp_spv.h $(VULKANINTEROP_GEN)/intersect_batch_comp_spv.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) -I$(VULKANINTEROP_GEN) -I$(CUDA_HOME)/include \
 		$(VULKANINTEROP_SRC) -lvulkan -L$(CUDA_HOME)/lib64 -lcudart -o $(VULKANINTEROP_LIB)

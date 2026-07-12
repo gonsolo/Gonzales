@@ -2,6 +2,7 @@ from std.ffi import external_call
 from std.gpu import block_idx, thread_idx, block_dim
 from std.gpu.host import DeviceContext, DeviceBuffer
 from std.gpu.host._nvidia_cuda import CUDA, CUstream
+from .geometry import TriangleMesh_C
 
 # Task #163 stage 1: Mojo-side FFI wrapper for the CUDA/Vulkan GPU-side
 # interop bridge (src/vulkaninterop/vulkaninterop.cpp). Proves the whole
@@ -48,3 +49,75 @@ def vulkaninterop_fill_kernel_test(data: UnsafePointer[Float32, MutAnyOrigin], n
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid < Int(n):
         data[tid] = base + Float32(tid)
+
+# ---------------------------------------------------------------------------
+# Stage 2: real VK_KHR_ray_query tracing through the same interop mechanism.
+# ---------------------------------------------------------------------------
+
+comptime VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin]
+
+# Builds an interop-AND-ray-query-capable scene from gonzales's own
+# TriangleMesh_C data (same field-for-field-mirror trick as vulkanrt.mojo's
+# vulkanrt_build_scene -- VulkanInteropMesh in vulkaninterop.h matches
+# TriangleMesh_C's layout exactly, no repacking needed) -- one real BLAS
+# per mesh + one TLAS, plus two CUDA-importable buffers sized for up to
+# `max_rays` rays/results at once. Returns a null handle on failure.
+def vulkaninterop_rt_create_scene(
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    mesh_count: Int64,
+    point_counts: UnsafePointer[Int64, MutAnyOrigin],
+    vertex_index_counts: UnsafePointer[Int64, MutAnyOrigin],
+    max_rays: Int64,
+) -> VulkanInteropRtSceneHandle:
+    return external_call["vulkaninterop_rt_create_scene", VulkanInteropRtSceneHandle,
+        UnsafePointer[TriangleMesh_C, MutAnyOrigin], Int64,
+        UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin], Int64](
+        meshes, mesh_count, point_counts, vertex_index_counts, max_rays)
+
+# CUDA device pointer for the shared rays buffer (max_rays * 8 floats, same
+# (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes). Wrap with
+# DeviceBuffer[DType.float32](ctx, ptr, max_rays * 8, owning=False) to
+# write ray data directly from a Mojo kernel -- no host round trip.
+def vulkaninterop_rt_get_rays_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Float32, MutAnyOrigin]:
+    return external_call["vulkaninterop_rt_get_rays_ptr", UnsafePointer[Float32, MutAnyOrigin],
+        VulkanInteropRtSceneHandle](scene)
+
+# CUDA device pointer for the shared results buffer (max_rays * 32 bytes,
+# matching intersect_batch.comp's Result struct: float hitT,u,v,pad; int32
+# hitMesh,hitTriangle; uint32 hitFlag,pad -- 8 x 4-byte fields). Wrap with
+# DeviceBuffer[DType.float32](ctx, ptr, max_rays * 8, owning=False) and
+# bitcast to read hitMesh/hitTriangle/hitFlag as Int32/UInt32 (same
+# raw-buffer-bitcast convention gpu.mojo already uses throughout).
+def vulkaninterop_rt_get_results_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Float32, MutAnyOrigin]:
+    return external_call["vulkaninterop_rt_get_results_ptr", UnsafePointer[Float32, MutAnyOrigin],
+        VulkanInteropRtSceneHandle](scene)
+
+# Enqueues one GPU-side ray-query dispatch on `cuda_stream`, tracing the
+# first `ray_count` rays (<= max_rays) from the rays buffer into the
+# results buffer. Returns 1 on success, 0 on failure. Does not block on GPU
+# completion -- see vulkaninterop.h.
+def vulkaninterop_rt_trace(scene: VulkanInteropRtSceneHandle, ray_count: Int32, cuda_stream: CUstream) -> Int32:
+    return external_call["vulkaninterop_rt_trace", Int32,
+        VulkanInteropRtSceneHandle, Int32, CUstream](scene, ray_count, cuda_stream)
+
+def vulkaninterop_rt_destroy_scene(scene: VulkanInteropRtSceneHandle):
+    external_call["vulkaninterop_rt_destroy_scene", NoneType, VulkanInteropRtSceneHandle](scene)
+
+# Minimal GPU kernel used only by Tests/unit/test_vulkaninterop_rt.mojo to
+# write 3 known test rays directly into the interop rays buffer (same
+# reasoning as vulkaninterop_fill_kernel_test for living in the package
+# rather than the test file).
+def vulkaninterop_rt_write_test_rays_kernel(rays: UnsafePointer[Float32, MutAnyOrigin]):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i == 0:
+        # Hits mesh 0's triangle at (0.25, 0.25).
+        rays[0] = Float32(0.25); rays[1] = Float32(0.25); rays[2] = Float32(-1.0); rays[3] = Float32(0.001)
+        rays[4] = Float32(0.0);  rays[5] = Float32(0.0);  rays[6] = Float32(1.0);  rays[7] = Float32(10.0)
+    elif i == 1:
+        # Hits mesh 1's triangle at (5.25, 0.25).
+        rays[8] = Float32(5.25); rays[9] = Float32(0.25); rays[10] = Float32(-1.0); rays[11] = Float32(0.001)
+        rays[12] = Float32(0.0); rays[13] = Float32(0.0);  rays[14] = Float32(1.0); rays[15] = Float32(10.0)
+    elif i == 2:
+        # Misses both.
+        rays[16] = Float32(100.0); rays[17] = Float32(100.0); rays[18] = Float32(-1.0); rays[19] = Float32(0.001)
+        rays[20] = Float32(0.0);   rays[21] = Float32(0.0);   rays[22] = Float32(1.0);  rays[23] = Float32(10.0)

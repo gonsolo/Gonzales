@@ -1,0 +1,83 @@
+#version 460
+#extension GL_EXT_ray_query : require
+
+// Task #162 step 3: trace many rays in one dispatch (vulkanrt_trace_rays),
+// instead of step 2's one-ray-per-dispatch vulkanrt_trace_ray -- one queue
+// submit + wait per ray is far too slow to ever back a real renderer.
+// Every invocation independently traces its own ray against the same TLAS
+// used by trace_ray.comp/smoke.comp; no cross-invocation communication.
+
+layout(local_size_x = 64) in;
+
+struct Ray {
+    vec4 originAndTMin;  // xyz = origin, w = tMin
+    vec4 dirAndTMax;     // xyz = direction, w = tMax
+};
+
+struct Result {
+    float hitT;
+    float u;
+    float v;
+    float _pad0;
+    int hitMesh;
+    int hitTriangle;
+    uint hitFlag;
+    uint _pad1;
+};
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, std430) readonly buffer RaysBuffer {
+    Ray rays[];
+};
+layout(set = 0, binding = 2, std430) writeonly buffer ResultsBuffer {
+    Result results[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint rayCount;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.rayCount) return;
+
+    vec3 origin = rays[i].originAndTMin.xyz;
+    float tMin = rays[i].originAndTMin.w;
+    vec3 direction = rays[i].dirAndTMax.xyz;
+    float tMax = rays[i].dirAndTMax.w;
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                           origin, tMin, direction, tMax);
+
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) ==
+            gl_RayQueryCandidateIntersectionTriangleEXT) {
+            rayQueryConfirmIntersectionEXT(rq);
+        }
+    }
+
+    Result r;
+    if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+        gl_RayQueryCommittedIntersectionTriangleEXT) {
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        r.hitT = rayQueryGetIntersectionTEXT(rq, true);
+        r.u = bary.x;
+        r.v = bary.y;
+        r._pad0 = 0.0;
+        r.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        r.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        r.hitFlag = 1u;
+        r._pad1 = 0u;
+    } else {
+        r.hitT = -1.0;
+        r.u = 0.0;
+        r.v = 0.0;
+        r._pad0 = 0.0;
+        r.hitMesh = -1;
+        r.hitTriangle = -1;
+        r.hitFlag = 0u;
+        r._pad1 = 0u;
+    }
+    results[i] = r;
+}

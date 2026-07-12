@@ -19,5 +19,6 @@ compile_shader() {
 }
 
 compile_shader "$SCRIPT_DIR/interop_double.comp" "interop_double_comp_spv"
+compile_shader "$SCRIPT_DIR/intersect_batch.comp" "intersect_batch_comp_spv"
 
 echo "Done. Generated headers in $OUT_DIR/"
