@@ -627,6 +627,54 @@ def _bdpt_connect_to_cache(
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor)
     return RGB(sum[0], sum[1], sum[2])
 
+def _bdpt_connect_to_cache_deferred(
+    cv: BDPTVertex,
+    sd: SceneDescriptor2_C,
+    lvc: UnsafePointer[BDPTVertex, MutAnyOrigin],
+    lp_idx: Int,
+    path_len: Int,
+    mis_vm_weight_factor: Float32,
+    shadow_rays: UnsafePointer[Float32, MutAnyOrigin],
+    shadow_pending: UnsafePointer[RGB, MutAnyOrigin],
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
+    shadow_seg_med: UnsafePointer[Int32, MutAnyOrigin],
+):
+    """Task #163 stage 5: Vulkan-RT-batched counterpart to
+    _bdpt_connect_to_cache -- instead of resolving each connection's shadow
+    ray inline via software BVH (_visible_transmittance), writes the ray +
+    _connect_unweighted's unweighted contribution into `lp_idx`'s own
+    dedicated _BDPT_MAX_VERTS-sized slice of the shadow-ray queue buffers
+    (same per-path-slice indexing convention as the LVC itself, see
+    _bdpt_store_lvc_vertex's docstring), for a later batched Vulkan RT
+    dispatch + resolve pass to fill in. ALWAYS writes exactly
+    _BDPT_MAX_VERTS slots, marking unused/invalid ones so stale data from a
+    previous bounce or sample never leaks through a reused buffer."""
+    var base = lp_idx * _BDPT_MAX_VERTS
+    for local in range(_BDPT_MAX_VERTS):
+        if local >= path_len:
+            shadow_valid[base + local] = Int8(0)
+            continue
+        var lv = lvc[base + local]
+        var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor)
+        if not valid:
+            shadow_valid[base + local] = Int8(0)
+            continue
+        var d3 = lv.pos - cv.pos
+        var dist = sqrt(d3.length_sq())
+        var dir = d3.to_simd() / dist
+        var idx8 = (base + local) * 8
+        shadow_rays[idx8 + 0] = cv.pos.x
+        shadow_rays[idx8 + 1] = cv.pos.y
+        shadow_rays[idx8 + 2] = cv.pos.z
+        shadow_rays[idx8 + 3] = Float32(1e-4)
+        shadow_rays[idx8 + 4] = dir[0]
+        shadow_rays[idx8 + 5] = dir[1]
+        shadow_rays[idx8 + 6] = dir[2]
+        shadow_rays[idx8 + 7] = dist * Float32(0.9995)
+        shadow_pending[base + local] = RGB(contrib[0], contrib[1], contrib[2])
+        shadow_seg_med[base + local] = cv.med_idx
+        shadow_valid[base + local] = Int8(1)
+
 # ── VCM vertex merging: spatial hash grid over the LVC ───────────────────────
 # Mirrors sppm.mojo's photon hash grid (_build_grid/_sppm_insert_photon/
 # _sppm_reset_grid_cell) exactly, but keyed on BDPTVertex.pos instead of
@@ -1830,6 +1878,18 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut dvm_carry: Float32,
     mut last_bsdf_pdf: Float32,
     wavelengths: SampledWavelengths,
+    # Task #163 stage 5: when set, the DIFFUSE branch's connect step queues
+    # its shadow rays into these buffers (one _BDPT_MAX_VERTS-sized slice
+    # per pixel, indexed like the LVC itself) instead of resolving them
+    # inline via software BVH -- see _bdpt_connect_to_cache_deferred's own
+    # docstring. Every OTHER material branch's connect (and every NEE/MNEE
+    # shadow ray anywhere) is UNCHANGED regardless of this flag -- a
+    # deliberately narrow first slice, not "all shadow rays on Vulkan RT".
+    defer_shadow_rays: Bool = False,
+    shadow_rays: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    shadow_pending: UnsafePointer[RGB, MutAnyOrigin] = UnsafePointer[RGB, MutAnyOrigin].unsafe_dangling(),
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin] = UnsafePointer[Int8, MutAnyOrigin].unsafe_dangling(),
+    shadow_seg_med: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
     `_bdpt_trace_camera_and_connect`'s main loop (bdpt.mojo:887-1684), the
@@ -2055,7 +2115,20 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             n_verts += 1
             if path_len > 0:
                 total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
-                total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                # Task #163 stage 5: the diffuse branch's connect shadow
+                # rays are the single highest-volume, cleanest shadow-ray
+                # call site in VCM (always exactly one ray per stored
+                # light-path vertex, present in every diffuse-heavy scene
+                # regardless of light types used) -- when defer_shadow_rays
+                # is set, queue them into the shadow-ray buffers instead of
+                # resolving inline, for a later batched Vulkan RT dispatch.
+                # Every other material branch's connect (and all NEE/MNEE
+                # shadow rays) stays on the unchanged, inline,
+                # software-BVH _bdpt_connect_to_cache path either way.
+                if defer_shadow_rays:
+                    _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med)
+                else:
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # NEE to distant/point/sphere/infinite lights, via the shared
             # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -4600,6 +4673,151 @@ def _connect(
 
     return contrib
 
+def _connect_unweighted(
+    cv: BDPTVertex,  # camera-subpath vertex
+    lv: BDPTVertex,  # light-subpath vertex (including light point itself)
+    sd: SceneDescriptor2_C,
+    mis_vm_weight_factor: Float32,
+) -> Tuple[SIMD[DType.float32, 3], Bool]:
+    """Task #163 stage 5: byte-for-byte copy of _connect's math (see that
+    function's own docstring for the MIS derivation, not repeated here),
+    with the visibility test (_visible_transmittance) REMOVED -- returns
+    (contrib_unweighted, valid) instead of the final Tr-weighted
+    contribution. `valid=False` means _connect's own early-exit conditions
+    (delta endpoint, coincident points, light facing away) already prove
+    the contribution is exactly zero regardless of visibility -- the
+    caller should NOT bother queuing a shadow ray for these. `valid=True`
+    means the caller must still resolve visibility (Tr) and multiply it
+    into contrib_unweighted -- this function intentionally does not do
+    that itself, so its result can be used to fill a batched Vulkan RT
+    shadow-ray queue instead of resolving inline per-thread. Used ONLY by
+    the wavefront-staged GPU path's deferred-connect kernels
+    (_bdpt_connect_diffuse_deferred_gpu et al.) when use_vk=True -- _connect
+    itself is UNCHANGED and still drives the CPU renderer, the
+    non-wavefront GPU renderer, and the wavefront GPU renderer's own
+    non-deferred (use_vk=False) path.
+
+    VCM Stage 2b/2d/153/hair (2026-07-10/11): real per-vertex MIS weighting
+    (Georgiev et al. 2012 / SmallVCM, see project_vcm_stage2_mis_derivation
+    memory) is applied when both endpoints have a genuine standalone pdf --
+    diffuse (mat_kind=0), light-source vertices (is_light=1, whose
+    cosine-weighted emission profile is mathematically the same shape as
+    diffuse), rough conductor/coated_conductor (mat_kind=1, GGX-VNDF pdf),
+    hair (mat_kind=2, Marschner 3-lobe pdf via _hair_eval_lobes -- the same
+    pdf machinery _nee_weight_hair already trusts for NEE MIS), and
+    measured (mat_kind=3, tabulated-BRDF pdf via a reconstructed local
+    frame). Only volume (isotropic phase, no surface normal) falls through
+    to `weight=1`, today's plain unweighted behavior; dielectric/
+    thin_dielectric are genuinely delta/specular and never even reach here
+    at all (never stored as LVC vertices, see this file's opening VCM
+    comment) -- both deliberately scoped boundaries, not silent
+    omissions."""
+    if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
+        return (SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0)), False)
+
+    var d3 = lv.pos - cv.pos
+    var dist2 = d3.length_sq()
+    if dist2 < Float32(1e-8):
+        return (SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0)), False)
+    var dist = sqrt(dist2)
+
+    var dir = d3.to_simd() / dist
+    var neg_dir = -dir
+
+    # Spectral connection eval (staged spectral rendering rollout, Stage 3 —
+    # see project_spectral_rendering memory): if the table is loaded and
+    # neither endpoint is hair (mat_kind=2, deliberately excluded — same as
+    # bxdf.mojo's spectral siblings; a hair-touching connection falls back to
+    # the plain RGB path below), evaluate BOTH vertices' BSDF/emission as a
+    # SpectralSample product at the LIGHT vertex's own stored wavelengths
+    # (a valid, unbiased hero-wavelength MC choice, applied consistently per
+    # connection — the camera subpath's own wavelength sample is discarded
+    # for this one connection's purposes, resolving the LVC's cross-
+    # wavelength mismatch since cache vertices come from many different
+    # light subpaths, each with its own independent wavelength draw), then
+    # convert the PRODUCT (not each factor separately) back to RGB — the
+    # whole point of spectral rendering's product-of-spectra accuracy.
+    # mat_kind=3 (measured) is ALSO routed to the plain-RGB fallback below,
+    # same as hair — _eval_vertex's own mat_kind=3 branch already does the
+    # full spectral eval internally (bxdf_eval_measured needs v.wavelengths
+    # regardless), so there's no separate _eval_vertex_spectral variant to
+    # maintain for it.
+    var is_hair_conn = cv.mat_kind == Int32(2) or cv.mat_kind == Int32(3) or (lv.is_light == Int32(0) and (lv.mat_kind == Int32(2) or lv.mat_kind == Int32(3)))
+    var f_combined: SIMD[DType.float32, 3]
+    if is_hair_conn or sd.spectral.res <= 0:
+        # BSDF at camera vertex (toward light)
+        var f_cam = _eval_vertex(cv, dir, sd)
+        # BSDF at light vertex (toward camera)
+        var f_lgt: SIMD[DType.float32, 3]
+        if lv.is_light == Int32(1):
+            # Light emission: f_lgt = Le (emission radiance, no cosine here).
+            # _geom_term already computes cos_l at the light surface, so don't multiply again.
+            var ln = lv.normal.to_simd()
+            var cos_l = dot(neg_dir, ln)  # emission normal vs direction toward cv
+            if cos_l <= Float32(0):
+                return (SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0)), False)
+            f_lgt = SIMD[DType.float32, 3](lv.alb.r, lv.alb.g, lv.alb.b)
+        else:
+            f_lgt = _eval_vertex(lv, neg_dir, sd)
+        f_combined = f_cam * f_lgt
+    else:
+        var wl = lv.wavelengths
+        var f_cam_spec = _eval_vertex_spectral(cv, dir, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+        var f_lgt_spec: SpectralSample
+        if lv.is_light == Int32(1):
+            var ln = lv.normal.to_simd()
+            var cos_l = dot(neg_dir, ln)
+            if cos_l <= Float32(0):
+                return (SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0)), False)
+            f_lgt_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
+        else:
+            f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+        var product_spec = f_cam_spec * f_lgt_spec
+        var (pr, pg, pb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, product_spec, wl)
+        f_combined = SIMD[DType.float32, 3](pr, pg, pb)
+
+    # Geometry term G = |cos_cv| × |cos_lv| / dist²
+    var G = _geom_term(cv, lv)
+
+    var beta = cv.beta * lv.beta
+    var contrib = f_combined * SIMD[DType.float32, 3](G, G, G)
+    contrib[0] *= beta.r
+    contrib[1] *= beta.g
+    contrib[2] *= beta.b
+
+    # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
+    # connections (see this function's docstring + _bdpt_vertex_pdfs'/
+    # project_vcm_stage2_mis_derivation memory for the full derivation and
+    # its "not independently verified" caveats). cos_cv/cos_lv reuse the
+    # same geometry _geom_term computed internally, recomputed here since
+    # that helper doesn't expose them.
+    if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
+        var cos_cv = abs(dot(dir, cv.normal.to_simd()))
+        var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
+        var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, dir, sd)
+        # Light-source vertex: forward and reverse pdf are the SAME
+        # cosine-weighted-emission formula (no real "wo" to distinguish a
+        # direction from, unlike a genuine BSDF bounce) -- REASONED, not
+        # independently verified against a reference light-source-specific
+        # connect path.
+        var light_bsdf_dir_pdf_w: Float32
+        var light_bsdf_rev_pdf_w: Float32
+        if lv.is_light == Int32(1):
+            light_bsdf_dir_pdf_w = cos_lv / PI
+            light_bsdf_rev_pdf_w = cos_lv / PI
+        else:
+            var (ldp, lrp) = _bdpt_vertex_pdfs(lv, neg_dir, sd)
+            light_bsdf_dir_pdf_w = ldp
+            light_bsdf_rev_pdf_w = lrp
+        var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
+        var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
+        var w_light = camera_bsdf_dir_pdf_a * (mis_vm_weight_factor + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
+        var w_camera = light_bsdf_dir_pdf_a * (mis_vm_weight_factor + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
+        var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
+        contrib *= mis_weight
+
+    return (contrib, True)
+
 # ── Main BDPT render ──────────────────────────────────────────────────────────
 
 def _bdpt_render_core(
@@ -5357,6 +5575,15 @@ def _bdpt_camera_path_bounce_gpu(
     measuredBrdfCount: Int64 = Int64(0),
     gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Task #163 stage 5: see _bdpt_camera_path_bounce's own matching
+    # params -- forwarded through unchanged, except Bool -> Int8 (raw kernel
+    # launch args must be DevicePassable; Bool doesn't conform, unlike a
+    # Bool that's merely a regular-function parameter one level down).
+    defer_shadow_rays: Int8 = Int8(0),
+    shadow_rays: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    shadow_pending: UnsafePointer[RGB, MutAnyOrigin] = UnsafePointer[RGB, MutAnyOrigin].unsafe_dangling(),
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin] = UnsafePointer[Int8, MutAnyOrigin].unsafe_dangling(),
+    shadow_seg_med: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
     still on the existing software-BVH `results + pix` scratch slot -- see
@@ -5403,6 +5630,7 @@ def _bdpt_camera_path_bounce_gpu(
         mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
         dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, wavelengths,
+        defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
     states[pix].active = Int8(1) if cont else Int8(0)
     states[pix].ro = ro
@@ -5564,6 +5792,84 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
         mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
         n_meshes,
         n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
+
+def vulkaninterop_pack_shadow_rays_kernel(
+    # Copies ONE local slot (in [0, _BDPT_MAX_VERTS)) out of the strided
+    # per-pixel shadow_rays queue into a CONTIGUOUS n_pix buffer the interop
+    # RT scene can trace -- the scene's own ray capacity is only n_pix (it's
+    # reused, unresized, from the primary-ray traversal above), so all
+    # _BDPT_MAX_VERTS slots are traced in separate batches, see
+    # resolve_shadow_connect_gpu's docstring. Invalid slots get a
+    # zero-length degenerate ray (tMax=0) so the trace call never reads
+    # uninitialized memory -- resolve skips them via shadow_valid regardless.
+    shadow_rays: UnsafePointer[Float32, MutAnyOrigin],
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
+    out_rays: UnsafePointer[Float32, MutAnyOrigin],
+    local: Int,
+    n_pix: Int,
+):
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    var idx = pix * _BDPT_MAX_VERTS + local
+    var dst8 = pix * 8
+    if shadow_valid[idx] == Int8(0):
+        out_rays[dst8 + 0] = Float32(0)
+        out_rays[dst8 + 1] = Float32(0)
+        out_rays[dst8 + 2] = Float32(0)
+        out_rays[dst8 + 3] = Float32(0)
+        out_rays[dst8 + 4] = Float32(0)
+        out_rays[dst8 + 5] = Float32(0)
+        out_rays[dst8 + 6] = Float32(1)
+        out_rays[dst8 + 7] = Float32(0)
+        return
+    var src8 = idx * 8
+    out_rays[dst8 + 0] = shadow_rays[src8 + 0]
+    out_rays[dst8 + 1] = shadow_rays[src8 + 1]
+    out_rays[dst8 + 2] = shadow_rays[src8 + 2]
+    out_rays[dst8 + 3] = shadow_rays[src8 + 3]
+    out_rays[dst8 + 4] = shadow_rays[src8 + 4]
+    out_rays[dst8 + 5] = shadow_rays[src8 + 5]
+    out_rays[dst8 + 6] = shadow_rays[src8 + 6]
+    out_rays[dst8 + 7] = shadow_rays[src8 + 7]
+
+def vulkaninterop_rt_traverse_shadow_gpu(
+    ctx: DeviceContext,
+    shadow_rays_buf: DeviceBuffer[DType.uint8],
+    shadow_valid_buf: DeviceBuffer[DType.uint8],
+    shadow_inter_scratch_buf: DeviceBuffer[DType.uint8],
+    interop_scene: VulkanInteropRtSceneHandle,
+    interop_rays_buf: DeviceBuffer[DType.float32],
+    interop_results_buf: DeviceBuffer[DType.float32],
+    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
+    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
+    local: Int,
+    n_pix: Int,
+) raises:
+    comptime block_size = 256
+    var grid = ceildiv(n_pix, block_size)
+
+    ctx.enqueue_function[vulkaninterop_pack_shadow_rays_kernel](
+        shadow_rays_buf.unsafe_ptr().bitcast[Float32](),
+        shadow_valid_buf.unsafe_ptr().bitcast[Int8](),
+        interop_rays_buf.unsafe_ptr(),
+        local, n_pix,
+        grid_dim=grid, block_dim=block_size,
+    )
+
+    var cuda_stream = CUDA(ctx.stream())
+    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_pix), cuda_stream)
+
+    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+        interop_results_buf.unsafe_ptr(),
+        shadow_inter_scratch_buf.unsafe_ptr().bitcast[Intersection_C](),
+        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64](),
+        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
+        n_meshes,
+        n_pix,
         grid_dim=grid, block_dim=block_size,
     )
 
@@ -5839,6 +6145,171 @@ def vcm_render_gpu(
         ret = Int32(-1)
     return ret
 
+# ── Task #163 stage 5: Vulkan-RT-batched shadow ray resolution ──────────────
+# Resolves the diffuse-branch connect shadow rays queued by
+# _bdpt_connect_to_cache_deferred: after a batched Vulkan RT dispatch fills
+# shadow_inter (the SAME vulkaninterop_unpack_results_kernel used for
+# primary/light/camera rays, reused unchanged), this kernel turns each hit/
+# miss into a resolved Tr multiplied into shadow_pending. FAST PATH (no
+# medium, and either a miss or a hit on an opaque material): resolved
+# directly from the single closest-hit query, no further ray casts needed.
+# FALLBACK PATH (a medium is active on this segment, or the hit is on a
+# dielectric/thin_dielectric/interface material -- i.e. exactly the cases
+# _visible_transmittance's own multi-round loop exists for): calls
+# _visible_transmittance UNCHANGED, per-thread, software-BVH -- 100%
+# correct for every scene, just not batched for these rarer rays. Neither
+# of this task's two test scenes (cornell-box, dragon) has any dielectric
+# material or medium, so the fallback path is written for correctness but
+# not exercised by them -- see project_vulkan_rt_backend memory.
+
+def reset_shadow_valid_gpu(
+    # Task #163 stage 5: zeroes EVERY pixel's shadow_valid slots, every
+    # bounce, unconditionally -- including inactive-path and non-diffuse-
+    # branch pixels that _bdpt_connect_to_cache_deferred never touches this
+    # bounce. Without this, a slot left valid=1 by an earlier diffuse-branch
+    # bounce keeps getting re-resolved and re-summed into states[pix].total
+    # on every subsequent bounce for the rest of the render (once a path
+    # goes inactive, or takes a non-diffuse branch, nothing else would ever
+    # clear it) -- a real overcounting bug caught via a 128spp cornell-box
+    # A/B mean-radiance comparison against the software-BVH baseline (the
+    # gap grew from +11% at 16spp to +62% at 128spp, the signature of a
+    # per-bounce accumulating bug, not RNG-path noise). Gating this reset on
+    # `states[pix].active` (cheaper, one fewer full-n_pix kernel launch)
+    # does NOT work: a pixel that goes inactive DURING bounce i must still
+    # keep bounce i's freshly-deferred contribution summed once, but an
+    # active-gated reset can't tell "just went inactive this bounce" (keep)
+    # apart from "went inactive last bounce" (must now read as all-invalid)
+    # -- both read `active=0` by the time this would run. An unconditional
+    # per-bounce reset sidesteps that distinction entirely.
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
+    n_pix: Int,
+):
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    var base = pix * _BDPT_MAX_VERTS
+    for local in range(_BDPT_MAX_VERTS):
+        shadow_valid[base + local] = Int8(0)
+
+def resolve_shadow_connect_gpu(
+    # `shadow_inter` is a CONTIGUOUS n_pix buffer holding this dispatch's
+    # single local-slot's trace results (packed/traced/unpacked by
+    # vulkaninterop_rt_traverse_shadow_gpu, one local in
+    # [0, _BDPT_MAX_VERTS) at a time -- the interop RT scene's own ray
+    # capacity is only n_pix, not n_pix*_BDPT_MAX_VERTS, so all _BDPT_MAX_VERTS
+    # shadow slots per pixel are traced in _BDPT_MAX_VERTS separate batches
+    # instead of one, to avoid resizing the shared Vulkan scene). `scratch`
+    # is a SEPARATE n_pix-or-larger Intersection_C buffer for
+    # _visible_transmittance's own internal multi-round tracing in the
+    # fallback path -- must not alias `shadow_inter` (would corrupt the
+    # just-unpacked closest-hit result mid-read) or `shadow_pending`/
+    # `shadow_valid`/`shadow_seg_med`/`shadow_rays` (those stay strided by
+    # _BDPT_MAX_VERTS and are indexed via `local`, not `pix`, below).
+    shadow_inter: UnsafePointer[Intersection_C, MutAnyOrigin],
+    shadow_pending: UnsafePointer[RGB, MutAnyOrigin],
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
+    shadow_seg_med: UnsafePointer[Int32, MutAnyOrigin],
+    shadow_rays: UnsafePointer[Float32, MutAnyOrigin],
+    scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
+    local: Int,
+    n_pix: Int,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curveCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediumCount: Int64,
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    mediumIfaceCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
+):
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    var idx = pix * _BDPT_MAX_VERTS + local
+    if shadow_valid[idx] == Int8(0):
+        return
+    var sd = _mk_sd_full(
+        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
+        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
+        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
+        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
+    )
+
+    var inter = shadow_inter[pix]
+    var seg_med = shadow_seg_med[idx]
+    var idx8 = idx * 8
+    var org = Point3f(shadow_rays[idx8 + 0], shadow_rays[idx8 + 1], shadow_rays[idx8 + 2])
+    var dir = Vec3f(shadow_rays[idx8 + 4], shadow_rays[idx8 + 5], shadow_rays[idx8 + 6])
+    var dist = shadow_rays[idx8 + 7] / Float32(0.9995)
+
+    var needs_fallback = False
+    if inter.hit == Int8(0):
+        if seg_med >= Int32(0):
+            needs_fallback = True
+        # else: fully visible (Tr=1), pending already holds the correct
+        # unweighted contribution -- nothing to multiply.
+    else:
+        var mat = sd.materials[Int(inter.primId.materialIndex)]
+        if seg_med >= Int32(0) or mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric or mat.type == MatKind.interface:
+            needs_fallback = True
+        else:
+            # Opaque hit, no medium: fully occluded.
+            shadow_pending[idx] = RGB(Float32(0))
+
+    if needs_fallback:
+        var dst = org + dir * dist
+        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch)
+        var p = shadow_pending[idx]
+        shadow_pending[idx] = RGB(p.r * Tr[0], p.g * Tr[1], p.b * Tr[2])
+
+def sum_shadow_connect_gpu(
+    states: UnsafePointer[VCMCameraPathState_C, MutAnyOrigin],
+    shadow_pending: UnsafePointer[RGB, MutAnyOrigin],
+    shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
+    n_pix: Int,
+):
+    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if pix >= n_pix:
+        return
+    var base = pix * _BDPT_MAX_VERTS
+    var sum = RGB(Float32(0))
+    for local in range(_BDPT_MAX_VERTS):
+        if shadow_valid[base + local] != Int8(0):
+            sum += shadow_pending[base + local]
+    states[pix].total += sum
+
 def vcm_render_gpu_wavefront(
     handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
     psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
@@ -5923,6 +6394,16 @@ def vcm_render_gpu_wavefront(
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
             var light_states_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[VCMLightPathState_C]())
             var cam_states_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VCMCameraPathState_C]())
+            # Task #163 stage 5: diffuse-branch connect shadow-ray queue,
+            # strided _BDPT_MAX_VERTS slots per pixel -- see
+            # _bdpt_connect_to_cache_deferred/resolve_shadow_connect_gpu.
+            # Only allocated/used when use_vk (software-BVH _connect stays
+            # the only path otherwise); harmless tiny alloc either way.
+            var shadow_cap = n_pix * _BDPT_MAX_VERTS
+            var shadow_rays_buf    = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * 8 * size_of[Float32]())
+            var shadow_pending_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[RGB]())
+            var shadow_valid_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int8]())
+            var shadow_seg_med_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int32]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().bitcast[Float32]()
@@ -5955,6 +6436,10 @@ def vcm_render_gpu_wavefront(
             var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
             var light_states_ptr = light_states_buf.unsafe_ptr().bitcast[VCMLightPathState_C]()
             var cam_states_ptr   = cam_states_buf.unsafe_ptr().bitcast[VCMCameraPathState_C]()
+            var shadow_rays_ptr    = shadow_rays_buf.unsafe_ptr().bitcast[Float32]()
+            var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().bitcast[RGB]()
+            var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().bitcast[Int8]()
+            var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().bitcast[Int32]()
             var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
@@ -6110,6 +6595,9 @@ def vcm_render_gpu_wavefront(
                             spheres, Int(n_spheres),
                             cam_states_ptr, inter_cam_ptr, n_pix,
                             grid_dim=grid_pix, block_dim=block_size)
+                    if use_vk:
+                        handle[].ctx.enqueue_function[reset_shadow_valid_gpu](
+                            shadow_valid_ptr, n_pix, grid_dim=grid_pix, block_dim=block_size)
                     handle[].ctx.enqueue_function[_bdpt_camera_path_bounce_gpu](
                         cam_states_ptr, inter_cam_ptr, lvc_ptr, path_len_ptr,
                         merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
@@ -6123,7 +6611,42 @@ def vcm_render_gpu_wavefront(
                         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                         measured_brdfs, n_measured_brdfs,
                         gpu_textures, n_gpu_textures,
+                        Int8(1) if use_vk else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
                         grid_dim=grid_pix, block_dim=block_size)
+
+                    # Task #163 stage 5: resolve this bounce's diffuse-branch
+                    # connect shadow rays via the same interop RT scene,
+                    # _BDPT_MAX_VERTS slots at a time (see
+                    # vulkaninterop_rt_traverse_shadow_gpu's docstring for
+                    # why it can't be one batched dispatch), then fold the
+                    # resolved contributions into each pixel's running total
+                    # before the next bounce's primary intersect overwrites
+                    # inter_cam_buf/inter_light_buf (both reused as scratch
+                    # here -- neither is needed again until this si's next
+                    # bounce/next si's light pass respectively).
+                    if use_vk:
+                        for local in range(_BDPT_MAX_VERTS):
+                            vulkaninterop_rt_traverse_shadow_gpu(
+                                handle[].ctx, shadow_rays_buf, shadow_valid_buf, inter_cam_buf,
+                                interop_scene, interop_rays_buf.value(), interop_results_buf.value(),
+                                mesh_material_idx_buf.value(), mesh_al_idx_buf.value(),
+                                n_meshes_vk, local, n_pix)
+                            handle[].ctx.enqueue_function[resolve_shadow_connect_gpu](
+                                inter_cam_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
+                                inter_light_ptr, local, n_pix,
+                                bvh2Nodes, primIds, meshes, materials,
+                                areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                                mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                                blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                                distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                                pointLights, n_point_lights,
+                                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                                measured_brdfs, n_measured_brdfs,
+                                gpu_textures, n_gpu_textures,
+                                grid_dim=grid_pix, block_dim=block_size)
+                        handle[].ctx.enqueue_function[sum_shadow_connect_gpu](
+                            cam_states_ptr, shadow_pending_ptr, shadow_valid_ptr, n_pix,
+                            grid_dim=grid_pix, block_dim=block_size)
 
                 handle[].ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
                     cam_states_ptr, accum_ptr, albedo_accum_ptr, n_pix,
