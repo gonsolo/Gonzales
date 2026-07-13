@@ -141,6 +141,22 @@ struct GpuSceneHandle(Movable):
 def gpu_available() -> Bool:
     return has_accelerator()
 
+# Uploads count elements of T from a host array into a fresh device buffer
+# (>= 1 elem so a zero-count scene never creates a 0-byte device buffer,
+# which crashes on use/free). Shared by gpu_upload_scene's ~11 near-identical
+# "size, create buffer, memcpy if non-empty" upload sites below.
+def _gpu_upload_array[T: AnyType](
+    ctx: DeviceContext,
+    src: UnsafePointer[T, MutAnyOrigin],
+    count: Int,
+) raises -> DeviceBuffer[DType.uint8]:
+    var n_bytes = max(count, 1) * size_of[T]()
+    var buf = ctx.enqueue_create_buffer[DType.uint8](n_bytes)
+    if count > 0:
+        with buf.map_to_host() as host_buf:
+            memcpy(dest=host_buf.unsafe_ptr(), src=src.bitcast[UInt8](), count=count * size_of[T]())
+    return buf^
+
 def gpu_upload_scene(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     bvh2NodesCount: Int64,
@@ -241,22 +257,11 @@ def gpu_upload_scene(
             if total_scene_bytes > Int(free_bytes):
                 print("WARNING: Scene (" + String(scene_mb) + " MB) may exceed available GPU memory (" + String(free_mb) + " MB)!")
 
-            # Upload BVH nodes (copy only the real bytes; the buffer may be a
-            # 1-element placeholder when the scene has no geometry).
-            var bvh_buf = ctx.enqueue_create_buffer[DType.uint8](bvh_bytes)
-            if Int(bvh2NodesCount) > 0:
-                with bvh_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = bvh2Nodes.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(bvh2NodesCount) * size_of[BVH2Node]())
-
-            # Upload prim IDs
-            var prim_buf = ctx.enqueue_create_buffer[DType.uint8](prim_bytes)
-            if Int(primIdsCount) > 0:
-                with prim_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = primIds.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(primIdsCount) * size_of[PrimId_C]())
+            # Upload BVH nodes and prim IDs (copy only the real bytes; the
+            # buffer may be a 1-element placeholder when the scene has no
+            # geometry).
+            var bvh_buf = _gpu_upload_array[BVH2Node](ctx, bvh2Nodes, Int(bvh2NodesCount))
+            var prim_buf = _gpu_upload_array[PrimId_C](ctx, primIds, Int(primIdsCount))
 
             # Upload object-instancing data: one device buffer per BLAS (its
             # nodes + primids), then two small "array of device pointers"
@@ -301,13 +306,7 @@ def gpu_upload_scene(
             blas_nodes_ptrs_host.free(); blas_primids_ptrs_host.free()
 
             var n_instances_int = Int(instanceCount)
-            var inst_bytes = max(n_instances_int, 1) * size_of[Instance_C]()
-            var instances_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](inst_bytes)
-            if n_instances_int > 0:
-                with instances_gpu_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = instances.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=n_instances_int * size_of[Instance_C]())
+            var instances_gpu_buf = _gpu_upload_array[Instance_C](ctx, instances, n_instances_int)
 
             # Upload per-mesh vertex/index/uv data and build device-side mesh structs
             var points_bufs = List[DeviceBuffer[DType.uint8]]()
@@ -400,60 +399,24 @@ def gpu_upload_scene(
             mesh_structs_host.free()
 
             # Upload materials array (>= 1 elem to avoid a zero-size buffer)
-            var mat_bytes = max(Int(materialCount), 1) * size_of[Material_C]()
-            var mat_buf = ctx.enqueue_create_buffer[DType.uint8](mat_bytes)
-            if Int(materialCount) > 0:
-                with mat_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = materials.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=mat_bytes)
+            var mat_buf = _gpu_upload_array[Material_C](ctx, materials, Int(materialCount))
 
             ctx.synchronize()
 
             # Upload area lights
-            var al_bytes = max(Int(areaLightCount), 1) * size_of[AreaLight_C]()
-            var al_buf = ctx.enqueue_create_buffer[DType.uint8](al_bytes)
-            if Int(areaLightCount) > 0:
-                with al_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = areaLights.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(areaLightCount) * size_of[AreaLight_C]())
+            var al_buf = _gpu_upload_array[AreaLight_C](ctx, areaLights, Int(areaLightCount))
 
             # Upload spheres (analytical sphere primitives + sphere area lights)
-            var sphere_bytes = max(Int(sphereCount), 1) * size_of[Sphere_C]()
-            var sphere_buf = ctx.enqueue_create_buffer[DType.uint8](sphere_bytes)
-            if Int(sphereCount) > 0:
-                with sphere_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = spheres.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(sphereCount) * size_of[Sphere_C]())
+            var sphere_buf = _gpu_upload_array[Sphere_C](ctx, spheres, Int(sphereCount))
 
             # Upload curves (native hair/fur primitives — control points only, no tessellation)
-            var curve_bytes = max(Int(curveCount), 1) * size_of[Curve_C]()
-            var curve_buf = ctx.enqueue_create_buffer[DType.uint8](curve_bytes)
-            if Int(curveCount) > 0:
-                with curve_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = curves.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(curveCount) * size_of[Curve_C]())
+            var curve_buf = _gpu_upload_array[Curve_C](ctx, curves, Int(curveCount))
 
             # Upload distant (directional) lights
-            var dl_bytes = max(Int(distantLightCount), 1) * size_of[DistantLight_C]()
-            var dl_buf = ctx.enqueue_create_buffer[DType.uint8](dl_bytes)
-            if Int(distantLightCount) > 0:
-                with dl_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = distantLights.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(distantLightCount) * size_of[DistantLight_C]())
+            var dl_buf = _gpu_upload_array[DistantLight_C](ctx, distantLights, Int(distantLightCount))
 
             # Upload point lights
-            var pl_bytes = max(Int(pointLightCount), 1) * size_of[PointLight_C]()
-            var pl_buf = ctx.enqueue_create_buffer[DType.uint8](pl_bytes)
-            if Int(pointLightCount) > 0:
-                with pl_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = pointLights.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(pointLightCount) * size_of[PointLight_C]())
+            var pl_buf = _gpu_upload_array[PointLight_C](ctx, pointLights, Int(pointLightCount))
 
             # Upload light sampler CDF (n+1 Float32 entries)
             var ls_entries = Int(lightSamplerN) + 1
@@ -512,22 +475,10 @@ def gpu_upload_scene(
             print("GPU: " + String(il_count) + " infinite light(s) uploaded")
 
             # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
-            var med_bytes = max(Int(mediumCount), 1) * size_of[Medium_C]()
-            var med_buf = ctx.enqueue_create_buffer[DType.uint8](med_bytes)
-            if Int(mediumCount) > 0:
-                with med_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = mediums.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(mediumCount) * size_of[Medium_C]())
+            var med_buf = _gpu_upload_array[Medium_C](ctx, mediums, Int(mediumCount))
 
             # Upload medium interfaces
-            var miface_bytes = max(Int(medium_iface_count), 1) * size_of[MediumInterface_C]()
-            var miface_buf = ctx.enqueue_create_buffer[DType.uint8](miface_bytes)
-            if Int(medium_iface_count) > 0:
-                with miface_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = medium_ifaces.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=Int(medium_iface_count) * size_of[MediumInterface_C]())
+            var miface_buf = _gpu_upload_array[MediumInterface_C](ctx, medium_ifaces, Int(medium_iface_count))
 
             # Upload heterogeneous density grids ("uniformgrid" media). Each
             # grid's (potentially large) density array gets its own device
