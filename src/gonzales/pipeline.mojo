@@ -811,7 +811,73 @@ def parse_and_render(
         var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
         var ret: Int32
         if use_vcm_wavefront:
-            ret = vcm_render_gpu_wavefront(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
+            # Task #163 stage 4 part 4: build the same interop-AND-ray-
+            # query-capable Vulkan RT scene the plain --gpu --vulkan-rt-
+            # shade path builds (see that branch's own comment below) --
+            # reused sequentially across BOTH the light pass and the
+            # camera pass every sample (n_light_paths_merge is always
+            # >= n_pix, so one scene sized for it covers both).
+            var use_vk_vcm = use_vulkan_rt_shade
+            var interop_scene_vcm = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+            var interop_rays_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
+            var interop_results_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
+            var mesh_material_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
+            var mesh_al_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
+            var n_meshes_vk_vcm = 0
+            if use_vk_vcm:
+                if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0) or psc[0].instance_count > Int32(0):
+                    print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
+                    use_vk_vcm = False
+                else:
+                    var n_light_paths_merge_vk = max(n_photons, n_pixels)
+                    n_meshes_vk_vcm = Int(psc[0].mesh_count)
+                    var vmeshes_vcm = alloc[TriangleMesh_C](max(n_meshes_vk_vcm, 1))
+                    var point_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
+                    var vidx_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
+                    for i in range(n_meshes_vk_vcm):
+                        vmeshes_vcm[i] = psc[0].meshes[i]
+                        point_counts_vcm[i] = Int64(psc[0].mesh_n_verts[i])
+                        vidx_counts_vcm[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+                    interop_scene_vcm = vulkaninterop_rt_create_scene(vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm, Int64(n_light_paths_merge_vk))
+                    vmeshes_vcm.free(); point_counts_vcm.free(); vidx_counts_vcm.free()
+                    if Int(interop_scene_vcm) == 0:
+                        print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
+                        use_vk_vcm = False
+                    else:
+                        var raysPtr_vcm = vulkaninterop_rt_get_rays_ptr(interop_scene_vcm)
+                        var resultsPtr_vcm = vulkaninterop_rt_get_results_ptr(interop_scene_vcm)
+                        interop_rays_buf_vcm = DeviceBuffer[DType.float32](handle[].ctx, raysPtr_vcm, n_light_paths_merge_vk * 8, owning=False)
+                        interop_results_buf_vcm = DeviceBuffer[DType.float32](handle[].ctx, resultsPtr_vcm, n_light_paths_merge_vk * 8, owning=False)
+
+                        var light_info_vcm = _build_mesh_light_info(psc)
+                        var mesh_material_idx_vcm = light_info_vcm[0]
+                        var mesh_al_idx_vcm = light_info_vcm[1]
+                        var n_meshes_alloc_vcm = max(n_meshes_vk_vcm, 1)
+
+                        var mmi_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int64]())
+                        with mmi_buf_vcm.map_to_host() as h:
+                            var dst = h.unsafe_ptr().bitcast[Int64]()
+                            for i in range(n_meshes_vk_vcm):
+                                dst[i] = mesh_material_idx_vcm[i]
+                        mesh_material_idx_buf_vcm = mmi_buf_vcm^
+
+                        var mai_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int32]())
+                        with mai_buf_vcm.map_to_host() as h2:
+                            var dst2 = h2.unsafe_ptr().bitcast[Int32]()
+                            for i in range(n_meshes_vk_vcm):
+                                dst2[i] = mesh_al_idx_vcm[i]
+                        mesh_al_idx_buf_vcm = mai_buf_vcm^
+
+                        mesh_material_idx_vcm.free()
+                        mesh_al_idx_vcm.free()
+
+            ret = vcm_render_gpu_wavefront(
+                handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose,
+                use_vk_vcm, interop_scene_vcm, interop_rays_buf_vcm, interop_results_buf_vcm,
+                mesh_material_idx_buf_vcm, mesh_al_idx_buf_vcm, n_meshes_vk_vcm,
+            )
+            if use_vk_vcm:
+                vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
             ret = vcm_render_gpu(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         gpu_free_scene(handle)

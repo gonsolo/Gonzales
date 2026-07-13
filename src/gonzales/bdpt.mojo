@@ -33,7 +33,9 @@ from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
 from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
-from .gpu import GpuSceneHandle
+from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
+from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
+from std.gpu.host._nvidia_cuda import CUDA
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
     rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
@@ -5440,6 +5442,131 @@ def _bdpt_camera_path_accumulate_gpu(
     albedo_accum[pix*3+1] += states[pix].first_alb.g
     albedo_accum[pix*3+2] += states[pix].first_alb.b
 
+# ── Task #163 stage 4 part 4: Vulkan RT interop intersect for VCM ───────────
+# Swaps _bdpt_light_path_intersect_gpu/_bdpt_camera_path_intersect_gpu's
+# software-BVH traverse_bvh2_core/test_spheres for the stage-1/2/3 CUDA/
+# Vulkan interop mechanism (see project_vulkan_rt_backend memory) --
+# real GPU-side ray-query tracing through shared CUDA/Vulkan memory, no
+# CPU round trip. Mirrors gpu.mojo's vulkaninterop_pack_rays_kernel/
+# vulkaninterop_rt_traverse_paths_gpu exactly, just reading ro/rd from
+# VCMLightPathState_C/VCMCameraPathState_C instead of PathState_C.ray --
+# vulkaninterop_unpack_results_kernel itself is reused UNCHANGED from
+# gpu.mojo for both (its output is always a plain Intersection_C, with no
+# dependency on which subpath produced the ray). Scope: triangle geometry
+# only, matching vulkaninterop_rt_create_scene -- callers must only use
+# this for scenes with no curves/spheres/object instancing (same boundary
+# debug_render_vulkanrt/--vulkan-rt-shade already enforce).
+
+def vulkaninterop_pack_light_rays_kernel(
+    states: UnsafePointer[VCMLightPathState_C, MutAnyOrigin],
+    rays: UnsafePointer[Float32, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var ro = states[tid].ro
+    var rd = states[tid].rd
+    var idx = tid * 8
+    rays[idx + 0] = ro.x
+    rays[idx + 1] = ro.y
+    rays[idx + 2] = ro.z
+    rays[idx + 3] = Float32(1e-4)
+    rays[idx + 4] = rd.x
+    rays[idx + 5] = rd.y
+    rays[idx + 6] = rd.z
+    rays[idx + 7] = Float32(1.0e8)
+
+def vulkaninterop_pack_camera_rays_kernel(
+    states: UnsafePointer[VCMCameraPathState_C, MutAnyOrigin],
+    rays: UnsafePointer[Float32, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var ro = states[tid].ro
+    var rd = states[tid].rd
+    var idx = tid * 8
+    rays[idx + 0] = ro.x
+    rays[idx + 1] = ro.y
+    rays[idx + 2] = ro.z
+    rays[idx + 3] = Float32(1e-4)
+    rays[idx + 4] = rd.x
+    rays[idx + 5] = rd.y
+    rays[idx + 6] = rd.z
+    rays[idx + 7] = Float32(1.0e8)
+
+def vulkaninterop_rt_traverse_light_paths_gpu(
+    ctx: DeviceContext,
+    state_buf: DeviceBuffer[DType.uint8],
+    inter_buf: DeviceBuffer[DType.uint8],
+    interop_scene: VulkanInteropRtSceneHandle,
+    interop_rays_buf: DeviceBuffer[DType.float32],
+    interop_results_buf: DeviceBuffer[DType.float32],
+    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
+    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
+    n_total: Int,
+) raises:
+    comptime block_size = 256
+    var grid = ceildiv(n_total, block_size)
+
+    ctx.enqueue_function[vulkaninterop_pack_light_rays_kernel](
+        state_buf.unsafe_ptr().bitcast[VCMLightPathState_C](),
+        interop_rays_buf.unsafe_ptr(),
+        n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
+
+    var cuda_stream = CUDA(ctx.stream())
+    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
+
+    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+        interop_results_buf.unsafe_ptr(),
+        inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64](),
+        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
+        n_meshes,
+        n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
+
+def vulkaninterop_rt_traverse_camera_paths_gpu(
+    ctx: DeviceContext,
+    state_buf: DeviceBuffer[DType.uint8],
+    inter_buf: DeviceBuffer[DType.uint8],
+    interop_scene: VulkanInteropRtSceneHandle,
+    interop_rays_buf: DeviceBuffer[DType.float32],
+    interop_results_buf: DeviceBuffer[DType.float32],
+    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
+    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
+    n_total: Int,
+) raises:
+    comptime block_size = 256
+    var grid = ceildiv(n_total, block_size)
+
+    ctx.enqueue_function[vulkaninterop_pack_camera_rays_kernel](
+        state_buf.unsafe_ptr().bitcast[VCMCameraPathState_C](),
+        interop_rays_buf.unsafe_ptr(),
+        n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
+
+    var cuda_stream = CUDA(ctx.stream())
+    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
+
+    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+        interop_results_buf.unsafe_ptr(),
+        inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64](),
+        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
+        n_meshes,
+        n_total,
+        grid_dim=grid, block_dim=block_size,
+    )
+
 def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
@@ -5720,6 +5847,21 @@ def vcm_render_gpu_wavefront(
     n_photons_req: Int,
     no_denoise: Bool,
     verbose:  Bool,
+    # Task #163 stage 4 part 4: when set, both subpaths' per-bounce
+    # intersect is routed through the CUDA/Vulkan interop mechanism
+    # (vulkaninterop_rt_traverse_light_paths_gpu/_camera_) instead of
+    # traverse_bvh2_core/test_spheres -- see that section's own comment.
+    # interop_scene must be sized for max(n_light_paths_merge, n_pix) rays
+    # (n_light_paths_merge is always >= n_pix by construction, see
+    # n_photons_req's docstring below) since it's reused sequentially for
+    # both the light pass and the camera pass every sample.
+    use_vk: Bool = False,
+    interop_scene: VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling(),
+    interop_rays_buf: Optional[DeviceBuffer[DType.float32]] = None,
+    interop_results_buf: Optional[DeviceBuffer[DType.float32]] = None,
+    mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    n_meshes_vk: Int = 0,
 ) -> Int32:
     """Task #163 stage 4 part 3: wavefront-staged variant of vcm_render_gpu,
     using _bdpt_light_path_init/_intersect/_bounce_gpu and
@@ -5731,14 +5873,17 @@ def vcm_render_gpu_wavefront(
     partially-built one), same output. The only behavioral difference is
     control-flow SHAPE: many small kernel launches (one intersect+bounce
     pair per _BDPT_MAX_DEPTH depth level, per subpath) instead of two
-    single-kernel-traces-a-whole-subpath launches. This is deliberately
-    NOT expected to be faster than vcm_render_gpu yet -- both still use
-    the same software-BVH `traverse_bvh2_core`/`test_spheres` intersect;
-    this function exists to prove the staging is correct BEFORE swapping
-    the intersect step for Vulkan RT (the stage-1/2/3 interop mechanism),
-    matching this whole task's own established discipline of proving one
-    variable at a time. See vcm_render_gpu's own docstring for the shared
-    algorithm-level documentation (n_photons_req/n_light_paths_merge
+    single-kernel-traces-a-whole-subpath launches. Task #163 stage 4 part
+    4: `use_vk=True` routes that per-bounce intersect through the CUDA/
+    Vulkan interop mechanism (real hardware ray-query tracing, stage-1/2/3)
+    instead of `traverse_bvh2_core`/`test_spheres` -- see this file's
+    `vulkaninterop_rt_traverse_light_paths_gpu`/`_camera_` and their own
+    section comment. `use_vk=False` (default) keeps the software-BVH path,
+    still useful as a same-algorithm baseline for A/B comparison. Shadow
+    rays (NEE/connect/merge/MNEE) stay on software BVH in BOTH modes, per
+    the user-confirmed stage 4 scope -- only the primary/bounce ray is
+    ever Vulkan-RT-traced. See vcm_render_gpu's own docstring for the
+    shared algorithm-level documentation (n_photons_req/n_light_paths_merge
     derivation etc.), not repeated here."""
     var fw = Int(psc[0].film_w)
     var fh = Int(psc[0].film_h)
@@ -5900,12 +6045,19 @@ def vcm_render_gpu_wavefront(
                     grid_dim=grid_light, block_dim=block_size)
 
                 for _bounce_i in range(_BDPT_MAX_DEPTH):
-                    handle[].ctx.enqueue_function[_bdpt_light_path_intersect_gpu](
-                        bvh2Nodes, primIds, meshes, curves,
-                        blasNodesArr, blasPrimIdsArr, instances,
-                        spheres, Int(n_spheres),
-                        light_states_ptr, inter_light_ptr, n_light_paths_merge,
-                        grid_dim=grid_light, block_dim=block_size)
+                    if use_vk:
+                        vulkaninterop_rt_traverse_light_paths_gpu(
+                            handle[].ctx, light_states_buf, inter_light_buf, interop_scene,
+                            interop_rays_buf.value(), interop_results_buf.value(),
+                            mesh_material_idx_buf.value(), mesh_al_idx_buf.value(),
+                            n_meshes_vk, n_light_paths_merge)
+                    else:
+                        handle[].ctx.enqueue_function[_bdpt_light_path_intersect_gpu](
+                            bvh2Nodes, primIds, meshes, curves,
+                            blasNodesArr, blasPrimIdsArr, instances,
+                            spheres, Int(n_spheres),
+                            light_states_ptr, inter_light_ptr, n_light_paths_merge,
+                            grid_dim=grid_light, block_dim=block_size)
                     handle[].ctx.enqueue_function[_bdpt_light_path_bounce_gpu](
                         light_states_ptr, inter_light_ptr, lvc_ptr, path_len_ptr,
                         mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_merge,
@@ -5945,12 +6097,19 @@ def vcm_render_gpu_wavefront(
                     grid_dim=grid_pix, block_dim=block_size)
 
                 for _bounce_i in range(_BDPT_MAX_DEPTH):
-                    handle[].ctx.enqueue_function[_bdpt_camera_path_intersect_gpu](
-                        bvh2Nodes, primIds, meshes, curves,
-                        blasNodesArr, blasPrimIdsArr, instances,
-                        spheres, Int(n_spheres),
-                        cam_states_ptr, inter_cam_ptr, n_pix,
-                        grid_dim=grid_pix, block_dim=block_size)
+                    if use_vk:
+                        vulkaninterop_rt_traverse_camera_paths_gpu(
+                            handle[].ctx, cam_states_buf, inter_cam_buf, interop_scene,
+                            interop_rays_buf.value(), interop_results_buf.value(),
+                            mesh_material_idx_buf.value(), mesh_al_idx_buf.value(),
+                            n_meshes_vk, n_pix)
+                    else:
+                        handle[].ctx.enqueue_function[_bdpt_camera_path_intersect_gpu](
+                            bvh2Nodes, primIds, meshes, curves,
+                            blasNodesArr, blasPrimIdsArr, instances,
+                            spheres, Int(n_spheres),
+                            cam_states_ptr, inter_cam_ptr, n_pix,
+                            grid_dim=grid_pix, block_dim=block_size)
                     handle[].ctx.enqueue_function[_bdpt_camera_path_bounce_gpu](
                         cam_states_ptr, inter_cam_ptr, lvc_ptr, path_len_ptr,
                         merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
