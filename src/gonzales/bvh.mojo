@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from std.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -389,7 +389,7 @@ def _sample_infinite_light_dir(
     Used for BOTH light-path/photon emission (bdpt.mojo/sppm.mojo) and NEE
     toward the light (same distribution works for both — the only
     difference is which end of the ray you start from)."""
-    if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+    if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
         return _sample_infinite_light_textured(ilight, u)
     else:
         # No texture: uniform sphere sampling, constant radiance.
@@ -559,7 +559,7 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> T
     bdpt.mojo's `last_bsdf_pdf` bookkeeping for why (getting this wrong
     double-counts unoccluded env light, the exact bug documented in
     [[project_infinite_light_shadows]])."""
-    if ilight.tex_idx < Int32(0) or Int(ilight.pixels_ptr) <= 1 or ilight.cdf_w <= Int32(0):
+    if ilight.tex_idx < Int32(0) or not _is_real_ptr(ilight.pixels_ptr) or ilight.cdf_w <= Int32(0):
         return (ilight.scale, Float32(1) / (Float32(4) * PI))
     var w2l = ilight.world_to_light
     var local_dir = Vec3f(

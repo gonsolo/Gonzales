@@ -1,6 +1,6 @@
 from std.memory import alloc
 from std.math import log as _log_math, pow as _pow_math
-from .geometry import RGB
+from .geometry import RGB, _is_real_ptr
 
 # ── pbrt Scanner Helpers ──────────────────────────────────────────────
 
@@ -482,7 +482,7 @@ def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[Pbrt
 
 
 def scanner_free(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
-    if Int(handle[0].buffer) > 1:
+    if _is_real_ptr(handle[0].buffer):
         handle[0].buffer.free()
     handle.free()
 

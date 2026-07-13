@@ -6,7 +6,7 @@
 
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min
-from .geometry import Point3f, Bounds3f
+from .geometry import Point3f, Bounds3f, _is_real_ptr
 from .bvh import _equal_area_square_to_sphere, _equal_area_sphere_to_square
 
 comptime GUIDE_DIMS: Int = 16
@@ -23,8 +23,8 @@ struct GuideGrid(TrivialRegisterPassable):
     var bounds: Bounds3f
 
 def null_guide() -> GuideGrid:
-    """Sentinel GuideGrid. unsafe_dangling() for Float32 returns align_of=4.
-    Guard: Int(energy) > 4 → active guide; ≤ 4 → disabled."""
+    """Sentinel GuideGrid. Guard with _is_real_ptr(g.energy) to tell an active
+    guide from this disabled placeholder."""
     return GuideGrid(
         UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
         Bounds3f(Point3f(Float32(0)), Point3f(Float32(1), Float32(1), Float32(1))),
@@ -38,7 +38,7 @@ def guide_create(bounds: Bounds3f) -> GuideGrid:
     return GuideGrid(e, bounds)
 
 def guide_free(g: GuideGrid):
-    if Int(g.energy) > 4:
+    if _is_real_ptr(g.energy):
         g.energy.free()
 
 def guide_merge(dst: GuideGrid, src: GuideGrid):

@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI
+from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from .transform import transform_normal_by_instance
@@ -444,7 +444,7 @@ def gpu_upload_scene(
                 il.world_to_light = w2l_buf.unsafe_ptr().bitcast[Float32]()
                 il_w2l_bufs.append(w2l_buf^)
                 # Upload pixels + CDF when texture is present
-                if il.cdf_w > Int32(0) and Int(il.pixels_ptr) > 1:
+                if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
                     var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
                     # Pixel data: iw × ih × 3 floats
                     var pix_count = iw * ih * 3

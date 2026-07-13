@@ -1,7 +1,18 @@
 from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, min, max, abs
+from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths
+
+# Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
+# "unset" pointer field is instead left at its `.unsafe_dangling()` sentinel --
+# which Mojo returns as an address equal to align_of[T](), NOT a fixed value
+# across pointee types (4 for Float32, 1 for UInt8, 8 for a pointer-sized
+# struct, ...). Use this helper instead of a hand-picked magic-number
+# threshold at each call site.
+@always_inline
+def _is_real_ptr[T: AnyType](ptr: UnsafePointer[T, MutAnyOrigin]) -> Bool:
+    return Int(ptr) > align_of[T]()
 
 # ── Math constants ─────────────────────────────────────────────────────────────
 # Stored as Float32 aliases so every formula reads like the paper it came from.

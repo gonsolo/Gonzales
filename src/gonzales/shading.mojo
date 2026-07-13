@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI
+from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -432,7 +432,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
             # "scatter direction ray.dir from parent_cell leads to illumination W here."
             # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
             # the path came from and ray.direction is the scatter direction that arrived here.
-            if Int(guide_write.energy) > 4 and path_ptr[].bounce > 0:
+            if _is_real_ptr(guide_write.energy) and path_ptr[].bounce > 0:
                 var parent_cell = guide_pos_to_cell(guide_write, path_ptr[].ray.origin)
                 if parent_cell >= 0:
                     var w = contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
@@ -811,7 +811,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 var env_dir: SIMD[DType.float32, 3]
                 var env_rgb: RGB
                 var pdf_light: Float32
-                if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+                if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
                     var u1_env = pcg.next_float()
                     var u2_env = pcg.next_float()
                     var (dir_v, rgb_v, pdf_v) = _sample_infinite_light_textured(ilight, Point2f(u1_env, u2_env))
@@ -2035,7 +2035,7 @@ def _nee_infinite_light[enqueue_shadow: Bool](
     var env_rgb: RGB
     var pdf_light: Float32
 
-    if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 1 and Int(ilight.cdf_ptr) > 1 and ilight.cdf_w > Int32(0):
+    if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
         # ── CDF importance sampling, via the shared bvh.mojo implementation ──
         # (A separate "sample a cosine-hemisphere direction, look up the env
         # map there, add it unweighted" block used to live here as an extra
@@ -2456,7 +2456,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var cos_theta: Float32
     var pdf_mix: Float32
 
-    if Int(ctx.guide.energy) > 4:
+    if _is_real_ptr(ctx.guide.energy):
         var cell = guide_pos_to_cell(ctx.guide, Point3f(hit_point[0], hit_point[1], hit_point[2]))
         var bsdf_s = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
         var bsdf_dir = bsdf_s[0]
@@ -2597,7 +2597,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var ld_z = w2l[2]*ray_dir[0] + w2l[6]*ray_dir[1] + w2l[10]*ray_dir[2]
             var local_dir = SIMD[DType.float32, 3](ld_x, ld_y, ld_z)
             var env_rgb: RGB
-            if ilight.tex_idx >= Int32(0) and Int(ilight.pixels_ptr) > 4 and ilight.cdf_w > Int32(0):
+            if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and ilight.cdf_w > Int32(0):
                 # Bilinear lookup in GPU/CPU-resident pixels (cdf_w × cdf_h, 3 floats/pixel)
                 var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
                 var ea_uv = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
@@ -2666,7 +2666,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var dp_col = ilight.cdf_ptr[dp_col_base + 1] - ilight.cdf_ptr[dp_col_base]
                         if dp_row > Float32(0.0):
                             pdf_light = dp_row * dp_col * Float32(iw) * Float32(ih) * INV_FOUR_PI
-                        if Int(ilight.pixels_ptr) > 1:
+                        if _is_real_ptr(ilight.pixels_ptr):
                             var nr = ilight.pixels_ptr[(py*iw+px)*3+0]
                             var ng = ilight.pixels_ptr[(py*iw+px)*3+1]
                             var nb = ilight.pixels_ptr[(py*iw+px)*3+2]

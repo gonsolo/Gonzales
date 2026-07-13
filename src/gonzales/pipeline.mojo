@@ -6,7 +6,7 @@ from std.gpu.host import DeviceBuffer
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr
 from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
@@ -361,7 +361,7 @@ def debug_trace_pixel(
                 var ldz = w2l[2]*dx + w2l[6]*dy + w2l[10]*dz
                 var uv = _equal_area_sphere_to_square(ldx, ldy, ldz)
                 var rgb_str = String("(no pixels)")
-                if Int(il.pixels_ptr) > 1 and il.cdf_w > Int32(0):
+                if _is_real_ptr(il.pixels_ptr) and il.cdf_w > Int32(0):
                     var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
                     var pxe = Int(max(Float32(0), min(Float32(iw-1), uv[0]*Float32(iw))))
                     var pye = Int(max(Float32(0), min(Float32(ih-1), uv[1]*Float32(ih))))
@@ -428,7 +428,7 @@ def debug_trace_pixel(
                 var l2z = w2[2]*rfx + w2[6]*rfy + w2[10]*rfz
                 var uv2 = _equal_area_sphere_to_square(l2x, l2y, l2z)
                 var rs = String("")
-                if Int(il2.pixels_ptr) > 1 and il2.cdf_w > Int32(0):
+                if _is_real_ptr(il2.pixels_ptr) and il2.cdf_w > Int32(0):
                     var iw2 = Int(il2.cdf_w); var ih2 = Int(il2.cdf_h)
                     var ax = Int(max(Float32(0), min(Float32(iw2-1), uv2[0]*Float32(iw2))))
                     var ay = Int(max(Float32(0), min(Float32(ih2-1), uv2[1]*Float32(ih2))))
@@ -786,7 +786,7 @@ def parse_and_render(
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
-        if Int(handle) <= 8:
+        if not _is_real_ptr(handle):
             sd.free()
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -803,7 +803,7 @@ def parse_and_render(
     elif use_gpu and use_vcm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
-        if Int(handle) <= 8:
+        if not _is_real_ptr(handle):
             sd.free()
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -900,7 +900,7 @@ def parse_and_render(
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
         var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
-        if Int(handle) <= 8:
+        if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
 
@@ -1259,7 +1259,7 @@ def render_interactive(
     var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
     if use_gpu:
         handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
-        if Int(handle) <= 8:
+        if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return
 
