@@ -6461,6 +6461,24 @@ def vcm_render_gpu_wavefront(
             var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().bitcast[Int8]()
             var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().bitcast[Int32]()
             var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().bitcast[Intersection_C]()
+            # Task #163 stage 5 perf fix #3 (2026-07-13): scene-adaptive
+            # shadow-ray batching. Investigation (dragon vs cornell-box)
+            # found the one-shot n_pix*_BDPT_MAX_VERTS dispatch (perf fix
+            # #2, commit cb25f83) only pays off when light paths are long
+            # enough to fill a real fraction of those _BDPT_MAX_VERTS
+            # slots -- cornell-box's mean path_len is 5.18/10 (~52%
+            # occupancy, a real win at every tested scale); dragon's is
+            # 0.51/10 (~5% occupancy -- the dispatch is ~95% wasted
+            # degenerate-ray padding, and got WORSE than software, even
+            # worse than the earlier primary-ray-only swap). Decided ONCE
+            # per render (not per sample -- a per-sample host sync was
+            # already tried and found catastrophic, see perf fix #1's
+            # revert note below) via a single path_len_buf readback after
+            # si=0's light pass, before its camera pass starts. The 20%-
+            # occupancy threshold is a judgment call from exactly 2 data
+            # points (cornell-box/dragon), not a rigorously derived
+            # constant -- revisit if a 3rd scene disagrees.
+            var shadow_batch_enabled = use_vk
             var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
@@ -6590,6 +6608,19 @@ def vcm_render_gpu_wavefront(
                     lvc_ptr, path_len_ptr, lvc_cap, merge_next_ptr, merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)
 
+                if use_vk and si == 0:
+                    var sum_pl = 0
+                    with path_len_buf.map_to_host() as host_buf:
+                        var pl = host_buf.unsafe_ptr().bitcast[Int32]()
+                        for pli in range(n_light_paths_merge):
+                            sum_pl += Int(pl[pli])
+                    var occupancy = (Float64(sum_pl) / Float64(n_light_paths_merge)) / Float64(_BDPT_MAX_VERTS)
+                    if occupancy < 0.2:
+                        shadow_batch_enabled = False
+                    if verbose:
+                        print("VCM (GPU wavefront): shadow-ray batching " + ("enabled" if shadow_batch_enabled else "disabled")
+                              + " (light-path slot occupancy " + String(occupancy * 100) + "%)")
+
                 # Task #163 stage 5 perf fix, ATTEMPTED AND REVERTED
                 # (2026-07-13): tried bounding the per-bounce shadow-ray
                 # local-slot loop below by this sample's actual max light-
@@ -6637,7 +6668,7 @@ def vcm_render_gpu_wavefront(
                             spheres, Int(n_spheres),
                             cam_states_ptr, inter_cam_ptr, n_pix,
                             grid_dim=grid_pix, block_dim=block_size)
-                    if use_vk:
+                    if shadow_batch_enabled:
                         handle[].ctx.enqueue_function[reset_shadow_valid_gpu](
                             shadow_valid_ptr, n_pix, grid_dim=grid_pix, block_dim=block_size)
                     handle[].ctx.enqueue_function[_bdpt_camera_path_bounce_gpu](
@@ -6653,7 +6684,7 @@ def vcm_render_gpu_wavefront(
                         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                         measured_brdfs, n_measured_brdfs,
                         gpu_textures, n_gpu_textures,
-                        Int8(1) if use_vk else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
+                        Int8(1) if shadow_batch_enabled else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
                         grid_dim=grid_pix, block_dim=block_size)
 
                     # Task #163 stage 5 perf follow-up (2026-07-13): resolve
@@ -6666,7 +6697,7 @@ def vcm_render_gpu_wavefront(
                     # to 1, the dominant cost identified by that follow-up's
                     # investigation. Then fold the resolved contributions
                     # into each pixel's running total.
-                    if use_vk:
+                    if shadow_batch_enabled:
                         var shadow_grid = ceildiv(shadow_cap, block_size)
                         vulkaninterop_rt_traverse_shadow_gpu(
                             handle[].ctx, shadow_rays_buf, shadow_valid_buf,
