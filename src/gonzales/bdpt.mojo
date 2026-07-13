@@ -5795,73 +5795,74 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
         grid_dim=grid, block_dim=block_size,
     )
 
-def vulkaninterop_pack_shadow_rays_kernel(
-    # Copies ONE local slot (in [0, _BDPT_MAX_VERTS)) out of the strided
-    # per-pixel shadow_rays queue into a CONTIGUOUS n_pix buffer the interop
-    # RT scene can trace -- the scene's own ray capacity is only n_pix (it's
-    # reused, unresized, from the primary-ray traversal above), so all
-    # _BDPT_MAX_VERTS slots are traced in separate batches, see
-    # resolve_shadow_connect_gpu's docstring. Invalid slots get a
+def vulkaninterop_pack_all_shadow_rays_kernel(
+    # Perf (2026-07-13, task #163 stage 5 follow-up): packs ALL
+    # n_pix*_BDPT_MAX_VERTS shadow-ray slots in ONE dispatch instead of
+    # _BDPT_MAX_VERTS(10) separate n_pix-sized ones -- the interop scene's
+    # ray capacity was resized (pipeline.mojo) specifically to make this
+    # possible, replacing the earlier per-local-slot loop. `shadow_rays`
+    # and `out_rays` share the EXACT SAME idx=pix*_BDPT_MAX_VERTS+local
+    # indexing scheme (both strided _BDPT_MAX_VERTS per pixel), so this is
+    # a straight elementwise copy, not a re-layout. Invalid slots get a
     # zero-length degenerate ray (tMax=0) so the trace call never reads
     # uninitialized memory -- resolve skips them via shadow_valid regardless.
     shadow_rays: UnsafePointer[Float32, MutAnyOrigin],
     shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
     out_rays: UnsafePointer[Float32, MutAnyOrigin],
-    local: Int,
-    n_pix: Int,
+    count: Int,
 ):
-    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if pix >= n_pix:
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
         return
-    var idx = pix * _BDPT_MAX_VERTS + local
-    var dst8 = pix * 8
-    if shadow_valid[idx] == Int8(0):
-        out_rays[dst8 + 0] = Float32(0)
-        out_rays[dst8 + 1] = Float32(0)
-        out_rays[dst8 + 2] = Float32(0)
-        out_rays[dst8 + 3] = Float32(0)
-        out_rays[dst8 + 4] = Float32(0)
-        out_rays[dst8 + 5] = Float32(0)
-        out_rays[dst8 + 6] = Float32(1)
-        out_rays[dst8 + 7] = Float32(0)
+    var idx8 = tid * 8
+    if shadow_valid[tid] == Int8(0):
+        out_rays[idx8 + 0] = Float32(0)
+        out_rays[idx8 + 1] = Float32(0)
+        out_rays[idx8 + 2] = Float32(0)
+        out_rays[idx8 + 3] = Float32(0)
+        out_rays[idx8 + 4] = Float32(0)
+        out_rays[idx8 + 5] = Float32(0)
+        out_rays[idx8 + 6] = Float32(1)
+        out_rays[idx8 + 7] = Float32(0)
         return
-    var src8 = idx * 8
-    out_rays[dst8 + 0] = shadow_rays[src8 + 0]
-    out_rays[dst8 + 1] = shadow_rays[src8 + 1]
-    out_rays[dst8 + 2] = shadow_rays[src8 + 2]
-    out_rays[dst8 + 3] = shadow_rays[src8 + 3]
-    out_rays[dst8 + 4] = shadow_rays[src8 + 4]
-    out_rays[dst8 + 5] = shadow_rays[src8 + 5]
-    out_rays[dst8 + 6] = shadow_rays[src8 + 6]
-    out_rays[dst8 + 7] = shadow_rays[src8 + 7]
+    out_rays[idx8 + 0] = shadow_rays[idx8 + 0]
+    out_rays[idx8 + 1] = shadow_rays[idx8 + 1]
+    out_rays[idx8 + 2] = shadow_rays[idx8 + 2]
+    out_rays[idx8 + 3] = shadow_rays[idx8 + 3]
+    out_rays[idx8 + 4] = shadow_rays[idx8 + 4]
+    out_rays[idx8 + 5] = shadow_rays[idx8 + 5]
+    out_rays[idx8 + 6] = shadow_rays[idx8 + 6]
+    out_rays[idx8 + 7] = shadow_rays[idx8 + 7]
 
 def vulkaninterop_rt_traverse_shadow_gpu(
     # Perf (2026-07-13): pack -> trace only, no unpack step -- the caller's
-    # resolve_shadow_connect_gpu now reads interop_results_buf's raw float
+    # resolve_shadow_connect_gpu reads interop_results_buf's raw float
     # layout directly (it only needs hit/material-index, not a full
-    # reconstructed Intersection_C), cutting one kernel launch per local
-    # slot. See resolve_shadow_connect_gpu's docstring.
+    # reconstructed Intersection_C). ONE dispatch over ALL
+    # n_pix*_BDPT_MAX_VERTS shadow-ray slots (see
+    # vulkaninterop_pack_all_shadow_rays_kernel above) -- requires the
+    # interop scene's ray capacity to have been sized for that (see
+    # pipeline.mojo's max_rays_vk_vcm), not just n_pix.
     ctx: DeviceContext,
     shadow_rays_buf: DeviceBuffer[DType.uint8],
     shadow_valid_buf: DeviceBuffer[DType.uint8],
     interop_scene: VulkanInteropRtSceneHandle,
     interop_rays_buf: DeviceBuffer[DType.float32],
-    local: Int,
-    n_pix: Int,
+    count: Int,
 ) raises:
     comptime block_size = 256
-    var grid = ceildiv(n_pix, block_size)
+    var grid = ceildiv(count, block_size)
 
-    ctx.enqueue_function[vulkaninterop_pack_shadow_rays_kernel](
+    ctx.enqueue_function[vulkaninterop_pack_all_shadow_rays_kernel](
         shadow_rays_buf.unsafe_ptr().bitcast[Float32](),
         shadow_valid_buf.unsafe_ptr().bitcast[Int8](),
         interop_rays_buf.unsafe_ptr(),
-        local, n_pix,
+        count,
         grid_dim=grid, block_dim=block_size,
     )
 
     var cuda_stream = CUDA(ctx.stream())
-    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_pix), cuda_stream)
+    _ = vulkaninterop_rt_trace(interop_scene, Int32(count), cuda_stream)
 
 def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -6182,29 +6183,27 @@ def reset_shadow_valid_gpu(
         shadow_valid[base + local] = Int8(0)
 
 def resolve_shadow_connect_gpu(
-    # `shadow_inter` is a CONTIGUOUS n_pix buffer holding this dispatch's
-    # single local-slot's trace results (packed/traced/unpacked by
-    # vulkaninterop_rt_traverse_shadow_gpu, one local in
-    # [0, _BDPT_MAX_VERTS) at a time -- the interop RT scene's own ray
-    # capacity is only n_pix, not n_pix*_BDPT_MAX_VERTS, so all _BDPT_MAX_VERTS
-    # shadow slots per pixel are traced in _BDPT_MAX_VERTS separate batches
-    # instead of one, to avoid resizing the shared Vulkan scene).
+    # Perf (2026-07-13, task #163 stage 5 follow-up): ONE dispatch over
+    # ALL n_pix*_BDPT_MAX_VERTS shadow-ray slots (replaces the earlier
+    # _BDPT_MAX_VERTS-separate-dispatches loop) -- `shadow_results` is the
+    # RAW interop trace output for the WHOLE batch, indexed by the same
+    # flat `tid` as `shadow_pending`/`shadow_valid`/`shadow_seg_med`/
+    # `shadow_rays` (all already strided idx=pix*_BDPT_MAX_VERTS+local, so
+    # no re-indexing is needed -- `tid` IS `idx`). Requires the interop
+    # scene's ray capacity to have been sized for n_pix*_BDPT_MAX_VERTS
+    # (see pipeline.mojo's max_rays_vk_vcm), not just n_pix.
     #
-    # Perf (2026-07-13): reads `shadow_results` (the RAW interop trace
-    # output, same idx*8 float layout vulkaninterop_unpack_results_kernel
-    # consumes) directly instead of going through a separate unpack-into-
-    # Intersection_C kernel first -- this kernel only ever needs hit/
-    # material-index, not the full reconstructed Intersection_C (uv/mesh/
-    # tri/area-light-index), so unpacking those was wasted work. Cuts one
-    # of the ~3 kernel launches per local slot (pack/unpack/resolve ->
-    # pack/resolve). See vulkaninterop_rt_traverse_shadow_gpu below, which
-    # now does pack -> trace only, no unpack step.
+    # Reads the RAW interop trace output directly (same idx*8 float layout
+    # vulkaninterop_unpack_results_kernel consumes) instead of going
+    # through a separate unpack-into-Intersection_C kernel first -- this
+    # kernel only ever needs hit/material-index, not the full reconstructed
+    # Intersection_C (uv/mesh/tri/area-light-index).
     #
-    # `scratch` is a SEPARATE n_pix-or-larger Intersection_C buffer for
+    # `scratch` is a SEPARATE Intersection_C buffer, sized for
+    # n_pix*_BDPT_MAX_VERTS (one slot PER THREAD, offset by `tid` below) for
     # _visible_transmittance's own internal multi-round tracing in the
     # fallback path -- must not alias `shadow_pending`/`shadow_valid`/
-    # `shadow_seg_med`/`shadow_rays` (those stay strided by
-    # _BDPT_MAX_VERTS and are indexed via `local`, not `pix`, below).
+    # `shadow_seg_med`/`shadow_rays`.
     shadow_results: UnsafePointer[Float32, MutAnyOrigin],
     mesh_material_idx: UnsafePointer[Int64, MutAnyOrigin],
     n_meshes_vk: Int,
@@ -6213,8 +6212,7 @@ def resolve_shadow_connect_gpu(
     shadow_seg_med: UnsafePointer[Int32, MutAnyOrigin],
     shadow_rays: UnsafePointer[Float32, MutAnyOrigin],
     scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
-    local: Int,
-    n_pix: Int,
+    count: Int,
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
     primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
@@ -6251,10 +6249,10 @@ def resolve_shadow_connect_gpu(
     gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
 ):
-    var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if pix >= n_pix:
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
         return
-    var idx = pix * _BDPT_MAX_VERTS + local
+    var idx = tid
     if shadow_valid[idx] == Int8(0):
         return
     var sd = _mk_sd_full(
@@ -6275,7 +6273,7 @@ def resolve_shadow_connect_gpu(
     var dir = Vec3f(shadow_rays[idx8 + 4], shadow_rays[idx8 + 5], shadow_rays[idx8 + 6])
     var dist = shadow_rays[idx8 + 7] / Float32(0.9995)
 
-    var ridx = pix * 8
+    var ridx = tid * 8
     var iresults = shadow_results.bitcast[Int32]()
     var hitFlag = iresults[ridx + 6]
 
@@ -6298,8 +6296,15 @@ def resolve_shadow_connect_gpu(
             shadow_pending[idx] = RGB(Float32(0))
 
     if needs_fallback:
+        # Per-thread scratch slot (offset by `tid`) -- matches the
+        # established convention elsewhere in this file (e.g.
+        # _bdpt_camera_connect_gpu's `scratch = inter_scratch + pix`).
+        # Passing the bare pointer here would race across threads; harmless
+        # today only because neither of this task's test scenes ever
+        # actually enters this fallback path (no dielectric/medium), but
+        # fixed now while this kernel is being rewritten anyway.
         var dst = org + dir * dist
-        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch)
+        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch + tid)
         var p = shadow_pending[idx]
         shadow_pending[idx] = RGB(p.r * Tr[0], p.g * Tr[1], p.b * Tr[2])
 
@@ -6407,12 +6412,18 @@ def vcm_render_gpu_wavefront(
             # strided _BDPT_MAX_VERTS slots per pixel -- see
             # _bdpt_connect_to_cache_deferred/resolve_shadow_connect_gpu.
             # Only allocated/used when use_vk (software-BVH _connect stays
-            # the only path otherwise); harmless tiny alloc either way.
+            # the only path otherwise).
             var shadow_cap = n_pix * _BDPT_MAX_VERTS
             var shadow_rays_buf    = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * 8 * size_of[Float32]())
             var shadow_pending_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[RGB]())
             var shadow_valid_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int8]())
             var shadow_seg_med_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int32]())
+            # One Intersection_C scratch slot PER THREAD (not per pixel) for
+            # resolve_shadow_connect_gpu's _visible_transmittance fallback
+            # call -- inter_light_buf (sized n_light_paths_merge) is too
+            # small now that resolve dispatches n_pix*_BDPT_MAX_VERTS
+            # threads in one go (2026-07-13 perf follow-up).
+            var shadow_scratch_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Intersection_C]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().bitcast[Float32]()
@@ -6449,6 +6460,7 @@ def vcm_render_gpu_wavefront(
             var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().bitcast[RGB]()
             var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().bitcast[Int8]()
             var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().bitcast[Int32]()
+            var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().bitcast[Intersection_C]()
             var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
@@ -6644,38 +6656,38 @@ def vcm_render_gpu_wavefront(
                         Int8(1) if use_vk else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
                         grid_dim=grid_pix, block_dim=block_size)
 
-                    # Task #163 stage 5: resolve this bounce's diffuse-branch
-                    # connect shadow rays via the same interop RT scene,
-                    # _BDPT_MAX_VERTS slots at a time (see
-                    # vulkaninterop_rt_traverse_shadow_gpu's docstring for
-                    # why it can't be one batched dispatch), then fold the
-                    # resolved contributions into each pixel's running total
-                    # before the next bounce's primary intersect overwrites
-                    # inter_light_buf (reused as _visible_transmittance
-                    # fallback scratch here -- not needed again until this
-                    # si's next bounce/next si's light pass respectively).
+                    # Task #163 stage 5 perf follow-up (2026-07-13): resolve
+                    # this bounce's diffuse-branch connect shadow rays in
+                    # ONE dispatch over all n_pix*_BDPT_MAX_VERTS slots
+                    # (the interop scene's ray capacity was resized in
+                    # pipeline.mojo specifically for this), replacing the
+                    # earlier _BDPT_MAX_VERTS-separate-dispatches loop --
+                    # cuts the per-bounce interop trace CALL count from 10
+                    # to 1, the dominant cost identified by that follow-up's
+                    # investigation. Then fold the resolved contributions
+                    # into each pixel's running total.
                     if use_vk:
-                        for local in range(_BDPT_MAX_VERTS):
-                            vulkaninterop_rt_traverse_shadow_gpu(
-                                handle[].ctx, shadow_rays_buf, shadow_valid_buf,
-                                interop_scene, interop_rays_buf.value(),
-                                local, n_pix)
-                            handle[].ctx.enqueue_function[resolve_shadow_connect_gpu](
-                                interop_results_buf.value().unsafe_ptr(),
-                                mesh_material_idx_buf.value().unsafe_ptr().bitcast[Int64](),
-                                n_meshes_vk,
-                                shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
-                                inter_light_ptr, local, n_pix,
-                                bvh2Nodes, primIds, meshes, materials,
-                                areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                                mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                                blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                                distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                                pointLights, n_point_lights,
-                                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                                measured_brdfs, n_measured_brdfs,
-                                gpu_textures, n_gpu_textures,
-                                grid_dim=grid_pix, block_dim=block_size)
+                        var shadow_grid = ceildiv(shadow_cap, block_size)
+                        vulkaninterop_rt_traverse_shadow_gpu(
+                            handle[].ctx, shadow_rays_buf, shadow_valid_buf,
+                            interop_scene, interop_rays_buf.value(),
+                            shadow_cap)
+                        handle[].ctx.enqueue_function[resolve_shadow_connect_gpu](
+                            interop_results_buf.value().unsafe_ptr(),
+                            mesh_material_idx_buf.value().unsafe_ptr().bitcast[Int64](),
+                            n_meshes_vk,
+                            shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
+                            shadow_scratch_ptr, shadow_cap,
+                            bvh2Nodes, primIds, meshes, materials,
+                            areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                            mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                            blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                            distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                            pointLights, n_point_lights,
+                            spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                            measured_brdfs, n_measured_brdfs,
+                            gpu_textures, n_gpu_textures,
+                            grid_dim=shadow_grid, block_dim=block_size)
                         handle[].ctx.enqueue_function[sum_shadow_connect_gpu](
                             cam_states_ptr, shadow_pending_ptr, shadow_valid_ptr, n_pix,
                             grid_dim=grid_pix, block_dim=block_size)

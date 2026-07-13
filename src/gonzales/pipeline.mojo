@@ -11,7 +11,7 @@ from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
 from .sppm import sppm_render, sppm_render_gpu
-from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront
+from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
 from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
@@ -830,6 +830,16 @@ def parse_and_render(
                     use_vk_vcm = False
                 else:
                     var n_light_paths_merge_vk = max(n_photons, n_pixels)
+                    # Task #163 stage 5 perf fix (2026-07-13): the scene's
+                    # ray/results buffers must also cover ALL _BDPT_MAX_VERTS
+                    # diffuse-branch connect shadow-ray slots for every
+                    # pixel traced in ONE dispatch per bounce, not n_pix at
+                    # a time -- see bdpt.mojo's shadow-ray batching loop.
+                    # vulkaninterop_rt_create_scene's max_rays purely drives
+                    # buffer sizing (raysBytes/resultsBytes = max_rays*8*4,
+                    # confirmed in vulkaninterop.cpp), no other backend
+                    # change needed to raise it.
+                    var max_rays_vk_vcm = max(n_light_paths_merge_vk, n_pixels * _BDPT_MAX_VERTS)
                     n_meshes_vk_vcm = Int(psc[0].mesh_count)
                     var vmeshes_vcm = alloc[TriangleMesh_C](max(n_meshes_vk_vcm, 1))
                     var point_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
@@ -838,7 +848,7 @@ def parse_and_render(
                         vmeshes_vcm[i] = psc[0].meshes[i]
                         point_counts_vcm[i] = Int64(psc[0].mesh_n_verts[i])
                         vidx_counts_vcm[i] = Int64(psc[0].mesh_n_tris[i]) * 3
-                    interop_scene_vcm = vulkaninterop_rt_create_scene(vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm, Int64(n_light_paths_merge_vk))
+                    interop_scene_vcm = vulkaninterop_rt_create_scene(vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm, Int64(max_rays_vk_vcm))
                     vmeshes_vcm.free(); point_counts_vcm.free(); vidx_counts_vcm.free()
                     if Int(interop_scene_vcm) == 0:
                         print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
@@ -846,8 +856,8 @@ def parse_and_render(
                     else:
                         var raysPtr_vcm = vulkaninterop_rt_get_rays_ptr(interop_scene_vcm)
                         var resultsPtr_vcm = vulkaninterop_rt_get_results_ptr(interop_scene_vcm)
-                        interop_rays_buf_vcm = DeviceBuffer[DType.float32](handle[].ctx, raysPtr_vcm, n_light_paths_merge_vk * 8, owning=False)
-                        interop_results_buf_vcm = DeviceBuffer[DType.float32](handle[].ctx, resultsPtr_vcm, n_light_paths_merge_vk * 8, owning=False)
+                        interop_rays_buf_vcm = DeviceBuffer[DType.float32](handle[].ctx, raysPtr_vcm, max_rays_vk_vcm * 8, owning=False)
+                        interop_results_buf_vcm = DeviceBuffer[DType.float32](handle[].ctx, resultsPtr_vcm, max_rays_vk_vcm * 8, owning=False)
 
                         var light_info_vcm = _build_mesh_light_info(psc)
                         var mesh_material_idx_vcm = light_info_vcm[0]
