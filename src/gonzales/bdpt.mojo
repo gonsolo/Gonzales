@@ -349,19 +349,20 @@ def _bdpt_nee_contribute(
 
 def _bdpt_mnee_diffuse_area_light(
     sd: SceneDescriptor2_C, hit: Point3f, gn: SIMD[DType.float32, 3], eff_alb: RGB,
-    beta: RGB, mut pcg: PCG32,
+    beta: RGB, mut pcg: PCG32, ior: Float32 = Float32(1.0),
 ) -> RGB:
     """Real MNEE (manifold next-event estimation, task #161): for a diffuse
-    camera vertex, probe whether a straight line toward a randomly-picked
-    area light first hits dielectric glass, and if so solve for the true
-    refracted connection via Newton iteration -- reusing shading.mojo's
-    _mnee_walk/_mnee_walk2, the exact technique the plain path tracer's own
-    _nee_area_lights already uses. This is WHY the plain path tracer
-    correctly lights barcelona-pavilion (night) while bdpt.mojo's VCM
-    connect/merge cannot: dielectric bounces are never stored as LVC
-    vertices (see project_vcm_stage2_mis_derivation memory), so a light
-    behind glass is structurally invisible to connect/merge, and its tiny
-    solid angle makes unassisted BSDF-sampling hit it by pure luck only.
+    (or coateddiffuse base-layer, see `ior` below) camera vertex, probe
+    whether a straight line toward a randomly-picked area light first hits
+    dielectric glass, and if so solve for the true refracted connection via
+    Newton iteration -- reusing shading.mojo's _mnee_walk/_mnee_walk2, the
+    exact technique the plain path tracer's own _nee_area_lights already
+    uses. This is WHY the plain path tracer correctly lights
+    barcelona-pavilion (night) while bdpt.mojo's VCM connect/merge cannot:
+    dielectric bounces are never stored as LVC vertices (see
+    project_vcm_stage2_mis_derivation memory), so a light behind glass is
+    structurally invisible to connect/merge, and its tiny solid angle
+    makes unassisted BSDF-sampling hit it by pure luck only.
 
     Deliberately scoped to ONLY the glass-detected case. An earlier attempt
     added plain straight-line NEE for ALL area lights (not just
@@ -374,11 +375,17 @@ def _bdpt_mnee_diffuse_area_light(
     when the probe does NOT hit glass first, this returns black and
     connect/merge (already correct for that ordinary case) are untouched.
 
-    Diffuse-only, matching shading.mojo's own _nee_area_lights scope
-    exactly -- no material in this codebase does MNEE for conductor/hair/
-    measured/coateddiffuse today (extending that is separately-scoped
-    future work). Curve-shaped area lights are skipped (no well-defined
-    surface tangents for a swept tube), same as shading.mojo."""
+    `ior` (2026-07-13 follow-up): the caller's coat IOR, applied as a
+    `(1 - Fresnel(cos_s_x0, ior))` transmittance factor on the returned
+    weight, matching _nee_weight_coated_diffuse_base's own formula shape
+    for ordinary (non-MNEE) coateddiffuse NEE. Defaults to 1.0 for plain
+    diffuse callers -- fr_dielectric(_, 1.0) is exactly 0 (no index
+    mismatch means no reflection), so `1 - 0 = 1` recovers the original
+    unweighted diffuse behavior exactly, not an approximation. Still
+    diffuse-family only -- no material in this codebase does MNEE for
+    conductor/hair/measured today. Curve-shaped area lights are skipped
+    (no well-defined surface tangents for a swept tube), same as
+    shading.mojo."""
     var n_area = Int(sd.areaLightCount)
     if n_area <= 0:
         return RGB(Float32(0))
@@ -506,7 +513,8 @@ def _bdpt_mnee_diffuse_area_light(
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
                 return RGB(Float32(0))
-            return beta * bxdf_eval_diffuse(eff_alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
+            var coat_t2 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
+            return beta * bxdf_eval_diffuse(eff_alb) * coat_t2 * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
         return RGB(Float32(0))
     else:
         # --- 1-vertex MNEE ---
@@ -562,7 +570,8 @@ def _bdpt_mnee_diffuse_area_light(
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
             return RGB(Float32(0))
-        return beta * bxdf_eval_diffuse(eff_alb) * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
+        var coat_t1 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
+        return beta * bxdf_eval_diffuse(eff_alb) * coat_t1 * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
 
 # ── Cosine-area PDF conversion ────────────────────────────────────────────────
 
@@ -1302,6 +1311,21 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
                     total += _bdpt_nee_contribute(beta * walk_beta, w_inf, ls_inf, hit, gn, cur_med_idx, sd, scratch)
+
+                # Task #161 follow-up (2026-07-13): MNEE for area lights
+                # behind glass, extended to coateddiffuse's base layer --
+                # see _bdpt_mnee_diffuse_area_light's docstring for why
+                # this only ever fires for the glass-obscured case (no
+                # double-count risk with the 4 NEE loops just above, which
+                # only ever reach UNobstructed lights). Fired once per
+                # recycling-walk iteration, matching those loops' own
+                # per-iteration cadence -- hit/gn never change across
+                # iterations (this walk is a fixed-position shading-space
+                # recycling, not a real geometric random walk), only
+                # walk_beta's attenuation does, so this models a genuinely
+                # different bounce each iteration, not a repeated estimate
+                # of the same one.
+                total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, ior)
 
                 var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
                 var w_up = _w_up_sample[0]
@@ -2312,6 +2336,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
                     total += _bdpt_nee_contribute(beta * walk_beta, w_inf, ls_inf, hit, gn, cur_med_idx, sd, scratch)
+
+                # Task #161 follow-up (2026-07-13): MNEE for area lights
+                # behind glass, extended to coateddiffuse's base layer --
+                # see _bdpt_mnee_diffuse_area_light's docstring for why
+                # this only ever fires for the glass-obscured case (no
+                # double-count risk with the 4 NEE loops just above, which
+                # only ever reach UNobstructed lights). Fired once per
+                # recycling-walk iteration, matching those loops' own
+                # per-iteration cadence -- hit/gn never change across
+                # iterations (this walk is a fixed-position shading-space
+                # recycling, not a real geometric random walk), only
+                # walk_beta's attenuation does, so this models a genuinely
+                # different bounce each iteration, not a repeated estimate
+                # of the same one.
+                total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, ior)
 
                 var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
                 var w_up = _w_up_sample[0]
