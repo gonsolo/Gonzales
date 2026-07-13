@@ -47,6 +47,14 @@ comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (in
                                 # just to reach a real (diffuse) vertex)
 comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices stored per light subpath (caps
                                 # each light path's contribution to the shared cache below)
+comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled via `if`
+                                  # guards instead of a `for` loop -- see
+                                  # _bdpt_mnee_sphere_light's own docstring for the real
+                                  # GPU codegen bug (CUDA_ERROR_ILLEGAL_ADDRESS) this
+                                  # works around. Scenes with more emissive spheres than
+                                  # this only lose MNEE's glass-behind-sphere handling for
+                                  # the extras -- ordinary NEE/connect/merge still reaches
+                                  # them normally.
 
 # ── VCM (Vertex Connection and Merging, Georgiev et al. 2012) ────────────────
 # Real VCM combines vertex CONNECTION (_bdpt_connect_to_cache/_connect) and
@@ -572,6 +580,286 @@ def _bdpt_mnee_diffuse_area_light(
             return RGB(Float32(0))
         var coat_t1 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
         return beta * bxdf_eval_diffuse(eff_alb) * coat_t1 * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
+
+
+def _bdpt_mnee_sphere_light(
+    sd: SceneDescriptor2_C, hit: Point3f, gn: SIMD[DType.float32, 3], eff_alb: RGB,
+    beta: RGB, mut pcg: PCG32, sph_idx: Int, n_spheres: Int, ior: Float32 = Float32(1.0),
+) -> RGB:
+    """Real MNEE (task #161 follow-up, 2026-07-13) against an ANALYTIC
+    SPHERE area light behind glass -- sibling to
+    _bdpt_mnee_diffuse_area_light (mesh/triangle lights), which live in a
+    completely separate list (sd.spheres, not sd.areaLights). Deliberate
+    FULL, SELF-CONTAINED DUPLICATE of that function's probe+Newton-walk
+    body (not a shared helper) -- see this section's own investigation
+    notes below for why.
+
+    _sample_sphere_light_nee's existing solid-angle/cone sampling (used
+    for ORDINARY sphere NEE elsewhere in this file) can't be reused here
+    -- it only returns a sampled DIRECTION and a solid-angle pdf w.r.t.
+    the shading point, no actual surface point or light-side
+    parameterization to take Newton-walk derivatives against. Instead,
+    samples a UNIFORM point on the sphere's surface via the standard
+    spherical parameterization p(θ,φ) = center + r·(sinθcosφ, sinθsinφ,
+    cosθ), using that SAME parameterization's own analytic partial
+    derivatives ∂p/∂φ, ∂p/∂θ as the light-side tangent vectors (matches
+    pbrt's own dpdu/dpdv convention for spheres).
+
+    `sph_idx` (an index into sd.spheres, read locally via
+    `sd.spheres[sph_idx]`) + `n_spheres` (the TOTAL sphere count, matching
+    `_sample_sphere_light_nee`'s own `1/n_sph` pdf convention) -- caller
+    iterates every sphere (see call-site comment for why NOT via a `for`
+    loop). `ior`: accepted for signature symmetry with
+    _bdpt_mnee_diffuse_area_light but NOT applied in the return value --
+    see the GPU-codegen-bug note below for why.
+
+    RESOLVED GPU BUG (2026-07-13, real Mojo/GPU-codegen bug, not sphere-
+    specific -- root-caused via systematic bisection, not application
+    logic): every earlier implementation of this feature crashed with a
+    reproducible CUDA_ERROR_ILLEGAL_ADDRESS on barcelona-pavilion-night
+    (this task's actual target scene). Made fully deterministic by
+    temporarily hardcoding pbrt_parser.mojo's RNG seed (normally
+    perf_counter_ns()) -- this turned a seemingly-nondeterministic crash
+    (varied run to run because a wall-clock seed explores different pixel/
+    sample paths each time) into 100%-reproducible pass/fail, which is
+    what made real bisection possible. Systematic cutoff-return bisection
+    through this function's body (return RGB(0) at successively later
+    points, rebuild+rerun at each cutoff) narrowed the crash to an exact
+    line: folding a SECOND `fr_dielectric(...)` call's result (`coat_t =
+    1 - fr_dielectric(cos_s_x0, ior)`) into the final returned RGB
+    expression, alongside `sph.emission`/`bxdf_eval_diffuse(...)`/the G
+    and pdf terms. Calling `fr_dielectric` and discarding the result was
+    SAFE; using `sph.emission` and `bxdf_eval_diffuse(...)` together in
+    the final expression was SAFE; splitting the multiply across two
+    statements (`var contrib = ...; return contrib * coat_t`) did NOT
+    help -- still crashed identically, ruling out "too many chained
+    multiplies in one expression" as the mechanism. This is consistent
+    with (though not confirmed identical to) the compiler bug already
+    flagged in `reference_mojo_compiler_bug_6759.md` -- a real, filed-
+    worthy Mojo/GPU-codegen issue tied to register allocation/scheduling
+    for this class of function (heavy, `InlineArray`-using, multiple
+    early returns, BVH traversal) under this scene's specific complexity,
+    not a NaN/degenerate-value bug in this code (cos_s_x0/ior were always
+    finite, well-conditioned values at the crash site).
+    WORKAROUND (applied here): don't compute/apply `coat_t` at all. Every
+    CURRENT call site passes the default `ior=1.0`, for which
+    `fr_dielectric(_, 1.0) == 0` exactly (an identity already relied on
+    by _bdpt_mnee_diffuse_area_light's own `ior=1.0` default case), so
+    `coat_t` would always equal exactly `1.0` anyway -- omitting it is a
+    zero behavior change today, not an approximation. If sphere-light
+    MNEE for coateddiffuse (ior != 1.0) is ever revisited, `coat_t` will
+    need a DIFFERENT strategy that avoids this exact pattern (e.g.
+    precomputing it in the caller and passing it in as a parameter,
+    rather than computing+applying `fr_dielectric` inside this function).
+    See project_barcelona_pavilion_mnee memory for the full investigation,
+    including two earlier, unrelated red herrings (a `for`-loop-wrapping
+    hypothesis and a shared-function-split hypothesis, both ruled out by
+    this same bisection).
+    WORKAROUND (unrelated, applied at every call site): call this
+    function via manually UNROLLED `if`-guarded statements, never a `for`
+    loop, capped at a small constant (comptime _MNEE_MAX_SPHERES) --
+    scenes with more emissive spheres than the cap silently skip the
+    extras for MNEE only (ordinary light-hit/connect/merge/NEE still
+    reaches them normally, this only affects the glass-behind-sphere-
+    light special case). Kept even though the loop-wrapping hypothesis
+    turned out not to be the real bug, since unrolling is harmless and
+    was already in place before the real cause was found."""
+    var sph = sd.spheres[sph_idx]
+    if sph.isAreaLight == Int8(0):
+        return RGB(Float32(0))
+    var u1 = pcg.next_float(); var u2 = pcg.next_float()
+    var cosT = Float32(1) - Float32(2) * u1
+    var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
+    var phi = Float32(2) * PI * u2
+    var cosPhi = cos(phi); var sinPhi = sin(phi)
+    var dir = SIMD[DType.float32, 3](sinT*cosPhi, sinT*sinPhi, cosT)
+    var light_point = sph.center.to_simd() + dir * sph.radius
+    # Analytic tangents of p(theta,phi) = center + r*dir(theta,phi) w.r.t.
+    # (phi,theta) -- the same two parameters this point was just sampled
+    # from (matches pbrt's own dpdu/dpdv convention for spheres).
+    var ldp_du = SIMD[DType.float32, 3](-sinT*sinPhi, sinT*cosPhi, Float32(0)) * sph.radius   # dp/dphi
+    var ldp_dv = SIMD[DType.float32, 3](cosT*cosPhi, cosT*sinPhi, -sinT) * sph.radius          # dp/dtheta
+    var total_area = Float32(4) * PI * sph.radius * sph.radius
+    if total_area <= Float32(0):
+        return RGB(Float32(0))
+    var hit_v = hit.to_simd()
+    var to_light = light_point - hit_v
+    var dist_sq = dot(to_light, to_light)
+    if dist_sq < Float32(1e-8) or total_area <= Float32(0):
+        return RGB(Float32(0))
+    var dist = sqrt(dist_sq)
+    var shadow_dir = to_light * (Float32(1) / dist)
+
+    var probe_org = hit_v + shadow_dir * Float32(0.0002)
+    var probe_ray = Ray_C(Point3f(probe_org[0], probe_org[1], probe_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+    var probe_tmax = dist * Float32(0.9995)
+    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    var probe_inter = probe_store[0]
+    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
+        return RGB(Float32(0))
+    var probe_mat = sd.materials[Int(probe_inter.primId.materialIndex)]
+    if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
+        return RGB(Float32(0))
+
+    var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
+    if not ptok:
+        return RGB(Float32(0))
+    var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
+    var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
+    var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+    var pdp_du = pp1 - pp0
+    var pdp_dv = pp2 - pp0
+    var pgeo_n3 = cross(pdp_du, pdp_dv)
+    var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
+    if pgeo_n_len <= Float32(1e-10):
+        return RGB(Float32(0))
+    var pgeo_n_raw = pgeo_n3 * (Float32(1) / pgeo_n_len)
+    var ior1 = probe_mat.albedo.r
+    var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior1)
+    var pgeo_n = pgeo_n_raw
+    if dot(pgeo_n, shadow_dir) > Float32(0):
+        pgeo_n = -pgeo_n
+    var pu = probe_inter.u; var pvb = probe_inter.v
+    var x1_init = pp0*(Float32(1)-pu-pvb) + pp1*pu + pp2*pvb
+
+    var pdf_sel = Float32(1) / Float32(max(n_spheres, 1))  # uniform light+point pick, matches this file's own convention
+
+    var probe2_t0 = probe_inter.tHit
+    var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
+    var probe2_org = x1_init + shadow_dir * Float32(0.0005)
+    var probe2_inter = dummy_inter
+    if probe2_rem > Float32(0.001):
+        var probe2_ray = Ray_C(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        probe2_inter = probe2_store[0]
+
+    if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
+        var probe2_mat = sd.materials[Int(probe2_inter.primId.materialIndex)]
+        if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
+            # --- 2-vertex MNEE ---
+            var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
+            if not p2ok:
+                return RGB(Float32(0))
+            var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
+            var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
+            var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+            var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
+            var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
+            var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
+            if pgeo_n_len2 <= Float32(1e-10):
+                return RGB(Float32(0))
+            var pgeo_n2_raw = pgeo_n3_2 * (Float32(1) / pgeo_n_len2)
+            var ior2 = probe2_mat.albedo.r
+            var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior2)
+            var pgeo_n2 = pgeo_n2_raw
+            if dot(pgeo_n2, shadow_dir) > Float32(0):
+                pgeo_n2 = -pgeo_n2
+            var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
+            var x2_init = p2p0*(Float32(1)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
+            var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
+                hit_v, light_point,
+                x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
+                x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
+                ldp_du, ldp_dv)
+            if not ok2:
+                return RGB(Float32(0))
+            var wi2f = hit_v - x1_f2
+            var wi2fl = sqrt(dot(wi2f, wi2f))
+            if wi2fl <= Float32(1e-8):
+                return RGB(Float32(0))
+            var wi2fn = wi2f * (Float32(1) / wi2fl)
+            var cos_s_x0 = dot(gn, -wi2fn)
+            if cos_s_x0 <= Float32(0):
+                return RGB(Float32(0))
+            var G2 = min(abs(dot(wi2fn, pgeo_n)) / (wi2fl*wi2fl) * dx1_dxl2, Float32(2))
+            var pdf_area2 = pdf_sel / total_area
+            var wo2f = light_point - x2_f2
+            var wo2fl = sqrt(dot(wo2f, wo2f))
+            if wo2fl <= Float32(1e-8):
+                return RGB(Float32(0))
+            var wo2fn = wo2f * (Float32(1) / wo2fl)
+            var vis2_org = x2_f2 + wo2fn * Float32(0.001)
+            var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
+            if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                return RGB(Float32(0))
+            # coat_t (coateddiffuse coat-transmittance, mirrors
+            # _bdpt_mnee_diffuse_area_light's `ior` handling) is DELIBERATELY
+            # not applied here -- see this function's own docstring, "GPU
+            # codegen bug" section, for why folding a 2nd fr_dielectric(...)
+            # result into this return crashes with CUDA_ERROR_ILLEGAL_ADDRESS
+            # on this task's target scene. Every current call site passes
+            # the default ior=1.0 (coateddiffuse sphere-light call sites are
+            # disabled, see _MNEE_MAX_SPHERES call-site comments), for which
+            # fr_dielectric(_, 1.0) == 0 exactly, so coat_t == 1.0 exactly --
+            # applying it would be a mathematical no-op anyway.
+            return beta * bxdf_eval_diffuse(eff_alb) * sph.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
+        return RGB(Float32(0))
+    else:
+        # --- 1-vertex MNEE ---
+        var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(hit_v, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
+        if not mnee_ok:
+            return RGB(Float32(0))
+        var wi_f = hit_v - x1_f
+        var wi_len2_f = dot(wi_f, wi_f)
+        var wo_f = light_point - x1_f
+        var wo_len2_f = dot(wo_f, wo_f)
+        if wi_len2_f <= Float32(1e-8) or wo_len2_f <= Float32(1e-8):
+            return RGB(Float32(0))
+        var wi_len_f = sqrt(wi_len2_f)
+        var wo_len_f = sqrt(wo_len2_f)
+        var wi_fn = wi_f * (Float32(1) / wi_len_f)
+        var wo_fn = wo_f * (Float32(1) / wo_len_f)
+        var cos_s_x0 = dot(gn, -wi_fn)
+        if cos_s_x0 <= Float32(0):
+            return RGB(Float32(0))
+        var H3_f = -(wi_fn + wo_fn * eta_f)
+        var H_len2_f = dot(H3_f, H3_f)
+        if H_len2_f <= Float32(1e-10):
+            return RGB(Float32(0))
+        var H_len_f = sqrt(H_len2_f)
+        var H_f = H3_f * (Float32(1) / H_len_f)
+        var dp_du_dot_n = dot(pdp_du, pgeo_n)
+        var s3_f = pdp_du - pgeo_n * dp_du_dot_n
+        var s_len2_f = dot(s3_f, s3_f)
+        if s_len2_f <= Float32(1e-10):
+            return RGB(Float32(0))
+        var s_f = s3_f * (Float32(1) / sqrt(s_len2_f))
+        var t_f = cross(pgeo_n, s_f)
+        var ilo_l = eta_f / (H_len_f * wo_len_f)
+        var dHdu_l = (ldp_du - wo_fn * dot(wo_fn, ldp_du)) * ilo_l
+        var dHdv_l = (ldp_dv - wo_fn * dot(wo_fn, ldp_dv)) * ilo_l
+        dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
+        dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
+        var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
+        var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
+        var det_dc = dc00*dc11 - dc01*dc10
+        var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
+        var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / wi_len2_f
+        var G = min(dw0_dx1 * dx1_dxl, Float32(2))
+        var cosNI = abs(dot(pgeo_n, wi_fn))
+        var cosHI = abs(dot(H_f, wi_fn))
+        var cosTM = abs(dot(pgeo_n, H_f))
+        var F_r = fr_dielectric(cosNI, eta_f)
+        var T_f = Float32(1) - F_r
+        var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
+        var pdf_area_x2 = pdf_sel / total_area
+        var vis_org = x1_f + wo_fn * Float32(0.001)
+        var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
+                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+            return RGB(Float32(0))
+        # coat_t deliberately not applied -- see the 2-vertex branch's
+        # identical comment above (this function's docstring has the full
+        # GPU-codegen-bug writeup). ior=1.0 at every current call site makes
+        # this an exact no-op, not an approximation.
+        return beta * bxdf_eval_diffuse(eff_alb) * sph.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
 
 # ── Cosine-area PDF conversion ────────────────────────────────────────────────
 
@@ -1160,6 +1448,23 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
             total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg)
+            # Sphere-shaped area lights (task #161 follow-up, 2026-07-13):
+            # a completely separate list from sd.areaLights (see
+            # _bdpt_mnee_sphere_light's docstring). Deliberately NOT a
+            # `for` loop -- see that function's own investigation note for
+            # the real GPU codegen bug (CUDA_ERROR_ILLEGAL_ADDRESS) a loop
+            # here triggers on this task's own target scene. Manually
+            # unrolled instead, capped at _MNEE_MAX_SPHERES (currently 4
+            # -- update both together if that constant ever changes).
+            var n_sph_mnee = Int(sd.sphereCount)
+            if 0 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee)
+            if 1 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee)
+            if 2 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee)
+            if 3 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee)
 
             # Cosine-weighted scatter direction
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -1326,6 +1631,24 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
                 # different bounce each iteration, not a repeated estimate
                 # of the same one.
                 total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, ior)
+                # Sphere-shaped area lights -- see the plain-diffuse
+                # branch's matching call site (above in this file) for
+                # why this is manually unrolled, not a `for` loop.
+                # Kept at 0 (not sd.sphereCount): _bdpt_mnee_sphere_light no
+                # longer applies coat_t at all (see its docstring's "GPU
+                # codegen bug" section) -- calling it here with a non-1.0
+                # ior would silently skip the coat's Fresnel attenuation,
+                # overestimating light through the coat for this specific
+                # case. Safe to enable once coat_t gets a real fix.
+                var n_sph_mnee_cd = 0
+                if 0 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 0, n_sph_mnee_cd, ior)
+                if False and 1 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 1, n_sph_mnee_cd, ior)
+                if False and 2 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 2, n_sph_mnee_cd, ior)
+                if False and 3 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 3, n_sph_mnee_cd, ior)
 
                 var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
                 var w_up = _w_up_sample[0]
@@ -2185,6 +2508,23 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
             total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg)
+            # Sphere-shaped area lights (task #161 follow-up, 2026-07-13):
+            # a completely separate list from sd.areaLights (see
+            # _bdpt_mnee_sphere_light's docstring). Deliberately NOT a
+            # `for` loop -- see that function's own investigation note for
+            # the real GPU codegen bug (CUDA_ERROR_ILLEGAL_ADDRESS) a loop
+            # here triggers on this task's own target scene. Manually
+            # unrolled instead, capped at _MNEE_MAX_SPHERES (currently 4
+            # -- update both together if that constant ever changes).
+            var n_sph_mnee = Int(sd.sphereCount)
+            if 0 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee)
+            if 1 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee)
+            if 2 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee)
+            if 3 < n_sph_mnee:
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee)
 
             # Cosine-weighted scatter direction
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -2351,6 +2691,24 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # different bounce each iteration, not a repeated estimate
                 # of the same one.
                 total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, ior)
+                # Sphere-shaped area lights -- see the plain-diffuse
+                # branch's matching call site (above in this file) for
+                # why this is manually unrolled, not a `for` loop.
+                # Kept at 0 (not sd.sphereCount): _bdpt_mnee_sphere_light no
+                # longer applies coat_t at all (see its docstring's "GPU
+                # codegen bug" section) -- calling it here with a non-1.0
+                # ior would silently skip the coat's Fresnel attenuation,
+                # overestimating light through the coat for this specific
+                # case. Safe to enable once coat_t gets a real fix.
+                var n_sph_mnee_cd = 0
+                if 0 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 0, n_sph_mnee_cd, ior)
+                if False and 1 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 1, n_sph_mnee_cd, ior)
+                if False and 2 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 2, n_sph_mnee_cd, ior)
+                if False and 3 < n_sph_mnee_cd:
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 3, n_sph_mnee_cd, ior)
 
                 var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
                 var w_up = _w_up_sample[0]
