@@ -5836,16 +5836,16 @@ def vulkaninterop_pack_shadow_rays_kernel(
     out_rays[dst8 + 7] = shadow_rays[src8 + 7]
 
 def vulkaninterop_rt_traverse_shadow_gpu(
+    # Perf (2026-07-13): pack -> trace only, no unpack step -- the caller's
+    # resolve_shadow_connect_gpu now reads interop_results_buf's raw float
+    # layout directly (it only needs hit/material-index, not a full
+    # reconstructed Intersection_C), cutting one kernel launch per local
+    # slot. See resolve_shadow_connect_gpu's docstring.
     ctx: DeviceContext,
     shadow_rays_buf: DeviceBuffer[DType.uint8],
     shadow_valid_buf: DeviceBuffer[DType.uint8],
-    shadow_inter_scratch_buf: DeviceBuffer[DType.uint8],
     interop_scene: VulkanInteropRtSceneHandle,
     interop_rays_buf: DeviceBuffer[DType.float32],
-    interop_results_buf: DeviceBuffer[DType.float32],
-    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
-    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
-    n_meshes: Int,
     local: Int,
     n_pix: Int,
 ) raises:
@@ -5862,16 +5862,6 @@ def vulkaninterop_rt_traverse_shadow_gpu(
 
     var cuda_stream = CUDA(ctx.stream())
     _ = vulkaninterop_rt_trace(interop_scene, Int32(n_pix), cuda_stream)
-
-    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
-        interop_results_buf.unsafe_ptr(),
-        shadow_inter_scratch_buf.unsafe_ptr().bitcast[Intersection_C](),
-        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64](),
-        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
-        n_meshes,
-        n_pix,
-        grid_dim=grid, block_dim=block_size,
-    )
 
 def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -6198,14 +6188,26 @@ def resolve_shadow_connect_gpu(
     # [0, _BDPT_MAX_VERTS) at a time -- the interop RT scene's own ray
     # capacity is only n_pix, not n_pix*_BDPT_MAX_VERTS, so all _BDPT_MAX_VERTS
     # shadow slots per pixel are traced in _BDPT_MAX_VERTS separate batches
-    # instead of one, to avoid resizing the shared Vulkan scene). `scratch`
-    # is a SEPARATE n_pix-or-larger Intersection_C buffer for
+    # instead of one, to avoid resizing the shared Vulkan scene).
+    #
+    # Perf (2026-07-13): reads `shadow_results` (the RAW interop trace
+    # output, same idx*8 float layout vulkaninterop_unpack_results_kernel
+    # consumes) directly instead of going through a separate unpack-into-
+    # Intersection_C kernel first -- this kernel only ever needs hit/
+    # material-index, not the full reconstructed Intersection_C (uv/mesh/
+    # tri/area-light-index), so unpacking those was wasted work. Cuts one
+    # of the ~3 kernel launches per local slot (pack/unpack/resolve ->
+    # pack/resolve). See vulkaninterop_rt_traverse_shadow_gpu below, which
+    # now does pack -> trace only, no unpack step.
+    #
+    # `scratch` is a SEPARATE n_pix-or-larger Intersection_C buffer for
     # _visible_transmittance's own internal multi-round tracing in the
-    # fallback path -- must not alias `shadow_inter` (would corrupt the
-    # just-unpacked closest-hit result mid-read) or `shadow_pending`/
-    # `shadow_valid`/`shadow_seg_med`/`shadow_rays` (those stay strided by
+    # fallback path -- must not alias `shadow_pending`/`shadow_valid`/
+    # `shadow_seg_med`/`shadow_rays` (those stay strided by
     # _BDPT_MAX_VERTS and are indexed via `local`, not `pix`, below).
-    shadow_inter: UnsafePointer[Intersection_C, MutAnyOrigin],
+    shadow_results: UnsafePointer[Float32, MutAnyOrigin],
+    mesh_material_idx: UnsafePointer[Int64, MutAnyOrigin],
+    n_meshes_vk: Int,
     shadow_pending: UnsafePointer[RGB, MutAnyOrigin],
     shadow_valid: UnsafePointer[Int8, MutAnyOrigin],
     shadow_seg_med: UnsafePointer[Int32, MutAnyOrigin],
@@ -6267,21 +6269,28 @@ def resolve_shadow_connect_gpu(
         gpuTextures, gpuTextureCount,
     )
 
-    var inter = shadow_inter[pix]
     var seg_med = shadow_seg_med[idx]
     var idx8 = idx * 8
     var org = Point3f(shadow_rays[idx8 + 0], shadow_rays[idx8 + 1], shadow_rays[idx8 + 2])
     var dir = Vec3f(shadow_rays[idx8 + 4], shadow_rays[idx8 + 5], shadow_rays[idx8 + 6])
     var dist = shadow_rays[idx8 + 7] / Float32(0.9995)
 
+    var ridx = pix * 8
+    var iresults = shadow_results.bitcast[Int32]()
+    var hitFlag = iresults[ridx + 6]
+
     var needs_fallback = False
-    if inter.hit == Int8(0):
+    if hitFlag != Int32(1):
         if seg_med >= Int32(0):
             needs_fallback = True
         # else: fully visible (Tr=1), pending already holds the correct
         # unweighted contribution -- nothing to multiply.
     else:
-        var mat = sd.materials[Int(inter.primId.materialIndex)]
+        var mi = Int(iresults[ridx + 4])
+        var mat_idx = Int64(0)
+        if mi >= 0 and mi < n_meshes_vk:
+            mat_idx = mesh_material_idx[mi]
+        var mat = sd.materials[Int(mat_idx)]
         if seg_med >= Int32(0) or mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric or mat.type == MatKind.interface:
             needs_fallback = True
         else:
@@ -6569,6 +6578,27 @@ def vcm_render_gpu_wavefront(
                     lvc_ptr, path_len_ptr, lvc_cap, merge_next_ptr, merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)
 
+                # Task #163 stage 5 perf fix, ATTEMPTED AND REVERTED
+                # (2026-07-13): tried bounding the per-bounce shadow-ray
+                # local-slot loop below by this sample's actual max light-
+                # path length (one path_len_buf.map_to_host() readback per
+                # SAMPLE). Correct in principle, but made things WORSE, not
+                # better -- 256x256/16spp went from 6.4s to 34.9s. Root
+                # cause: this whole per-sample loop is normally fully async/
+                # pipelined across all `si` iterations with zero host syncs;
+                # a single per-sample sync point breaks that overlap and
+                # forces the CPU to idle-wait on GPU completion every
+                # sample, which cost far more than the dispatches it saved.
+                # Also, VCM's bounce loop doesn't respect the scene's own
+                # `maxdepth` (grep confirms bdpt.mojo never reads
+                # psc[0].max_depth) -- cornell-box's light paths routinely
+                # reach the full _BDPT_MAX_VERTS(10) cap via RR-only
+                # termination regardless of its maxdepth=4 setting, so even
+                # a static maxdepth-based bound would be unsafe (could drop
+                # real connect candidates) as well as ineffective (wouldn't
+                # actually reduce shadow_locals below 10 for this scene).
+                # See project_vulkan_rt_backend memory for the full story.
+
                 # Task #163 stage 4 part 3: wavefront-staged camera pass --
                 # same shape as the light pass above. Connect/merge (still
                 # software-BVH shadow rays, per the user-confirmed stage 4
@@ -6621,18 +6651,20 @@ def vcm_render_gpu_wavefront(
                     # why it can't be one batched dispatch), then fold the
                     # resolved contributions into each pixel's running total
                     # before the next bounce's primary intersect overwrites
-                    # inter_cam_buf/inter_light_buf (both reused as scratch
-                    # here -- neither is needed again until this si's next
-                    # bounce/next si's light pass respectively).
+                    # inter_light_buf (reused as _visible_transmittance
+                    # fallback scratch here -- not needed again until this
+                    # si's next bounce/next si's light pass respectively).
                     if use_vk:
                         for local in range(_BDPT_MAX_VERTS):
                             vulkaninterop_rt_traverse_shadow_gpu(
-                                handle[].ctx, shadow_rays_buf, shadow_valid_buf, inter_cam_buf,
-                                interop_scene, interop_rays_buf.value(), interop_results_buf.value(),
-                                mesh_material_idx_buf.value(), mesh_al_idx_buf.value(),
-                                n_meshes_vk, local, n_pix)
+                                handle[].ctx, shadow_rays_buf, shadow_valid_buf,
+                                interop_scene, interop_rays_buf.value(),
+                                local, n_pix)
                             handle[].ctx.enqueue_function[resolve_shadow_connect_gpu](
-                                inter_cam_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
+                                interop_results_buf.value().unsafe_ptr(),
+                                mesh_material_idx_buf.value().unsafe_ptr().bitcast[Int64](),
+                                n_meshes_vk,
+                                shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
                                 inter_light_ptr, local, n_pix,
                                 bvh2Nodes, primIds, meshes, materials,
                                 areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
