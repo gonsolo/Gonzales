@@ -552,16 +552,8 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].albedo = refl
     path_ptr[].bounce += 1
 
-    # Russian roulette after first bounce
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-
-    path_ptr[].pcgState = pcg.state
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
 # ── CoatedDiffuse (plastic) branch ───────────────────────────────────────────
@@ -901,15 +893,27 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].throughput *= beta
     path_ptr[].bounce += 1
 
-    # Russian roulette after first bounce
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
+
+
+# Russian roulette after the first bounce, then save PCG state -- the same
+# 8-line epilogue every shade_* path ends with. u_rr must be drawn by the
+# caller (not inside here) since some callers already drew it earlier in
+# the same bounce for other purposes and must not draw a second one.
+@always_inline
+def _apply_russian_roulette(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    pcg: PCG32,
+    u_rr: Float32,
+):
     if path_ptr[].bounce > 1:
         var lum = path_ptr[].throughput.luma()
         var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
+        if u_rr < q:
             path_ptr[].active = 0
         else:
             path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-
     path_ptr[].pcgState = pcg.state
 
 
@@ -940,15 +944,8 @@ def _finish_delta_bounce(
     path_ptr[].lastBsdfPdf = Float32(0.0)
     path_ptr[].bounce += 1
 
-    # Russian roulette after first bounce
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-    path_ptr[].pcgState = pcg.state
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
@@ -1226,14 +1223,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_iso)
         path_ptr[].bounce += 1
-        if path_ptr[].bounce > 1:
-            var lum = path_ptr[].throughput.luma()
-            var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-            if pcg.next_float() < q:
-                path_ptr[].active = 0
-            else:
-                path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-        path_ptr[].pcgState = pcg.state
+        var u_rr = pcg.next_float()
+        _apply_russian_roulette(path_ptr, pcg, u_rr)
     else:
         _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat_eff.albedo)
 
@@ -1413,14 +1404,8 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].lastBsdfPdf = bxdf_pdf_measured(mb, wo_l, wi_l)
     path_ptr[].bounce += 1
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-    path_ptr[].pcgState = pcg.state
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
 # CoatedConductor: dielectric clearcoat over GGX conductor.
@@ -1473,14 +1458,8 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_cc)
         path_ptr[].bounce += 1
-        if path_ptr[].bounce > 1:
-            var lum = path_ptr[].throughput.luma()
-            var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-            if pcg.next_float() < q:
-                path_ptr[].active = 0
-            else:
-                path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-        path_ptr[].pcgState = pcg.state
+        var u_rr = pcg.next_float()
+        _apply_russian_roulette(path_ptr, pcg, u_rr)
     else:
         _finish_delta_bounce(path_ptr, pcg, bs, hit_point, mat.albedo)
 
@@ -2533,15 +2512,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].throughput *= alb * _w
     path_ptr[].bounce += 1
 
-    if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
-        if u_rr < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-
-    path_ptr[].pcgState = pcg.state
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
 @always_inline
