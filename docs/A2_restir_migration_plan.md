@@ -363,12 +363,49 @@ candidates compete, so technique selection emerges from resampling weights.
 
 **Do not start before Phases 4-8 work independently.**
 
-### Phase 10 — Cost-awareness (**open research**)
+### Phase 10 — Cost-awareness (**open research, but a viable direction —
+checked 2026-07-28**)
 
-Weight by contribution-*per-compute* (cf. Kondapaneni et al., *Optimal
-MIS*, 2019); add a bandit-style layer throttling *invocation* of
-low-yield techniques — a correct weight only discards bad candidates after
-paying to generate them.
+Weight by contribution-*per-compute*; add a bandit-style layer throttling
+*invocation* of low-yield techniques — a correct weight only discards bad
+candidates after paying to generate them.
+
+**Literature check:** Kondapaneni et al. 2019, *Optimal MIS*, read in full —
+does **not** give cost-aware weighting despite being cited for it. It derives
+variance-optimal weights for a *fixed* technique roster and fixed sample
+counts (useful for Phase 9's weight math); its own §9 explicitly leaves
+"whether some techniques should be included in the mix at all" as future
+work. No canonical paper found for bandit-driven per-pixel technique
+throttling in rendering specifically — likely genuinely open, not just
+unread.
+
+**Toy-simulated the actual mechanism** (many pixels, most gain nothing from
+an expensive technique, a rare few gain a lot; compared Always/Never/
+Adaptive-two-phase/Oracle at matched total budget). Unlike 9.2, **this one
+came back positive**: a budget-safe adaptive policy (spend a small,
+budget-*proportional* — not absolute — slice exploring every pixel, then
+invest further only where a hit was actually observed) beat both naive
+extremes at every budget and every scene sparsity tested (0.5-10% of
+pixels benefiting), by up to 9-24x on mean image error, with zero false
+positives throughout. Real lesson from a first-pass bug: a *fixed absolute*
+exploration budget can itself exceed the total available budget and blow
+up the estimator — exploration cost must scale with what's actually
+available, not be assumed affordable.
+
+**Honest gap:** even the fixed version never got within an order of
+magnitude of Oracle, and missed most true rare-technique pixels outright at
+tight budgets (single independent per-pixel trials can't reliably detect a
+rare event) — it still won because avoiding waste on the far more numerous
+zero-yield pixels mattered more than catching every rare one. Likely lever,
+untested: pool exploration evidence spatially (real caustic features span
+pixel neighborhoods, not scattered independent pixels) — the same idea
+ReSTIR already uses for reservoir reuse — instead of treating each pixel as
+an independent bandit arm.
+
+**Net:** unlike 9.2's two dead ends, this mechanism is empirically viable
+and worth prototyping for real, not just a literature gap to route around.
+Toy sim (`phase10_toy.py`, scratch only, not committed to the repo) —
+see chat history 2026-07-28 to reproduce.
 
 ---
 
