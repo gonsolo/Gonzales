@@ -396,16 +396,47 @@ available, not be assumed affordable.
 magnitude of Oracle, and missed most true rare-technique pixels outright at
 tight budgets (single independent per-pixel trials can't reliably detect a
 rare event) — it still won because avoiding waste on the far more numerous
-zero-yield pixels mattered more than catching every rare one. Likely lever,
-untested: pool exploration evidence spatially (real caustic features span
-pixel neighborhoods, not scattered independent pixels) — the same idea
-ReSTIR already uses for reservoir reuse — instead of treating each pixel as
-an independent bandit arm.
+zero-yield pixels mattered more than catching every rare one.
+
+**Spatial pooling, tested (2026-07-28):** the original toy scattered
+"special" pixels i.i.d. — no spatial structure to exploit, so this was
+untested. Rebuilt the scene as a grid with contiguous caustic-like blobs,
+and added a pooling policy: spend exploration probes per *block* instead
+of per pixel; if any probe anywhere in a block hits, the whole block
+qualifies for extra investment (ReSTIR's own move — propagate evidence
+found anywhere in a neighborhood to the whole neighborhood). **Result:
+substantially better than independent-per-pixel at every sparsity level
+tested (0.5-10%), 1.4-4.2x lower mean image error**, by turning many
+individually-unreliable per-pixel exploration decisions into fewer,
+far-more-reliable per-block ones (false negatives dropped from 38/49 to
+7/49 at 0.5% sparsity, same total exploration budget).
+
+Two real limits, not a clean unconditional win:
+- **Block size has a sweet spot, not "bigger is better."** Too small
+  (2×2): barely improves on independent, not enough pixels pooled to
+  concentrate trials. Too large (16×16): one hit anywhere in the block
+  triggers extra investment across the whole thing — false positives
+  explode (876/3948 ordinary pixels wrongly flagged, vs. 0 for
+  independent). Best result was at block size ≈ the blob size used to
+  generate the scene, not a coincidence — mirrors needing to tune
+  ReSTIR's spatial-reuse radius to the actual feature scale.
+- **Pooling can lose to independent exploration once the budget is
+  generous.** At the most generous budget tested, independent alone
+  already reached zero false negatives and beat pooling — pooling's
+  false positives dilute the shared follow-up budget across pixels that
+  don't need it, while independent exploration never has false positives
+  to dilute with (ordinary pixels have exactly-zero success probability
+  by construction). So the advantage concentrates exactly in the
+  tight-budget, sparse-feature regime Phase 10 actually cares about —
+  nobody needs throttling once the budget is already generous — but it
+  isn't unconditional.
 
 **Net:** unlike 9.2's two dead ends, this mechanism is empirically viable
-and worth prototyping for real, not just a literature gap to route around.
-Toy sim (`phase10_toy.py`, scratch only, not committed to the repo) —
-see chat history 2026-07-28 to reproduce.
+and worth prototyping for real, with two concrete, honestly-earned
+caveats (block-size tuning, budget-regime dependence) a real
+implementation would need to navigate. Toy sim (`phase10_toy.py`, scratch
+only, not committed to the repo) — see chat history 2026-07-28 to
+reproduce.
 
 ---
 
