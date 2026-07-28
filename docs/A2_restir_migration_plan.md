@@ -338,8 +338,19 @@ candidates compete, so technique selection emerges from resampling weights.
   correctly at `bdpt.mojo:5352` and the working template.
 - **9.2** Handle SMS's density being a **random variable**, not a fixed
   formula. Naive substitution into a balance-heuristic weight biases the
-  result; use **Marginal MIS** (West/Georgiev/Hachisuka, SIGGRAPH Asia
-  2022) / Stochastic MIS.
+  result. **Checked 2026-07-28, neither solves this** (see §5): Marginal
+  MIS (West/Georgiev/Hachisuka, SIGGRAPH Asia 2022) requires a smooth,
+  evaluable conditional PDF `p(x|t)`; SMS's seed→root map is a Newton
+  basin-of-attraction (delta conditional), so it doesn't fit. Misso et
+  al. 2022 ("Unbiased and consistent rendering using biased estimators")
+  confirms SMS's Bernoulli-trial estimator is already an optimal-class
+  instance of their single-quantity debiasing recipe, and their own test
+  on specular manifold sampling (Fig. 13) only proposes *alternatives* to
+  Bernoulli trials for estimating `1/q_SMS` alone — not a way to combine
+  it with other techniques' exact densities in one weight. The open
+  problem is now precisely stated: debias `w = p̂/Σᵢnᵢqᵢ`, a multivariate
+  function of several densities where only `q_SMS` is noisy — no
+  published instance of this found.
 - **9.3** Only then unify the Phase 4/6/7/8 reservoirs into a tagged union.
 
 **Do not start before Phases 4-8 work independently.**
@@ -367,6 +378,25 @@ The lesson generalizes: **the stochastic-density problem is not an artifact
 of Newton being a weak solver.** It is intrinsic to specular chains of
 nontrivial length. Don't go looking for a deterministic solver that makes
 Phase 9 easy.
+
+Two follow-up reads (2026-07-28), both verified in full text, neither
+sufficient — see 9.2 for the precise gap they leave open:
+
+- **Marginal MIS** (West/Georgiev/Hachisuka, SIGGRAPH Asia 2022) generalizes
+  MIS to techniques whose density is a marginal over a smooth auxiliary
+  variable with a *readily computable conditional PDF*. SMS's seed→root map
+  via Newton's method doesn't have one — the conditional given a seed is a
+  delta, and the basin measure that would make it a proper density is
+  exactly the intractable quantity SMS's Bernoulli trick works around.
+- **Misso et al. 2022**, "Unbiased and consistent rendering using biased
+  estimators," generalizes reciprocal/exponential debiasing (Taylor or
+  telescoping series in a bias parameter `k`) and explicitly notes SMS's
+  Bernoulli-trial reciprocal estimator is already a special case of it.
+  Their own experiment applying it to specular manifold sampling (their
+  Fig. 13) only found alternative single-quantity estimators of `1/q_SMS`,
+  performing similarly to or not-yet-competitive with Bernoulli trials —
+  it does not address combining that estimate with other techniques'
+  densities in a joint weight, which is what Phase 9.2 actually needs.
 
 ---
 

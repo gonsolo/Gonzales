@@ -78,6 +78,8 @@ def main() raises:
     var use_vulkan_rt = False
     var use_vulkan_rt_shade = False
     var use_vcm_wavefront = False
+    var use_restir = False  # Phase 0.5 (docs/A2_restir_migration_plan.md): no-op for now,
+                             # falls through to the standard path tracer
     var i = 1
     while i < len(args):
         var arg = String(args[i])
@@ -130,6 +132,8 @@ def main() raises:
             use_vcm = True
         elif arg == "--vcm-wavefront":
             use_vcm_wavefront = True
+        elif arg == "--restir":
+            use_restir = True
         elif arg == "--vcm-spp" and i + 1 < len(args):
             i += 1
             vcm_spp = _parse_int32(String(args[i]), 0)
@@ -210,7 +214,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

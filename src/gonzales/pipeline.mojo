@@ -753,6 +753,10 @@ def parse_and_render(
     # exercises the staging itself, a prerequisite for a future Vulkan RT
     # swap, not yet a speed win. See vcm_render_gpu_wavefront's docstring.
     use_vcm_wavefront: Bool = False,
+    # Phase 0.5 (docs/A2_restir_migration_plan.md): plumbed through but
+    # not yet wired to any dispatch branch -- prints a notice and falls
+    # through to whichever integrator the other flags select.
+    use_restir: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -782,6 +786,9 @@ def parse_and_render(
     var crop_y1px = Int32(ceil(psc[0].crop_y1 * Float32(fh)))
     var crop_w = crop_x1px - crop_x0px
     var crop_h = crop_y1px - crop_y0px
+
+    if use_restir:
+        print("--restir: not yet implemented (docs/A2_restir_migration_plan.md Phase 0), falling back to the standard renderer")
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
