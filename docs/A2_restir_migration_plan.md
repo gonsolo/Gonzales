@@ -338,19 +338,27 @@ candidates compete, so technique selection emerges from resampling weights.
   correctly at `bdpt.mojo:5352` and the working template.
 - **9.2** Handle SMS's density being a **random variable**, not a fixed
   formula. Naive substitution into a balance-heuristic weight biases the
-  result. **Checked 2026-07-28, neither solves this** (see §5): Marginal
-  MIS (West/Georgiev/Hachisuka, SIGGRAPH Asia 2022) requires a smooth,
-  evaluable conditional PDF `p(x|t)`; SMS's seed→root map is a Newton
-  basin-of-attraction (delta conditional), so it doesn't fit. Misso et
-  al. 2022 ("Unbiased and consistent rendering using biased estimators")
-  confirms SMS's Bernoulli-trial estimator is already an optimal-class
-  instance of their single-quantity debiasing recipe, and their own test
-  on specular manifold sampling (Fig. 13) only proposes *alternatives* to
-  Bernoulli trials for estimating `1/q_SMS` alone — not a way to combine
-  it with other techniques' exact densities in one weight. The open
-  problem is now precisely stated: debias `w = p̂/Σᵢnᵢqᵢ`, a multivariate
-  function of several densities where only `q_SMS` is noisy — no
-  published instance of this found.
+  result. **Checked 2026-07-28, neither published toolkit solves this**
+  (see §5): Marginal MIS requires a smooth, evaluable conditional PDF
+  `p(x|t)` that SMS's Newton basin-of-attraction doesn't have; Misso et
+  al. 2022 only offers alternatives to Bernoulli trials for `1/q_SMS`
+  alone, not a way to combine it with other techniques' densities.
+  **A candidate derivation was toy-tested (§5) and empirically refuted**:
+  reducing `w = p̂/(n_SMS·q_SMS + C)` to Misso et al.'s single-variable
+  reciprocal case, fed by a direct hit-rate estimator of `q_SMS` instead
+  of Bernoulli trials, is unbiased in principle but has *worse* RMSE than
+  doing nothing (biased plug-in) everywhere it was meant to help, and is
+  numerically catastrophic near the `q_SMS`-dominant regime.
+  **Reframed, pragmatic direction (untested against gonzales, but
+  actionable — bounded engineering, not open research):** the same toy
+  data shows the *naive* plug-in's bias is tiny and computable in closed
+  form (`≈ Var(q̂_SMS)/F³`, verified numerically) whenever `q_SMS` is
+  small relative to the rest of the sum — the common case, most pixels
+  aren't on a specular chain. So: use the naive plug-in when that bound
+  is below a chosen threshold; fall back to Phase 6's separate reservoir
+  (no joint weight, already published) when it isn't. Needs: verifying
+  the bound holds with gonzales's actual `n_i`/`M` scales, and picking a
+  threshold empirically against the validation scenes.
 - **9.3** Only then unify the Phase 4/6/7/8 reservoirs into a tagged union.
 
 **Do not start before Phases 4-8 work independently.**
@@ -397,6 +405,24 @@ sufficient — see 9.2 for the precise gap they leave open:
   performing similarly to or not-yet-competitive with Bernoulli trials —
   it does not address combining that estimate with other techniques'
   densities in a joint weight, which is what Phase 9.2 actually needs.
+- **Derived-and-toy-tested reduction (2026-07-28):** since only `q_SMS`
+  is noisy in the denominator `F = n_SMS·q_SMS + C` (other techniques'
+  densities are exact constants), `g(F) = p̂/F` is a single-variable
+  reciprocal, not genuinely multivariate — reducible to Misso et al.'s
+  already-solved Eq. 5/6 case, *if* fed an unbiased direct estimator of
+  `q_SMS` (a plain hit-rate: fire `M` seeds, count the fraction landing
+  in the target root's basin — unbiased for any `M`, unlike Bernoulli
+  trials which target `1/q_SMS`). A Python toy simulation (synthetic
+  basin probability, no gonzales code involved) tested this: at matched
+  sample budget the debiased estimator's RMSE is 2-10x *worse* than the
+  naive plug-in when `C` dominates (the realistic regime), and its
+  variance is unbounded near `C=0` (the regime it would matter most) —
+  same instability the Bernoulli-trial method was specifically designed
+  to avoid. **Empirically refuted as a practical estimator.** What it did
+  produce: an analytic, numerically-confirmed bias bound for the naive
+  plug-in (`≈ Var(q̂_SMS)/F³`) small enough in the `C`-dominant regime to
+  motivate the pragmatic bias-bounded-plug-in-plus-fallback direction
+  recorded in 9.2.
 
 ---
 
