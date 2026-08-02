@@ -905,6 +905,23 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
+# Cap on throughput luminance immediately after an RR survival compensation
+# (see _apply_russian_roulette below). Each individual RR event is still the
+# standard unbiased estimator (throughput /= survival_probability) -- the
+# problem this guards against is a RARE STREAK of survivals compounding
+# across many bounces, seen concretely on a path trapped doing many
+# consecutive total-internal-reflection bounces inside glass (each
+# survival's ~2x compensation is unremarkable alone, but 2^30 is not).
+# Clamping the RESULT after each application trades a small, deliberate
+# bias for a large variance reduction -- the same trade-off the denoiser's
+# own firefly clamp already makes at the image level (project_denoiser_
+# firefly_clamp memory), just applied earlier, at the estimator level,
+# where it actually stops the compounding instead of painting over it
+# after the fact. 32x is generous relative to any well-behaved path's
+# throughput (which should hover near 1 after RR, by construction) while
+# still cutting off blowups many orders of magnitude larger.
+comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
+
 # Russian roulette after the first bounce, then save PCG state -- the same
 # 8-line epilogue every shade_* path ends with. u_rr must be drawn by the
 # caller (not inside here) since some callers already drew it earlier in
@@ -922,6 +939,9 @@ def _apply_russian_roulette(
             path_ptr[].active = 0
         else:
             path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
+            var new_lum = path_ptr[].throughput.luma()
+            if new_lum > RR_THROUGHPUT_CLAMP:
+                path_ptr[].throughput *= RR_THROUGHPUT_CLAMP / new_lum
     path_ptr[].pcgState = pcg.state
 
 
@@ -1761,16 +1781,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].bounce += 1
 
-    # Russian roulette
-    if path_ptr[].bounce > 1:
-        var lum_t = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum_t if lum_t < Float32(0.95) else Float32(0.95))
-        if pcg.next_float() < q:
-            path_ptr[].active = 0
-        else:
-            path_ptr[].throughput *= Float32(1.0) / (Float32(1.0) - q)
-
-    path_ptr[].pcgState = pcg.state
+    var u_rr_hair = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr_hair)
 
 
 @always_inline
