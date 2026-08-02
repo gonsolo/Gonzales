@@ -40,6 +40,9 @@ def _clamp_fireflies(
             var ci = (py * w + px) * 3
             var lum0 = Float32(0.2126) * beauty[ci] + Float32(0.7152) * beauty[ci + 1] + Float32(0.0722) * beauty[ci + 2]
             var max_n = Float32(0)
+            var max_n_r = Float32(0)
+            var max_n_g = Float32(0)
+            var max_n_b = Float32(0)
             var has_neighbor = False
             for dy in range(-1, 2):
                 for dx in range(-1, 2):
@@ -54,19 +57,46 @@ def _clamp_fireflies(
                     var lum_n = Float32(0.2126) * beauty[ni] + Float32(0.7152) * beauty[ni + 1] + Float32(0.0722) * beauty[ni + 2]
                     if lum_n > max_n:
                         max_n = lum_n
+                    if beauty[ni + 0] > max_n_r: max_n_r = beauty[ni + 0]
+                    if beauty[ni + 1] > max_n_g: max_n_g = beauty[ni + 1]
+                    if beauty[ni + 2] > max_n_b: max_n_b = beauty[ni + 2]
             var threshold = _FIREFLY_CLAMP_K * max_n
+            var r0 = beauty[ci + 0]
+            var g0 = beauty[ci + 1]
+            var b0 = beauty[ci + 2]
             # No in-bounds neighbor at all (e.g. a 1x1 image) -- "isolated"
             # is meaningless without anything to compare against, so pass
             # the pixel through unchanged rather than clamping to 0.
             if has_neighbor and lum0 > threshold and lum0 > Float32(1e-6):
                 var scale = threshold / lum0
-                out[ci + 0] = beauty[ci + 0] * scale
-                out[ci + 1] = beauty[ci + 1] * scale
-                out[ci + 2] = beauty[ci + 2] * scale
-            else:
-                out[ci + 0] = beauty[ci + 0]
-                out[ci + 1] = beauty[ci + 1]
-                out[ci + 2] = beauty[ci + 2]
+                r0 *= scale; g0 *= scale; b0 *= scale
+            # Chrominance clamp: a pixel can have UNREMARKABLE overall
+            # luminance yet one channel wildly out of proportion to its
+            # neighbors -- colored, not bright, Monte Carlo noise. Found
+            # concretely from a hero-wavelength spectral NEE estimate
+            # (bxdf.mojo's _nee_weight_simple_via_spectral) occasionally
+            # drawing an unlucky wavelength set for a genuinely-colored
+            # light, producing e.g. RGB=[0.48,0.37,0.87] on a wall that
+            # should be a uniform cream color -- unremarkable in luminance
+            # (~0.5), so the scalar clamp above never sees it, but the
+            # bilateral blur below (guided by albedo/normal/depth, not
+            # color) then smears that one wrong-colored pixel into a
+            # visible blue/red blotch across its whole filter radius. Same
+            # isolated-pixel reasoning as the luminance clamp, just applied
+            # per channel: a genuinely-colored coherent feature has
+            # similarly-colored neighbors, so ITS channel max stays high
+            # and it's untouched; only a true one-pixel color spike with no
+            # coherent neighbor to back it up gets pulled down.
+            if has_neighbor:
+                if max_n_r > Float32(1e-6) and r0 > _FIREFLY_CLAMP_K * max_n_r:
+                    r0 = _FIREFLY_CLAMP_K * max_n_r
+                if max_n_g > Float32(1e-6) and g0 > _FIREFLY_CLAMP_K * max_n_g:
+                    g0 = _FIREFLY_CLAMP_K * max_n_g
+                if max_n_b > Float32(1e-6) and b0 > _FIREFLY_CLAMP_K * max_n_b:
+                    b0 = _FIREFLY_CLAMP_K * max_n_b
+            out[ci + 0] = r0
+            out[ci + 1] = g0
+            out[ci + 2] = b0
     return out
 
 # Joint bilateral denoiser guided by albedo, normals, and depth.
