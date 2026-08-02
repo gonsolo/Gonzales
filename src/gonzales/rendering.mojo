@@ -10,6 +10,7 @@ from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_inde
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths
 from .gpu import _sample_medium_core
+from .restir_di import DIReservoir
 
 
 def render_tile(
@@ -23,6 +24,8 @@ def render_tile(
     guide_read: GuideGrid,
     guide_write: GuideGrid,
     use_restir: Bool = False,
+    frame_w: Int32 = Int32(0),
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -41,6 +44,13 @@ def render_tile(
 
     var paths = alloc[PathState_C](n)
     var intersections = alloc[Intersection_C](n)
+    # Global (frame-wide) pixel index per path -- needed only for ReSTIR DI's
+    # temporal reservoir buffer (Phase 2.3, docs/A2_restir_migration_plan.md),
+    # which persists across frames and so must be indexed by a stable,
+    # tile-independent key, not the tile-local `idx` below. -1 (never a
+    # valid buffer index) whenever frame_w wasn't supplied -- matches
+    # di_temporal_step's own "no temporal reuse" fallback.
+    var pixel_idx_buf = alloc[Int](n)
 
     # Generate primary rays from Sobol film samples
     var idx = 0
@@ -49,6 +59,7 @@ def render_tile(
         for ix in range(tileW):
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
+            var this_pixel_idx = Int(py * frame_w + px) if frame_w > Int32(0) else -1
             for si in range(spp):
                 var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
                     px, py, Int32(si) + sp.sampleIndexOffset,
@@ -71,6 +82,7 @@ def render_tile(
                     Int32(3), sobol_idx,
                     wavelengths,
                 )
+                pixel_idx_buf[idx] = this_pixel_idx
                 idx += 1
 
     # Multi-bounce path trace
@@ -127,7 +139,8 @@ def render_tile(
                                scene.lightSampler, sp.sobolMatrices, guide_read,
                                blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
-                               measured_brdfs=scene.measuredBrdfs, use_restir=use_restir)
+                               measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
+                               restir_reservoirs=restir_reservoirs, pixel_idx=pixel_idx_buf[i])
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -194,6 +207,7 @@ def render_tile(
 
     intersections.free()
     paths.free()
+    pixel_idx_buf.free()
 
 
 
@@ -238,6 +252,8 @@ def render_all_tiles(
     write_guides: UnsafePointer[GuideGrid, MutAnyOrigin] = UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
     n_write_guides: Int = 0,
     use_restir: Bool = False,
+    frame_w: Int32 = Int32(0),
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -280,7 +296,8 @@ def render_all_tiles(
         render_tile(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
-            sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir)
+            sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
+            frame_w, restir_reservoirs)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix

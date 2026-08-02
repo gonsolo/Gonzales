@@ -13,6 +13,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
 from .sppm import sppm_render, sppm_render_gpu
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
+from .restir_di import DIReservoir, di_reservoir_init
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
@@ -1323,6 +1324,10 @@ def render_interactive(
 
     # Mode-specific buffers — dangling until allocated below
     var sd           = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin].unsafe_dangling()
+    # Phase 2.3 (docs/A2_restir_migration_plan.md): one persistent DIReservoir
+    # per pixel, read+written across frames for temporal reuse -- CPU-only
+    # (--restir has no GPU wiring yet, see restir_di.mojo's header).
+    var restir_reservoirs = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
     var accum        = List[Float32]()
     var albedo_acc   = List[Float32]()
     var normals_int  = List[Float32]()
@@ -1353,6 +1358,10 @@ def render_interactive(
             normals_int.append(Float32(0))
         for _ in range(n_pixels):
             depth_int.append(Float32(0))
+        if use_restir:
+            restir_reservoirs = alloc[DIReservoir](n_pixels)
+            for i in range(n_pixels):
+                restir_reservoirs[i] = di_reservoir_init()
 
     var zero = TileResult_C(
         estimate=RGB(Float32(0)),
@@ -1374,6 +1383,14 @@ def render_interactive(
                     for i in range(n_pixels * 3):
                         accum[i]      = Float32(0)
                         albedo_acc[i] = Float32(0)
+                    if use_restir:
+                        # Reservoir invalidation on camera move (fact #2,
+                        # docs/A2_restir_migration_plan.md) -- identity
+                        # reprojection is only valid for a static camera; a
+                        # stale reservoir after a move would reuse a light
+                        # candidate resampled for a different view.
+                        for i in range(n_pixels):
+                            restir_reservoirs[i] = di_reservoir_init()
         # headless: camera is never polled, so it never "changes" -- every
         # frame accumulates onto the same static view, exactly the
         # steady-state case temporal reuse (Phase 2.3) needs to be verified
@@ -1419,7 +1436,7 @@ def render_interactive(
                 Int32(32), Int32(32),
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
                 guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
-                n_write_guides=0, use_restir=use_restir)
+                n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_reservoirs=restir_reservoirs)
             if frame_count == 0:
                 render_aux_buffers(
                     psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
@@ -1462,5 +1479,7 @@ def render_interactive(
     else:
         # accum, albedo_acc, sd freed automatically (accum/albedo_acc are List)
         sd.free()
+        if use_restir:
+            restir_reservoirs.free()
     mojo_parsed_free(psc)
     viewer_destroy(v)

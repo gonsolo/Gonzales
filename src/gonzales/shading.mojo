@@ -10,7 +10,7 @@ from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_h
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
 from .spectrum import SpectralHandle, null_spectral_handle
-from .reservoir import ReservoirState, reservoir_update, reservoir_finalize
+from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
 from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf
 
 @fieldwise_init
@@ -2468,6 +2468,42 @@ def di_resolve(
     var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * res.le * (cos_s * res.state.w * mis_w)
     _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
 
+comptime DI_TEMPORAL_M_CAP: Float32 = Float32(20 * DI_RIS_CANDIDATES)
+
+def di_temporal_step(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    mut pcg: PCG32,
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
+):
+    """Phase 2.1/2.2/2.3/2.6/2.7: generate this frame's fresh RIS candidates
+    (di_generate_reservoir), temporally combine with the previous frame's
+    stored reservoir at the SAME pixel via IDENTITY reprojection (fact #2,
+    docs/A2_restir_migration_plan.md -- static camera means no shift/
+    Jacobian is needed, target_pdf is just di_target_pdf re-evaluated at
+    this frame's hit_point using the previous winner's stored candidate),
+    resolve one shadow ray for the combined winner, then M-cap and store
+    for the next frame to read. Falls back to plain single-frame RIS (no
+    persistence) when restir_reservoirs isn't a real buffer -- the batch
+    (non-interactive) --restir path, which has no cross-frame concept."""
+    var res = di_generate_reservoir(ctx, hit_point, normal, alb, pcg)
+    var has_temporal = pixel_idx >= 0 and _is_real_ptr(restir_reservoirs)
+    if has_temporal:
+        var prev = restir_reservoirs[pixel_idx]
+        if prev.light_idx >= Int32(0):
+            var p_hat_prev_here = di_target_pdf(hit_point, normal, alb, prev.sample_point, prev.light_normal, prev.le)
+            var accept = reservoir_combine(res.state, prev.state, p_hat_prev_here, pcg.next_float())
+            if accept:
+                res.light_idx = prev.light_idx
+                res.sample_point = prev.sample_point
+                res.light_normal = prev.light_normal
+                res.le = prev.le
+    di_resolve(path_ptr, ctx, hit_point, normal, alb, res)
+    if has_temporal:
+        reservoir_cap_confidence(res.state, DI_TEMPORAL_M_CAP)
+        restir_reservoirs[pixel_idx] = res
+
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -2482,6 +2518,8 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     u_env2: Float32,
     mut pcg: PCG32,
     guide_write: GuideGrid = null_guide(),
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
 ):
     # NEE sampling asymmetry: area lights use CDF-weighted selection (one light per
     # bounce, weight = power), while infinite/env lights are ALL sampled every bounce.
@@ -2501,8 +2539,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # an unoccluded straight shadow ray, same simplifying assumption as
     # every other non-diffuse material's NEE in this file.
     if ctx.use_restir and path_ptr[].bounce == Int32(0):
-        var di_res = di_generate_reservoir(ctx, hit_point, normal, alb, pcg)
-        di_resolve(path_ptr, ctx, hit_point, normal, alb, di_res)
+        di_temporal_step(path_ptr, ctx, hit_point, normal, alb, pcg, restir_reservoirs, pixel_idx)
     else:
         _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
 
@@ -2531,6 +2568,8 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material_C,
     guide_write: GuideGrid = null_guide(),
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
 ):
     var (gc, ok) = _build_geom_context_full[use_gpu](path_ptr, inter, mat, ctx)
     if not ok:
@@ -2574,7 +2613,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var u_rr    = ss.rr
 
     _shade_diffuse_nee[use_gpu, enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, gc.wo,
-        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write)
+        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write, restir_reservoirs, pixel_idx)
 
     # ── Scatter direction: 50/50 mixture of guide and cosine-weighted BSDF ──────
     # The guide is active when its energy pointer is a real allocation (Int > 1).
@@ -2666,9 +2705,11 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     inter: Intersection_C,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
 ):
     if mat.type == MatKind.diffuse:
-        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write)
+        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_reservoirs, pixel_idx)
     # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
     # textures, or Sobol. Passing ctx.meshes directly keeps GPU kernel
     # argument counts minimal. Conductor/coated_conductor CAN be rough (not
@@ -2707,6 +2748,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     inter: Intersection_C,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
@@ -2929,7 +2972,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type
     else:
-        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx, guide_write)
+        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx, guide_write, restir_reservoirs, pixel_idx)
 
 
 @always_inline
@@ -2963,6 +3006,8 @@ def shade_core_cpu_nee(
     spectral: SpectralHandle = null_spectral_handle(),
     measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
     use_restir: Bool = False,
+    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2982,4 +3027,4 @@ def shade_core_cpu_nee(
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
             spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler))
-    shade_nee_core[False, False](path_ptr, inter, ctx, guide_write)
+    shade_nee_core[False, False](path_ptr, inter, ctx, guide_write, restir_reservoirs, pixel_idx)
