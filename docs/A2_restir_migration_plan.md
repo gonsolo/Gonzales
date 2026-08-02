@@ -310,7 +310,20 @@ only after parity on `volumetric-caustic`.
 
 - **8.1** Bidirectional hybrid shift with technique-aware extended path
   space — the reservoir domain must carry *which strategy* produced a path.
-- **8.2** Caustics reservoirs.
+  Concretely (re-verified full text 2026-08-02): pair each path with its
+  technique index, `X̂ = (X, τ)`, over `Ω̂ = ∪_τ Ω_τ`; target function
+  `p̂(x̂) = ω_τ(x̄)q̂(x̄)`; resampling MIS weight is the generalized balance
+  heuristic *with confidence weights* (their Eq. 17,
+  `m_i = c_i p̂←i / Σ_j c_j p̂←j`); BDPT's own strategy MIS weight `ω_τ` is
+  then recovered cheaply during reconnection via a recursive formulation
+  (van Antwerpen 2011, extended here) rather than retracing the whole
+  subpath. Reusable machinery even before Phase 9.2 is solved.
+- **8.2** Caustics reservoirs. Confidence weights for these must not be
+  updated based on whether a caustic sample actually landed on the pixel
+  (that would correlate the weight with the realized sample and bias the
+  result) — ReSTIR BDPT updates via a *proxy*: the prior frame's
+  motion-vector-mapped reservoir weight (their §5.1, Eq. 27). Worth the
+  same care if Phase 6's SMS reservoir ever gains temporal reuse.
 - **8.3** **ReSTIR BDPT does not cover everything your VCM does.** Its
   Limitations section states SDS paths remain unsolved (suggesting vertex
   merging or manifold shifts), and it has **no participating-media support
@@ -359,6 +372,15 @@ candidates compete, so technique selection emerges from resampling weights.
   (no joint weight, already published) when it isn't. Needs: verifying
   the bound holds with gonzales's actual `n_i`/`M` scales, and picking a
   threshold empirically against the validation scenes.
+  **Second independent confirmation (re-verified full text 2026-08-02):**
+  ReSTIR BDPT's own caustics reservoirs use exactly this strategy for its
+  `t≤1` caustic paths — it does not attempt a joint MIS weight against an
+  intractable density at all; it sets `f = p̂ = 0` on the "wrong" reservoir
+  per path type and simply **sums the two reservoirs' final estimates**
+  (their §5.1). Same move as SMS-ReSTIR's separate `Reservoir`, from a
+  different paper solving a different technique's density problem — this
+  looks like the field's actual consensus practice, not a gonzales-specific
+  workaround.
 - **9.3** Only then unify the Phase 4/6/7/8 reservoirs into a tagged union.
 
 **Do not start before Phases 4-8 work independently.**
@@ -437,6 +459,16 @@ caveats (block-size tuning, budget-regime dependence) a real
 implementation would need to navigate. Toy sim (`phase10_toy.py`, scratch
 only, not committed to the repo) — see chat history 2026-07-28 to
 reproduce.
+
+**Checked 2026-08-02:** Bálint et al., *Forget Superresolution, Sample
+Adaptively (when Path Tracing)* (SIGGRAPH 2026), read in full — **does not
+bear on Phase 10 despite the title.** It adaptively allocates uniform
+path-tracing samples-per-pixel via a learned network (a differentiable
+relaxed-stochastic-rounding trick enabling gradients through a discrete
+sample-count decision); there is no technique selection, no per-technique
+cost model, and no MIS interaction anywhere in it — a strictly different
+problem from "should this pixel invoke an expensive technique at all."
+Filed as a related-but-orthogonal technique, not a lead.
 
 ---
 
