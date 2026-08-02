@@ -1243,6 +1243,8 @@ def render_interactive(
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     spp_override: Int32 = Int32(0),
     verbose: Bool = False,
+    use_restir: Bool = False,
+    headless_frames: Int32 = Int32(0),
 ):
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -1357,19 +1359,25 @@ def render_interactive(
         albedo=RGB(Float32(0)),
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
 
-    while not viewer_should_close(v):
-        viewer_poll_events(v)
-        viewer_get_camera_state(v, result=cam_buf.unsafe_ptr())
-        if cam_buf[].cameraChanged != Int32(0):
-            frame_count = 0
-            build_camera_to_world(cam_buf.unsafe_ptr(), c2w_buf.unsafe_ptr())
-            if use_gpu:
-                gpu_clear_film(handle, Int64(n_pixels))
-                gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels))
-            else:
-                for i in range(n_pixels * 3):
-                    accum[i]      = Float32(0)
-                    albedo_acc[i] = Float32(0)
+    var headless = headless_frames > Int32(0)
+    while (not headless and not viewer_should_close(v)) or (headless and frame_count < Int(headless_frames)):
+        if not headless:
+            viewer_poll_events(v)
+            viewer_get_camera_state(v, result=cam_buf.unsafe_ptr())
+            if cam_buf[].cameraChanged != Int32(0):
+                frame_count = 0
+                build_camera_to_world(cam_buf.unsafe_ptr(), c2w_buf.unsafe_ptr())
+                if use_gpu:
+                    gpu_clear_film(handle, Int64(n_pixels))
+                    gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels))
+                else:
+                    for i in range(n_pixels * 3):
+                        accum[i]      = Float32(0)
+                        albedo_acc[i] = Float32(0)
+        # headless: camera is never polled, so it never "changes" -- every
+        # frame accumulates onto the same static view, exactly the
+        # steady-state case temporal reuse (Phase 2.3) needs to be verified
+        # against via ordinary render-diffing.
 
         if use_gpu:
             comptime log2spp_i = 16
@@ -1409,7 +1417,9 @@ def render_interactive(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True)
+                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
+                guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
+                n_write_guides=0, use_restir=use_restir)
             if frame_count == 0:
                 render_aux_buffers(
                     psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
@@ -1441,6 +1451,10 @@ def render_interactive(
                     Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
 
         viewer_update_framebuffer(v, denoised.unsafe_ptr(), fw, fh)
+
+    if headless:
+        _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, Int32(0), Int32(0), fw, fh,
+                                 psc[0].film_filename, Int32(32), Int32(32))
 
     # results, beauty, albedo, denoised, c2w_buf, cam_buf, sp_int freed automatically
     if use_gpu:

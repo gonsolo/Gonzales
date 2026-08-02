@@ -92,6 +92,7 @@ def _make_ctx(
         px_scale,
         UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
         null_guide(),
+        False,
         _null_light_context(),
         UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
