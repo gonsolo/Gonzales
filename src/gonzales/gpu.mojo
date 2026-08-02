@@ -5,7 +5,7 @@ from std.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from .transform import transform_normal_by_instance
@@ -111,6 +111,12 @@ struct GpuSceneHandle(Movable):
     var atrous_normals_buf: DeviceBuffer[DType.uint8]  # n_pixels × 12 — unjittered geometric normals
     var atrous_depth_buf: DeviceBuffer[DType.uint8]    # n_pixels × 4  — unjittered first-hit depth
     var atrous_curve_mask_buf: DeviceBuffer[DType.uint8] # n_pixels × 4 — 1.0 if first hit was a curve (hair), else 0.0
+    # G-buffer extension (Phase 0.3, docs/A2_restir_migration_plan.md): world
+    # position + material ID at the primary hit. Not consumed anywhere yet --
+    # normals+depth alone accept too many invalid shift-mapping candidates for
+    # future ReSTIR spatial/temporal reuse, which is what these are for.
+    var gbuf_worldpos_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — world-space hit point; meaningless where depth==1e38 (miss)
+    var gbuf_material_id_buf: DeviceBuffer[DType.uint8]  # n_pixels × 4  — Int32 material index of first hit, -1 on miss
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -671,6 +677,8 @@ def gpu_upload_scene(
             var r_atrous_normals_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]())
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -925,6 +933,8 @@ def gpu_upload_scene(
                 atrous_normals_buf=r_atrous_normals_buf^,
                 atrous_depth_buf=r_atrous_depth_buf^,
                 atrous_curve_mask_buf=r_atrous_curve_mask_buf^,
+                gbuf_worldpos_buf=r_gbuf_worldpos_buf^,
+                gbuf_material_id_buf=r_gbuf_material_id_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -2580,6 +2590,8 @@ def gen_aux_buffers_gpu(
     normals_out: UnsafePointer[Float32, MutAnyOrigin],
     depth_out: UnsafePointer[Float32, MutAnyOrigin],
     curve_mask_out: UnsafePointer[Float32, MutAnyOrigin],
+    world_pos_out: UnsafePointer[Float32, MutAnyOrigin],
+    material_id_out: UnsafePointer[Int32, MutAnyOrigin],
     fw: Int, fh: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -2678,6 +2690,8 @@ def gen_aux_buffers_gpu(
     normals_out[tid*3+2] = normal.z
     depth_out[tid] = d
     curve_mask_out[tid] = Float32(1.0) if (isects_tmp[tid].hit != Int8(0) and Int(isects_tmp[tid].primId.type) == 5) else Float32(0.0)
+    store_vec3(world_pos_out, tid, (org + dir*d).to_simd())
+    material_id_out[tid] = Int32(isects_tmp[tid].primId.materialIndex) if isects_tmp[tid].hit != Int8(0) else Int32(-1)
 
 
 def gpu_gen_aux_buffers(
@@ -2713,6 +2727,8 @@ def gpu_gen_aux_buffers(
                 handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].atrous_curve_mask_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].gbuf_material_id_buf.unsafe_ptr().bitcast[Int32](),
                 handle[].fw, handle[].fh,
                 grid_dim=grid_n, block_dim=block_size,
             )

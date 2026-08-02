@@ -128,6 +128,16 @@ def point3f(s: SIMD[DType.float32, 3]) -> Point3f:
     """Convert a SIMD[f32,3] to a Point3f."""
     return Point3f(s[0], s[1], s[2])
 
+@always_inline
+def store_vec3(dst: UnsafePointer[Float32, MutAnyOrigin], slot: Int, v: SIMD[DType.float32, 3]):
+    """Write a Point3f/Vec3f (pass `.to_simd()`) into a flat, stride-3
+    Float32 buffer at `slot` -- i.e. dst[slot*3 : slot*3+3] -- replacing the
+    dst[slot*3+0]=v.x; dst[slot*3+1]=v.y; dst[slot*3+2]=v.z pattern repeated
+    at per-pixel G-buffer-style write sites."""
+    dst[slot*3+0] = v[0]
+    dst[slot*3+1] = v[1]
+    dst[slot*3+2] = v[2]
+
 # <</listing>>
 
 @fieldwise_init

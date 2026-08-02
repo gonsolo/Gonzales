@@ -105,3 +105,33 @@ def reservoir_cap_confidence(mut state: ReservoirState, max_m: Float32):
     the current frame's own W incorrectly."""
     if state.m > max_m:
         state.m = max_m
+
+
+# ── Reprojection strategy (Phase 0.2b) ──────────────────────────────────────
+# Maps a pixel in the current frame to the reservoir it should pull temporal
+# history from, if any. docs/A2_restir_migration_plan.md fact #3: gonzales
+# has zero motion/animation support today, so only two modes are real yet --
+# IDENTITY (interactive mode, static camera: pipeline.mojo's render_interactive
+# already clears the film, and would need to clear stored reservoirs the same
+# way, on any camera move -- so "previous frame, same pixel" is exactly
+# correct whenever a reservoir survived) and NONE (no history available:
+# final-frame mode's first pass, or any case a caller doesn't want reuse).
+# A future host-supplied motion-vector mode (Phase 3.5) is a third value this
+# struct exists to make cheap to add later -- don't collapse this back to a
+# bare Bool once that lands.
+struct ReprojectMode:
+    comptime none     = Int32(0)
+    comptime identity = Int32(1)
+
+@always_inline
+def reproject_pixel(mode: Int32, px: Int) -> Tuple[Bool, Int]:
+    """Return (valid, src_pixel_index): where to read a prior reservoir from
+    for pixel `px` of the current frame, under reprojection strategy `mode`.
+    IDENTITY always reports the same pixel valid -- the caller is responsible
+    for having already invalidated (cleared) stored reservoirs on any event
+    that breaks the static-camera assumption, exactly as pipeline.mojo does
+    for the film today. NONE always reports invalid, `px` unchanged only as
+    a harmless placeholder -- callers must check `valid` before using it."""
+    if mode == ReprojectMode.identity:
+        return (True, px)
+    return (False, px)

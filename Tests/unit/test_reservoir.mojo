@@ -3,6 +3,7 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.reservoir import (
     ReservoirState, reservoir_state_init, reservoir_update, reservoir_combine,
     reservoir_finalize, reservoir_cap_confidence,
+    ReprojectMode, reproject_pixel,
 )
 from gonzales.rng import PCG32
 
@@ -136,6 +137,17 @@ def test_reservoir_cap_confidence_does_not_rescale_w_sum() raises:
     var s = ReservoirState(w_sum=Float32(9.0), m=Float32(500.0), w=Float32(0.0))
     reservoir_cap_confidence(s, Float32(20.0))
     assert_true(_close(s.w_sum, Float32(9.0)))
+
+# ── reproject_pixel ─────────────────────────────────────────────────────────
+
+def test_reproject_pixel_identity_reports_valid_same_pixel() raises:
+    var (valid, src) = reproject_pixel(ReprojectMode.identity, 42)
+    assert_true(valid)
+    assert_true(src == 42)
+
+def test_reproject_pixel_none_reports_invalid() raises:
+    var (valid, _) = reproject_pixel(ReprojectMode.none, 42)
+    assert_false(valid)
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

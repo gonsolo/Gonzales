@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from std.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, store_vec3
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -1864,6 +1864,12 @@ def render_aux_buffers(
     scene: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
     normals_out: UnsafePointer[Float32, MutAnyOrigin],
     depth_out:   UnsafePointer[Float32, MutAnyOrigin],
+    # G-buffer extension (Phase 0.3, docs/A2_restir_migration_plan.md), CPU
+    # counterpart of gpu.mojo's gen_aux_buffers_gpu. Optional/unused by every
+    # current caller -- default to the .unsafe_dangling() sentinel and skip
+    # the write, guarded by _is_real_ptr, so existing call sites are unaffected.
+    world_pos_out: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    material_id_out: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
 ):
     var w  = Int(max_x - min_x)
     var h  = Int(max_y - min_y)
@@ -1969,6 +1975,10 @@ def render_aux_buffers(
         normals_out[i*3 + 1] = normal.y
         normals_out[i*3 + 2] = normal.z
         depth_out[i] = d
+        if _is_real_ptr(world_pos_out):
+            store_vec3(world_pos_out, i, (org + dir*d).to_simd())
+        if _is_real_ptr(material_id_out):
+            material_id_out[i] = Int32(isects[i].primId.materialIndex) if isects[i].hit != Int8(0) else Int32(-1)
 
     parallelize[trace_pixel](n_pixels)
     isects.free()
