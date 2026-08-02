@@ -5,8 +5,8 @@ GRIS/ReSTIR-based sampling framework. **Status: plan only, nothing
 implemented.**
 
 Theory (MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the
-"common currency" problem) lives in a companion document and is not
-repeated here.
+"common currency" problem) lives in a companion document,
+[`A3_restir_theory.md`](A3_restir_theory.md), and is not repeated here.
 
 ---
 

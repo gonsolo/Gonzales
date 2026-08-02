@@ -17,6 +17,7 @@
 1. [Development Roadmap](A0_development_roadmap.md) — From CPU optimization to GPU wavefront tracing
 2. [Feature Status](A1_feature_status.md) — What's implemented, what's missing, what's out of scope
 3. [ReSTIR / SMS Migration Plan](A2_restir_migration_plan.md) — Phased plan for GRIS-based unified sampling
+4. [ReSTIR / GRIS Theory](A3_restir_theory.md) — MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the common currency problem
 
 All code snippets in this book are taken directly from the Mojo source files
 in `src/mojoKernel/`.
