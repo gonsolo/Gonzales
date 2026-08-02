@@ -690,7 +690,29 @@ def _nee_weight_simple_via_spectral(
     (test_bxdf_spectral.mojo's _nee_weight_simple_spectral round-trip test)."""
     var spec = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, n, wo, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
     var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, spec, wavelengths)
-    return RGB(r, g, b)
+
+    # Variance guard: a hero-wavelength MC estimate of a COLORED light's
+    # contribution uses only N_SPECTRAL_SAMPLES (4) wavelength samples per
+    # path -- for a genuinely colored emitter (not a flat/white light) this
+    # has real per-channel variance around the correct converged color,
+    # visible as red/blue speckle fireflies on nearly-neutral (e.g. chrome)
+    # conductor surfaces at low sample counts. Found via a real artifact the
+    # user spotted: staircase2's rear light is strongly reddish
+    # (L=[4.575,3.59,1.55]), reflected by the scene's Metal railing.
+    # _nee_weight_simple (the plain, non-spectral RGB path) is a cheap,
+    # always-available, correctly-colored reference for the right ballpark
+    # -- clamp the spectral result to within RATIO_CAP x of it per channel.
+    # This bounds the EXTRA variance spectral evaluation introduces without
+    # discarding genuine, converged color shift (the reason to use spectral
+    # evaluation here at all): a well-converged spectral estimate should
+    # already agree with the plain-RGB one to within a modest factor, so
+    # RATIO_CAP only ever clips the rare, high-variance outlier samples.
+    var plain = _nee_weight_simple(ls, mat_kind, alb, alpha, n, wo)
+    comptime RATIO_CAP: Float32 = 4.0
+    var cr = min(r, plain.r * RATIO_CAP) if plain.r > Float32(0.0) else r
+    var cg = min(g, plain.g * RATIO_CAP) if plain.g > Float32(0.0) else g
+    var cb = min(b, plain.b * RATIO_CAP) if plain.b > Float32(0.0) else b
+    return RGB(cr, cg, cb)
 
 @always_inline
 def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
