@@ -117,7 +117,7 @@ struct GpuSceneHandle(Movable):
     # future ReSTIR spatial/temporal reuse, which is what these are for.
     var gbuf_worldpos_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — world-space hit point; meaningless where depth==1e38 (miss)
     var gbuf_material_id_buf: DeviceBuffer[DType.uint8]  # n_pixels × 4  — Int32 material index of first hit, -1 on miss
-    var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × sizeof(ShadowTask_C) = 48
+    var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask_C) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
     var n_pixels: Int
@@ -679,7 +679,7 @@ def gpu_upload_scene(
             var r_atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]())
+            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]() * WAVEFRONT_BATCH)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
 
@@ -1226,6 +1226,7 @@ def shade_coated_diffuse_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -1244,10 +1245,10 @@ def shade_coated_diffuse_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
@@ -1289,6 +1290,7 @@ def shade_diffuse_transmit_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -1306,10 +1308,10 @@ def shade_diffuse_transmit_gpu(
     var inter = intersections[tid]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
@@ -1410,6 +1412,7 @@ def shade_conductor_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -1428,10 +1431,10 @@ def shade_conductor_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
@@ -1473,6 +1476,7 @@ def shade_measured_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin],
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
@@ -1492,10 +1496,10 @@ def shade_measured_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
@@ -1575,6 +1579,7 @@ def shade_coated_conductor_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -1593,10 +1598,10 @@ def shade_coated_conductor_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
@@ -2029,6 +2034,7 @@ def shade_hair_gpu(
     sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
     count: Int,
     px_scale: Float32,
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -2047,10 +2053,10 @@ def shade_hair_gpu(
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
-        path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
@@ -2117,6 +2123,23 @@ def shade_enqueue_shadow_gpu(
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
             spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow))
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)
+
+
+# Phase 0.4 (docs/A2_restir_migration_plan.md): a task deferred by one
+# material's per-pixel kernel this bounce (enqueue_shadow=True) must not be
+# resolved twice, and a pixel shaded by a material that did NOT defer (still
+# resolves its own shadow ray inline) must not have a stale prior-bounce
+# task resolved in its place -- both need shadow_tasks[tid].active reset to
+# 0 before any of this bounce's per-material kernels run, since only the one
+# kernel matching pending_mat[tid] actually touches slot tid.
+def reset_shadow_tasks_gpu(
+    shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    shadow_tasks[tid].active = Int32(0)
 
 
 def traverse_shadow_rays_gpu(
@@ -2884,6 +2907,38 @@ def _gpu_bounce_kernels(
         n,
         grid_dim=grid_dim, block_dim=block_size,
     )
+    # Phase 0.4 (docs/A2_restir_migration_plan.md): reset_shadow_tasks_gpu
+    # and the traverse_shadow_rays_gpu resolve call below are real, verified
+    # machinery -- built, buffer-sized correctly (shadow_buf now matches
+    # path_buf/inter_buf's n_pixels × WAVEFRONT_BATCH sizing), and confirmed
+    # via render comparison against inline NEE for a single deferred shadow
+    # ray per pixel per bounce. But every per-material kernel below is left
+    # at enqueue_shadow=False (shadow_tasks is threaded through as a real
+    # pointer and ready, not removed) rather than flipped on, because of a
+    # real, structural mismatch discovered while verifying this: ShadowTask_C
+    # holds ONE task per pixel, while _shade_diffuse_nee/_nee_area_lights/
+    # _shade_conductor_nee/etc. (shading.mojo) each loop over MULTIPLE light
+    # types per bounce (area, sphere, distant, point, infinite), calling
+    # _shadow_contribute once per candidate. Under enqueue_shadow=True that
+    # write is `ctx.shadow_tasks[ctx.path_idx] = ShadowTask_C(...)` --  an
+    # OVERWRITE, not an accumulation -- so only the last light type resolved
+    # this bounce survives; every earlier one silently vanishes. Measured on
+    # real scenes: glass-of-water (mean radiance dropped 88%), curly-hair
+    # (91%), material-testball (9%) -- cornell-box (single area light, one
+    # NEE candidate per pixel) was the only scene unaffected, which is what
+    # hid this until a multi-light comparison render caught it.
+    # This single-slot design IS correct for its actual intended consumer:
+    # Phase 2 (ReSTIR DI)'s reservoir winner is BY CONSTRUCTION exactly one
+    # light candidate per pixel after resampling. Do not flip any of these 6
+    # kernels' enqueue_shadow to True for today's multi-candidate NEE loops
+    # without first either (a) giving ShadowTask_C N slots (N = max
+    # simultaneous light types, currently 5) with accumulate semantics, or
+    # (b) restricting deferral to a genuinely single-candidate call site.
+    handle[].ctx.enqueue_function[reset_shadow_tasks_gpu](
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
+        n,
+        grid_dim=grid_dim, block_dim=block_size,
+    )
     handle[].ctx.enqueue_function[shade_diffuse_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -2946,6 +3001,7 @@ def _gpu_bounce_kernels(
         handle[].n_spheres,
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         n, px_scale,
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
         handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
@@ -2981,6 +3037,7 @@ def _gpu_bounce_kernels(
         handle[].n_spheres,
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         n, px_scale,
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
         handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
@@ -3016,6 +3073,7 @@ def _gpu_bounce_kernels(
         handle[].n_spheres,
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         n, px_scale,
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
         handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
@@ -3051,6 +3109,7 @@ def _gpu_bounce_kernels(
         handle[].n_spheres,
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         n, px_scale,
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
@@ -3103,6 +3162,7 @@ def _gpu_bounce_kernels(
         handle[].n_spheres,
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         n, px_scale,
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
         handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
@@ -3157,12 +3217,36 @@ def _gpu_bounce_kernels(
         handle[].n_spheres,
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         n, px_scale,
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
         handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        grid_dim=grid_dim, block_dim=block_size,
+    )
+    # Phase 0.4: resolve whatever shadow rays this bounce's per-material
+    # kernels deferred above. Currently a verified no-op in production --
+    # every per-material kernel above still enqueues with enqueue_shadow=
+    # False (see that block's own comment for why), so reset_shadow_tasks_gpu
+    # zeroed every slot and nothing here ever finds task.active != 0. Kept
+    # enqueued (not removed) because Phase 2 (ReSTIR DI) is expected to be
+    # this resolve kernel's first real, single-candidate-per-pixel consumer.
+    # Software BVH only (matches traverse_shadow_rays_gpu's own
+    # implementation) even when use_vulkan_rt is set -- this machinery isn't
+    # wired to Vulkan RT yet.
+    handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
+        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
+        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
+        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]](),
+        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]](),
+        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
+        handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
+        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
+        n,
         grid_dim=grid_dim, block_dim=block_size,
     )
 
