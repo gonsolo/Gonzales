@@ -854,6 +854,30 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
         var w_up = _w_up_sample[0]
         beta *= alb
+        # Chrominance floor: up to MAX_COAT_DEPTH iterations of `beta *= alb`
+        # against the SAME cached texture sample (one _tex_lookup per shading
+        # call, reused for the whole recycling walk -- see `alb` above) means
+        # beta = base_albedo^depth. That's the intended "saturation" effect
+        # (see this function's own docstring), but for a texture whose
+        # specific texel has even a modest per-channel imbalance (ordinary
+        # texture variation -- a wood-grain fleck, a tile-grout pixel),
+        # raising it to the 10th power drives the weakest channel toward
+        # zero while another stays large -- a real, visible magenta/green-
+        # starved artifact found by comparing against the scene's published
+        # reference image (a thin ceiling/glass-edge highlight was purple
+        # instead of the reference's green). Same class of bug as the
+        # RR-throughput and spectral-NEE fixes earlier this session:
+        # legitimate per-step math, unboundedly extreme after enough
+        # repetitions. Floor the weakest channel at a small fraction of the
+        # strongest each iteration to bound how extreme a single texel's
+        # saturation can compound to, while still letting real,
+        # order-of-magnitude color saturation through.
+        var beta_max_c = max(beta.r, max(beta.g, beta.b))
+        comptime BETA_CHROMA_FLOOR: Float32 = 0.1
+        var beta_floor = beta_max_c * BETA_CHROMA_FLOOR
+        if beta.r < beta_floor: beta.r = beta_floor
+        if beta.g < beta_floor: beta.g = beta_floor
+        if beta.b < beta_floor: beta.b = beta_floor
 
         # Coat underside: transmit out (exit) or reflect back (recycle).
         # The interface microfacet is the surface normal when smooth, else a
