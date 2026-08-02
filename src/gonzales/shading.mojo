@@ -8,7 +8,7 @@ from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
-from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide
+from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
 from .spectrum import SpectralHandle, null_spectral_handle
 
 @fieldwise_init
@@ -432,7 +432,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
             # "scatter direction ray.dir from parent_cell leads to illumination W here."
             # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
             # the path came from and ray.direction is the scatter direction that arrived here.
-            if _is_real_ptr(guide_write.energy) and path_ptr[].bounce > 0:
+            if guide_is_active(guide_write) and path_ptr[].bounce > 0:
                 var parent_cell = guide_pos_to_cell(guide_write, path_ptr[].ray.origin)
                 if parent_cell >= 0:
                     var w = contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
@@ -2456,7 +2456,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var cos_theta: Float32
     var pdf_mix: Float32
 
-    if _is_real_ptr(ctx.guide.energy):
+    if guide_is_active(ctx.guide):
         var cell = guide_pos_to_cell(ctx.guide, Point3f(hit_point[0], hit_point[1], hit_point[2]))
         var bsdf_s = sample_cosine_hemisphere_world(u_scat1, u_scat2, normal)
         var bsdf_dir = bsdf_s[0]

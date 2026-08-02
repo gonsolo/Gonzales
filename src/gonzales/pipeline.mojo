@@ -12,7 +12,7 @@ from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_g
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
 from .sppm import sppm_render, sppm_render_gpu
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
-from .guide import GuideGrid, guide_create, guide_free, null_guide, guide_merge, guide_cell_has_data, GUIDE_CELLS, GUIDE_BINS
+from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
@@ -1061,81 +1061,44 @@ def parse_and_render(
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
 
         if use_guide and psc[0].bvh_node_count > Int32(0):
-            # ── Two-batch guided rendering ────────────────────────────────────
-            # Build guide from BVH root AABB.
-            # Pilot batch (half the spp) trains the guide via BSDF-only sampling.
-            # Main batch (remaining spp) uses the trained guide for importance
-            # sampling.  Two batches avoid the per-pass tile-spawn overhead of
-            # the spp-separate-pass design (which was ~37× slower).
+            # ── N-iteration guided rendering (adaptive SD-tree) ───────────────
+            # Build an empty SD-tree from the BVH root AABB (guide.mojo). Each
+            # iteration: clone the current tree into 16 empty per-tile-group
+            # shards (avoids cross-core cache ping-pong on shared energy, same
+            # reasoning as the old 2-batch design), render reading from the
+            # PREVIOUS iteration's cumulative tree (iteration 0 reads null --
+            # BSDF-only, tree is empty anyway), fold the shards' freshly
+            # recorded energy into the tree, then -- except after the last
+            # iteration -- refine (grow) the tree's structure for the next
+            # iteration to read from. Equal spp per iteration is a
+            # simplification vs. Müller's progressive-doubling schedule; both
+            # are unbiased, doubling mainly reduces the final combined
+            # estimator's variance, an optimization not attempted here.
             var root = psc[0].bvh_nodes[0]
-            # 16 private guide grids — one per tile-group (tile_idx % 16).
-            # Eliminates cross-core cache ping-pong on the shared energy array.
-            # After the pilot pass render_all_tiles merges them into write_guides[0].
             comptime N_GUIDE_THREADS: Int = 16
-            var write_guides = alloc[GuideGrid](N_GUIDE_THREADS)
-            for gi in range(N_GUIDE_THREADS):
-                write_guides[gi] = guide_create(Bounds3f(root.min, root.max))
+            comptime N_ITERATIONS: Int = 4
             var spp = psc[0].samples_per_pixel
-            var pilot_spp = max(Int32(1), spp // Int32(2))
-            var main_spp  = spp - pilot_spp
-            print("Path guiding: pilot " + String(pilot_spp) + " + main "
-                + String(main_spp) + " spp, 16^3×64 guide grid, 16 private shards")
+            var n_iters = min(Int(spp), N_ITERATIONS)
+            var base_spp = spp // Int32(n_iters)
+            var tree = guide_create(Bounds3f(root.min, root.max))
+            var write_guides = alloc[GuideGrid](N_GUIDE_THREADS)
+            print("Path guiding: " + String(n_iters) + " iterations x ~" + String(base_spp)
+                + " spp, adaptive SD-tree, 16 private shards")
             var t0_g = perf_counter_ns()
-
-            # Pilot pass: each tile writes to its own private guide shard.
-            # guide_read=null → sampling falls back to BSDF (guide is empty anyway).
-            # After this call write_guides[0] contains the merged training data.
-            var sp_pilot = TileSamplerParams_C(
-                sobolMatrices=sobol_matrices,
-                rngSeed=psc[0].rng_seed,
-                sobolSeed=Int32(0),
-                log2SamplesPerPixel=psc[0].log2_spp,
-                nBase4Digits=psc[0].n_base4_digits,
-                samplesPerPixel=pilot_spp,
-                filterSigma=psc[0].filter_sigma,
-                filterSupportX=psc[0].filter_support_x,
-                filterSupportY=psc[0].filter_support_y,
-                filterNormX=psc[0].filter_norm_x,
-                filterNormY=psc[0].filter_norm_y,
-                filterWeight=psc[0].filter_weight,
-                filterType=psc[0].filter_type,
-                sampleIndexOffset=Int32(0),
-            )
-            var sp_pilot_ptr = OwnedPointer[TileSamplerParams_C](sp_pilot)
-            render_all_tiles(
-                psc[0].raster_to_camera, psc[0].camera_to_world,
-                Int32(0), Int32(0), fw, fh,
-                Int32(32), Int32(32),
-                sp_pilot_ptr.unsafe_ptr(), sd, results.unsafe_ptr(),
-                psc[0].max_depth, False,
-                null_guide(),      # guide_read: no sampling during pilot
-                write_guides,      # write to 16 private shards
-                N_GUIDE_THREADS)
-            var pilot_s = Float64(perf_counter_ns() - t0_g) / 1.0e9
-            print("Path guiding: pilot done in " + fmt_time(pilot_s))
-            # Diagnostic: count active cells and total energy in merged guide.
-            var n_active_cells = 0
-            var total_guide_energy = Float32(0)
-            var g0 = write_guides[0]
-            for ci in range(GUIDE_CELLS):
-                if guide_cell_has_data(g0, ci):
-                    n_active_cells += 1
-                    for bi in range(GUIDE_BINS):
-                        total_guide_energy += g0.energy[ci * GUIDE_BINS + bi]
-            print("Guide: " + String(n_active_cells) + "/" + String(GUIDE_CELLS)
-                + " active cells, total energy=" + String(total_guide_energy))
-
-            # Main pass: read from merged guide_read=write_guides[0]; no writes.
-            if main_spp > Int32(0):
-                var main_buf = List[TileResult_C](capacity=n_pixels)
-                for _ in range(n_pixels): main_buf.append(zero)
-                var sp_main = TileSamplerParams_C(
+            var offset = Int32(0)
+            for it in range(n_iters):
+                var iter_spp = base_spp
+                if it == n_iters - 1:
+                    iter_spp = spp - offset  # absorb any remainder into the last iteration
+                for gi in range(N_GUIDE_THREADS):
+                    write_guides[gi] = guide_clone_empty(tree)
+                var sp_iter = TileSamplerParams_C(
                     sobolMatrices=sobol_matrices,
                     rngSeed=psc[0].rng_seed,
-                    sobolSeed=Int32(0),  # same sequence as pilot; offset selects later samples
+                    sobolSeed=Int32(0),
                     log2SamplesPerPixel=psc[0].log2_spp,
                     nBase4Digits=psc[0].n_base4_digits,
-                    samplesPerPixel=main_spp,
+                    samplesPerPixel=iter_spp,
                     filterSigma=psc[0].filter_sigma,
                     filterSupportX=psc[0].filter_support_x,
                     filterSupportY=psc[0].filter_support_y,
@@ -1143,31 +1106,57 @@ def parse_and_render(
                     filterNormY=psc[0].filter_norm_y,
                     filterWeight=psc[0].filter_weight,
                     filterType=psc[0].filter_type,
-                    sampleIndexOffset=pilot_spp,  # continue the Sobol sequence after pilot
+                    sampleIndexOffset=offset,
                 )
-                var sp_main_ptr = OwnedPointer[TileSamplerParams_C](sp_main)
-                render_all_tiles(
-                    psc[0].raster_to_camera, psc[0].camera_to_world,
-                    Int32(0), Int32(0), fw, fh,
-                    Int32(32), Int32(32),
-                    sp_main_ptr.unsafe_ptr(), sd, main_buf.unsafe_ptr(),
-                    psc[0].max_depth, False,
-                    write_guides[0],   # guide_read: merged training data
-                    write_guides,      # write_guides: ignored (n_write_guides=0)
-                    Int(0))            # n_write_guides=0 → no recording in main pass
-                for i in range(n_pixels):
-                    var p = results.unsafe_ptr()[i]
-                    var m = main_buf.unsafe_ptr()[i]
-                    results.unsafe_ptr()[i] = TileResult_C(
-                        p.estimate + m.estimate,
-                        p.albedo   + m.albedo,
-                        p.filterWeight + m.filterWeight,
-                        m.pixelX, m.pixelY)
+                var sp_iter_ptr = OwnedPointer[TileSamplerParams_C](sp_iter)
+                var guide_read = null_guide() if it == 0 else tree
+                if it == 0:
+                    # First iteration writes straight into `results` (like the
+                    # old pilot pass) -- no accumulation add needed.
+                    render_all_tiles(
+                        psc[0].raster_to_camera, psc[0].camera_to_world,
+                        Int32(0), Int32(0), fw, fh,
+                        Int32(32), Int32(32),
+                        sp_iter_ptr.unsafe_ptr(), sd, results.unsafe_ptr(),
+                        psc[0].max_depth, False,
+                        guide_read, write_guides, N_GUIDE_THREADS)
+                else:
+                    var iter_buf = List[TileResult_C](capacity=n_pixels)
+                    for _ in range(n_pixels): iter_buf.append(zero)
+                    render_all_tiles(
+                        psc[0].raster_to_camera, psc[0].camera_to_world,
+                        Int32(0), Int32(0), fw, fh,
+                        Int32(32), Int32(32),
+                        sp_iter_ptr.unsafe_ptr(), sd, iter_buf.unsafe_ptr(),
+                        psc[0].max_depth, False,
+                        guide_read, write_guides, N_GUIDE_THREADS)
+                    for i in range(n_pixels):
+                        var p = results.unsafe_ptr()[i]
+                        var m = iter_buf.unsafe_ptr()[i]
+                        results.unsafe_ptr()[i] = TileResult_C(
+                            p.estimate + m.estimate,
+                            p.albedo   + m.albedo,
+                            p.filterWeight + m.filterWeight,
+                            m.pixelX, m.pixelY)
+                offset += iter_spp
+                # render_all_tiles already merged shards [1..N-1] into [0].
+                guide_merge(tree, write_guides[0])
+                for gi in range(N_GUIDE_THREADS):
+                    guide_free(write_guides[gi])
+                if it < n_iters - 1:
+                    var refined = guide_refine(tree)
+                    tree = refined
+                var n_active = 0
+                for ci in range(Int(tree.n_snodes)):
+                    if guide_cell_has_data(tree, ci):
+                        n_active += 1
+                print("Path guiding: iter " + String(it) + " done, " + String(n_active) + "/"
+                    + String(tree.n_snodes) + " active spatial leaves, " + String(tree.n_dnodes)
+                    + " directional nodes")
 
             var total_g = Float64(perf_counter_ns() - t0_g) / 1.0e9
             print("Path guiding done in " + fmt_time(total_g) + "                ")
-            for gi in range(N_GUIDE_THREADS):
-                guide_free(write_guides[gi])
+            guide_free(tree)
             write_guides.free()
         else:
             # ── Standard single-call rendering ───────────────────────────────
