@@ -338,9 +338,27 @@ def bxdf_sample_dielectric(
     # NOT conserved across the interface the way importance/flux is (PBRT
     # SpecularTransmission's `mode == Radiance` factor). This function is only
     # ever reached from camera-path contexts (the plain path tracer's wavefront
-    # shading kernels), never from a light-emission/photon path, so the 1/eta²
+    # shading kernels), never from a light-emission/photon path, so the eta²
     # factor applies unconditionally here.
-    var radiance_transmit = white / (eta * eta)
+    #
+    # BUG FIX (found via a real firefly repro, staircase2 scene): this was
+    # `white / (eta * eta)` -- the RECIPROCAL of the correct factor. Veach's
+    # radiance non-symmetry law says physical (forward, light-traced)
+    # radiance scales by (eta_transmitted/eta_incident)^2 when crossing into
+    # a medium of different IOR; a camera/importance path needs the INVERSE
+    # of that forward scaling as its correction, i.e. (eta_incident/eta_
+    # transmitted)^2 = eta*eta (since `eta` here IS eta_incident/eta_
+    # transmitted, per the comment above). The bug was invisible for the
+    # common case (a ray straight through one flat pane: one entering event
+    # at eta, one exiting event at 1/eta, and the two -- wrong or right --
+    # factors always cancel to ~1 either way). It only shows up as a real
+    # error once a path's entering/exiting transmission events go
+    # unbalanced (multiple glass surfaces, geometry with more one-directional
+    # crossings than the other), where the inverted factor compounds
+    # multiplicatively bounce over bounce -- observed as throughput
+    # inflating past 1e11 by bounce ~30 on a maxdepth=65 scene with several
+    # glass surfaces, producing extreme, denoiser-smeared fireflies.
+    var radiance_transmit = white * (eta * eta)
     return (BxDFSample(refr, radiance_transmit, Float32(1.0), BxDFFlags.delta | BxDFFlags.transmit, Int8(1), Int8(0), Int8(0)), normal)
 
 # ── Thin dielectric (one-sided glass slab: window, soap film) ────────────────
