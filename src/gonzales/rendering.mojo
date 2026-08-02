@@ -22,6 +22,7 @@ def render_tile(
     maxDepth: Int32,
     guide_read: GuideGrid,
     guide_write: GuideGrid,
+    use_restir: Bool = False,
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -126,7 +127,7 @@ def render_tile(
                                scene.lightSampler, sp.sobolMatrices, guide_read,
                                blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
-                               measured_brdfs=scene.measuredBrdfs)
+                               measured_brdfs=scene.measuredBrdfs, use_restir=use_restir)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -236,6 +237,7 @@ def render_all_tiles(
     guide_read: GuideGrid = null_guide(),
     write_guides: UnsafePointer[GuideGrid, MutAnyOrigin] = UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
     n_write_guides: Int = 0,
+    use_restir: Bool = False,
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -278,7 +280,7 @@ def render_all_tiles(
         render_tile(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
-            sampler_params, scene, tile_buf, max_depth, guide_read, gw)
+            sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix

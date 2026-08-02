@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -10,6 +10,8 @@ from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_h
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
 from .spectrum import SpectralHandle, null_spectral_handle
+from .reservoir import ReservoirState, reservoir_update, reservoir_finalize
+from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf
 
 @fieldwise_init
 struct LightContext(Copyable, Movable):
@@ -49,6 +51,12 @@ struct ShadeContext:
     var px_scale:         Float32
     var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
     var guide:            GuideGrid
+    # Phase 2 (docs/A2_restir_migration_plan.md): CPU-only today, like
+    # `guide` above -- every GPU ShadeContext construction site passes
+    # False. When True, the diffuse material's area-light NEE (bounce 0
+    # only) is replaced by RIS candidate generation + a single deferred
+    # shadow-ray resolve (restir_di.mojo) instead of one direct NEE sample.
+    var use_restir:       Bool
     var lights:           LightContext
     # Object instancing (see geometry.mojo's Instance_C docs). GPU call sites
     # pass dangling/zero-count values — GPU's own device-side scene upload
@@ -2352,6 +2360,114 @@ def _nee_area_lights[enqueue_shadow: Bool](
             if not used_mnee:
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
+# ── ReSTIR DI (Phase 2, restir_di.mojo's DIReservoir/di_target_pdf) ─────────
+# Plain RIS: M candidates from the existing light sampler, weighted p̂/q,
+# streamed into a reservoir (2.1+2.2); one shadow ray resolves the winner
+# (2.6), MIS-weighted against BSDF sampling exactly like ordinary NEE (2.7).
+# No temporal/spatial reuse yet (2.3/2.5 need persistent per-pixel GPU state
+# across real interactive-viewer frames -- see restir_di.mojo's header and
+# project_restir_migration.md memory for why that's scoped out for now).
+# CPU-only (ctx.use_restir is only ever True from the CPU dispatch path,
+# see ShadeContext's own docstring) -- traces the winner's shadow ray
+# INLINE (_shadow_contribute[False]) rather than through Phase 0.4's
+# deferred machinery the plan's 2.6 names: that machinery is GPU-only
+# (shadow_buf lives in GpuSceneHandle), nothing CPU-side to defer into yet.
+comptime DI_RIS_CANDIDATES: Int = 16
+
+def _di_sample_candidate(
+    ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], mut pcg: PCG32,
+) -> Tuple[Bool, Int32, SIMD[DType.float32, 3], SIMD[DType.float32, 3], RGB, Float32]:
+    """One RIS candidate draw: (valid, light_idx, sample_point,
+    light_normal, Le, generation_pdf). Mirrors _sample_area_light_nee's
+    math but keeps the sampled point/normal the reservoir payload needs --
+    that function only returns the derived wi/dist, not the point itself."""
+    var invalid = (False, Int32(-1), SIMD[DType.float32, 3](Float32(0)), SIMD[DType.float32, 3](Float32(0)), RGB(Float32(0)), Float32(0))
+    if ctx.lights.area_light_count == 0:
+        return invalid
+    var u_light = pcg.next_float()
+    var ls_result = light_sampler_sample(ctx.lights.light_sampler, u_light)
+    var light_idx = ls_result[0]
+    var light_sel_pdf = ls_result[1]
+    var al = ctx.lights.area_lights[light_idx]
+    var r1 = pcg.next_float()
+    var r2 = pcg.next_float()
+    var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
+    var to_light = light_point - hit_point
+    var dist_sq = dot(to_light, to_light)
+    if dist_sq <= Float32(1e-8) or al.total_area <= Float32(0.0):
+        return invalid
+    var dist = sqrt(dist_sq)
+    var wi = to_light * (Float32(1.0) / dist)
+    var cos_l = -dot(light_normal, wi)
+    if cos_l <= Float32(0.0):
+        return invalid
+    var pdf = dist_sq * light_sel_pdf / (cos_l * al.total_area)
+    if pdf <= Float32(0.0):
+        return invalid
+    return (True, Int32(light_idx), light_point, light_normal, al.emission, pdf)
+
+def di_generate_reservoir(
+    ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
+    alb: RGB, mut pcg: PCG32,
+) -> DIReservoir:
+    """Phase 2.1+2.2: stream DI_RIS_CANDIDATES area-light samples through
+    weighted reservoir sampling, weight = p̂/q per candidate (reservoir.mojo).
+    Visibility deliberately excluded (2.1) -- resolved once for the winner
+    by di_resolve."""
+    var res = di_reservoir_init()
+    for _ in range(DI_RIS_CANDIDATES):
+        var (valid, light_idx, sample_point, light_normal, le, gen_pdf) = _di_sample_candidate(ctx, hit_point, pcg)
+        if not valid:
+            continue
+        var p_hat = di_target_pdf(hit_point, normal, alb, sample_point, light_normal, le)
+        var weight = p_hat / gen_pdf
+        var accept = reservoir_update(res.state, weight, pcg.next_float())
+        if accept:
+            res.light_idx = light_idx
+            res.sample_point = sample_point
+            res.light_normal = light_normal
+            res.le = le
+    return res
+
+def di_resolve(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    mut res: DIReservoir,
+):
+    """Phase 2.6+2.7: finalize the reservoir's RIS weight, then trace ONE
+    shadow ray for the winner and add its MIS-weighted contribution. The
+    resampled winner is treated as a single light-technique sample for MIS
+    purposes against BSDF sampling (same balance-heuristic pattern as
+    ordinary NEE) -- standard RIS/ReSTIR practice; the RIS weight W already
+    accounts for the M-candidate resampling itself."""
+    if res.light_idx < Int32(0):
+        return
+    var p_hat = di_target_pdf(hit_point, normal, alb, res.sample_point, res.light_normal, res.le)
+    reservoir_finalize(res.state, p_hat)
+    if res.state.w <= Float32(0.0):
+        return
+    var to_light = res.sample_point - hit_point
+    var dist_sq = dot(to_light, to_light)
+    if dist_sq <= Float32(1e-8):
+        return
+    var dist = sqrt(dist_sq)
+    var wi = to_light * (Float32(1.0) / dist)
+    var cos_s = dot(normal, wi)
+    var cos_l = -dot(res.light_normal, wi)
+    if cos_s <= Float32(0.0) or cos_l <= Float32(0.0):
+        return
+    var al = ctx.lights.area_lights[Int(res.light_idx)]
+    if al.total_area <= Float32(0.0):
+        return
+    var light_sel_pdf = light_sampler_pdf(ctx.lights.light_sampler, res.light_idx)
+    var pdf_light = dist_sq * light_sel_pdf / (cos_l * al.total_area)
+    if pdf_light <= Float32(0.0):
+        return
+    var pdf_bsdf = bxdf_pdf_diffuse(cos_s)
+    var mis_w = power_heuristic(pdf_light, pdf_bsdf)
+    var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * res.le * (cos_s * res.state.w * mis_w)
+    _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
+
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -2376,7 +2492,19 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # env lights this asymmetry would need revisiting.
 
     # ── Area light NEE ────────────────────────────────────────────────────────
-    _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
+    # Phase 2 (docs/A2_restir_migration_plan.md): ReSTIR DI's RIS reservoir
+    # replaces plain one-sample NEE for area lights, primary bounce only
+    # (bounce 0 -- matches every real ReSTIR DI implementation's scope; it's
+    # a screen-space technique over the primary G-buffer, not a per-bounce
+    # one). Deliberately does NOT get MNEE's glass-caustic probing that
+    # _nee_area_lights below has -- restir_di.mojo's target function assumes
+    # an unoccluded straight shadow ray, same simplifying assumption as
+    # every other non-diffuse material's NEE in this file.
+    if ctx.use_restir and path_ptr[].bounce == Int32(0):
+        var di_res = di_generate_reservoir(ctx, hit_point, normal, alb, pcg)
+        di_resolve(path_ptr, ctx, hit_point, normal, alb, di_res)
+    else:
+        _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
 
     # ── Distant/point/sphere light NEE, via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (bxdf.mojo's
@@ -2834,6 +2962,7 @@ def shade_core_cpu_nee(
     guide_write: GuideGrid = null_guide(),
     spectral: SpectralHandle = null_spectral_handle(),
     measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    use_restir: Bool = False,
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -2844,7 +2973,7 @@ def shade_core_cpu_nee(
         tex_filenames=tex_filenames,
         textures=UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), n_textures=0,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide,
+        px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,
         lights=LightContext(

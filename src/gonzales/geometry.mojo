@@ -851,6 +851,15 @@ def light_sampler_sample(ls: LightSampler_C, u: Float32) -> Tuple[Int, Float32]:
     var pdf = ls.cdf[lo + 1] - ls.cdf[lo]
     return (lo, max(pdf, Float32(1e-6)))
 
+@always_inline
+def light_sampler_pdf(ls: LightSampler_C, light_idx: Int32) -> Float32:
+    """Selection pdf for a KNOWN light index -- the inverse of
+    light_sampler_sample's (index, pdf) draw, needed to re-evaluate a
+    specific light's pdf without redrawing it (e.g. ReSTIR DI's MIS weight
+    for an already-chosen reservoir winner, restir_di.mojo)."""
+    var i = Int(light_idx)
+    return max(ls.cdf[i + 1] - ls.cdf[i], Float32(1e-6))
+
 
 @fieldwise_init
 struct TileResult_C(TrivialRegisterPassable):

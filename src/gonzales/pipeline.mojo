@@ -787,8 +787,14 @@ def parse_and_render(
     var crop_w = crop_x1px - crop_x0px
     var crop_h = crop_y1px - crop_y0px
 
-    if use_restir:
-        print("--restir: not yet implemented (docs/A2_restir_migration_plan.md Phase 0), falling back to the standard renderer")
+    if use_restir and use_gpu:
+        print("--restir: GPU not yet implemented (docs/A2_restir_migration_plan.md Phase 2 is CPU-only so far), falling back to the standard GPU renderer")
+    if use_restir and use_sppm:
+        print("--restir: no effect combined with --sppm (Phase 2 only touches the plain path tracer's diffuse-material NEE)")
+    if use_restir and use_vcm:
+        print("--restir: no effect combined with --vcm (Phase 2 only touches the plain path tracer's diffuse-material NEE)")
+    if use_restir and use_guide:
+        print("--restir: no effect combined with --guide (Phase 2 only wired into the plain, non-guided CPU render path so far)")
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
@@ -1181,7 +1187,10 @@ def parse_and_render(
                 psc[0].raster_to_camera, psc[0].camera_to_world,
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth)
+                sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth,
+                quiet=False, guide_read=null_guide(),
+                write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(), n_write_guides=0,
+                use_restir=use_restir)
             # sp_ptr freed automatically
 
         # Unjittered normals and depth for edge-preserving denoising.
