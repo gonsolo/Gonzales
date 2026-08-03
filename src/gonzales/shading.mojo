@@ -2562,17 +2562,23 @@ def di_resolve(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
     hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
     mut res: DIReservoir,
+    z_norm: Float32 = Float32(-1.0),
 ):
     """Phase 2.6+2.7: finalize the reservoir's RIS weight, then trace ONE
     shadow ray for the winner and add its MIS-weighted contribution. The
     resampled winner is treated as a single light-technique sample for MIS
     purposes against BSDF sampling (same balance-heuristic pattern as
     ordinary NEE) -- standard RIS/ReSTIR practice; the RIS weight W already
-    accounts for the M-candidate resampling itself."""
+    accounts for the M-candidate resampling itself.
+
+    `z_norm` is forwarded verbatim to reservoir_finalize: negative (the
+    default) means "divide by state.m", correct for single-domain
+    combination; spatial reuse passes Bitterli 2020 Algorithm 6's Z
+    instead. See di_temporal_step for how Z is accumulated."""
     if res.light_idx < Int32(0):
         return
     var p_hat = di_target_pdf(hit_point, normal, alb, res.sample_point, res.light_normal, res.le)
-    reservoir_finalize(res.state, p_hat)
+    reservoir_finalize(res.state, p_hat, z_norm)
     if res.state.w <= Float32(0.0):
         return
     var to_light = res.sample_point - hit_point
@@ -2635,28 +2641,39 @@ comptime DI_TEMPORAL_M_CAP: Float32 = Float32(20 * DI_RIS_CANDIDATES)
 # Phase 2.5 spatial reuse tuning, per the plan's own "k ~= 3-5 neighbors"
 # and G-buffer rejection thresholds (docs/A2_restir_migration_plan.md).
 #
-# DISABLED BY DEFAULT (k=0) -- the machinery below is correct and stays
-# built, but the WEIGHTING it uses is Bitterli et al. 2020's BIASED
-# spatial-reuse variant: it combines each neighbour with the target
-# function re-evaluated at this pixel, and never applies that paper's `Z`
-# normalization (how many of the combined domains could actually have
-# produced the chosen sample). Measured on staircase2 (400x400,
-# interactive 1spp/frame, vs a 128spp plain-NEE reference), splitting
-# temporal from spatial by flipping exactly this constant:
+# DISABLED BY DEFAULT (k=0) -- but for a PERFORMANCE reason now, not a
+# correctness one. The Z normalization in di_temporal_step fixed the bias;
+# spatial reuse is simply still not a net win here. staircase2, 400x400,
+# interactive 1spp/frame, vs a 128spp plain-NEE reference of mean 0.5039:
 #
-#   config                     mean     MSE@128fr   MSE 16->128
-#   plain NEE                  0.5050    0.000845     3.75x
-#   ReSTIR temporal only       0.5035    0.001346     2.79x
-#   ReSTIR temporal + k=4      0.5082    0.003252     1.15x
+#   config                        mean    MSE@128fr  16->128   bias
+#   plain NEE                    0.5050    0.000845    3.75x   +0.22%
+#   ReSTIR temporal only         0.5035    0.001346    2.79x   -0.08%
+#   ReSTIR temporal + k=4, no Z  0.5082    0.003252    1.15x   +0.86%
+#   ReSTIR temporal + k=4, +Z    0.5047    0.001834    2.02x   +0.15%
 #
-# Temporal-only is unbiased (0.5035 vs the 0.5039 reference) and still
-# converges; adding spatial introduces a +0.85% mean offset AND stalls
-# convergence to 1.15x, which is what a biased estimator looks like --
-# MSE floors out at bias^2 instead of falling with sample count. Turning
-# it on therefore makes images measurably worse, so it ships off until
-# the Z normalization lands (Bitterli 2020 sec. 4.2). Set to 4 to
-# re-enable for experiments.
+# Z did its job: the +0.86% offset collapsed to +0.15% (inside the same
+# band as plain NEE's own interactive-vs-batch +0.22%, i.e. no longer
+# distinguishable from unbiased) and the stalled 1.15x convergence
+# recovered to 2.02x. But 0.001834 is still worse than temporal-only's
+# 0.001346, so switching it on costs quality.
+#
+# Prime suspect for why, and the concrete next thing to try: this
+# implementation reads neighbours from the PREVIOUS frame's buffer
+# (restir_io.read), because render_all_tiles parallelizes per-tile and a
+# same-frame neighbour read would race whichever tile has not shaded yet.
+# Standard ReSTIR does spatial reuse WITHIN the current frame, after the
+# temporal pass. Pulling stale neighbours adds correlation without adding
+# much fresh information, which is exactly the "more samples, little new
+# information" shape seen above. Fixing that means splitting the frame
+# into two passes over render_all_tiles (pass 1 generate+temporal for all
+# pixels, pass 2 spatial reading pass 1's output) -- a real restructure,
+# not a constant flip, and NOT attempted.
 comptime DI_SPATIAL_NEIGHBORS: Int = 0
+# Fixed-size scratch for the Z pass, which must revisit each combined
+# neighbour after the winner is known. +1 so the array is never zero-sized
+# when someone sets DI_SPATIAL_NEIGHBORS = 0 to disable spatial reuse.
+comptime DI_SPATIAL_SLOTS: Int = DI_SPATIAL_NEIGHBORS + 1
 comptime DI_SPATIAL_RADIUS_PX: Float32 = Float32(20.0)
 comptime DI_SPATIAL_NORMAL_DOT_MIN: Float32 = Float32(0.9)
 comptime DI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
@@ -2690,6 +2707,14 @@ def di_temporal_step(
     has no cross-frame concept."""
     var res = di_generate_reservoir(ctx, hit_point, normal, alb, pcg)
     var has_temporal = pixel_idx >= 0 and _is_real_ptr(restir_io.read)
+    # Z-normalization bookkeeping, declared at function scope because the Z
+    # pass below runs after the reuse block closes: which neighbour domains
+    # took part, each one's confidence, and the confidence contributed by
+    # domains identical to this pixel's own (see where it is assigned).
+    var nb_px_seen = InlineArray[Int32, DI_SPATIAL_SLOTS](fill=Int32(-1))
+    var nb_m_seen = InlineArray[Float32, DI_SPATIAL_SLOTS](fill=Float32(0))
+    var nb_seen = 0
+    var m_same_domain = Float32(0.0)
     if has_temporal:
         var prev = restir_io.read[pixel_idx]
         if prev.light_idx >= Int32(0):
@@ -2702,6 +2727,14 @@ def di_temporal_step(
                 res.ldp_du = prev.ldp_du
                 res.ldp_dv = prev.ldp_dv
                 res.le = prev.le
+
+        # Confidence accumulated so far comes from THIS pixel's own
+        # candidates plus temporal reuse. Under identity reprojection the
+        # previous frame's domain IS this pixel's domain (static camera), so
+        # every bit of it can produce the winner and it all counts toward Z
+        # unconditionally. Snapshot it before spatial combination starts,
+        # since reservoir_combine grows state.m as it goes.
+        m_same_domain = res.state.m
 
         if _is_real_ptr(restir_io.gbuf_normal) and restir_io.frame_w > Int32(0) and restir_io.frame_h > Int32(0):
             var self_px = Int32(pixel_idx) % restir_io.frame_w
@@ -2732,6 +2765,13 @@ def di_temporal_step(
                 if nb.light_idx < Int32(0):
                     continue
                 var p_hat_nb_here = di_target_pdf(hit_point, normal, alb, nb.sample_point, nb.light_normal, nb.le)
+                # Remember every neighbour actually folded in (winner or
+                # not) -- Z is a property of which DOMAINS took part, not of
+                # which one happened to win.
+                if nb_seen < DI_SPATIAL_SLOTS:
+                    nb_px_seen[nb_seen] = Int32(n_idx)
+                    nb_m_seen[nb_seen] = nb.state.m
+                    nb_seen += 1
                 var accept_nb = reservoir_combine(res.state, nb.state, p_hat_nb_here, pcg.next_float())
                 if accept_nb:
                     res.light_idx = nb.light_idx
@@ -2741,8 +2781,47 @@ def di_temporal_step(
                     res.ldp_dv = nb.ldp_dv
                     res.le = nb.le
 
-    di_resolve(path_ptr, ctx, hit_point, normal, alb, res)
+    # ── Z normalization (Bitterli et al. 2020, Algorithm 6) ───────────────
+    # Dividing W by the full accumulated m assumes every combined reservoir
+    # could have produced the chosen sample. Across DIFFERENT pixels that is
+    # false: a neighbour whose surface faces away from the winning light
+    # never could have generated it, yet its confidence still inflates the
+    # denominator -- the systematic under-weighting that makes Algorithm 4
+    # biased. Z instead counts only the domains that genuinely contain the
+    # winner, which is the whole difference between the biased and unbiased
+    # variants.
+    #
+    # "Domain i contains y" is tested by re-evaluating the target function
+    # at neighbour i's OWN shading point (its world position + normal from
+    # the Phase 0.3 G-buffer) rather than at this pixel's -- that is what
+    # makes it a statement about neighbour i's integrand and not merely a
+    # restatement of our own. Only the SIGN matters (>0 vs 0), so passing
+    # this pixel's albedo is harmless: albedo scales p_hat, it cannot change
+    # whether it is zero (and an all-black albedo contributes nothing under
+    # either variant anyway). The test is therefore purely geometric --
+    # exactly the cos_s>0 / cos_l>0 / dist>0 conditions inside di_target_pdf.
+    var z_norm = Float32(-1.0)
+    if nb_seen > 0 and _is_real_ptr(restir_io.gbuf_world_pos):
+        var z = m_same_domain
+        for i in range(nb_seen):
+            var np_off = Int(nb_px_seen[i]) * 3
+            var n_hit = SIMD[DType.float32, 3](
+                restir_io.gbuf_world_pos[np_off],
+                restir_io.gbuf_world_pos[np_off + 1],
+                restir_io.gbuf_world_pos[np_off + 2])
+            var n_nrm = SIMD[DType.float32, 3](
+                restir_io.gbuf_normal[np_off],
+                restir_io.gbuf_normal[np_off + 1],
+                restir_io.gbuf_normal[np_off + 2])
+            if di_target_pdf(n_hit, n_nrm, alb, res.sample_point, res.light_normal, res.le) > Float32(0.0):
+                z += nb_m_seen[i]
+        z_norm = z
+
+    di_resolve(path_ptr, ctx, hit_point, normal, alb, res, z_norm)
     if has_temporal:
+        # Note the ordering: state.m still holds the TRUE accumulated
+        # confidence here (z_norm renormalized only W, never m), so the
+        # M-cap and the stored history stay correct for the next frame.
         reservoir_cap_confidence(res.state, DI_TEMPORAL_M_CAP)
         restir_io.write[pixel_idx] = res
 

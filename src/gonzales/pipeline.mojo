@@ -1344,10 +1344,13 @@ def render_interactive(
     var albedo_acc   = List[Float32]()
     var normals_int  = List[Float32]()
     var depth_int    = List[Float32]()
-    # Phase 0.3 G-buffer extension, material ID only (normals_int/depth_int
-    # above already cover the other two) -- Phase 2.5's neighbor-rejection
-    # test needs it, nothing else in render_interactive reads it.
+    # Phase 0.3 G-buffer extension (normals_int/depth_int above cover the
+    # denoiser's own two). Phase 2.5 needs both: material ID for the
+    # neighbour-rejection test, world position for the Z normalization,
+    # which re-evaluates the target function at a NEIGHBOUR's shading point
+    # and so needs that point. Nothing else in render_interactive reads them.
     var material_id_int = List[Int32]()
+    var world_pos_int   = List[Float32]()
     var sp_int     = OwnedPointer[TileSamplerParams_C](TileSamplerParams_C(
         sobolMatrices=sobol,
         rngSeed=UInt64(0), sobolSeed=Int32(0),
@@ -1377,6 +1380,8 @@ def render_interactive(
         if use_restir:
             for _ in range(n_pixels):
                 material_id_int.append(Int32(-1))
+            for _ in range(n_pixels * 3):
+                world_pos_int.append(Float32(0))
             restir_buf_a = alloc[DIReservoir](n_pixels)
             restir_buf_b = alloc[DIReservoir](n_pixels)
             for i in range(n_pixels):
@@ -1467,6 +1472,7 @@ def render_interactive(
                         psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                         Int32(0), Int32(0), fw, fh, sd,
                         normals_int.unsafe_ptr(), depth_int.unsafe_ptr(),
+                        world_pos_out=world_pos_int.unsafe_ptr(),
                         material_id_out=material_id_int.unsafe_ptr())
                 else:
                     render_aux_buffers(
@@ -1480,6 +1486,7 @@ def render_interactive(
                     gbuf_normal=normals_int.unsafe_ptr(),
                     gbuf_depth=depth_int.unsafe_ptr(),
                     gbuf_material_id=material_id_int.unsafe_ptr(),
+                    gbuf_world_pos=world_pos_int.unsafe_ptr(),
                     frame_w=fw, frame_h=fh,
                 )
             render_all_tiles(

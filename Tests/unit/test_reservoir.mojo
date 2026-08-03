@@ -117,6 +117,35 @@ def test_reservoir_finalize_empty_reservoir_gives_zero_weight() raises:
     reservoir_finalize(s, Float32(1.0))
     assert_true(_close(s.w, Float32(0.0)))
 
+def test_reservoir_finalize_z_norm_divides_by_z_not_m() raises:
+    """Bitterli 2020 Algorithm 6: when combined reservoirs span DIFFERENT
+    integration domains, W divides by Z (the confidence of only those
+    domains that could have produced the winner), not by the full m.
+    Same state, two normalizations -> two different weights, and the
+    Z-normalized one must be LARGER because Z <= m by construction."""
+    var s = ReservoirState(w_sum=Float32(12.0), m=Float32(4.0), w=Float32(0.0))
+    reservoir_finalize(s, Float32(3.0), Float32(2.0))  # 12.0 / (2.0 * 3.0) = 2.0
+    assert_true(_close(s.w, Float32(2.0)))
+    # m itself must be untouched: the stored confidence still drives the
+    # next frame's temporal reuse and the M-cap, so only W is renormalized.
+    assert_true(_close(s.m, Float32(4.0)))
+
+def test_reservoir_finalize_negative_z_norm_falls_back_to_m() raises:
+    """The default sentinel keeps every single-domain caller (a pixel's own
+    candidates, temporal reuse under identity reprojection) on the plain
+    w_sum/(m*p_hat) path -- guarding the backwards compatibility that lets
+    di_resolve pass z_norm unconditionally."""
+    var s = ReservoirState(w_sum=Float32(12.0), m=Float32(4.0), w=Float32(0.0))
+    reservoir_finalize(s, Float32(3.0), Float32(-1.0))
+    assert_true(_close(s.w, Float32(1.0)))
+
+def test_reservoir_finalize_zero_z_norm_gives_zero_weight_not_inf() raises:
+    """Z can legitimately come out 0 if no combined domain contains the
+    winner; that must degenerate to "contribute nothing", not to Inf."""
+    var s = ReservoirState(w_sum=Float32(12.0), m=Float32(4.0), w=Float32(0.0))
+    reservoir_finalize(s, Float32(3.0), Float32(0.0))
+    assert_true(_close(s.w, Float32(0.0)))
+
 # ── reservoir_cap_confidence ────────────────────────────────────────────────
 
 def test_reservoir_cap_confidence_clamps_above_max() raises:

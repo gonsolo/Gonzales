@@ -107,6 +107,12 @@ struct ReservoirIO(TrivialRegisterPassable):
     var gbuf_normal:      UnsafePointer[Float32, MutAnyOrigin]
     var gbuf_depth:       UnsafePointer[Float32, MutAnyOrigin]
     var gbuf_material_id: UnsafePointer[Int32, MutAnyOrigin]
+    # World position per pixel (Phase 0.3's other G-buffer output). Needed
+    # for spatial reuse's Z normalization: deciding whether a NEIGHBOUR's
+    # integration domain could have produced the chosen sample means
+    # re-evaluating the target function at THAT neighbour's shading point,
+    # which needs its position, not just its normal.
+    var gbuf_world_pos:   UnsafePointer[Float32, MutAnyOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
@@ -118,5 +124,6 @@ def reservoir_io_null() -> ReservoirIO:
         gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
         gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
         gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )

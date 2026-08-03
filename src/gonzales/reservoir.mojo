@@ -77,8 +77,11 @@ def reservoir_combine(
     return accept
 
 @always_inline
-def reservoir_finalize(mut state: ReservoirState, target_pdf_of_chosen_sample: Float32):
-    """Compute the final corrective weight W = w_sum / (m * p_hat(chosen)),
+def reservoir_finalize(
+    mut state: ReservoirState, target_pdf_of_chosen_sample: Float32,
+    norm: Float32 = Float32(-1.0),
+):
+    """Compute the final corrective weight W = w_sum / (norm * p_hat(chosen)),
     the standard RIS estimator correction (Bitterli et al. 2020, Eq. 6).
     Call once after all streaming/combining for this pixel/frame is done,
     passing p_hat of whichever sample ended up as the winner. The caller
@@ -86,11 +89,29 @@ def reservoir_finalize(mut state: ReservoirState, target_pdf_of_chosen_sample: F
     case) contribution -- contribution * state.w is the unbiased estimate.
     Degenerate cases (empty reservoir, zero-probability winner) set w=0
     rather than producing NaN/Inf, so a degenerate reservoir contributes
-    nothing instead of corrupting the image."""
-    if state.w_sum <= Float32(0.0) or target_pdf_of_chosen_sample <= Float32(0.0) or state.m <= Float32(0.0):
+    nothing instead of corrupting the image.
+
+    `norm` is the count the estimator divides by. Leave it negative (the
+    default) to use `state.m`, which is correct whenever every combined
+    reservoir shared ONE integration domain -- a single pixel's own
+    candidates, or temporal reuse under identity reprojection, where the
+    previous frame's domain IS this pixel's domain.
+
+    Pass an explicit value for Bitterli et al. 2020 Algorithm 6's UNBIASED
+    multi-domain combination, where it is `Z`: the sum of confidences of
+    only those combined reservoirs whose OWN domain could actually have
+    produced the chosen sample. Dividing by the full `m` there over-counts
+    domains that could never have generated it, which is exactly the bias
+    in that paper's Algorithm 4 -- measured here as a mean offset plus a
+    convergence rate that stalls instead of falling (MSE floors at bias^2).
+    Note `norm` deliberately does NOT touch state.m: the stored confidence
+    must stay the true accumulated count for the next frame's reuse and
+    M-cap, so only W is renormalized."""
+    var denom = state.m if norm < Float32(0.0) else norm
+    if state.w_sum <= Float32(0.0) or target_pdf_of_chosen_sample <= Float32(0.0) or denom <= Float32(0.0):
         state.w = Float32(0.0)
         return
-    state.w = state.w_sum / (state.m * target_pdf_of_chosen_sample)
+    state.w = state.w_sum / (denom * target_pdf_of_chosen_sample)
 
 @always_inline
 def reservoir_cap_confidence(mut state: ReservoirState, max_m: Float32):
