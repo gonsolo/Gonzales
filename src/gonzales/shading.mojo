@@ -2634,7 +2634,29 @@ def di_resolve(
 comptime DI_TEMPORAL_M_CAP: Float32 = Float32(20 * DI_RIS_CANDIDATES)
 # Phase 2.5 spatial reuse tuning, per the plan's own "k ~= 3-5 neighbors"
 # and G-buffer rejection thresholds (docs/A2_restir_migration_plan.md).
-comptime DI_SPATIAL_NEIGHBORS: Int = 4
+#
+# DISABLED BY DEFAULT (k=0) -- the machinery below is correct and stays
+# built, but the WEIGHTING it uses is Bitterli et al. 2020's BIASED
+# spatial-reuse variant: it combines each neighbour with the target
+# function re-evaluated at this pixel, and never applies that paper's `Z`
+# normalization (how many of the combined domains could actually have
+# produced the chosen sample). Measured on staircase2 (400x400,
+# interactive 1spp/frame, vs a 128spp plain-NEE reference), splitting
+# temporal from spatial by flipping exactly this constant:
+#
+#   config                     mean     MSE@128fr   MSE 16->128
+#   plain NEE                  0.5050    0.000845     3.75x
+#   ReSTIR temporal only       0.5035    0.001346     2.79x
+#   ReSTIR temporal + k=4      0.5082    0.003252     1.15x
+#
+# Temporal-only is unbiased (0.5035 vs the 0.5039 reference) and still
+# converges; adding spatial introduces a +0.85% mean offset AND stalls
+# convergence to 1.15x, which is what a biased estimator looks like --
+# MSE floors out at bias^2 instead of falling with sample count. Turning
+# it on therefore makes images measurably worse, so it ships off until
+# the Z normalization lands (Bitterli 2020 sec. 4.2). Set to 4 to
+# re-enable for experiments.
+comptime DI_SPATIAL_NEIGHBORS: Int = 0
 comptime DI_SPATIAL_RADIUS_PX: Float32 = Float32(20.0)
 comptime DI_SPATIAL_NORMAL_DOT_MIN: Float32 = Float32(0.9)
 comptime DI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
