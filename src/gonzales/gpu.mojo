@@ -1224,14 +1224,20 @@ def shade_diffuse_gpu(
             point_lights=pointLights, point_count=n_point_lights,
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
             spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
-    # tid IS the pixel index here: this kernel only sees use_restir=True from
-    # gpu_render_sample, which runs exactly one path per pixel. Passing -1
-    # otherwise matches di_temporal_step's own "no reuse" sentinel.
-    # Reuse needs per-pixel reservoir buffers; RIS alone does not. Batch
-    # (wavefront) launches pass use_restir with NO buffers to get plain RIS,
-    # so key the pixel index off the buffers rather than the flag -- with
-    # pixel_idx=-1, di_temporal_step skips every read/write of them.
-    var restir_has_state = restir_on and _is_real_ptr(restir_read)
+    # gpu_render_sample runs exactly one path per pixel, so tid IS the pixel
+    # index there and `tid < frame_w*frame_h` is trivially always true.
+    # gpu_render_wavefront (Phase 3.1) now ALSO passes real buffers, but runs
+    # WAVEFRONT_BATCH paths per pixel concurrently in one launch -- letting
+    # all of them read/write the same persisted reservoir slot would race.
+    # Its path layout is `ti = si_local*n_pixels + px_flat`
+    # (gen_primary_rays_wavefront_gpu), so exactly the first n_pixels threads
+    # of any call (si_local == 0) each own a distinct pixel; every other
+    # thread this call falls back to plain per-thread RIS (pixel_idx=-1,
+    # di_temporal_step's own "no reuse" sentinel) -- unbiased on its own,
+    # same as today's batch-without-reuse path, just not persisted. Batch
+    # calls with no reservoir buffers at all (use_restir but RIS-only) still
+    # get restir_has_state=False from _is_real_ptr regardless of tid.
+    var restir_has_state = restir_on and _is_real_ptr(restir_read) and tid < Int(frame_w) * Int(frame_h)
     var restir_io = reservoir_io_null()
     if restir_has_state:
         restir_io = ReservoirIO(
@@ -3423,14 +3429,44 @@ def gpu_render_wavefront(
     mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
-    # ReSTIR DI, RIS only -- appended LAST so no existing positional argument
-    # shifts. Batch has no frames to reuse across, and WAVEFRONT_BATCH samples
-    # per pixel run concurrently, so per-pixel reservoir reuse is both
-    # meaningless and racy here. Plain RIS keeps no state between samples, so
-    # it applies unchanged, and carries most of the benefit anyway (0.486x MSE
-    # vs plain NEE on Scenes/restir-manylights.pbrt). Passing no reservoir
-    # buffers is what selects RIS-without-reuse -- see shade_diffuse_gpu.
+    # ReSTIR DI -- appended LAST so no existing positional argument shifts.
+    # Phase 3.1 (docs/A2_restir_migration_plan.md): WAVEFRONT_BATCH paths
+    # per pixel run concurrently within ONE call, so per-pixel reservoir
+    # reuse WITHIN a call is still meaningless/racy for all but one of them
+    # -- but separate calls (the caller's `while si < spp` loop) run
+    # strictly sequentially on the same stream, so persisting a reservoir
+    # ACROSS calls is safe exactly like gpu_render_sample's across-frame
+    # ping-pong, just keyed on call index (frame_index here) instead of
+    # frame index. shade_diffuse_gpu restricts persistence to the tid <
+    # n_pixels slice of each call (see its own comment) so only one thread
+    # per pixel ever touches a given buffer this call -- no race.
+    #
+    # Measured on Scenes/restir-manylights.pbrt (256 equal-power lights),
+    # vs a 2048spp --no-denoise reference, MSE relative to batch RIS-only
+    # (the pre-3.1 baseline, same scene/seed):
+    #
+    #   spp    RIS-only    +reuse(3.1)   reuse/RIS-only
+    #    16    0.035195    0.032552      0.925  win
+    #    32    0.014427    0.014283      0.990  ~tie
+    #    64    0.006721    0.007722      1.149  LOSS
+    #   128    0.003700    0.003748      1.013  ~tie
+    #
+    # No bias at any point (mean stayed within ~0.2% of the reference at
+    # every spp, no consistent direction) -- 3.2's "confidence weighting is
+    # load-bearing" risk did not materialize as a brightness error. But the
+    # QUALITY effect is a wash, not a win: only 1 of every WAVEFRONT_BATCH
+    # concurrent samples per pixel per call ever touches the persisted
+    # reservoir (see shade_diffuse_gpu's tid < frame_w*frame_h gate), and
+    # even that one only sees ONE more call's worth of history each time,
+    # so the effective reuse depth here is far shallower than interactive
+    # mode's real per-frame accumulation. Shipped anyway: it is the
+    # correct, unbiased mechanism 3.1 asks for, and a plausible
+    # prerequisite for deeper reuse later (e.g. combining all
+    # WAVEFRONT_BATCH candidates per pixel into one reservoir via a
+    # dedicated per-pixel reduction kernel, which would raise the
+    # participating fraction from 1/8 to 8/8 -- not attempted here).
     use_restir: Bool = False,
+    frame_index: Int = 0,
 ):
     var n_pix = Int(n)
     var batch  = Int(actual_batch)
@@ -3461,12 +3497,26 @@ def gpu_render_wavefront(
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
+            # Same ping-pong rationale as gpu_render_sample: the read side
+            # must be the PREVIOUS call's finished buffer, since spatial
+            # reuse reads neighbouring pixels that this call's slot-0
+            # threads are concurrently writing.
+            var restir_rd = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+            var restir_wr = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+            if use_restir:
+                var buf_a = handle[].restir_a_buf.unsafe_ptr().bitcast[DIReservoir]()
+                var buf_b = handle[].restir_b_buf.unsafe_ptr().bitcast[DIReservoir]()
+                if frame_index % 2 == 0:
+                    restir_rd = buf_a; restir_wr = buf_b
+                else:
+                    restir_rd = buf_b; restir_wr = buf_a
             for _ in range(Int(maxDepth)):
                 _gpu_bounce_kernels(
                     handle, n_total, grid_total, px_scale,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
                     use_restir=use_restir,
+                    restir_read=restir_rd, restir_write=restir_wr,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),

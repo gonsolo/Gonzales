@@ -985,15 +985,28 @@ def parse_and_render(
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         var seed_dim1 = UInt32(0)
         if use_restir:
-            # Batch gets RIS but not reuse: there are no frames to reuse
-            # across, and WAVEFRONT_BATCH samples per pixel run concurrently,
-            # so a shared per-pixel reservoir would race. RIS itself keeps no
-            # state between samples and carries most of the benefit.
-            print("Note: --gpu --restir uses RIS only in batch mode "
-                  "(no temporal/spatial reuse); add --interactive-frames N for full ReSTIR.")
+            # Phase 3.1 (docs/A2_restir_migration_plan.md): batch mode now
+            # persists reservoirs across gpu_render_wavefront calls (temporal
+            # reuse) and reuses neighbouring pixels' persisted state
+            # (spatial reuse) -- the only "frames" batch mode has are these
+            # WAVEFRONT_BATCH-sized sample chunks. Only 1 of each chunk's
+            # WAVEFRONT_BATCH concurrent samples per pixel participates in
+            # reuse (the rest stay plain per-thread RIS, unbiased on their
+            # own -- see shade_diffuse_gpu's tid < frame_w*frame_h gate), so
+            # this is a partial-strength version of the interactive path's
+            # full reuse, not identical to it.
+            print("Note: --gpu --restir batch mode reuses reservoirs across "
+                  "sample chunks (1 of every " + String(WAVEFRONT_BATCH) + " samples/pixel).")
+            # Spatial reuse needs a real G-buffer already in place before the
+            # first wavefront call -- normally only generated post-render for
+            # the denoiser. Camera is static for the whole batch render, so
+            # generating it once up front is exact, not an approximation.
+            gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
+            gpu_clear_restir(handle, Int64(n_pixels))
         gpu_clear_film(handle, Int64(n_pixels))
         var t0_gpu = perf_counter_ns()
         var si = 0
+        var restir_call_idx = 0
         while si < spp:
             var actual_batch = min(WAVEFRONT_BATCH, spp - si)
             gpu_render_wavefront(
@@ -1008,9 +1021,10 @@ def parse_and_render(
                 px_scale,
                 use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                 mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
-                use_restir=use_restir,
+                use_restir=use_restir, frame_index=restir_call_idx,
             )
             si += actual_batch
+            restir_call_idx += 1
             var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
             print(progress_str(si, spp, elapsed, "spp"), end="\r")
         var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
