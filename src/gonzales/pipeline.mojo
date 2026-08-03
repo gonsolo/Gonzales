@@ -306,6 +306,22 @@ def _build_mesh_light_info(
                 mat_idx[mi] = p.materialIndex
                 al_idx[mi] = Int32(p.id1)
                 seen[mi] = UInt8(1)
+    # Object-instancing templates: their mesh triangles live ONLY in each
+    # template's own BLAS (psc[0].prim_ids above is the ordinary top-level
+    # TLAS, which explicitly excludes template meshes -- see finalize_scene),
+    # so without this second pass every template mesh index would be left at
+    # the mat_idx=0/al_idx=-1 default, giving Vulkan RT instance hits the
+    # wrong material. AreaLightSource is not supported inside ObjectBegin/
+    # ObjectEnd (parser skips it there), so template triangles are always
+    # type==0 -- no type==3 case needed here.
+    for tmpl in range(Int(psc[0].blas_count)):
+        var tprims = psc[0].blas_primids_arr[tmpl]
+        for i in range(Int(psc[0].blas_primid_counts[tmpl])):
+            var p = tprims[i]
+            var mi = Int(p.id1)
+            if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
+                mat_idx[mi] = p.materialIndex
+                seen[mi] = UInt8(1)
     seen.free()
     return (mat_idx, al_idx)
 
@@ -862,7 +878,22 @@ def parse_and_render(
                         vmeshes_vcm[i] = psc[0].meshes[i]
                         point_counts_vcm[i] = Int64(psc[0].mesh_n_verts[i])
                         vidx_counts_vcm[i] = Int64(psc[0].mesh_n_tris[i]) * 3
-                    interop_scene_vcm = vulkaninterop_rt_create_scene(vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm, Int64(max_rays_vk_vcm))
+                    # VCM's Vulkan RT path doesn't support object instancing
+                    # yet (its own primary/bounce interop -- vulkaninterop_
+                    # rt_traverse_light_paths_gpu/_camera_ in bdpt.mojo -- is
+                    # a separate wiring from the plain wavefront path's
+                    # _gpu_bounce_kernels, not extended this session; see
+                    # project_vulkan_rt_backend memory). The guard above
+                    # already keeps instanced scenes off this path entirely,
+                    # so template_count/instance_count are always 0 here.
+                    var no_templates_vcm = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
+                    var no_instances_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+                    var no_instance_tmpl_vcm = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+                    interop_scene_vcm = vulkaninterop_rt_create_scene(
+                        vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm,
+                        Int64(0), no_templates_vcm, no_templates_vcm,
+                        Int64(0), no_instances_vcm, no_instance_tmpl_vcm,
+                        Int64(max_rays_vk_vcm))
                     vmeshes_vcm.free(); point_counts_vcm.free(); vidx_counts_vcm.free()
                     if Int(interop_scene_vcm) == 0:
                         print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
@@ -936,11 +967,12 @@ def parse_and_render(
         var interop_results_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
         var mesh_material_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var mesh_al_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
+        var instance_base_mesh_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
-            if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0) or psc[0].instance_count > Int32(0):
-                print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
+            if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0):
+                print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres (unsupported) -- falling back to CUDA intersection")
                 use_vk = False
             else:
                 n_meshes_vk = Int(psc[0].mesh_count)
@@ -951,11 +983,50 @@ def parse_and_render(
                     vmeshes[i] = psc[0].meshes[i]
                     point_counts[i] = Int64(psc[0].mesh_n_verts[i])
                     vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
-                interop_scene = vulkaninterop_rt_create_scene(vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts, max_rays_vk)
+
+                # Object instancing (project_vulkan_rt_backend memory's
+                # "close the Vulkan RT gap" plan, item 1): template_mesh_
+                # start/end mark which mesh-index ranges are template-only
+                # (excluded from the ordinary BLAS-per-mesh loop, merged
+                # instead into their template's own multi-geometry BLAS
+                # inside vulkaninterop_rt_create_scene); instance_obj_to_
+                # world/instance_template_idx place one TLAS instance per
+                # ObjectInstance. Empty (n_templates=0) is byte-identical to
+                # the pre-instancing call.
+                var n_templates_vk = Int(psc[0].blas_count)
+                var template_mesh_start_vk = alloc[Int64](max(n_templates_vk, 1))
+                var template_mesh_end_vk   = alloc[Int64](max(n_templates_vk, 1))
+                for t in range(n_templates_vk):
+                    template_mesh_start_vk[t] = Int64(psc[0].template_mesh_start[t])
+                    template_mesh_end_vk[t]   = Int64(psc[0].template_mesh_end[t])
+
+                var n_instances_vk = Int(psc[0].instance_count)
+                var instance_o2w_vk = alloc[Float32](max(n_instances_vk, 1) * 16)
+                var instance_tmpl_idx_vk = alloc[Int32](max(n_instances_vk, 1))
+                # Precompute each instance's real BASE mesh index (its
+                # template's own mstart) here on the host so the GPU decode
+                # kernel only needs one array lookup + geometryIndex add --
+                # see vulkaninterop_unpack_results_kernel (gpu.mojo).
+                var instance_base_mesh_host = alloc[Int32](max(n_instances_vk, 1))
+                for k in range(n_instances_vk):
+                    var inst = psc[0].instances[k]
+                    for ci in range(16):
+                        instance_o2w_vk[k * 16 + ci] = inst.objToWorld[ci]
+                    instance_tmpl_idx_vk[k] = Int32(inst.blasIdx)
+                    instance_base_mesh_host[k] = psc[0].template_mesh_start[Int(inst.blasIdx)]
+
+                interop_scene = vulkaninterop_rt_create_scene(
+                    vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts,
+                    Int64(n_templates_vk), template_mesh_start_vk, template_mesh_end_vk,
+                    Int64(n_instances_vk), instance_o2w_vk, instance_tmpl_idx_vk,
+                    max_rays_vk)
                 vmeshes.free(); point_counts.free(); vidx_counts.free()
+                template_mesh_start_vk.free(); template_mesh_end_vk.free()
+                instance_o2w_vk.free(); instance_tmpl_idx_vk.free()
                 if Int(interop_scene) == 0:
                     print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                     use_vk = False
+                    instance_base_mesh_host.free()
                 else:
                     var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
                     var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
@@ -983,6 +1054,15 @@ def parse_and_render(
 
                     mesh_material_idx.free()
                     mesh_al_idx.free()
+
+                    if n_instances_vk > 0:
+                        var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vk * size_of[Int32]())
+                        with ibm_buf.map_to_host() as h3:
+                            var dst3 = h3.unsafe_ptr().bitcast[Int32]()
+                            for k in range(n_instances_vk):
+                                dst3[k] = instance_base_mesh_host[k]
+                        instance_base_mesh_buf_opt = ibm_buf^
+                    instance_base_mesh_host.free()
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -1038,6 +1118,7 @@ def parse_and_render(
                     px_scale,
                     use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
+                    instance_base_mesh_buf_opt,
                 )
                 si += actual_batch
                 var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9

@@ -19,10 +19,15 @@ struct Result {
     float u;
     float v;
     float _pad0;
-    int hitMesh;
-    int hitTriangle;
+    int hitMesh;       // instanceCustomIndex: mesh index if < mesh_count, else
+                        // (mesh_count + instance index) -- see
+                        // vulkaninterop_rt_create_scene's docstring
+    int hitTriangle;    // primitiveIndex: LOCAL to whichever geometry was hit
     uint hitFlag;
-    uint _pad1;
+    int geometryIndex;  // which geometry within the hit BLAS -- always 0 for
+                        // an ordinary (single-geometry) mesh BLAS; for an
+                        // instance hit, the real mesh index is
+                        // template_mesh_start[template] + geometryIndex
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
@@ -68,7 +73,7 @@ void main() {
         r.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
         r.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
         r.hitFlag = 1u;
-        r._pad1 = 0u;
+        r.geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, true);
     } else {
         r.hitT = -1.0;
         r.u = 0.0;
@@ -77,7 +82,7 @@ void main() {
         r.hitMesh = -1;
         r.hitTriangle = -1;
         r.hitFlag = 0u;
-        r._pad1 = 0u;
+        r.geometryIndex = -1;
     }
     results[i] = r;
 }

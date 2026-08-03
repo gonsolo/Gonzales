@@ -112,6 +112,15 @@ struct ParsedScene_Mojo:
     var blas_count:       Int32
     var instances:        UnsafePointer[Instance_C, MutAnyOrigin]
     var instance_count:   Int32
+    # Mesh-index range [start, end) each template's BLAS spans, into the SAME
+    # `meshes` array above (a template can bundle several Shape calls, e.g.
+    # barcelona-pavilion's tree templates each have 5-9 plymesh shapes).
+    # Only consumer today: the Vulkan RT interop scene builder (pipeline.mojo),
+    # which needs to know which mesh indices are template-only (excluded from
+    # its ordinary one-BLAS-per-mesh loop) and which meshes feed which
+    # per-template multi-geometry BLAS -- see [[project_vulkan_rt_backend]].
+    var template_mesh_start: UnsafePointer[Int32, MutAnyOrigin]
+    var template_mesh_end:   UnsafePointer[Int32, MutAnyOrigin]
     # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
     # (deduped by path), referenced by Material_C.measured_idx. Populated at
     # final-scene-build time from named_materials[i].measured_bsdf_path -- see
@@ -1916,9 +1925,13 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     # their own device buffers and needs to know how many bytes that is.
     var blas_node_counts   = alloc[Int32](max(n_templates, 1))
     var blas_primid_counts = alloc[Int32](max(n_templates, 1))
+    var template_mesh_start = alloc[Int32](max(n_templates, 1))
+    var template_mesh_end   = alloc[Int32](max(n_templates, 1))
     for tmpl in range(n_templates):
         var mstart = Int(s[0].object_mesh_start[tmpl])
         var mend   = Int(s[0].object_mesh_end[tmpl])
+        template_mesh_start[tmpl] = Int32(mstart)
+        template_mesh_end[tmpl]   = Int32(mend)
         var t_tris = Int32(0)
         for mi in range(mstart, mend):
             t_tris += Int32(len(s[0].meshes[mi].face_idxs))
@@ -2180,6 +2193,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutAnyOrigin],
     psc[0].blas_count       = Int32(n_templates)
     psc[0].instances        = instances_c
     psc[0].instance_count   = total_instances
+    psc[0].template_mesh_start = template_mesh_start
+    psc[0].template_mesh_end   = template_mesh_end
     psc[0].film_w           = s[0].film_w
     psc[0].film_h           = s[0].film_h
     psc[0].crop_x0          = s[0].crop_x0
@@ -2618,6 +2633,8 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]):
     psc[0].blas_node_counts.free()
     psc[0].blas_primid_counts.free()
     psc[0].instances.free()
+    psc[0].template_mesh_start.free()
+    psc[0].template_mesh_end.free()
     psc.free()
 
 def mojo_apply_overrides(

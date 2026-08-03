@@ -2392,6 +2392,16 @@ def vulkaninterop_pack_rays_kernel(
 # now done per-thread on the GPU instead of a Mojo host loop, so
 # mesh_material_idx/mesh_al_idx must be GPU-resident buffers here (see
 # _build_mesh_light_info + the upload step in pipeline.mojo).
+#
+# Object instancing: a hit's hitMesh (instanceCustomIndex) is either an
+# ordinary mesh index (< n_meshes, unchanged from before instancing existed)
+# or mesh_count + instance_index (see vulkaninterop_rt_create_scene). For
+# the latter, instance_base_mesh[instance_index] (host-precomputed as
+# template_mesh_start[instances[k].blasIdx], pipeline.mojo) plus the hit's
+# geometryIndex gives the real originating mesh index -- AreaLightSource is
+# not supported inside ObjectBegin/ObjectEnd (pbrt_parser.mojo skips it
+# there), so instance hits are always ordinary (type==0) triangles, never
+# the type==3 area-light encoding.
 def vulkaninterop_unpack_results_kernel(
     results: UnsafePointer[Float32, MutAnyOrigin],
     inter: UnsafePointer[Intersection_C, MutAnyOrigin],
@@ -2399,6 +2409,7 @@ def vulkaninterop_unpack_results_kernel(
     mesh_al_idx: UnsafePointer[Int32, MutAnyOrigin],
     n_meshes: Int,
     count: Int,
+    instance_base_mesh: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -2407,13 +2418,20 @@ def vulkaninterop_unpack_results_kernel(
     var iresults = results.bitcast[Int32]()
     var hitFlag = iresults[idx + 6]
     if hitFlag == Int32(1):
-        var mi = Int(iresults[idx + 4])
+        var raw_idx = Int(iresults[idx + 4])
         var tri = iresults[idx + 5]
+        var geometry_idx = iresults[idx + 7]
+        var instance_idx = Int32(-1)
+        var mi = raw_idx
+        if raw_idx >= n_meshes and _is_real_ptr(instance_base_mesh):
+            instance_idx = Int32(raw_idx - n_meshes)
+            mi = Int(instance_base_mesh[Int(instance_idx)]) + Int(geometry_idx)
         var mat_idx = Int64(0)
         var al = Int32(-1)
         if mi >= 0 and mi < n_meshes:
             mat_idx = mesh_material_idx[mi]
-            al = mesh_al_idx[mi]
+            if instance_idx < Int32(0):
+                al = mesh_al_idx[mi]
         var hitT = results[idx + 0]
         var u = results[idx + 1]
         var v = results[idx + 2]
@@ -2425,7 +2443,7 @@ def vulkaninterop_unpack_results_kernel(
             )
         else:
             inter[tid] = Intersection_C(
-                PrimId_C(Int64(mi), Int64(tri) * 3, mat_idx, Int32(-1),
+                PrimId_C(Int64(mi), Int64(tri) * 3, mat_idx, instance_idx,
                          Int8(0), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
@@ -2455,6 +2473,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     mesh_al_idx_buf: DeviceBuffer[DType.uint8],
     n_meshes: Int,
     n_total: Int,
+    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -2469,6 +2488,10 @@ def vulkaninterop_rt_traverse_paths_gpu(
     var cuda_stream = CUDA(ctx.stream())
     _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
 
+    var instance_base_mesh_ptr = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+    if instance_base_mesh_buf:
+        instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().bitcast[Int32]()
+
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr(),
         inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -2476,6 +2499,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
         mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
         n_meshes,
         n_total,
+        instance_base_mesh_ptr,
         grid_dim=grid, block_dim=block_size,
     )
 
@@ -2841,6 +2865,10 @@ def _gpu_bounce_kernels(
     use_restir: Bool = False,
     restir_read: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
     restir_write: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    # Object-instancing decode for Vulkan RT hits (see
+    # vulkaninterop_unpack_results_kernel) -- None for scenes with no
+    # instancing, matching every other Optional buffer above.
+    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ) raises:
     comptime block_size = 256
     if use_vulkan_rt:
@@ -2855,6 +2883,7 @@ def _gpu_bounce_kernels(
             mesh_al_idx_buf.value(),
             n_meshes_vk,
             n,
+            instance_base_mesh_buf,
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](
@@ -3413,8 +3442,9 @@ def gpu_render_wavefront(
     # intersection test is routed through the CUDA/Vulkan interop RT
     # backend (vulkaninterop_rt_traverse_paths_gpu, zero CPU sync) instead
     # of the traverse_paths_gpu CUDA kernel below -- caller must only set
-    # this for scenes with no curves/spheres/instancing (see
-    # vulkaninterop_rt_traverse_paths_gpu's docstring). The interop_*/
+    # this for scenes with no curves/spheres (object instancing IS
+    # supported now -- see vulkaninterop_rt_create_scene/
+    # vulkaninterop_rt_traverse_paths_gpu's docstrings). The interop_*/
     # mesh_*_buf/n_meshes_vk params are ignored when use_vulkan_rt is False.
     use_vulkan_rt: Bool = False,
     interop_scene: VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling(),
@@ -3423,6 +3453,7 @@ def gpu_render_wavefront(
     mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
+    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ):
     # --restir batch rendering does not go through this function at all
     # (docs/A2_restir_migration_plan.md, pipeline.mojo's batch GPU branch):
@@ -3468,6 +3499,7 @@ def gpu_render_wavefront(
                     handle, n_total, grid_total, px_scale,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
+                    instance_base_mesh_buf=instance_base_mesh_buf,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),

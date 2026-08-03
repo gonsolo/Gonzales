@@ -82,18 +82,42 @@ typedef struct {
     const float* normals;
 } VulkanInteropMesh;
 
-// Builds an interop-AND-ray-query-capable Vulkan device, a real BLAS-per-
-// mesh + TLAS scene (same construction as vulkanrt_build_scene), and two
-// CUDA-importable buffers sized for up to `max_rays` rays/results at once:
-// a rays buffer (max_rays * 8 floats, same (ox,oy,oz,tmin,dx,dy,dz,tmax)
-// layout vulkanrt_trace_rays takes) and a results buffer (max_rays * 32
-// bytes, matching intersect_batch.comp's Result struct: float hitT,u,v,pad;
-// int32 hitMesh,hitTriangle; uint32 hitFlag,pad). Returns NULL on failure.
+// Builds an interop-AND-ray-query-capable Vulkan device, a real BLAS/TLAS
+// scene, and two CUDA-importable buffers sized for up to `max_rays`
+// rays/results at once: a rays buffer (max_rays * 8 floats, same
+// (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes) and a
+// results buffer (max_rays * 32 bytes, matching intersect_batch.comp's
+// Result struct: float hitT,u,v,pad; int32 hitMesh,hitTriangle,geometryIndex;
+// uint32 hitFlag). Returns NULL on failure.
+//
+// Object instancing (mirrors gonzales's own two-level BVH, see
+// geometry.mojo's Instance_C / pbrt_parser.mojo's ObjectBegin/ObjectEnd/
+// ObjectInstance handling): `meshes[i]` for i in any
+// [template_mesh_start[t], template_mesh_end[t]) range is a TEMPLATE mesh
+// -- excluded from the ordinary one-BLAS-per-mesh-with-identity-transform
+// treatment every other mesh gets, and instead merged (as separate
+// geometries, one per mesh, within ONE BLAS) into template t's own BLAS.
+// Each of `instance_count` placements gets its own TLAS instance
+// referencing template `instance_template_idx[k]`'s BLAS with the
+// (column-major, 16-float, gonzales's own transform.mojo convention)
+// transform `instance_obj_to_world[k*16 .. k*16+16)`. Pass template_count=0/
+// instance_count=0 (with the corresponding arrays possibly NULL) for a
+// scene with no instancing -- byte-identical to the pre-instancing
+// behavior. A hit's instanceCustomIndex is `i` (< mesh_count) for an
+// ordinary mesh, or `mesh_count + k` (instance index k) for an instance --
+// see intersect_batch.comp / vulkaninterop_unpack_results_kernel (gpu.mojo)
+// for the decode.
 void* vulkaninterop_rt_create_scene(
     const VulkanInteropMesh* meshes,
     int64_t mesh_count,
     const int64_t* point_counts,
     const int64_t* vertex_index_counts,
+    int64_t template_count,
+    const int64_t* template_mesh_start,
+    const int64_t* template_mesh_end,
+    int64_t instance_count,
+    const float* instance_obj_to_world,
+    const int32_t* instance_template_idx,
     int64_t max_rays);
 
 // CUDA device pointer for the shared rays buffer -- a Mojo kernel writes

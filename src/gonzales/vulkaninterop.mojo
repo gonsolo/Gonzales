@@ -60,19 +60,41 @@ comptime VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin]
 # TriangleMesh_C data (same field-for-field-mirror trick as vulkanrt.mojo's
 # vulkanrt_build_scene -- VulkanInteropMesh in vulkaninterop.h matches
 # TriangleMesh_C's layout exactly, no repacking needed) -- one real BLAS
-# per mesh + one TLAS, plus two CUDA-importable buffers sized for up to
-# `max_rays` rays/results at once. Returns a null handle on failure.
+# per ordinary mesh (identity-transform TLAS instance) + one multi-geometry
+# BLAS per object-instancing template (template_mesh_start/end mark which
+# mesh-index ranges are template-only) + one TLAS instance per
+# ObjectInstance placement (instance_obj_to_world, column-major 16 floats
+# per instance, gonzales's own transform.mojo convention;
+# instance_template_idx says which template's BLAS it references) + two
+# CUDA-importable buffers sized for up to `max_rays` rays/results at once.
+# Pass template_count=0/instance_count=0 (arrays may then be a
+# `.unsafe_dangling()` placeholder) for a scene with no instancing --
+# byte-identical to the pre-instancing behavior. Returns a null handle on
+# failure. See vulkaninterop.h's own docstring for the full instancing
+# rationale and the hit-decode convention.
 def vulkaninterop_rt_create_scene(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mesh_count: Int64,
     point_counts: UnsafePointer[Int64, MutAnyOrigin],
     vertex_index_counts: UnsafePointer[Int64, MutAnyOrigin],
+    template_count: Int64,
+    template_mesh_start: UnsafePointer[Int64, MutAnyOrigin],
+    template_mesh_end: UnsafePointer[Int64, MutAnyOrigin],
+    instance_count: Int64,
+    instance_obj_to_world: UnsafePointer[Float32, MutAnyOrigin],
+    instance_template_idx: UnsafePointer[Int32, MutAnyOrigin],
     max_rays: Int64,
 ) -> VulkanInteropRtSceneHandle:
     return external_call["vulkaninterop_rt_create_scene", VulkanInteropRtSceneHandle,
         UnsafePointer[TriangleMesh_C, MutAnyOrigin], Int64,
-        UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin], Int64](
-        meshes, mesh_count, point_counts, vertex_index_counts, max_rays)
+        UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
+        Int64, UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
+        Int64, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
+        Int64](
+        meshes, mesh_count, point_counts, vertex_index_counts,
+        template_count, template_mesh_start, template_mesh_end,
+        instance_count, instance_obj_to_world, instance_template_idx,
+        max_rays)
 
 # CUDA device pointer for the shared rays buffer (max_rays * 8 floats, same
 # (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes). Wrap with
@@ -84,10 +106,12 @@ def vulkaninterop_rt_get_rays_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePo
 
 # CUDA device pointer for the shared results buffer (max_rays * 32 bytes,
 # matching intersect_batch.comp's Result struct: float hitT,u,v,pad; int32
-# hitMesh,hitTriangle; uint32 hitFlag,pad -- 8 x 4-byte fields). Wrap with
-# DeviceBuffer[DType.float32](ctx, ptr, max_rays * 8, owning=False) and
-# bitcast to read hitMesh/hitTriangle/hitFlag as Int32/UInt32 (same
-# raw-buffer-bitcast convention gpu.mojo already uses throughout).
+# hitMesh,hitTriangle,geometryIndex; uint32 hitFlag -- 8 x 4-byte fields).
+# Wrap with DeviceBuffer[DType.float32](ctx, ptr, max_rays * 8,
+# owning=False) and bitcast to read hitMesh/hitTriangle/hitFlag/
+# geometryIndex as Int32/UInt32 (same raw-buffer-bitcast convention
+# gpu.mojo already uses throughout) -- see
+# vulkaninterop_unpack_results_kernel (gpu.mojo) for the instancing decode.
 def vulkaninterop_rt_get_results_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Float32, MutAnyOrigin]:
     return external_call["vulkaninterop_rt_get_results_ptr", UnsafePointer[Float32, MutAnyOrigin],
         VulkanInteropRtSceneHandle](scene)

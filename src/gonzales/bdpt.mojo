@@ -6147,6 +6147,11 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
     var cuda_stream = CUDA(ctx.stream())
     _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
 
+    # GPU kernel dispatch has no default-argument fill-in (unlike ordinary
+    # Mojo calls) -- must pass instance_base_mesh explicitly. VCM's Vulkan
+    # RT path doesn't support object instancing (its own pipeline.mojo call
+    # site keeps the pre-existing instance_count>0 CUDA-fallback guard), so
+    # this is always the inert dangling default.
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr(),
         inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -6154,6 +6159,7 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
         mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
         n_meshes,
         n_total,
+        UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
         grid_dim=grid, block_dim=block_size,
     )
 
@@ -6182,6 +6188,11 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
     var cuda_stream = CUDA(ctx.stream())
     _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
 
+    # GPU kernel dispatch has no default-argument fill-in (unlike ordinary
+    # Mojo calls) -- must pass instance_base_mesh explicitly. VCM's Vulkan
+    # RT path doesn't support object instancing (its own pipeline.mojo call
+    # site keeps the pre-existing instance_count>0 CUDA-fallback guard), so
+    # this is always the inert dangling default.
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr(),
         inter_buf.unsafe_ptr().bitcast[Intersection_C](),
@@ -6189,6 +6200,7 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
         mesh_al_idx_buf.unsafe_ptr().bitcast[Int32](),
         n_meshes,
         n_total,
+        UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
         grid_dim=grid, block_dim=block_size,
     )
 

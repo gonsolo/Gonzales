@@ -246,6 +246,106 @@ bool buildAccelerationStructure(
     return true;
 }
 
+// Multi-geometry BLAS variant: object-instancing templates can bundle
+// several meshes (e.g. barcelona-pavilion's tree templates have 5-9
+// plymesh shapes each -- see pbrt_parser.mojo's ObjectBegin/ObjectEnd), so
+// one template needs one BLAS built from MULTIPLE triangle geometries, one
+// per mesh, each getting its own geometryIndex (0..geometries.size()-1) so
+// a hit can be decoded back to "mesh template_mesh_start[t] + geometryIndex"
+// -- see intersect_batch.comp's geometryIndex report and
+// vulkaninterop_unpack_results_kernel's decode (gpu.mojo). Otherwise
+// identical to the single-geometry buildAccelerationStructure above (same
+// scratch/command-buffer/address-query dance), just with geometryCount > 1
+// and one VkAccelerationStructureBuildRangeInfoKHR per geometry.
+bool buildAccelerationStructureMulti(
+    VkDevice device, VkPhysicalDevice physicalDevice,
+    VkCommandPool cmdPool, VkQueue queue, const RtFunctions& fns,
+    const std::vector<VkAccelerationStructureGeometryKHR>& geometries,
+    const std::vector<uint32_t>& primitiveCounts,
+    VkAccelerationStructureKHR* outAS, Buffer* outASBuffer,
+    VkDeviceAddress* outASAddress) {
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.geometryCount = (uint32_t)geometries.size();
+    buildInfo.pGeometries = geometries.data();
+
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
+    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    fns.getBuildSizes(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                       &buildInfo, primitiveCounts.data(), &sizeInfo);
+
+    if (!createBuffer(device, physicalDevice, sizeInfo.accelerationStructureSize,
+                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, outASBuffer)) {
+        return false;
+    }
+
+    VkAccelerationStructureCreateInfoKHR createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+    createInfo.buffer = outASBuffer->buffer;
+    createInfo.size = sizeInfo.accelerationStructureSize;
+    createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    if (fns.create(device, &createInfo, nullptr, outAS) != VK_SUCCESS) {
+        fprintf(stderr, "vulkaninterop: vkCreateAccelerationStructureKHR (multi) failed\n");
+        return false;
+    }
+
+    Buffer scratch;
+    if (!createBuffer(device, physicalDevice, sizeInfo.buildScratchSize,
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true, &scratch)) {
+        return false;
+    }
+
+    buildInfo.dstAccelerationStructure = *outAS;
+    buildInfo.scratchData.deviceAddress = scratch.address;
+
+    std::vector<VkAccelerationStructureBuildRangeInfoKHR> rangeInfos(primitiveCounts.size());
+    std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> pRangeInfos(primitiveCounts.size());
+    for (size_t i = 0; i < primitiveCounts.size(); i++) {
+        rangeInfos[i] = VkAccelerationStructureBuildRangeInfoKHR{};
+        rangeInfos[i].primitiveCount = primitiveCounts[i];
+        pRangeInfos[i] = &rangeInfos[i];
+    }
+
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = cmdPool;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    if (vkAllocateCommandBuffers(device, &cbai, &cmd) != VK_SUCCESS) {
+        destroyBuffer(device, &scratch);
+        return false;
+    }
+
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    fns.cmdBuild(cmd, 1, &buildInfo, pRangeInfos.data());
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device, cmdPool, 1, &cmd);
+    destroyBuffer(device, &scratch);
+
+    VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
+    addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    addrInfo.accelerationStructure = *outAS;
+    *outASAddress = fns.getDeviceAddress(device, &addrInfo);
+    return true;
+}
+
 struct Interop {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -532,10 +632,22 @@ struct InteropRtScene {
     ExtFns extFns{};
     RtFunctions rtFns{};
 
+    // Sized mesh_count -- one slot per mesh, whether ordinary or template.
+    // Ordinary meshes get a real BLAS in blas[i]/blasBufs[i] (identity-
+    // transform TLAS instance, same as before instancing existed); template
+    // meshes' vertex/index buffers are populated the same way but reused as
+    // one GEOMETRY within their template's own multi-geometry BLAS below --
+    // blas[i]/blasBufs[i] stay VK_NULL_HANDLE/empty for those indices.
     std::vector<Buffer> blasVertexBufs;
     std::vector<Buffer> blasIndexBufs;
     std::vector<VkAccelerationStructureKHR> blas;
     std::vector<Buffer> blasBufs;
+
+    // Sized template_count -- one multi-geometry BLAS per ObjectBegin/
+    // ObjectEnd template, built from that template's mesh range's buffers
+    // above (see buildAccelerationStructureMulti).
+    std::vector<VkAccelerationStructureKHR> templateBlas;
+    std::vector<Buffer> templateBlasBufs;
 
     Buffer instanceBuf{};
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
@@ -1048,6 +1160,10 @@ extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
         destroyBuffer(sc->device, &sc->blasVertexBufs[i]);
         destroyBuffer(sc->device, &sc->blasIndexBufs[i]);
     }
+    for (size_t t = 0; t < sc->templateBlas.size(); t++) {
+        if (sc->templateBlas[t]) sc->rtFns.destroy(sc->device, sc->templateBlas[t], nullptr);
+        destroyBuffer(sc->device, &sc->templateBlasBufs[t]);
+    }
 
     if (sc->cmdPool) vkDestroyCommandPool(sc->device, sc->cmdPool, nullptr);
     if (sc->device) vkDestroyDevice(sc->device, nullptr);
@@ -1061,6 +1177,12 @@ extern "C" void* vulkaninterop_rt_create_scene(
     int64_t mesh_count,
     const int64_t* point_counts,
     const int64_t* vertex_index_counts,
+    int64_t template_count,
+    const int64_t* template_mesh_start,
+    const int64_t* template_mesh_end,
+    int64_t instance_count,
+    const float* instance_obj_to_world,
+    const int32_t* instance_template_idx,
     int64_t max_rays) {
 
     if (mesh_count <= 0 || max_rays <= 0) {
@@ -1074,15 +1196,29 @@ extern "C" void* vulkaninterop_rt_create_scene(
     sc->blasBufs.resize((size_t)mesh_count);
     sc->blasVertexBufs.resize((size_t)mesh_count);
     sc->blasIndexBufs.resize((size_t)mesh_count);
+    sc->templateBlas.resize((size_t)template_count, VK_NULL_HANDLE);
+    sc->templateBlasBufs.resize((size_t)template_count);
 
     if (!createHeadlessInteropRtDevice(sc)) {
         vulkaninterop_rt_destroy_scene(sc);
         return nullptr;
     }
 
-    // ---- BLAS per mesh + TLAS (identical construction to vulkanrt.cpp's
-    //      vulkanrt_build_scene -- see that file for the full rationale) ----
-    std::vector<VkDeviceAddress> blasAddresses((size_t)mesh_count);
+    // Which mesh indices belong to a template (excluded from the ordinary
+    // one-BLAS-per-mesh-with-identity-transform loop below, folded instead
+    // into their template's own multi-geometry BLAS).
+    std::vector<bool> isTemplateMesh((size_t)mesh_count, false);
+    for (int64_t t = 0; t < template_count; t++) {
+        for (int64_t mi = template_mesh_start[t]; mi < template_mesh_end[t]; mi++) {
+            isTemplateMesh[(size_t)mi] = true;
+        }
+    }
+
+    // ---- Vertex/index buffers for EVERY mesh (ordinary and template alike
+    //      -- template meshes' buffers get reused as geometries in their
+    //      template's BLAS below, same upload logic either way) ----
+    std::vector<VkAccelerationStructureGeometryKHR> meshGeoms((size_t)mesh_count);
+    std::vector<uint32_t> meshTriCounts((size_t)mesh_count);
     for (int64_t i = 0; i < mesh_count; i++) {
         int64_t nVerts = point_counts[i];
         int64_t nIdx = vertex_index_counts[i];
@@ -1092,7 +1228,7 @@ extern "C" void* vulkaninterop_rt_create_scene(
             vulkaninterop_rt_destroy_scene(sc);
             return nullptr;
         }
-        uint32_t triCount = (uint32_t)(nIdx / 3);
+        meshTriCounts[i] = (uint32_t)(nIdx / 3);
 
         VkDeviceSize vbBytes = (VkDeviceSize)nVerts * 4 * sizeof(float);
         if (!createBuffer(sc->device, sc->physicalDevice, vbBytes,
@@ -1135,28 +1271,81 @@ extern "C" void* vulkaninterop_rt_create_scene(
         geom.geometry.triangles.maxVertex = (uint32_t)(nVerts - 1);
         geom.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
         geom.geometry.triangles.indexData.deviceAddress = sc->blasIndexBufs[i].address;
+        meshGeoms[i] = geom;
+    }
 
+    // ---- Ordinary meshes: one single-geometry BLAS each (identical to
+    //      pre-instancing behavior) ----
+    std::vector<VkDeviceAddress> blasAddresses((size_t)mesh_count, 0);
+    for (int64_t i = 0; i < mesh_count; i++) {
+        if (isTemplateMesh[(size_t)i]) continue;
         if (!buildAccelerationStructure(sc->device, sc->physicalDevice, sc->cmdPool,
                                          sc->queue, sc->rtFns,
                                          VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-                                         geom, triCount,
+                                         meshGeoms[i], meshTriCounts[i],
                                          &sc->blas[i], &sc->blasBufs[i], &blasAddresses[i])) {
             vulkaninterop_rt_destroy_scene(sc);
             return nullptr;
         }
     }
 
-    std::vector<VkAccelerationStructureInstanceKHR> instances((size_t)mesh_count);
+    // ---- Templates: one multi-geometry BLAS each, geometryIndex i-mstart
+    //      within the BLAS corresponds to mesh (mstart+i) -- see
+    //      intersect_batch.comp / vulkaninterop_unpack_results_kernel for
+    //      the hit decode that relies on this exact indexing ----
+    std::vector<VkDeviceAddress> templateBlasAddresses((size_t)template_count, 0);
+    for (int64_t t = 0; t < template_count; t++) {
+        int64_t mstart = template_mesh_start[t];
+        int64_t mend   = template_mesh_end[t];
+        std::vector<VkAccelerationStructureGeometryKHR> tGeoms(meshGeoms.begin() + mstart, meshGeoms.begin() + mend);
+        std::vector<uint32_t> tCounts(meshTriCounts.begin() + mstart, meshTriCounts.begin() + mend);
+        if (!buildAccelerationStructureMulti(sc->device, sc->physicalDevice, sc->cmdPool,
+                                              sc->queue, sc->rtFns,
+                                              tGeoms, tCounts,
+                                              &sc->templateBlas[t], &sc->templateBlasBufs[t],
+                                              &templateBlasAddresses[t])) {
+            vulkaninterop_rt_destroy_scene(sc);
+            return nullptr;
+        }
+    }
+
+    // ---- TLAS instances: one per ordinary mesh (identity transform,
+    //      instanceCustomIndex = mesh index, unchanged from pre-instancing)
+    //      plus one per ObjectInstance placement (real transform,
+    //      instanceCustomIndex = mesh_count + instance index -- decoded on
+    //      the Mojo side, see vulkaninterop_unpack_results_kernel) ----
+    std::vector<VkAccelerationStructureInstanceKHR> instances;
+    instances.reserve((size_t)(mesh_count + instance_count));
     for (int64_t i = 0; i < mesh_count; i++) {
+        if (isTemplateMesh[(size_t)i]) continue;
         VkAccelerationStructureInstanceKHR inst{};
         inst.transform.matrix[0][0] = 1; inst.transform.matrix[1][1] = 1; inst.transform.matrix[2][2] = 1;
         inst.instanceCustomIndex = (uint32_t)i;
         inst.mask = 0xFF;
         inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         inst.accelerationStructureReference = blasAddresses[i];
-        instances[i] = inst;
+        instances.push_back(inst);
     }
-    VkDeviceSize instBytes = (VkDeviceSize)mesh_count * sizeof(VkAccelerationStructureInstanceKHR);
+    for (int64_t k = 0; k < instance_count; k++) {
+        // gonzales's objToWorld is column-major (M[col*4+row], matches
+        // transform.mojo/camera_to_world's own convention); Vulkan's
+        // VkTransformMatrixKHR is the top 3 rows of a row-major 4x4, so
+        // matrix[r][c] = M[c*4+r].
+        const float* m = instance_obj_to_world + (size_t)k * 16;
+        VkAccelerationStructureInstanceKHR inst{};
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 4; c++) {
+                inst.transform.matrix[r][c] = m[c * 4 + r];
+            }
+        }
+        inst.instanceCustomIndex = (uint32_t)(mesh_count + k);
+        inst.mask = 0xFF;
+        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        inst.accelerationStructureReference = templateBlasAddresses[(size_t)instance_template_idx[k]];
+        instances.push_back(inst);
+    }
+    uint32_t instanceCount32 = (uint32_t)instances.size();
+    VkDeviceSize instBytes = (VkDeviceSize)instances.size() * sizeof(VkAccelerationStructureInstanceKHR);
     if (!createBuffer(sc->device, sc->physicalDevice, instBytes,
                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1180,7 +1369,7 @@ extern "C" void* vulkaninterop_rt_create_scene(
     if (!buildAccelerationStructure(sc->device, sc->physicalDevice, sc->cmdPool,
                                      sc->queue, sc->rtFns,
                                      VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-                                     tlasGeom, (uint32_t)mesh_count,
+                                     tlasGeom, instanceCount32,
                                      &sc->tlas, &sc->tlasBuf, &tlasAddress)) {
         vulkaninterop_rt_destroy_scene(sc);
         return nullptr;
