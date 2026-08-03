@@ -3615,7 +3615,6 @@ def atrous_filter_gpu(
         return
     var cl = c.luma()
     var var_p = variance[tid]
-    var sigma_l2 = sigma_l * sigma_l * var_p + Float32(1e-6)
     var sigma_a2 = sigma_a * sigma_a
     var ca = RGB(albedo[tid*3], albedo[tid*3+1], albedo[tid*3+2])
     var cn = Vec3f(normals[tid*3], normals[tid*3+1], normals[tid*3+2])
@@ -3640,6 +3639,25 @@ def atrous_filter_gpu(
                 continue
             var qc = RGB(input[ni], input[ni+1], input[ni+2])
             var dl = qc.luma() - cl
+            # Symmetric in (p,q) via min() -- deliberately NOT the centre
+            # pixel's variance alone. Keying the tolerance to var_p only makes
+            # w(p,q) != w(q,p), and this filter normalizes by its own weight
+            # sum, so an asymmetric weight DESTROYS energy rather than moving
+            # it: a small bright feature sits at high spatial variance, so it
+            # accepts dark neighbours and dims, while those neighbours (low
+            # variance) reject it and never brighten. Measured on
+            # Scenes/restir-manylights.pbrt, whose emissive quads are exactly
+            # that case: 31.7% of total image energy vanished (bright pixels
+            # lost 38800, dim pixels gained only 3914). The CPU denoiser never
+            # had this because it has no variance-keyed term at all.
+            #
+            # min() rather than max(): mix only where BOTH pixels are noisy.
+            # That matters because estimate_variance_gpu measures SPATIAL
+            # variance, which cannot tell a real edge from noise -- a genuine
+            # edge reads as maximum "noise", so a max()/var_p rule blurs
+            # hardest exactly where it should blur least.
+            var var_q = variance[ni1]
+            var sigma_l2 = sigma_l * sigma_l * min(var_p, var_q) + Float32(1e-6)
             var w_l = exp(-dl * dl / sigma_l2)
             var dalb = RGB(albedo[ni], albedo[ni+1], albedo[ni+2]) - ca
             var w_a = exp(-(dalb * dalb).sum() / sigma_a2)
