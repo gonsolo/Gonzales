@@ -1182,10 +1182,12 @@ def shade_diffuse_gpu(
     spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    # ReSTIR DI (Phase 2, --restir). All defaulted-inert so every other caller
-    # -- including gpu_render_wavefront, where `tid` indexes a path rather than
-    # a pixel and so could not index a per-pixel reservoir anyway -- keeps the
-    # byte-for-byte previous dispatch.
+    # ReSTIR DI (Phase 2, --restir). Only gpu_render_sample ever passes
+    # use_restir=True here -- gpu_render_wavefront has no ReSTIR concept at
+    # all (see its own docstring: batch --restir renders via
+    # gpu_render_sample instead, precisely to avoid the
+    # WAVEFRONT_BATCH-concurrent-samples-per-pixel problem). All defaulted-
+    # inert so gpu_render_wavefront's dispatch is unaffected.
     # Int32 rather than Bool: GPU kernel arguments must be DevicePassable and
     # Bool is not, which the compiler only reports at the enqueue site.
     use_restir: Int32 = Int32(0),
@@ -1224,13 +1226,11 @@ def shade_diffuse_gpu(
             point_lights=pointLights, point_count=n_point_lights,
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
             spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
-    # tid IS the pixel index here: this kernel only sees use_restir=True from
-    # gpu_render_sample, which runs exactly one path per pixel. Passing -1
-    # otherwise matches di_temporal_step's own "no reuse" sentinel.
-    # Reuse needs per-pixel reservoir buffers; RIS alone does not. Batch
-    # (wavefront) launches pass use_restir with NO buffers to get plain RIS,
-    # so key the pixel index off the buffers rather than the flag -- with
-    # pixel_idx=-1, di_temporal_step skips every read/write of them.
+    # tid IS the pixel index here: this kernel only ever sees use_restir=True
+    # from gpu_render_sample, which runs exactly one path per pixel (see the
+    # param block above -- gpu_render_wavefront never sets it). restir_on
+    # without real buffers (non-restir renders) still needs pixel_idx=-1,
+    # di_temporal_step's own "no reuse" sentinel.
     var restir_has_state = restir_on and _is_real_ptr(restir_read)
     var restir_io = reservoir_io_null()
     if restir_has_state:
@@ -3423,15 +3423,17 @@ def gpu_render_wavefront(
     mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
-    # ReSTIR DI, RIS only -- appended LAST so no existing positional argument
-    # shifts. Batch has no frames to reuse across, and WAVEFRONT_BATCH samples
-    # per pixel run concurrently, so per-pixel reservoir reuse is both
-    # meaningless and racy here. Plain RIS keeps no state between samples, so
-    # it applies unchanged, and carries most of the benefit anyway (0.486x MSE
-    # vs plain NEE on Scenes/restir-manylights.pbrt). Passing no reservoir
-    # buffers is what selects RIS-without-reuse -- see shade_diffuse_gpu.
-    use_restir: Bool = False,
 ):
+    # --restir batch rendering does not go through this function at all
+    # (docs/A2_restir_migration_plan.md, pipeline.mojo's batch GPU branch):
+    # WAVEFRONT_BATCH (8) concurrent samples per pixel per dispatch made
+    # reservoir reuse either meaningless (plain RIS, no persistence) or
+    # actively wrong (an attempted "N readers, 1 writer" reservoir-sharing
+    # scheme measured a real, unexplained divergence and was reverted --
+    # see project memory). Batch --restir instead loops gpu_render_sample
+    # (1 sample/pixel/dispatch, same proven-correct path
+    # --interactive-frames uses) so there is only ever one reader/writer
+    # per pixel. This function is unconditionally RIS-and-reuse-free.
     var n_pix = Int(n)
     var batch  = Int(actual_batch)
     var n_total = n_pix * batch
@@ -3466,7 +3468,6 @@ def gpu_render_wavefront(
                     handle, n_total, grid_total, px_scale,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
-                    use_restir=use_restir,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
