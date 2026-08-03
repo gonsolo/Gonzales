@@ -14,7 +14,7 @@ from .sppm import sppm_render, sppm_render_gpu
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
-from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
+from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene
@@ -984,6 +984,13 @@ def parse_and_render(
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         var seed_dim1 = UInt32(0)
+        if use_restir:
+            # Batch gets RIS but not reuse: there are no frames to reuse
+            # across, and WAVEFRONT_BATCH samples per pixel run concurrently,
+            # so a shared per-pixel reservoir would race. RIS itself keeps no
+            # state between samples and carries most of the benefit.
+            print("Note: --gpu --restir uses RIS only in batch mode "
+                  "(no temporal/spatial reuse); add --interactive-frames N for full ReSTIR.")
         gpu_clear_film(handle, Int64(n_pixels))
         var t0_gpu = perf_counter_ns()
         var si = 0
@@ -1001,6 +1008,7 @@ def parse_and_render(
                 px_scale,
                 use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                 mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
+                use_restir=use_restir,
             )
             si += actual_batch
             var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
@@ -1368,6 +1376,8 @@ def render_interactive(
 
     if use_gpu:
         gpu_clear_film(handle, Int64(n_pixels))
+        if use_restir:
+            gpu_clear_restir(handle, Int64(n_pixels))
         gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
     else:
         sd = mojo_parsed_scene_descriptor(psc, spectral)
@@ -1405,6 +1415,11 @@ def render_interactive(
                 build_camera_to_world(cam_buf.unsafe_ptr(), c2w_buf.unsafe_ptr())
                 if use_gpu:
                     gpu_clear_film(handle, Int64(n_pixels))
+                    if use_restir:
+                        # Same invalidation rule as the CPU path: a stale
+                        # reservoir after a camera move describes a different
+                        # shading point (identity reprojection).
+                        gpu_clear_restir(handle, Int64(n_pixels))
                     gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels))
                 else:
                     for i in range(n_pixels * 3):
@@ -1436,6 +1451,7 @@ def render_interactive(
                 UInt32(0), UInt32(0),
                 UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
                 Int64(n_pixels), psc[0].max_depth,
+                use_restir=use_restir, frame_index=frame_count,
             )
             frame_count += 1
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),

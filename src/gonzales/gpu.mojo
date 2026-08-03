@@ -13,6 +13,7 @@ from std.atomic import Atomic
 from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured
 from .guide import null_guide
+from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -117,6 +118,13 @@ struct GpuSceneHandle(Movable):
     # future ReSTIR spatial/temporal reuse, which is what these are for.
     var gbuf_worldpos_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — world-space hit point; meaningless where depth==1e38 (miss)
     var gbuf_material_id_buf: DeviceBuffer[DType.uint8]  # n_pixels × 4  — Int32 material index of first hit, -1 on miss
+    # ReSTIR DI reservoirs (Phase 2, --restir). Double-buffered and
+    # ping-ponged per frame: spatial reuse reads NEIGHBOUR pixels, which other
+    # threads are concurrently writing, so reads must come from the previous
+    # frame's finished buffer. Same rule the CPU path follows, for the same
+    # reason -- see pipeline.mojo's restir_buf_a/b.
+    var restir_a_buf: DeviceBuffer[DType.uint8]     # n_pixels × sizeof(DIReservoir)
+    var restir_b_buf: DeviceBuffer[DType.uint8]     # n_pixels × sizeof(DIReservoir)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask_C) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -679,6 +687,8 @@ def gpu_upload_scene(
             var r_atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
+            var r_restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]() * WAVEFRONT_BATCH)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -935,6 +945,8 @@ def gpu_upload_scene(
                 atrous_curve_mask_buf=r_atrous_curve_mask_buf^,
                 gbuf_worldpos_buf=r_gbuf_worldpos_buf^,
                 gbuf_material_id_buf=r_gbuf_material_id_buf^,
+                restir_a_buf=r_restir_a_buf^,
+                restir_b_buf=r_restir_b_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -1169,6 +1181,21 @@ def shade_diffuse_gpu(
     spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    # ReSTIR DI (Phase 2, --restir). All defaulted-inert so every other caller
+    # -- including gpu_render_wavefront, where `tid` indexes a path rather than
+    # a pixel and so could not index a per-pixel reservoir anyway -- keeps the
+    # byte-for-byte previous dispatch.
+    # Int32 rather than Bool: GPU kernel arguments must be DevicePassable and
+    # Bool is not, which the compiler only reports at the enqueue site.
+    use_restir: Int32 = Int32(0),
+    restir_read: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    restir_write: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    gbuf_normal: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    gbuf_depth: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    gbuf_material_id: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+    gbuf_world_pos: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    frame_w: Int32 = Int32(0),
+    frame_h: Int32 = Int32(0),
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1180,12 +1207,13 @@ def shade_diffuse_gpu(
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+    var restir_on = use_restir != Int32(0)
     var ctx = ShadeContext(
         path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
-        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
+        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=restir_on,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
@@ -1195,7 +1223,22 @@ def shade_diffuse_gpu(
             point_lights=pointLights, point_count=n_point_lights,
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
             spheres=spheres, sphere_count=n_spheres, light_sampler=ls))
-    shade_diffuse[True, False](path_ptr, inter, ctx, mat)
+    # tid IS the pixel index here: this kernel only sees use_restir=True from
+    # gpu_render_sample, which runs exactly one path per pixel. Passing -1
+    # otherwise matches di_temporal_step's own "no reuse" sentinel.
+    # Reuse needs per-pixel reservoir buffers; RIS alone does not. Batch
+    # (wavefront) launches pass use_restir with NO buffers to get plain RIS,
+    # so key the pixel index off the buffers rather than the flag -- with
+    # pixel_idx=-1, di_temporal_step skips every read/write of them.
+    var restir_has_state = restir_on and _is_real_ptr(restir_read)
+    var restir_io = reservoir_io_null()
+    if restir_has_state:
+        restir_io = ReservoirIO(
+            read=restir_read, write=restir_write,
+            gbuf_normal=gbuf_normal, gbuf_depth=gbuf_depth,
+            gbuf_material_id=gbuf_material_id, gbuf_world_pos=gbuf_world_pos,
+            frame_w=frame_w, frame_h=frame_h)
+    shade_diffuse[True, False](path_ptr, inter, ctx, mat, null_guide(), restir_io, tid if restir_has_state else -1)
 
 
 def shade_coated_diffuse_gpu(
@@ -2141,6 +2184,21 @@ def reset_shadow_tasks_gpu(
         return
     shadow_tasks[tid].active = Int32(0)
 
+def reset_restir_reservoirs_gpu(
+    reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin],
+    count: Int,
+):
+    """Clear ReSTIR DI reservoirs to "no candidate yet". Needed at scene
+    upload and on every camera move: identity reprojection assumes the
+    previous frame's reservoir describes THIS pixel's shading point, so a
+    surviving reservoir after the camera moves would reuse a light chosen
+    for a different view. The GPU film is cleared on the same events for
+    exactly the same reason (gpu_clear_film)."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    reservoirs[tid] = di_reservoir_init()
+
 
 def traverse_shadow_rays_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
@@ -2777,6 +2835,11 @@ def _gpu_bounce_kernels(
     mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
+    # ReSTIR DI: only gpu_render_sample passes these (one path per pixel, so
+    # tid is a valid pixel index). gpu_render_wavefront leaves them inert.
+    use_restir: Bool = False,
+    restir_read: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    restir_write: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
 ) raises:
     comptime block_size = 256
     if use_vulkan_rt:
@@ -2972,6 +3035,15 @@ def _gpu_bounce_kernels(
         handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        Int32(1) if use_restir else Int32(0),
+        restir_read,
+        restir_write,
+        handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].gbuf_material_id_buf.unsafe_ptr().bitcast[Int32](),
+        handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32](),
+        Int32(handle[].fw),
+        Int32(handle[].fh),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
@@ -3262,6 +3334,8 @@ def gpu_render_sample(
     n: Int64,
     maxDepth: Int32,
     px_scale: Float32 = Float32(0.0),
+    use_restir: Bool = False,
+    frame_index: Int = 0,
 ):
     var n_int = Int(n)
     if n_int == 0:
@@ -3292,8 +3366,23 @@ def gpu_render_sample(
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
+            # ReSTIR reservoir ping-pong. Spatial reuse reads neighbouring
+            # pixels, which other threads are writing this frame, so the read
+            # side must be the PREVIOUS frame's finished buffer. Alternating on
+            # frame parity gives that without any copy.
+            var restir_rd = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+            var restir_wr = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+            if use_restir:
+                var buf_a = handle[].restir_a_buf.unsafe_ptr().bitcast[DIReservoir]()
+                var buf_b = handle[].restir_b_buf.unsafe_ptr().bitcast[DIReservoir]()
+                if frame_index % 2 == 0:
+                    restir_rd = buf_a; restir_wr = buf_b
+                else:
+                    restir_rd = buf_b; restir_wr = buf_a
             for _ in range(Int(maxDepth)):
-                _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale)
+                _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale,
+                                    use_restir=use_restir,
+                                    restir_read=restir_rd, restir_write=restir_wr)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
@@ -3333,6 +3422,14 @@ def gpu_render_wavefront(
     mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
+    # ReSTIR DI, RIS only -- appended LAST so no existing positional argument
+    # shifts. Batch has no frames to reuse across, and WAVEFRONT_BATCH samples
+    # per pixel run concurrently, so per-pixel reservoir reuse is both
+    # meaningless and racy here. Plain RIS keeps no state between samples, so
+    # it applies unchanged, and carries most of the benefit anyway (0.486x MSE
+    # vs plain NEE on Scenes/restir-manylights.pbrt). Passing no reservoir
+    # buffers is what selects RIS-without-reuse -- see shade_diffuse_gpu.
+    use_restir: Bool = False,
 ):
     var n_pix = Int(n)
     var batch  = Int(actual_batch)
@@ -3368,6 +3465,7 @@ def gpu_render_wavefront(
                     handle, n_total, grid_total, px_scale,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
+                    use_restir=use_restir,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
@@ -3671,6 +3769,35 @@ def gpu_clear_film(
             handle[].ctx.synchronize()
         except e:
             print("GPU clear film failed: " + String(e))
+
+
+def gpu_clear_restir(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
+    n: Int64,
+):
+    """Reset both ReSTIR reservoir buffers. Call wherever gpu_clear_film is
+    called: identity reprojection assumes the stored reservoir belongs to this
+    pixel's shading point, which a camera move invalidates. Both buffers are
+    cleared because which one is "read" this frame depends on frame parity."""
+    var n_int = Int(n)
+    if n_int == 0:
+        return
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            comptime block_size = 256
+            var grid_dim = ceildiv(n_int, block_size)
+            handle[].ctx.enqueue_function[reset_restir_reservoirs_gpu](
+                handle[].restir_a_buf.unsafe_ptr().bitcast[DIReservoir](),
+                n_int, grid_dim=grid_dim, block_dim=block_size,
+            )
+            handle[].ctx.enqueue_function[reset_restir_reservoirs_gpu](
+                handle[].restir_b_buf.unsafe_ptr().bitcast[DIReservoir](),
+                n_int, grid_dim=grid_dim, block_dim=block_size,
+            )
+            handle[].ctx.synchronize()
+        except e:
+            print("GPU clear restir failed: " + String(e))
 
 
 def gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin]):
