@@ -2637,7 +2637,28 @@ def di_resolve(
     if not used_mnee:
         _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
 
-comptime DI_TEMPORAL_M_CAP: Float32 = Float32(20 * DI_RIS_CANDIDATES)
+# Temporal history clamp. The migration plan (and Bitterli et al. 2020)
+# suggest ~20x the per-frame candidate count; measured here, 4x is better,
+# so this deliberately departs from that guideline. staircase2 400x400,
+# interactive 1spp/frame, MSE vs a 128spp plain-NEE reference:
+#
+#   temporal only, cap=20x (320):  0.001346 @128fr, converges 2.79x
+#   temporal only, cap= 4x  (64):  0.001035 @128fr, converges 3.41x
+#
+# 1.30x better, with convergence rising to near plain NEE's own 3.75x.
+# Mechanism: a reservoir pinned at a large cap gives each frame's fresh
+# candidates only 16/320 ~ 5% of the total confidence, so it clings to
+# recycled history and the effective independent-sample count grows far
+# slower than m suggests. At 4x, fresh candidates carry 25%.
+#
+# Caveat worth respecting before trusting this number elsewhere: it is one
+# scene, measured in the STATIC-camera accumulation regime, where trading
+# sample independence for sample quality is a bad deal because the film is
+# already averaging many frames. The cap's real job is bounding staleness
+# across camera motion -- and render_interactive clears reservoirs outright
+# on a camera move, so it rarely binds there at all. Re-measure before
+# assuming 4x is right for a genuinely dynamic session.
+comptime DI_TEMPORAL_M_CAP: Float32 = Float32(4 * DI_RIS_CANDIDATES)
 # Phase 2.5 spatial reuse tuning, per the plan's own "k ~= 3-5 neighbors"
 # and G-buffer rejection thresholds (docs/A2_restir_migration_plan.md).
 #
@@ -2658,17 +2679,32 @@ comptime DI_TEMPORAL_M_CAP: Float32 = Float32(20 * DI_RIS_CANDIDATES)
 # recovered to 2.02x. But 0.001834 is still worse than temporal-only's
 # 0.001346, so switching it on costs quality.
 #
-# Prime suspect for why, and the concrete next thing to try: this
-# implementation reads neighbours from the PREVIOUS frame's buffer
-# (restir_io.read), because render_all_tiles parallelizes per-tile and a
-# same-frame neighbour read would race whichever tile has not shaded yet.
-# Standard ReSTIR does spatial reuse WITHIN the current frame, after the
-# temporal pass. Pulling stale neighbours adds correlation without adding
-# much fresh information, which is exactly the "more samples, little new
-# information" shape seen above. Fixing that means splitting the frame
-# into two passes over render_all_tiles (pass 1 generate+temporal for all
-# pixels, pass 2 spatial reading pass 1's output) -- a real restructure,
-# not a constant flip, and NOT attempted.
+# The "stale neighbours" theory for that shortfall was TESTED AND WRONG,
+# which is worth recording so it is not re-attempted. The suspicion was
+# that reading neighbours from the PREVIOUS frame's buffer (which this
+# does, because render_all_tiles parallelizes per-tile and a same-frame
+# read would race an unfinished tile) starved spatial reuse of fresh
+# information, and that the fix was a two-pass restructure. But with a
+# static camera the previous frame's reservoirs are drawn from the same
+# distribution as this frame's, so staleness costs almost nothing. The
+# actual culprit was the M-cap: see DI_TEMPORAL_M_CAP above. Re-measured
+# with that fixed, at a MATCHED cap=64:
+#
+#   config                     MSE 16fr    MSE@128fr
+#   temporal only              0.003529     0.001035
+#   temporal + spatial k=4     0.003486     0.001337
+#
+# Spatial is a statistical tie at 16 frames (0.99x) and 1.29x WORSE at
+# 128. So it stays off: the estimator is correct (Z made it unbiased) but
+# it genuinely does not pay for itself here.
+#
+# Most likely reason it does not pay, and the thing to change before
+# trying again: staircase2 has only 13 lights, and gonzales already
+# selects among them with a power-weighted CDF plus MIS. RIS resampling
+# buys the most when uniform-ish light selection is badly wrong -- i.e.
+# hundreds-to-thousands of lights. Judging ReSTIR spatial reuse on a
+# 13-light scene under-sells it; the honest next experiment is a
+# many-light scene, not more tuning here.
 comptime DI_SPATIAL_NEIGHBORS: Int = 0
 # Fixed-size scratch for the Z pass, which must revisit each combined
 # neighbour after the winner is known. +1 so the array is never zero-sized
