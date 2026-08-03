@@ -2698,13 +2698,38 @@ comptime DI_TEMPORAL_M_CAP: Float32 = Float32(4 * DI_RIS_CANDIDATES)
 # 128. So it stays off: the estimator is correct (Z made it unbiased) but
 # it genuinely does not pay for itself here.
 #
-# Most likely reason it does not pay, and the thing to change before
-# trying again: staircase2 has only 13 lights, and gonzales already
-# selects among them with a power-weighted CDF plus MIS. RIS resampling
-# buys the most when uniform-ish light selection is badly wrong -- i.e.
-# hundreds-to-thousands of lights. Judging ReSTIR spatial reuse on a
-# 13-light scene under-sells it; the honest next experiment is a
-# many-light scene, not more tuning here.
+# The "13 lights is too few, try a many-light scene" theory was ALSO
+# tested, and also did not rescue it. Surveyed every pbrt-v4 and bitterli
+# scene by light count: zero-day has 283 area lights, bistro 102, vs
+# staircase2's 13. On zero-day (384x168, vs a 256spp plain-NEE ref):
+#
+#   config                     MSE 16fr    MSE@128fr
+#   plain NEE                  0.008567     0.002237
+#   ReSTIR temporal only       0.008555     0.002246
+#   ReSTIR temporal + k=4      0.008581     0.002240
+#
+# All within +-0.4% -- a three-way tie. Spatial is at least no longer
+# HARMFUL there (it costs 1.29x on staircase2), but it buys nothing, so
+# 0 remains the right default. More lights moved ReSTIR from "worse" to
+# "parity", never to a win.
+#
+# Nor is the narrow bounce-0-only scope the explanation: re-running
+# zero-day with maxdepth=1, isolating exactly the direct lighting ReSTIR
+# governs, still gives 1.000x at 16 frames and 1.002x at 64.
+#
+# Best remaining explanation, and the concrete thing to try next:
+# VISIBILITY. di_target_pdf deliberately excludes it, so RIS happily
+# resamples toward a light that looks excellent unshadowed and is then
+# found occluded by di_resolve's shadow ray, contributing nothing -- and
+# with 283 mostly-occluded lights that is the common case. Worse, the
+# reservoir is stored for temporal reuse REGARDLESS of what that shadow
+# ray reported, so an occluded winner persists in the history and keeps
+# being re-chosen. Bitterli et al. 2020 sec. 5 addresses exactly this
+# with visibility reuse: zero (or down-weight) the reservoir when the
+# resolved shadow ray reports occlusion, before storing it. That is a
+# small change at the di_resolve/di_temporal_step boundary -- di_resolve
+# already knows the answer, it just throws it away -- and it is the next
+# thing to implement, ahead of any further spatial-reuse tuning.
 comptime DI_SPATIAL_NEIGHBORS: Int = 0
 # Fixed-size scratch for the Z pass, which must revisit each combined
 # neighbour after the winner is known. +1 so the array is never zero-sized
