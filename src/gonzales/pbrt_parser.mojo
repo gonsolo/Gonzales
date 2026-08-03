@@ -719,6 +719,80 @@ def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     s[0].spheres_al.append(s[0].cur_attr.is_alight)
     s[0].spheres_rgb.append(s[0].cur_attr.al_rgb)
 
+comptime DISK_TESSELLATION_SEGMENTS: Int = 32
+
+def handle_disk_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+                           s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+    """PBRT `Shape "disk"`: not a native primitive here (unlike sphere) --
+    tessellated into a triangle mesh at parse time and handed to the
+    existing trianglemesh machinery (BVH, area-light NEE/ReSTIR, GPU, ...)
+    via store_mesh, mirroring loopsubdiv's approach above. A disk lies in
+    the OBJECT-SPACE z=height plane, an annulus from innerradius to radius
+    swept from phi=0 to phimax (degrees, pbrt convention) -- store_mesh
+    applies the CTM, so all of this stays in that local frame.
+
+    Tessellated as an EVEN angular fan (innerradius==0, the common case for
+    a light fixture) or an even angular strip (innerradius>0) so every
+    triangle spans an equal angular wedge and therefore has equal area by
+    construction -- this matters because _sample_light_point_and_normal
+    (shading.mojo) picks a UNIFORM RANDOM TRIANGLE, not area-weighted, when
+    sampling a mesh light; equal-area triangles make that sampling correctly
+    uniform-over-surface-area (see project_pbrt_disk_shape_missing /
+    project_restir_migration memory for how a non-uniform tessellation
+    would silently bias NEE/ReSTIR toward whichever triangles happen to be
+    larger). The two triangles WITHIN one annulus strip quad can still
+    differ slightly in area from each other (a trapezoid split on the
+    diagonal) -- a minor known residual for the innerradius>0 case, not
+    worth a fancier non-uniform-strip tessellation to fully equalize.
+
+    Winding is chosen so the un-reversed normal faces OBJECT-SPACE +z,
+    matching pbrt's own disk convention; store_mesh's existing
+    reverse_orient handling (from `ReverseOrientation`) applies on top,
+    exactly as it does for an ordinary "trianglemesh" shape."""
+    var params = _psc_collect_params(handle)
+    var radius = params.get_float("radius", Float32(1.0))
+    var inner_radius = params.get_float("innerradius", Float32(0.0))
+    var height = params.get_float("height", Float32(0.0))
+    var phimax_deg = params.get_float("phimax", Float32(360.0))
+    if phimax_deg > Float32(360.0):
+        phimax_deg = Float32(360.0)
+    if phimax_deg <= Float32(0.0) or radius <= Float32(0.0) or inner_radius < Float32(0.0) or inner_radius >= radius:
+        return
+
+    from std.math import sin as _sin, cos as _cos
+    var phimax = phimax_deg * (PI / Float32(180.0))
+    comptime n = DISK_TESSELLATION_SEGMENTS
+
+    var pts = List[Float32]()
+    var idx = List[Int32]()
+
+    if inner_radius <= Float32(1e-8):
+        # Full disk (or pie slice if phimax < 360): a fan from the center.
+        pts.append(Float32(0.0)); pts.append(Float32(0.0)); pts.append(height)
+        for i in range(n + 1):
+            var phi = phimax * Float32(i) / Float32(n)
+            pts.append(radius * _cos(phi)); pts.append(radius * _sin(phi)); pts.append(height)
+        for i in range(n):
+            idx.append(Int32(0)); idx.append(Int32(i + 1)); idx.append(Int32(i + 2))
+    else:
+        # Annulus: a strip of quads between the inner and outer rings.
+        for i in range(n + 1):
+            var phi = phimax * Float32(i) / Float32(n)
+            pts.append(inner_radius * _cos(phi)); pts.append(inner_radius * _sin(phi)); pts.append(height)
+        for i in range(n + 1):
+            var phi = phimax * Float32(i) / Float32(n)
+            pts.append(radius * _cos(phi)); pts.append(radius * _sin(phi)); pts.append(height)
+        var outer0 = Int32(n + 1)
+        for i in range(n):
+            var in_i = Int32(i); var in_i1 = Int32(i + 1)
+            var out_i = outer0 + Int32(i); var out_i1 = outer0 + Int32(i + 1)
+            idx.append(in_i); idx.append(out_i); idx.append(out_i1)
+            idx.append(in_i); idx.append(out_i1); idx.append(in_i1)
+
+    var n_verts = Int32(len(pts) // 3)
+    var n_tris = Int32(len(idx) // 3)
+    store_mesh(s, pts.unsafe_ptr(), idx.unsafe_ptr(), n_verts, n_tris)
+
 def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
                      s: UnsafePointer[SceneParseState, MutAnyOrigin]):
     var shape_type = alloc[UInt8](64)
@@ -729,7 +803,17 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
     var is_curve = _psc_streq(shape_type, "curve")
     var is_sphere = _psc_streq(shape_type, "sphere")
     var is_loopsubdiv = _psc_streq(shape_type, "loopsubdiv")
+    var is_disk = _psc_streq(shape_type, "disk")
     shape_type.free()
+
+    if is_disk:
+        # Tessellated into a mesh (handle_disk_shape above), so it goes
+        # through store_mesh exactly like trianglemesh/loopsubdiv --
+        # already usable inside ObjectBegin/ObjectEnd instancing templates,
+        # no object_depth restriction needed (unlike curve/sphere above,
+        # which are native, uninstanced primitives).
+        handle_disk_shape(handle, s)
+        return
 
     if is_curve:
         if s[0].object_depth == 0:
