@@ -927,7 +927,10 @@ def parse_and_render(
         # unpack kernel runs on the GPU, not a Mojo host loop) and wraps
         # the interop rays/results CUDA pointers as Mojo DeviceBuffers
         # once, reused unchanged across every bounce.
-        var use_vk = use_vulkan_rt_shade
+        var use_vk = use_vulkan_rt_shade and not use_restir
+        if use_vulkan_rt_shade and use_restir:
+            print("Note: --restir batch mode does not support --vulkan-rt-shade yet "
+                  "(gpu_render_sample has no Vulkan RT interop path) -- using CUDA intersection.")
         var interop_scene = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
         var interop_rays_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
         var interop_results_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
@@ -985,34 +988,60 @@ def parse_and_render(
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         var seed_dim1 = UInt32(0)
         if use_restir:
-            # Batch gets RIS but not reuse: there are no frames to reuse
-            # across, and WAVEFRONT_BATCH samples per pixel run concurrently,
-            # so a shared per-pixel reservoir would race. RIS itself keeps no
-            # state between samples and carries most of the benefit.
-            print("Note: --gpu --restir uses RIS only in batch mode "
-                  "(no temporal/spatial reuse); add --interactive-frames N for full ReSTIR.")
+            # Architecture change (docs/A2_restir_migration_plan.md, replaces
+            # the Phase 3.1 wavefront-persistence attempt, reverted): rather
+            # than adapt reservoir reuse to WAVEFRONT_BATCH concurrent
+            # samples/pixel/dispatch -- which needs multiple threads per
+            # pixel to touch shared reservoir state and, when tried, produced
+            # a real, unexplained divergence with no literature precedent to
+            # check the design against -- batch --restir now renders 1
+            # sample/pixel/dispatch via gpu_render_sample, exactly like
+            # --interactive-frames already does (proven correct: no bias,
+            # real wins there). This inherits that path's full temporal+
+            # spatial reuse for free, at the cost of WAVEFRONT_BATCH-wide
+            # batching's throughput (more, smaller kernel launches).
+            print("Note: --gpu --restir batch mode renders 1 sample/pixel per "
+                  "dispatch (like --interactive-frames) for full reservoir "
+                  "reuse, trading wavefront-batching throughput for it.")
+            gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
+            gpu_clear_restir(handle, Int64(n_pixels))
         gpu_clear_film(handle, Int64(n_pixels))
         var t0_gpu = perf_counter_ns()
-        var si = 0
-        while si < spp:
-            var actual_batch = min(WAVEFRONT_BATCH, spp - si)
-            gpu_render_wavefront(
-                handle,
-                psc[0].camera_to_world,
-                Int32(si), Int32(actual_batch),
-                psc[0].log2_spp, psc[0].n_base4_digits,
-                seed_dim0, seed_dim1,
-                UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
-                UInt32(psc[0].rng_seed >> UInt64(32)),
-                Int64(n_pixels), psc[0].max_depth,
-                px_scale,
-                use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
-                mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
-                use_restir=use_restir,
-            )
-            si += actual_batch
-            var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
-            print(progress_str(si, spp, elapsed, "spp"), end="\r")
+        if use_restir:
+            for si in range(spp):
+                gpu_render_sample(
+                    handle,
+                    psc[0].camera_to_world,
+                    Int32(si), psc[0].log2_spp, psc[0].n_base4_digits,
+                    seed_dim0, seed_dim1,
+                    UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
+                    UInt32(psc[0].rng_seed >> UInt64(32)),
+                    Int64(n_pixels), psc[0].max_depth,
+                    px_scale,
+                    use_restir=use_restir, frame_index=si,
+                )
+                var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
+                print(progress_str(si + 1, spp, elapsed, "spp"), end="\r")
+        else:
+            var si = 0
+            while si < spp:
+                var actual_batch = min(WAVEFRONT_BATCH, spp - si)
+                gpu_render_wavefront(
+                    handle,
+                    psc[0].camera_to_world,
+                    Int32(si), Int32(actual_batch),
+                    psc[0].log2_spp, psc[0].n_base4_digits,
+                    seed_dim0, seed_dim1,
+                    UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
+                    UInt32(psc[0].rng_seed >> UInt64(32)),
+                    Int64(n_pixels), psc[0].max_depth,
+                    px_scale,
+                    use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
+                    mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
+                )
+                si += actual_batch
+                var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
+                print(progress_str(si, spp, elapsed, "spp"), end="\r")
         var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
         print("Rendering: " + String(spp) + " / " + String(spp)
             + " spp (100.0%) | Done: " + fmt_time(gpu_total_s) + "                ")
