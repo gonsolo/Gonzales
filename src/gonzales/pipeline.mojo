@@ -13,7 +13,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
 from .sppm import sppm_render, sppm_render_gpu
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
-from .restir_di import DIReservoir, di_reservoir_init
+from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
@@ -1324,14 +1324,30 @@ def render_interactive(
 
     # Mode-specific buffers — dangling until allocated below
     var sd           = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin].unsafe_dangling()
-    # Phase 2.3 (docs/A2_restir_migration_plan.md): one persistent DIReservoir
-    # per pixel, read+written across frames for temporal reuse -- CPU-only
+    # Phase 2.3+2.5 (docs/A2_restir_migration_plan.md): two persistent
+    # DIReservoir buffers per pixel, ping-ponged each frame -- CPU-only
     # (--restir has no GPU wiring yet, see restir_di.mojo's header).
-    var restir_reservoirs = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+    # Double-buffered (not read+written in place) because render_all_tiles
+    # parallelizes per-tile: Phase 2.5's spatial reuse reads NEIGHBOR
+    # pixels' reservoirs, which may live in a different, concurrently
+    # running tile. Reading only from `restir_read` (strictly the PREVIOUS
+    # frame's fully-resolved buffer, never touched again until it becomes
+    # next frame's write target) and writing only to `restir_write` (each
+    # pixel written by exactly one thread, at 1 spp/frame) makes both
+    # race-free without any locking. Swapped after each frame completes,
+    # below.
+    var restir_buf_a = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+    var restir_buf_b = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+    var restir_read  = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+    var restir_write = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
     var accum        = List[Float32]()
     var albedo_acc   = List[Float32]()
     var normals_int  = List[Float32]()
     var depth_int    = List[Float32]()
+    # Phase 0.3 G-buffer extension, material ID only (normals_int/depth_int
+    # above already cover the other two) -- Phase 2.5's neighbor-rejection
+    # test needs it, nothing else in render_interactive reads it.
+    var material_id_int = List[Int32]()
     var sp_int     = OwnedPointer[TileSamplerParams_C](TileSamplerParams_C(
         sobolMatrices=sobol,
         rngSeed=UInt64(0), sobolSeed=Int32(0),
@@ -1359,9 +1375,15 @@ def render_interactive(
         for _ in range(n_pixels):
             depth_int.append(Float32(0))
         if use_restir:
-            restir_reservoirs = alloc[DIReservoir](n_pixels)
+            for _ in range(n_pixels):
+                material_id_int.append(Int32(-1))
+            restir_buf_a = alloc[DIReservoir](n_pixels)
+            restir_buf_b = alloc[DIReservoir](n_pixels)
             for i in range(n_pixels):
-                restir_reservoirs[i] = di_reservoir_init()
+                restir_buf_a[i] = di_reservoir_init()
+                restir_buf_b[i] = di_reservoir_init()
+            restir_read = restir_buf_a
+            restir_write = restir_buf_b
 
     var zero = TileResult_C(
         estimate=RGB(Float32(0)),
@@ -1388,9 +1410,12 @@ def render_interactive(
                         # docs/A2_restir_migration_plan.md) -- identity
                         # reprojection is only valid for a static camera; a
                         # stale reservoir after a move would reuse a light
-                        # candidate resampled for a different view.
+                        # candidate resampled for a different view. Reset
+                        # both buffers -- which one is "read" vs "write" is
+                        # irrelevant right after both are identically empty.
                         for i in range(n_pixels):
-                            restir_reservoirs[i] = di_reservoir_init()
+                            restir_buf_a[i] = di_reservoir_init()
+                            restir_buf_b[i] = di_reservoir_init()
         # headless: camera is never polled, so it never "changes" -- every
         # frame accumulates onto the same static view, exactly the
         # steady-state case temporal reuse (Phase 2.3) needs to be verified
@@ -1430,18 +1455,47 @@ def render_interactive(
             )
             for i in range(n_pixels):
                 results[i] = zero
+            # Must run BEFORE render_all_tiles below, not after: Phase 2.5's
+            # spatial reuse (shading.mojo's di_temporal_step) reads
+            # normals_int/depth_int/material_id_int during THIS frame's
+            # shading, so on frame 0 (or right after a camera move) they
+            # need to already be populated, not still zero-initialized from
+            # this function's own List() setup above.
+            if frame_count == 0:
+                if use_restir:
+                    render_aux_buffers(
+                        psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
+                        Int32(0), Int32(0), fw, fh, sd,
+                        normals_int.unsafe_ptr(), depth_int.unsafe_ptr(),
+                        material_id_out=material_id_int.unsafe_ptr())
+                else:
+                    render_aux_buffers(
+                        psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
+                        Int32(0), Int32(0), fw, fh, sd,
+                        normals_int.unsafe_ptr(), depth_int.unsafe_ptr())
+            var restir_io = reservoir_io_null()
+            if use_restir:
+                restir_io = ReservoirIO(
+                    read=restir_read, write=restir_write,
+                    gbuf_normal=normals_int.unsafe_ptr(),
+                    gbuf_depth=depth_int.unsafe_ptr(),
+                    gbuf_material_id=material_id_int.unsafe_ptr(),
+                    frame_w=fw, frame_h=fh,
+                )
             render_all_tiles(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
                 guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
-                n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_reservoirs=restir_reservoirs)
-            if frame_count == 0:
-                render_aux_buffers(
-                    psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
-                    Int32(0), Int32(0), fw, fh, sd,
-                    normals_int.unsafe_ptr(), depth_int.unsafe_ptr())
+                n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io)
+            if use_restir:
+                # render_all_tiles above is synchronous (parallelize joins
+                # before returning), so restir_write is now fully resolved
+                # for every pixel -- safe to become next frame's read buffer.
+                var tmp = restir_read
+                restir_read = restir_write
+                restir_write = tmp
             var beauty_frame = List[Float32](capacity=n_pixels * 3)
             var albedo_frame = List[Float32](capacity=n_pixels * 3)
             for _ in range(n_pixels * 3): beauty_frame.append(Float32(0)); albedo_frame.append(Float32(0))
@@ -1480,6 +1534,7 @@ def render_interactive(
         # accum, albedo_acc, sd freed automatically (accum/albedo_acc are List)
         sd.free()
         if use_restir:
-            restir_reservoirs.free()
+            restir_buf_a.free()
+            restir_buf_b.free()
     mojo_parsed_free(psc)
     viewer_destroy(v)

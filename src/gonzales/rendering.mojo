@@ -10,7 +10,7 @@ from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_inde
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths
 from .gpu import _sample_medium_core
-from .restir_di import DIReservoir
+from .restir_di import ReservoirIO, reservoir_io_null
 
 
 def render_tile(
@@ -25,7 +25,7 @@ def render_tile(
     guide_write: GuideGrid,
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
-    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    restir_io: ReservoirIO = reservoir_io_null(),
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -140,7 +140,7 @@ def render_tile(
                                blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
                                measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
-                               restir_reservoirs=restir_reservoirs, pixel_idx=pixel_idx_buf[i])
+                               restir_io=restir_io, pixel_idx=pixel_idx_buf[i])
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -253,7 +253,7 @@ def render_all_tiles(
     n_write_guides: Int = 0,
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
-    restir_reservoirs: UnsafePointer[DIReservoir, MutAnyOrigin] = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+    restir_io: ReservoirIO = reservoir_io_null(),
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -297,7 +297,7 @@ def render_all_tiles(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
             sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
-            frame_w, restir_reservoirs)
+            frame_w, restir_io)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix

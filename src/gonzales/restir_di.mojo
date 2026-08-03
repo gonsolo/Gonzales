@@ -6,14 +6,15 @@
 # the deferred-shadow-ray resolve) lives in shading.mojo itself, next to
 # _shade_diffuse_nee, and imports from this file one-directionally.
 #
-# Scope actually implemented this session: plain RIS (2.1 payload, 2.2
-# initial candidates, 2.6 one deferred shadow ray for the winner, 2.7 MIS
-# against BSDF sampling) for the diffuse material's area-light NEE at the
-# PRIMARY bounce only, CPU path tracer only (--restir, no --gpu/--guide/
-# --sppm/--vcm combination yet). Temporal reuse (2.3) and spatial reuse
-# (2.5) need persistent per-pixel GPU state across real interactive-viewer
-# frames and are NOT implemented here -- see project_restir_migration.md
-# memory for why (no headless way to verify them to this session's bar).
+# Scope actually implemented: plain RIS (2.1 payload, 2.2 initial
+# candidates, 2.6 one deferred shadow ray for the winner, 2.7 MIS against
+# BSDF sampling), temporal reuse (2.3), and spatial reuse (2.5) for the
+# diffuse material's area-light NEE at the PRIMARY bounce only, CPU path
+# tracer only (--restir, no --gpu/--guide/--sppm/--vcm combination yet).
+# Both reuse passes need persistent per-pixel state across real
+# interactive-viewer frames -- see project_restir_migration.md memory for
+# the headless `--interactive-frames` debug path that makes them
+# verifiable without a real window.
 
 from std.math import sqrt
 from .geometry import RGB, dot, INV_PI
@@ -64,3 +65,42 @@ def di_target_pdf(
     var g = cos_s * cos_l / dist_sq
     var contrib = alb * le * (INV_PI * g)
     return contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
+
+@fieldwise_init
+struct ReservoirIO(TrivialRegisterPassable):
+    """Bundles everything di_temporal_step needs beyond the current pixel's
+    own hit data, so Phase 2.3/2.5's plumbing through the
+    shade_core_cpu_nee -> ... -> di_temporal_step call chain (rendering.mojo,
+    shading.mojo) is ONE trailing defaulted parameter instead of five. `read`
+    is the previous frame's fully-resolved reservoirs (safe to read from any
+    thread -- render_all_tiles parallelizes per-tile, so this must never be
+    written to during the frame that reads it); `write` is this frame's
+    target (each pixel written by exactly one thread, at interactive mode's
+    1 spp/frame, so no two threads ever touch the same slot). pipeline.mojo's
+    render_interactive swaps which physical buffer is `read` vs `write` each
+    frame rather than copying. gbuf_* are Phase 0.3's world-pos/material-ID
+    G-buffer extension (gbuf_normal/gbuf_depth already existed for the
+    denoiser; gbuf_material_id is new, wired only when use_restir) -- used
+    for 2.5's neighbor rejection (normal dot / depth delta / material match).
+    All pointers default to `.unsafe_dangling()` and frame_w/frame_h to 0;
+    di_temporal_step checks `_is_real_ptr`/`> 0` before ever touching them,
+    so callers that don't pass a real ReservoirIO (the batch --restir path)
+    get exactly the old "no temporal, no spatial reuse" behavior for free."""
+    var read:  UnsafePointer[DIReservoir, MutAnyOrigin]
+    var write: UnsafePointer[DIReservoir, MutAnyOrigin]
+    var gbuf_normal:      UnsafePointer[Float32, MutAnyOrigin]
+    var gbuf_depth:       UnsafePointer[Float32, MutAnyOrigin]
+    var gbuf_material_id: UnsafePointer[Int32, MutAnyOrigin]
+    var frame_w: Int32
+    var frame_h: Int32
+
+@always_inline
+def reservoir_io_null() -> ReservoirIO:
+    return ReservoirIO(
+        read=UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+        write=UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0),
+    )
