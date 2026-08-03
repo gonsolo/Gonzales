@@ -2474,6 +2474,29 @@ def vulkaninterop_test_spheres_gpu(
         return
     test_spheres(spheres, n_spheres, paths[tid].ray, inter + tid)
 
+# Copies the Vulkan-interop curve-candidate buffers (written directly by
+# intersect_batch.comp's shader -- see vulkaninterop_rt_create_scene's
+# docstring) into gonzales's own curve_cand_prim_buf/curve_cand_count_buf,
+# so the EXISTING compact_curve_paths_gpu/resolve_curve_candidates_gpu
+# pipeline (_gpu_bounce_kernels, unconditional whenever handle[].n_curves >
+# 0) can run completely unchanged regardless of which backend produced the
+# candidates. A plain elementwise device-to-device copy, cheap and fully
+# GPU-resident -- no host sync.
+def vulkaninterop_copy_curve_candidates_gpu(
+    src_cand: UnsafePointer[Int32, MutAnyOrigin],
+    src_count: UnsafePointer[Int32, MutAnyOrigin],
+    dst_cand: UnsafePointer[Int32, MutAnyOrigin],
+    dst_count: UnsafePointer[Int32, MutAnyOrigin],
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var n = src_count[tid]
+    dst_count[tid] = n
+    for i in range(Int(n)):
+        dst_cand[tid * CURVE_DEFER_K + i] = src_cand[tid * CURVE_DEFER_K + i]
+
 # Host driver: enqueues pack -> interop ray-query dispatch -> unpack, ALL
 # on ctx.stream() in strict program order, with NO ctx.synchronize()
 # anywhere -- vulkaninterop_rt_trace's internal CUDA-signal/Vulkan-submit/
@@ -2483,10 +2506,10 @@ def vulkaninterop_test_spheres_gpu(
 # fast where the retired host-round-trip version was ~94x slower: no CPU
 # stall, no host-memory copy, anywhere in this function.
 #
-# Scope: triangle/instance geometry via Vulkan RT, PLUS an analytic sphere
-# pass (see vulkaninterop_test_spheres_gpu) -- caller must only invoke this
-# for scenes with no curves (mirrors debug_render_vulkanrt's own scope
-# boundary; spheres and object instancing are both supported now).
+# Scope: triangle/instance/curve geometry via Vulkan RT, PLUS an analytic
+# sphere pass (see vulkaninterop_test_spheres_gpu) -- meshes, instances,
+# spheres, AND curves are all supported now (see vulkaninterop_rt_create_
+# scene's docstring for how curves are represented).
 def vulkaninterop_rt_traverse_paths_gpu(
     ctx: DeviceContext,
     path_buf: DeviceBuffer[DType.uint8],
@@ -2501,6 +2524,10 @@ def vulkaninterop_rt_traverse_paths_gpu(
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    interop_curve_cand_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    interop_curve_cand_count_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    dst_curve_cand_buf: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+    dst_curve_cand_count_buf: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -2529,6 +2556,16 @@ def vulkaninterop_rt_traverse_paths_gpu(
         instance_base_mesh_ptr,
         grid_dim=grid, block_dim=block_size,
     )
+
+    if interop_curve_cand_buf and interop_curve_cand_count_buf:
+        ctx.enqueue_function[vulkaninterop_copy_curve_candidates_gpu](
+            interop_curve_cand_buf.value().unsafe_ptr().bitcast[Int32](),
+            interop_curve_cand_count_buf.value().unsafe_ptr().bitcast[Int32](),
+            dst_curve_cand_buf,
+            dst_curve_cand_count_buf,
+            n_total,
+            grid_dim=grid, block_dim=block_size,
+        )
 
     if n_spheres > 0:
         ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
@@ -2906,6 +2943,11 @@ def _gpu_bounce_kernels(
     # vulkaninterop_unpack_results_kernel) -- None for scenes with no
     # instancing, matching every other Optional buffer above.
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    # Curve candidates for Vulkan RT hits (see vulkaninterop_rt_create_
+    # scene/vulkaninterop_copy_curve_candidates_gpu) -- None for scenes
+    # with no curves.
+    interop_curve_cand_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    interop_curve_cand_count_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ) raises:
     comptime block_size = 256
     if use_vulkan_rt:
@@ -2923,6 +2965,10 @@ def _gpu_bounce_kernels(
             instance_base_mesh_buf,
             handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
             handle[].n_spheres,
+            interop_curve_cand_buf,
+            interop_curve_cand_count_buf,
+            handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](
@@ -3493,6 +3539,8 @@ def gpu_render_wavefront(
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    interop_curve_cand_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    interop_curve_cand_count_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ):
     # --restir batch rendering does not go through this function at all
     # (docs/A2_restir_migration_plan.md, pipeline.mojo's batch GPU branch):
@@ -3539,6 +3587,8 @@ def gpu_render_wavefront(
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
                     instance_base_mesh_buf=instance_base_mesh_buf,
+                    interop_curve_cand_buf=interop_curve_cand_buf,
+                    interop_curve_cand_count_buf=interop_curve_cand_count_buf,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),

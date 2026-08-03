@@ -107,6 +107,27 @@ typedef struct {
 // ordinary mesh, or `mesh_count + k` (instance index k) for an instance --
 // see intersect_batch.comp / vulkaninterop_unpack_results_kernel (gpu.mojo)
 // for the decode.
+//
+// Curves (gonzales's deferred-candidate scheme, see bvh.mojo's
+// traverse_bvh2_core_defer_curves / gpu.mojo's resolve_curve_candidates_gpu):
+// curves are NOT tessellated into triangle geometry. Instead
+// `curve_leaf_aabbs` (n_curve_leaves * 6 floats: xmin,ymin,zmin,xmax,ymax,
+// zmax, one box per curve BVH leaf -- a leaf may cover several
+// locally-linear curve pieces, see pbrt_parser.mojo's curve-group bounds)
+// becomes ONE procedural-AABB BLAS + TLAS instance, distinguishable from
+// ordinary triangle geometry by intersection TYPE
+// (gl_RayQueryCandidateIntersectionAABBEXT), not by instanceCustomIndex.
+// `curve_leaf_prim_idx[i]` is leaf i's index into gonzales's own top-level
+// `prim_ids` array (exactly the `primIdx` resolve_curve_candidates_gpu
+// expects) -- uploaded as a plain read-only storage buffer the shader
+// indexes by `rayQueryGetIntersectionPrimitiveIndexEXT`. Every ray's AABB
+// candidates (up to CURVE_DEFER_K, matching geometry.mojo's constant) are
+// recorded into the two curve-candidate buffers below by the shader itself,
+// during the SAME dispatch that resolves the committed triangle/instance
+// hit -- they never affect that committed hit (AABB candidates are never
+// confirmed/generated), so the ordinary hit-decode path is unaffected.
+// Pass n_curve_leaves=0 (arrays may then be NULL) for a scene with no
+// curves -- byte-identical to before curve support existed.
 void* vulkaninterop_rt_create_scene(
     const VulkanInteropMesh* meshes,
     int64_t mesh_count,
@@ -118,7 +139,22 @@ void* vulkaninterop_rt_create_scene(
     int64_t instance_count,
     const float* instance_obj_to_world,
     const int32_t* instance_template_idx,
+    int64_t n_curve_leaves,
+    const float* curve_leaf_aabbs,
+    const int64_t* curve_leaf_prim_idx,
     int64_t max_rays);
+
+// CUDA device pointer for the shared curve-candidate buffer (max_rays *
+// CURVE_DEFER_K int32s, row-major per ray -- same layout as gpu.mojo's
+// curve_cand_prim_buf) -- a Mojo kernel copies this into
+// curve_cand_prim_buf after the ray-query dispatch (see
+// vulkaninterop_rt_traverse_paths_gpu). NULL if the scene has no curves.
+void* vulkaninterop_rt_get_curve_cand_ptr(void* scene);
+
+// CUDA device pointer for the shared curve-candidate COUNT buffer
+// (max_rays int32s, one per ray -- same layout as gpu.mojo's
+// curve_cand_count_buf). NULL if the scene has no curves.
+void* vulkaninterop_rt_get_curve_cand_count_ptr(void* scene);
 
 // CUDA device pointer for the shared rays buffer -- a Mojo kernel writes
 // ray data directly into this (no host copy) before calling

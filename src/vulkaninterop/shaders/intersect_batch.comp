@@ -9,6 +9,10 @@
 
 layout(local_size_x = 64) in;
 
+// Must match geometry.mojo's CURVE_DEFER_K (not shared across the Mojo/C++/
+// GLSL boundary, same as every other cross-language constant in this repo).
+const uint CURVE_DEFER_K = 4;
+
 struct Ray {
     vec4 originAndTMin;  // xyz = origin, w = tMin
     vec4 dirAndTMax;     // xyz = direction, w = tMax
@@ -37,6 +41,23 @@ layout(set = 0, binding = 1, std430) readonly buffer RaysBuffer {
 layout(set = 0, binding = 2, std430) writeonly buffer ResultsBuffer {
     Result results[];
 };
+// Curve support (see vulkaninterop_rt_create_scene's docstring): curve BVH
+// leaves are procedural AABB geometry in the SAME TLAS, distinguished from
+// triangle candidates by intersection TYPE, never confirmed/generated --
+// they never affect the committed triangle/instance hit above. Every AABB
+// candidate this ray encounters gets recorded (up to CURVE_DEFER_K) into
+// CurveCandBuffer/CurveCandCountBuffer, which a Mojo copy kernel feeds
+// straight into gonzales's existing curve_cand_prim_buf/curve_cand_count_buf
+// (gpu.mojo's compact_curve_paths_gpu/resolve_curve_candidates_gpu, unchanged).
+layout(set = 0, binding = 3, std430) readonly buffer CurveLeafPrimIdxBuffer {
+    int curveLeafPrimIdx[];
+};
+layout(set = 0, binding = 4, std430) writeonly buffer CurveCandBuffer {
+    int curveCand[];  // row-major per ray: curveCand[ray*CURVE_DEFER_K + slot]
+};
+layout(set = 0, binding = 5, std430) writeonly buffer CurveCandCountBuffer {
+    int curveCandCount[];
+};
 
 layout(push_constant) uniform PushConstants {
     uint rayCount;
@@ -55,12 +76,24 @@ void main() {
     rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
                            origin, tMin, direction, tMax);
 
+    uint curveCandN = 0u;
     while (rayQueryProceedEXT(rq)) {
-        if (rayQueryGetIntersectionTypeEXT(rq, false) ==
-            gl_RayQueryCandidateIntersectionTriangleEXT) {
+        uint candType = rayQueryGetIntersectionTypeEXT(rq, false);
+        if (candType == gl_RayQueryCandidateIntersectionTriangleEXT) {
             rayQueryConfirmIntersectionEXT(rq);
+        } else if (candType == gl_RayQueryCandidateIntersectionAABBEXT) {
+            // Never confirmed/generated -- purely informational, recorded
+            // for the narrow-phase (CPU/CUDA-side) curve math to resolve
+            // later, exactly mirroring how the software BVH walk defers
+            // curve leaves instead of testing them inline.
+            if (curveCandN < CURVE_DEFER_K) {
+                int leafIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+                curveCand[i * CURVE_DEFER_K + curveCandN] = curveLeafPrimIdx[leafIdx];
+                curveCandN++;
+            }
         }
     }
+    curveCandCount[i] = int(curveCandN);
 
     Result r;
     if (rayQueryGetIntersectionTypeEXT(rq, true) ==

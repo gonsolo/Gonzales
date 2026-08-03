@@ -69,9 +69,15 @@ comptime VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin]
 # CUDA-importable buffers sized for up to `max_rays` rays/results at once.
 # Pass template_count=0/instance_count=0 (arrays may then be a
 # `.unsafe_dangling()` placeholder) for a scene with no instancing --
-# byte-identical to the pre-instancing behavior. Returns a null handle on
-# failure. See vulkaninterop.h's own docstring for the full instancing
-# rationale and the hit-decode convention.
+# byte-identical to the pre-instancing behavior. Curves (n_curve_leaves,
+# curve_leaf_aabbs, curve_leaf_prim_idx): NOT tessellated -- one procedural-
+# AABB BLAS carrying each curve BVH leaf's bounding box, resolved via
+# gonzales's existing deferred-candidate scheme (see this function's own
+# docstring in vulkaninterop.h for the exact per-ray candidate mechanism).
+# Pass n_curve_leaves=0 for a scene with no curves -- byte-identical to
+# before curve support existed. Returns a null handle on failure. See
+# vulkaninterop.h's own docstring for the full instancing/curve rationale
+# and the hit-decode convention.
 def vulkaninterop_rt_create_scene(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mesh_count: Int64,
@@ -83,6 +89,9 @@ def vulkaninterop_rt_create_scene(
     instance_count: Int64,
     instance_obj_to_world: UnsafePointer[Float32, MutAnyOrigin],
     instance_template_idx: UnsafePointer[Int32, MutAnyOrigin],
+    n_curve_leaves: Int64,
+    curve_leaf_aabbs: UnsafePointer[Float32, MutAnyOrigin],
+    curve_leaf_prim_idx: UnsafePointer[Int64, MutAnyOrigin],
     max_rays: Int64,
 ) -> VulkanInteropRtSceneHandle:
     return external_call["vulkaninterop_rt_create_scene", VulkanInteropRtSceneHandle,
@@ -90,11 +99,29 @@ def vulkaninterop_rt_create_scene(
         UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
         Int64, UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
         Int64, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
+        Int64, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
         Int64](
         meshes, mesh_count, point_counts, vertex_index_counts,
         template_count, template_mesh_start, template_mesh_end,
         instance_count, instance_obj_to_world, instance_template_idx,
+        n_curve_leaves, curve_leaf_aabbs, curve_leaf_prim_idx,
         max_rays)
+
+# CUDA device pointer for the shared curve-candidate buffer (max_rays *
+# CURVE_DEFER_K int32s, row-major per ray -- same layout as gpu.mojo's
+# curve_cand_prim_buf). A Mojo copy kernel moves this into
+# curve_cand_prim_buf after the ray-query dispatch (see
+# vulkaninterop_rt_traverse_paths_gpu, gpu.mojo). Always a real (if
+# possibly minimal/unused) pointer, even for scenes with no curves.
+def vulkaninterop_rt_get_curve_cand_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
+    return external_call["vulkaninterop_rt_get_curve_cand_ptr", UnsafePointer[Int32, MutAnyOrigin],
+        VulkanInteropRtSceneHandle](scene)
+
+# CUDA device pointer for the shared curve-candidate COUNT buffer (max_rays
+# int32s, one per ray -- same layout as gpu.mojo's curve_cand_count_buf).
+def vulkaninterop_rt_get_curve_cand_count_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
+    return external_call["vulkaninterop_rt_get_curve_cand_count_ptr", UnsafePointer[Int32, MutAnyOrigin],
+        VulkanInteropRtSceneHandle](scene)
 
 # CUDA device pointer for the shared rays buffer (max_rays * 8 floats, same
 # (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes). Wrap with

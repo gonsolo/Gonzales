@@ -59,7 +59,7 @@ this doc is the quick-scan summary.
 | PBRT v4 scene parser | — | `Include`/`Import` (incl. `.pbrt.gz`), most shapes (`trianglemesh`/`plymesh`/`curve`/`sphere`/`disk`/`loopsubdiv`) — see gaps below for what's still missing |
 | GPU wavefront rendering | `step5-6` | Mojo GPU kernels, WAVEFRONT_BATCH=8 concurrent samples/pixel/dispatch |
 | Object instancing (`ObjectInstance`) | `ab7a56f`, `11ddf08` | Two-level BVH (BLAS+TLAS), CPU + GPU software traversal |
-| Vulkan RT — 2nd GPU intersection backend | `a9eb370`+ | `VK_KHR_ray_query`; primary rays + diffuse-branch shadow rays, scene-adaptive on/off by light-path occupancy; **mesh-only** — see gap below |
+| Vulkan RT — 2nd GPU intersection backend | `a9eb370`+ | `VK_KHR_ray_query`; primary rays + diffuse-branch shadow rays, scene-adaptive on/off by light-path occupancy. Full scene coverage (2026-08-03, plain `--gpu --vulkan-rt-shade` batch path): meshes, object instancing (multi-geometry-per-template BLAS + real per-instance transforms), spheres (reuses the CUDA path's own analytic `test_spheres` pass unchanged), and curves (procedural-AABB BLAS feeding the existing curve-candidate deferral pipeline, no tessellation) all supported now. Known limit: extremely dense hair scenes (1M+ curve leaves, e.g. curly-hair/bunny-fur) hit a real `vkAllocateMemory` OOM and fall back to CUDA cleanly — a scale ceiling, not a correctness bug. The separate VCM Vulkan RT path (bdpt.mojo) still excludes all of instancing/spheres/curves, not yet extended. |
 
 ---
 
@@ -77,17 +77,18 @@ this doc is the quick-scan summary.
 
 | # | Feature | Why it matters |
 |---|---|---|
-| 4 | **Vulkan RT scene coverage** | Object instancing DONE (2026-08-03, plain `--gpu --vulkan-rt-shade` batch path only — multi-geometry-per-template BLAS + real per-instance transforms, verified on barcelona-pavilion's tree instancing vs the CUDA baseline). Spheres DONE same day — simpler than expected: no tessellation needed, spheres already ran as a separate analytic pass in the CUDA path too, so Vulkan RT reuses that same pass unchanged after its own mesh/instance hit; verified on veach-mis (sphere area lights). Only curves remain (hardest; needs either a custom intersection shader or a broad/narrow two-phase reuse of the existing CUDA curve-candidate pattern) — still hard-falls-back to CUDA, excluding hair scenes from the Vulkan RT speedup. The separate VCM Vulkan RT path (bdpt.mojo) still falls back for ANY instanced or sphere scene, not yet extended. |
-| 5 | **Random-walk SSS** | Skin, marble, wax, candles — current "subsurface" is a coateddiffuse approximation, not real volumetric random-walk transport |
-| 6 | **ReSTIR beyond primary-bounce direct lighting** | ReSTIR DI only covers bounce 0, area lights, diffuse material. Phases 4-8 of `docs/A2_restir_migration_plan.md` (ReSTIR GI, SMS-ReSTIR, volumetric ReSTIR, BDPT-ReSTIR) would extend its reach — mostly not started. Phase 9 (unifying ReSTIR's reservoir formalism with VCM's connect/merge into one joint structure) is explicitly marked **open research** in the plan doc itself, not a scoped deliverable |
+| 4 | **Random-walk SSS** | Skin, marble, wax, candles — current "subsurface" is a coateddiffuse approximation, not real volumetric random-walk transport |
+| 5 | **ReSTIR beyond primary-bounce direct lighting** | ReSTIR DI only covers bounce 0, area lights, diffuse material. Phases 4-8 of `docs/A2_restir_migration_plan.md` (ReSTIR GI, SMS-ReSTIR, volumetric ReSTIR, BDPT-ReSTIR) would extend its reach — mostly not started. Phase 9 (unifying ReSTIR's reservoir formalism with VCM's connect/merge into one joint structure) is explicitly marked **open research** in the plan doc itself, not a scoped deliverable |
+| 6 | **VCM's Vulkan RT wiring lacks instancing/spheres/curves** | Its primary/bounce interop (`vulkaninterop_rt_traverse_light_paths_gpu`/`_camera_gpu`, bdpt.mojo) is separate from the plain wavefront path's, and none of the 2026-08-03 Vulkan RT coverage fixes were ported there — still falls back to CUDA for any instanced/sphere/curve scene |
+| 7 | **Vulkan RT memory ceiling on extreme-density curve scenes** | Curly-hair/bunny-fur-scale hair (1M+ curve BVH leaves) hit a real `vkAllocateMemory` OOM building the procedural-AABB acceleration structure and fall back to CUDA — not a correctness bug, but blocks the Vulkan RT speedup on the very densest hair scenes on a 12GB card |
 
 ### High Effort
 
 | # | Feature | Why it matters |
 |---|---|---|
-| 7 | **NanoVDB / OpenVDB grids** | `disney-cloud` and similar volumetric scenes still unsupported (uniformgrid media works; sparse VDB grids don't) |
-| 8 | **Motion blur** | Time-sampled BVH; static world only right now, no animation support at all |
-| 9 | **Displacement mapping** | On-the-fly tessellation + height field for geometric detail |
+| 8 | **NanoVDB / OpenVDB grids** | `disney-cloud` and similar volumetric scenes still unsupported (uniformgrid media works; sparse VDB grids don't) |
+| 9 | **Motion blur** | Time-sampled BVH; static world only right now, no animation support at all |
+| 10 | **Displacement mapping** | On-the-fly tessellation + height field for geometric detail |
 
 ### Explicitly Out of Scope
 | Feature | Reason |

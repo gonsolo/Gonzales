@@ -6,7 +6,7 @@ from std.gpu.host import DeviceBuffer
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, CURVE_DEFER_K
 from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
@@ -21,6 +21,7 @@ from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destro
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
+    vulkaninterop_rt_get_curve_cand_ptr, vulkaninterop_rt_get_curve_cand_count_ptr,
     vulkaninterop_rt_destroy_scene,
 )
 
@@ -884,15 +885,19 @@ def parse_and_render(
                     # a separate wiring from the plain wavefront path's
                     # _gpu_bounce_kernels, not extended this session; see
                     # project_vulkan_rt_backend memory). The guard above
-                    # already keeps instanced scenes off this path entirely,
-                    # so template_count/instance_count are always 0 here.
+                    # already keeps instanced/curve/sphere scenes off this
+                    # path entirely, so template_count/instance_count/
+                    # n_curve_leaves are always 0 here.
                     var no_templates_vcm = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
                     var no_instances_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
                     var no_instance_tmpl_vcm = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+                    var no_curve_aabbs_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+                    var no_curve_prim_idx_vcm = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
                     interop_scene_vcm = vulkaninterop_rt_create_scene(
                         vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm,
                         Int64(0), no_templates_vcm, no_templates_vcm,
                         Int64(0), no_instances_vcm, no_instance_tmpl_vcm,
+                        Int64(0), no_curve_aabbs_vcm, no_curve_prim_idx_vcm,
                         Int64(max_rays_vk_vcm))
                     vmeshes_vcm.free(); point_counts_vcm.free(); vidx_counts_vcm.free()
                     if Int(interop_scene_vcm) == 0:
@@ -968,101 +973,144 @@ def parse_and_render(
         var mesh_material_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var mesh_al_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var instance_base_mesh_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
+        var interop_curve_cand_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
+        var interop_curve_cand_count_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
-            if psc[0].curve_count > Int32(0):
-                print("WARNING: --vulkan-rt-shade requested but scene uses curves (unsupported) -- falling back to CUDA intersection")
+            n_meshes_vk = Int(psc[0].mesh_count)
+            var vmeshes = alloc[TriangleMesh_C](max(n_meshes_vk, 1))
+            var point_counts = alloc[Int64](max(n_meshes_vk, 1))
+            var vidx_counts = alloc[Int64](max(n_meshes_vk, 1))
+            for i in range(n_meshes_vk):
+                vmeshes[i] = psc[0].meshes[i]
+                point_counts[i] = Int64(psc[0].mesh_n_verts[i])
+                vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+
+            # Object instancing (project_vulkan_rt_backend memory's
+            # "close the Vulkan RT gap" plan, item 1): template_mesh_
+            # start/end mark which mesh-index ranges are template-only
+            # (excluded from the ordinary BLAS-per-mesh loop, merged
+            # instead into their template's own multi-geometry BLAS
+            # inside vulkaninterop_rt_create_scene); instance_obj_to_
+            # world/instance_template_idx place one TLAS instance per
+            # ObjectInstance. Empty (n_templates=0) is byte-identical to
+            # the pre-instancing call.
+            var n_templates_vk = Int(psc[0].blas_count)
+            var template_mesh_start_vk = alloc[Int64](max(n_templates_vk, 1))
+            var template_mesh_end_vk   = alloc[Int64](max(n_templates_vk, 1))
+            for t in range(n_templates_vk):
+                template_mesh_start_vk[t] = Int64(psc[0].template_mesh_start[t])
+                template_mesh_end_vk[t]   = Int64(psc[0].template_mesh_end[t])
+
+            var n_instances_vk = Int(psc[0].instance_count)
+            var instance_o2w_vk = alloc[Float32](max(n_instances_vk, 1) * 16)
+            var instance_tmpl_idx_vk = alloc[Int32](max(n_instances_vk, 1))
+            # Precompute each instance's real BASE mesh index (its
+            # template's own mstart) here on the host so the GPU decode
+            # kernel only needs one array lookup + geometryIndex add --
+            # see vulkaninterop_unpack_results_kernel (gpu.mojo).
+            var instance_base_mesh_host = alloc[Int32](max(n_instances_vk, 1))
+            for k in range(n_instances_vk):
+                var inst = psc[0].instances[k]
+                for ci in range(16):
+                    instance_o2w_vk[k * 16 + ci] = inst.objToWorld[ci]
+                instance_tmpl_idx_vk[k] = Int32(inst.blasIdx)
+                instance_base_mesh_host[k] = psc[0].template_mesh_start[Int(inst.blasIdx)]
+
+            # Curves (item 3 of the plan, the last remaining gap): NOT
+            # tessellated. Scan the ordinary top-level prim_ids for type==5
+            # (curve) leaf entries -- each becomes one procedural AABB (the
+            # union of its piece-group's bounds, same computation
+            # finalize_scene already does for the CPU BVH's own leaf
+            # bounds) tagged with ITS OWN index `i` in `prim_ids`, exactly
+            # the `primIdx` resolve_curve_candidates_gpu (gpu.mojo) expects
+            # -- see vulkaninterop_rt_create_scene's docstring.
+            var n_curve_leaves_vk = 0
+            for i in range(Int(psc[0].prim_count)):
+                if psc[0].prim_ids[i].type == Int8(5):
+                    n_curve_leaves_vk += 1
+            var curve_leaf_aabbs_vk = alloc[Float32](max(n_curve_leaves_vk, 1) * 6)
+            var curve_leaf_prim_idx_vk = alloc[Int64](max(n_curve_leaves_vk, 1))
+            var curve_leaf_write = 0
+            for i in range(Int(psc[0].prim_count)):
+                var p = psc[0].prim_ids[i]
+                if p.type != Int8(5):
+                    continue
+                var curve = psc[0].curves[Int(p.id1)]
+                var first_piece = Int(p.id2) // 8
+                var piece_count = Int(p.id2) % 8
+                var (xmin, ymin, zmin, xmax, ymax, zmax) = curve_piece_bounds(curve, first_piece)
+                for piece in range(first_piece + 1, first_piece + piece_count):
+                    var (pxmin, pymin, pzmin, pxmax, pymax, pzmax) = curve_piece_bounds(curve, piece)
+                    xmin = min(xmin, pxmin); ymin = min(ymin, pymin); zmin = min(zmin, pzmin)
+                    xmax = max(xmax, pxmax); ymax = max(ymax, pymax); zmax = max(zmax, pzmax)
+                var b = curve_leaf_write * 6
+                curve_leaf_aabbs_vk[b+0] = xmin; curve_leaf_aabbs_vk[b+1] = ymin; curve_leaf_aabbs_vk[b+2] = zmin
+                curve_leaf_aabbs_vk[b+3] = xmax; curve_leaf_aabbs_vk[b+4] = ymax; curve_leaf_aabbs_vk[b+5] = zmax
+                curve_leaf_prim_idx_vk[curve_leaf_write] = Int64(i)
+                curve_leaf_write += 1
+
+            interop_scene = vulkaninterop_rt_create_scene(
+                vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts,
+                Int64(n_templates_vk), template_mesh_start_vk, template_mesh_end_vk,
+                Int64(n_instances_vk), instance_o2w_vk, instance_tmpl_idx_vk,
+                Int64(n_curve_leaves_vk), curve_leaf_aabbs_vk, curve_leaf_prim_idx_vk,
+                max_rays_vk)
+            vmeshes.free(); point_counts.free(); vidx_counts.free()
+            template_mesh_start_vk.free(); template_mesh_end_vk.free()
+            instance_o2w_vk.free(); instance_tmpl_idx_vk.free()
+            curve_leaf_aabbs_vk.free(); curve_leaf_prim_idx_vk.free()
+            if Int(interop_scene) == 0:
+                print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                 use_vk = False
+                instance_base_mesh_host.free()
             else:
-                n_meshes_vk = Int(psc[0].mesh_count)
-                var vmeshes = alloc[TriangleMesh_C](max(n_meshes_vk, 1))
-                var point_counts = alloc[Int64](max(n_meshes_vk, 1))
-                var vidx_counts = alloc[Int64](max(n_meshes_vk, 1))
-                for i in range(n_meshes_vk):
-                    vmeshes[i] = psc[0].meshes[i]
-                    point_counts[i] = Int64(psc[0].mesh_n_verts[i])
-                    vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+                var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
+                var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
+                interop_rays_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, raysPtr, Int(max_rays_vk) * 8, owning=False)
+                interop_results_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, resultsPtr, Int(max_rays_vk) * 8, owning=False)
 
-                # Object instancing (project_vulkan_rt_backend memory's
-                # "close the Vulkan RT gap" plan, item 1): template_mesh_
-                # start/end mark which mesh-index ranges are template-only
-                # (excluded from the ordinary BLAS-per-mesh loop, merged
-                # instead into their template's own multi-geometry BLAS
-                # inside vulkaninterop_rt_create_scene); instance_obj_to_
-                # world/instance_template_idx place one TLAS instance per
-                # ObjectInstance. Empty (n_templates=0) is byte-identical to
-                # the pre-instancing call.
-                var n_templates_vk = Int(psc[0].blas_count)
-                var template_mesh_start_vk = alloc[Int64](max(n_templates_vk, 1))
-                var template_mesh_end_vk   = alloc[Int64](max(n_templates_vk, 1))
-                for t in range(n_templates_vk):
-                    template_mesh_start_vk[t] = Int64(psc[0].template_mesh_start[t])
-                    template_mesh_end_vk[t]   = Int64(psc[0].template_mesh_end[t])
+                var light_info = _build_mesh_light_info(psc)
+                var mesh_material_idx = light_info[0]
+                var mesh_al_idx = light_info[1]
+                var n_meshes_alloc = max(n_meshes_vk, 1)
 
-                var n_instances_vk = Int(psc[0].instance_count)
-                var instance_o2w_vk = alloc[Float32](max(n_instances_vk, 1) * 16)
-                var instance_tmpl_idx_vk = alloc[Int32](max(n_instances_vk, 1))
-                # Precompute each instance's real BASE mesh index (its
-                # template's own mstart) here on the host so the GPU decode
-                # kernel only needs one array lookup + geometryIndex add --
-                # see vulkaninterop_unpack_results_kernel (gpu.mojo).
-                var instance_base_mesh_host = alloc[Int32](max(n_instances_vk, 1))
-                for k in range(n_instances_vk):
-                    var inst = psc[0].instances[k]
-                    for ci in range(16):
-                        instance_o2w_vk[k * 16 + ci] = inst.objToWorld[ci]
-                    instance_tmpl_idx_vk[k] = Int32(inst.blasIdx)
-                    instance_base_mesh_host[k] = psc[0].template_mesh_start[Int(inst.blasIdx)]
+                var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int64]())
+                with mmi_buf.map_to_host() as h:
+                    var dst = h.unsafe_ptr().bitcast[Int64]()
+                    for i in range(n_meshes_vk):
+                        dst[i] = mesh_material_idx[i]
+                mesh_material_idx_buf_opt = mmi_buf^
 
-                interop_scene = vulkaninterop_rt_create_scene(
-                    vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts,
-                    Int64(n_templates_vk), template_mesh_start_vk, template_mesh_end_vk,
-                    Int64(n_instances_vk), instance_o2w_vk, instance_tmpl_idx_vk,
-                    max_rays_vk)
-                vmeshes.free(); point_counts.free(); vidx_counts.free()
-                template_mesh_start_vk.free(); template_mesh_end_vk.free()
-                instance_o2w_vk.free(); instance_tmpl_idx_vk.free()
-                if Int(interop_scene) == 0:
-                    print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
-                    use_vk = False
-                    instance_base_mesh_host.free()
-                else:
-                    var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
-                    var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
-                    interop_rays_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, raysPtr, Int(max_rays_vk) * 8, owning=False)
-                    interop_results_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, resultsPtr, Int(max_rays_vk) * 8, owning=False)
+                var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int32]())
+                with mai_buf.map_to_host() as h2:
+                    var dst2 = h2.unsafe_ptr().bitcast[Int32]()
+                    for i in range(n_meshes_vk):
+                        dst2[i] = mesh_al_idx[i]
+                mesh_al_idx_buf_opt = mai_buf^
 
-                    var light_info = _build_mesh_light_info(psc)
-                    var mesh_material_idx = light_info[0]
-                    var mesh_al_idx = light_info[1]
-                    var n_meshes_alloc = max(n_meshes_vk, 1)
+                mesh_material_idx.free()
+                mesh_al_idx.free()
 
-                    var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int64]())
-                    with mmi_buf.map_to_host() as h:
-                        var dst = h.unsafe_ptr().bitcast[Int64]()
-                        for i in range(n_meshes_vk):
-                            dst[i] = mesh_material_idx[i]
-                    mesh_material_idx_buf_opt = mmi_buf^
+                if n_instances_vk > 0:
+                    var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vk * size_of[Int32]())
+                    with ibm_buf.map_to_host() as h3:
+                        var dst3 = h3.unsafe_ptr().bitcast[Int32]()
+                        for k in range(n_instances_vk):
+                            dst3[k] = instance_base_mesh_host[k]
+                    instance_base_mesh_buf_opt = ibm_buf^
+                instance_base_mesh_host.free()
 
-                    var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int32]())
-                    with mai_buf.map_to_host() as h2:
-                        var dst2 = h2.unsafe_ptr().bitcast[Int32]()
-                        for i in range(n_meshes_vk):
-                            dst2[i] = mesh_al_idx[i]
-                    mesh_al_idx_buf_opt = mai_buf^
-
-                    mesh_material_idx.free()
-                    mesh_al_idx.free()
-
-                    if n_instances_vk > 0:
-                        var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vk * size_of[Int32]())
-                        with ibm_buf.map_to_host() as h3:
-                            var dst3 = h3.unsafe_ptr().bitcast[Int32]()
-                            for k in range(n_instances_vk):
-                                dst3[k] = instance_base_mesh_host[k]
-                        instance_base_mesh_buf_opt = ibm_buf^
-                    instance_base_mesh_host.free()
+                if n_curve_leaves_vk > 0:
+                    var curveCandPtr = vulkaninterop_rt_get_curve_cand_ptr(interop_scene)
+                    var curveCandCountPtr = vulkaninterop_rt_get_curve_cand_count_ptr(interop_scene)
+                    interop_curve_cand_buf_opt = DeviceBuffer[DType.uint8](
+                        handle[].ctx, curveCandPtr.bitcast[UInt8](),
+                        Int(max_rays_vk) * Int(CURVE_DEFER_K) * 4, owning=False)
+                    interop_curve_cand_count_buf_opt = DeviceBuffer[DType.uint8](
+                        handle[].ctx, curveCandCountPtr.bitcast[UInt8](),
+                        Int(max_rays_vk) * 4, owning=False)
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -1119,6 +1167,7 @@ def parse_and_render(
                     use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
                     instance_base_mesh_buf_opt,
+                    interop_curve_cand_buf_opt, interop_curve_cand_count_buf_opt,
                 )
                 si += actual_batch
                 var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
