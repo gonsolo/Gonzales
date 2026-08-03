@@ -28,6 +28,45 @@ comptime _FIREFLY_CLAMP_K = Float32(4.0)  # isolated-pixel threshold multiplier,
 # clamped. Biased (slightly dims genuine isolated micro-highlights), but
 # this is the standard practical mitigation production renderers use for
 # exactly this failure mode.
+@always_inline
+def _firefly_clamp_pixel(
+    r0: Float32, g0: Float32, b0: Float32,
+    max_n: Float32, max_n_r: Float32, max_n_g: Float32, max_n_b: Float32,
+    has_neighbor: Bool,
+) -> RGB:
+    """Per-pixel clamp math shared by the CPU firefly pre-clamp (below) and
+    firefly_clamp_gpu (gpu.mojo) -- pure scalar math, no CPU/GPU-specific
+    ops, so it compiles into both a plain function call and a GPU kernel
+    body unchanged. Takes the pixel's own color plus its 8-neighborhood's
+    precomputed maxima (luminance and per-channel), so the CALLER owns the
+    neighbor-gathering loop, which differs between a full nested CPU loop
+    and one GPU thread per pixel."""
+    var lum0 = RGB(r0, g0, b0).luma()
+    var threshold = _FIREFLY_CLAMP_K * max_n
+    var r = r0; var g = g0; var b = b0
+    # No in-bounds neighbor at all (e.g. a 1x1 image) -- "isolated" is
+    # meaningless without anything to compare against, so pass the pixel
+    # through unchanged rather than clamping to 0.
+    if has_neighbor and lum0 > threshold and lum0 > Float32(1e-6):
+        var scale = threshold / lum0
+        r *= scale; g *= scale; b *= scale
+    # Chrominance clamp: a pixel can have UNREMARKABLE overall luminance
+    # yet one channel wildly out of proportion to its neighbors -- colored,
+    # not bright, Monte Carlo noise. Found concretely from a
+    # hero-wavelength spectral NEE estimate occasionally drawing an
+    # unlucky wavelength set for a genuinely-colored light. Same
+    # isolated-pixel reasoning as the luminance clamp, per channel: a
+    # genuinely-colored coherent feature has similarly-colored neighbors,
+    # so its channel max stays high and it's untouched.
+    if has_neighbor:
+        if max_n_r > Float32(1e-6) and r > _FIREFLY_CLAMP_K * max_n_r:
+            r = _FIREFLY_CLAMP_K * max_n_r
+        if max_n_g > Float32(1e-6) and g > _FIREFLY_CLAMP_K * max_n_g:
+            g = _FIREFLY_CLAMP_K * max_n_g
+        if max_n_b > Float32(1e-6) and b > _FIREFLY_CLAMP_K * max_n_b:
+            b = _FIREFLY_CLAMP_K * max_n_b
+    return RGB(r, g, b)
+
 def _clamp_fireflies(
     beauty: UnsafePointer[Float32, MutAnyOrigin],
     width: Int32, height: Int32,
@@ -38,7 +77,6 @@ def _clamp_fireflies(
     for py in range(h):
         for px in range(w):
             var ci = (py * w + px) * 3
-            var lum0 = Float32(0.2126) * beauty[ci] + Float32(0.7152) * beauty[ci + 1] + Float32(0.0722) * beauty[ci + 2]
             var max_n = Float32(0)
             var max_n_r = Float32(0)
             var max_n_g = Float32(0)
@@ -54,59 +92,90 @@ def _clamp_fireflies(
                         continue
                     has_neighbor = True
                     var ni = (ny * w + nx) * 3
-                    var lum_n = Float32(0.2126) * beauty[ni] + Float32(0.7152) * beauty[ni + 1] + Float32(0.0722) * beauty[ni + 2]
+                    var lum_n = RGB(beauty[ni], beauty[ni + 1], beauty[ni + 2]).luma()
                     if lum_n > max_n:
                         max_n = lum_n
                     if beauty[ni + 0] > max_n_r: max_n_r = beauty[ni + 0]
                     if beauty[ni + 1] > max_n_g: max_n_g = beauty[ni + 1]
                     if beauty[ni + 2] > max_n_b: max_n_b = beauty[ni + 2]
-            var threshold = _FIREFLY_CLAMP_K * max_n
-            var r0 = beauty[ci + 0]
-            var g0 = beauty[ci + 1]
-            var b0 = beauty[ci + 2]
-            # No in-bounds neighbor at all (e.g. a 1x1 image) -- "isolated"
-            # is meaningless without anything to compare against, so pass
-            # the pixel through unchanged rather than clamping to 0.
-            if has_neighbor and lum0 > threshold and lum0 > Float32(1e-6):
-                var scale = threshold / lum0
-                r0 *= scale; g0 *= scale; b0 *= scale
-            # Chrominance clamp: a pixel can have UNREMARKABLE overall
-            # luminance yet one channel wildly out of proportion to its
-            # neighbors -- colored, not bright, Monte Carlo noise. Found
-            # concretely from a hero-wavelength spectral NEE estimate
-            # (bxdf.mojo's _nee_weight_simple_via_spectral) occasionally
-            # drawing an unlucky wavelength set for a genuinely-colored
-            # light, producing e.g. RGB=[0.48,0.37,0.87] on a wall that
-            # should be a uniform cream color -- unremarkable in luminance
-            # (~0.5), so the scalar clamp above never sees it, but the
-            # bilateral blur below (guided by albedo/normal/depth, not
-            # color) then smears that one wrong-colored pixel into a
-            # visible blue/red blotch across its whole filter radius. Same
-            # isolated-pixel reasoning as the luminance clamp, just applied
-            # per channel: a genuinely-colored coherent feature has
-            # similarly-colored neighbors, so ITS channel max stays high
-            # and it's untouched; only a true one-pixel color spike with no
-            # coherent neighbor to back it up gets pulled down.
-            if has_neighbor:
-                if max_n_r > Float32(1e-6) and r0 > _FIREFLY_CLAMP_K * max_n_r:
-                    r0 = _FIREFLY_CLAMP_K * max_n_r
-                if max_n_g > Float32(1e-6) and g0 > _FIREFLY_CLAMP_K * max_n_g:
-                    g0 = _FIREFLY_CLAMP_K * max_n_g
-                if max_n_b > Float32(1e-6) and b0 > _FIREFLY_CLAMP_K * max_n_b:
-                    b0 = _FIREFLY_CLAMP_K * max_n_b
-            out[ci + 0] = r0
-            out[ci + 1] = g0
-            out[ci + 2] = b0
+            var c = _firefly_clamp_pixel(
+                beauty[ci + 0], beauty[ci + 1], beauty[ci + 2],
+                max_n, max_n_r, max_n_g, max_n_b, has_neighbor)
+            out[ci + 0] = c.r
+            out[ci + 1] = c.g
+            out[ci + 2] = c.b
     return out
+
+@always_inline
+def _atrous_tap_weight(
+    dl: Float32,
+    var_p: Float32, var_q: Float32,
+    dalb: RGB,
+    ndot: Float32,
+    ddiff: Float32, d0_sq: Float32,
+    sigma_l: Float32, sigma_a: Float32, sigma_n: Float32, sigma_d: Float32,
+) -> Float32:
+    """One à-trous tap's edge-stopping weight (excluding the fixed spatial
+    B3-spline factor, which the caller's hierarchical kernel supplies) --
+    shared verbatim by the CPU pass loop (denoise, below) and
+    atrous_filter_gpu (gpu.mojo), pure scalar/RGB math with no
+    CPU/GPU-specific ops.
+
+    `min(var_p, var_q)`, NOT `var_p` alone: this is the fix for a real bug
+    (see project_gpu_denoiser_energy_bug.md memory) where keying the
+    luminance tolerance to only the CENTRE pixel's variance makes the
+    weight asymmetric (w(p,q) != w(q,p)), and since the caller normalizes
+    by its own weight sum, an asymmetric weight DESTROYS energy instead of
+    moving it -- a small bright feature sits at high spatial variance, so
+    it accepts dark neighbours and dims, while those neighbours (low
+    variance) reject it and never brighten. min() rather than max() so
+    mixing happens only where BOTH pixels are noisy -- a clean pixel is
+    never contaminated by a noisy neighbour."""
+    var sigma_l2 = sigma_l * sigma_l * min(var_p, var_q) + Float32(1e-6)
+    var w_l = exp(-dl * dl / sigma_l2)
+    var sigma_a2 = sigma_a * sigma_a
+    var w_a = exp(-(dalb * dalb).sum() / sigma_a2)
+    var normal_diff = max(Float32(0), Float32(1) - ndot)
+    var inv_sn = Float32(1) / sigma_n
+    var inv2sd = Float32(1) / (Float32(2) * sigma_d * sigma_d)
+    var rel_depth2 = (ddiff * ddiff) / d0_sq
+    var w_nd = exp(-(normal_diff * inv_sn + rel_depth2 * inv2sd))
+    return w_l * w_a * w_nd
+
+@always_inline
+def _atrous_spatial_weight(dx: Int, dy: Int) -> Float32:
+    """Separable B3-spline kernel {3/8, 1/4, 1/16} at a 5x5 tap offset,
+    shared by the CPU pass loop and atrous_filter_gpu -- the fixed
+    hierarchical weight à-trous dilates by `step` each pass instead of a
+    spatial Gaussian, which is what lets 5 cheap 5x5 passes reach an
+    effective 31px radius."""
+    var adx = dx if dx >= 0 else -dx
+    var ady = dy if dy >= 0 else -dy
+    var hx = Float32(0.0625) if adx == 2 else (Float32(0.25) if adx == 1 else Float32(0.375))
+    var hy = Float32(0.0625) if ady == 2 else (Float32(0.25) if ady == 1 else Float32(0.375))
+    return hx * hy
 
 # Joint bilateral denoiser guided by albedo, normals, and depth.
 # beauty/albedo: width*height*3 floats, R,G,B interleaved, row-major.
 # normals: width*height*3 unit-vector floats (Nx,Ny,Nz) from unjittered first-hit geometry.
 # depth:   width*height floats, unjittered first-hit ray distance.
-# sigma_s: spatial Gaussian std-dev (pixels).
-# sigma_r: albedo range std-dev.
+# n_passes: number of à-trous iterations; pass i dilates taps by step=2^i,
+#           so n_passes=5 reaches an effective 31px radius from five cheap
+#           5x5 taps instead of one huge dense window.
+# sigma_l: per-tap luminance tolerance (see _atrous_tap_weight for why it's
+#          keyed to min(var_p,var_q), not either pixel alone).
+# sigma_a: albedo range std-dev.
 # sigma_n: normal edge sharpness (weight = exp(-(1-dot(n0,n1))/sigma_n)).
 # sigma_d: depth relative std-dev (weight = exp(-((d1-d0)/d0)^2 / (2*sigma_d^2))).
+#
+# à-trous ("with holes") wavelet filter (Dammertz et al. 2010), the same
+# algorithm and edge-stopping weights as atrous_filter_gpu (gpu.mojo) --
+# unified 2026-08-03 after finding the GPU version was both a better
+# algorithm AND, before a companion fix, had a real energy-destroying bug;
+# see project_gpu_denoiser_energy_bug.md memory. CPU still lacks GPU's
+# curve_mask hair passthrough (hair/fur was never specially handled on the
+# CPU path either before or after this change -- not a regression, just an
+# still-open gap, see the memory file).
 def denoise(
     beauty:  UnsafePointer[Float32, MutAnyOrigin],
     albedo:  UnsafePointer[Float32, MutAnyOrigin],
@@ -114,74 +183,95 @@ def denoise(
     depth:   UnsafePointer[Float32, MutAnyOrigin],
     width: Int32, height: Int32,
     output: UnsafePointer[Float32, MutAnyOrigin],
-    radius: Int32,
-    sigma_s: Float32,
-    sigma_r: Float32,
+    n_passes: Int32,
+    sigma_l: Float32,
+    sigma_a: Float32,
     sigma_n: Float32,
     sigma_d: Float32,
 ):
     var w = Int(width)
     var h = Int(height)
-    var r = Int(radius)
-    var inv2ss = Float32(1) / (Float32(2) * sigma_s * sigma_s)
-    var inv2sr = Float32(1) / (Float32(2) * sigma_r * sigma_r)
-    var inv_sn = Float32(1) / sigma_n
-    var inv2sd = Float32(1) / (Float32(2) * sigma_d * sigma_d)
-    var diam = 2 * r + 1
+    var n = w * h
 
     var clamped = _clamp_fireflies(beauty, width, height)
 
-    # Precompute spatial weights for the (2r+1)×(2r+1) window.
-    var sw = List[Float32](capacity=diam * diam)
-    for dy in range(-r, r + 1):
-        for dx in range(-r, r + 1):
-            var dist2 = Float32(dx * dx + dy * dy)
-            sw.append(exp(-dist2 * inv2ss))
-
+    # Per-pixel luminance variance over a 3x3 neighborhood, estimated ONCE
+    # (not re-estimated per pass, matching estimate_variance_gpu) and used,
+    # via min(var_p,var_q), by every à-trous pass below.
+    var variance = alloc[Float32](n)
     for py in range(h):
         for px in range(w):
-            var ci  = (py * w + px) * 3
-            var pi  = py * w + px
-            var a0 = RGB(albedo[ci + 0], albedo[ci + 1], albedo[ci + 2])
-            var n0x = normals[ci + 0]
-            var n0y = normals[ci + 1]
-            var n0z = normals[ci + 2]
-            var d0  = depth[pi]
-            var d0_clamped = min(d0, Float32(1e18))
-            var d0_sq = max(d0_clamped * d0_clamped, Float32(1e-6))
-
-            var acc = RGB(Float32(0))
-            var acc_w = Float32(0)
-
-            for dy in range(-r, r + 1):
-                for dx in range(-r, r + 1):
+            var pi = py * w + px
+            var mean = Float32(0)
+            var mean_sq = Float32(0)
+            var count = 0
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
                     var nx = px + dx
                     var ny = py + dy
                     if nx < 0 or nx >= w or ny < 0 or ny >= h:
                         continue
-                    var ni  = (ny * w + nx) * 3
-                    var npi = ny * w + nx
-                    var dalb = RGB(albedo[ni + 0], albedo[ni + 1], albedo[ni + 2]) - a0
-                    var albedo_dist2 = (dalb * dalb).sum()
-                    # Normal: 1 - dot(n0, n_neighbor) is 0 for same dir, 2 for opposite.
-                    var ndot = normals[ni+0]*n0x + normals[ni+1]*n0y + normals[ni+2]*n0z
-                    var normal_diff = max(Float32(0), Float32(1) - ndot)
-                    # Depth: relative difference squared.
-                    var ddiff = min(depth[npi], Float32(1e18)) - d0_clamped
-                    var rel_depth2 = (ddiff * ddiff) / d0_sq
-                    # Merge all three edge-stopping terms into one exp.
-                    var wt = sw[(dy + r) * diam + (dx + r)] * exp(
-                        -(albedo_dist2 * inv2sr + normal_diff * inv_sn + rel_depth2 * inv2sd)
-                    )
-                    acc += RGB(clamped[ni + 0], clamped[ni + 1], clamped[ni + 2]) * wt
-                    acc_w += wt
+                    var ni = (ny * w + nx) * 3
+                    var l = RGB(clamped[ni], clamped[ni + 1], clamped[ni + 2]).luma()
+                    mean += l; mean_sq += l * l; count += 1
+            var fc = Float32(count)
+            mean /= fc; mean_sq /= fc
+            var v = mean_sq - mean * mean
+            variance[pi] = v if v > Float32(0) else Float32(0)
 
-            var result = (acc / acc_w) if acc_w > Float32(0) else RGB(clamped[ci + 0], clamped[ci + 1], clamped[ci + 2])
-            output[ci + 0] = result.r
-            output[ci + 1] = result.g
-            output[ci + 2] = result.b
+    var ping = clamped
+    var pong = alloc[Float32](n * 3)
+    var np = Int(n_passes)
+    for i in range(np):
+        var step = 1 << i
+        var src = ping if i % 2 == 0 else pong
+        var dst = pong if i % 2 == 0 else ping
+        for py in range(h):
+            for px in range(w):
+                var ci = (py * w + px) * 3
+                var pi = py * w + px
+                var c = RGB(src[ci], src[ci + 1], src[ci + 2])
+                var cl = c.luma()
+                var var_p = variance[pi]
+                var a0 = RGB(albedo[ci + 0], albedo[ci + 1], albedo[ci + 2])
+                var n0x = normals[ci + 0]
+                var n0y = normals[ci + 1]
+                var n0z = normals[ci + 2]
+                var d0_clamped = min(depth[pi], Float32(1e18))
+                var d0_sq = max(d0_clamped * d0_clamped, Float32(1e-6))
+
+                var acc = RGB(Float32(0))
+                var acc_w = Float32(0)
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        var nx = px + dx * step
+                        var ny = py + dy * step
+                        if nx < 0 or nx >= w or ny < 0 or ny >= h:
+                            continue
+                        var ni = (ny * w + nx) * 3
+                        var npi = ny * w + nx
+                        var qc = RGB(src[ni], src[ni + 1], src[ni + 2])
+                        var dl = qc.luma() - cl
+                        var dalb = RGB(albedo[ni + 0], albedo[ni + 1], albedo[ni + 2]) - a0
+                        var ndot = normals[ni+0]*n0x + normals[ni+1]*n0y + normals[ni+2]*n0z
+                        var ddiff = min(depth[npi], Float32(1e18)) - d0_clamped
+                        var wt = _atrous_spatial_weight(dx, dy) * _atrous_tap_weight(
+                            dl, var_p, variance[npi], dalb, ndot, ddiff, d0_sq,
+                            sigma_l, sigma_a, sigma_n, sigma_d)
+                        acc += qc * wt
+                        acc_w += wt
+
+                var result = (acc / acc_w) if acc_w > Float32(0) else c
+                dst[ci + 0] = result.r
+                dst[ci + 1] = result.g
+                dst[ci + 2] = result.b
+
+    var result_buf = pong if np % 2 == 1 else ping
+    for i in range(n * 3):
+        output[i] = result_buf[i]
+    variance.free()
     clamped.free()
-    # sw freed automatically when it goes out of scope
+    pong.free()
 
 
 # Write a float RGB buffer via the OpenImageIO bridge.

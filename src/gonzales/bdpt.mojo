@@ -5454,7 +5454,7 @@ def vcm_render(
         for i in range(n_pix * 3): denoised[i] = pixels[i]
     else:
         denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
-                denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+                denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
     _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
     pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
@@ -6521,7 +6521,7 @@ def vcm_render_gpu(
                 for i in range(n_pix * 3): denoised[i] = pixels[i]
             else:
                 denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
-                        denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+                        denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
             _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
             pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
@@ -7167,7 +7167,7 @@ def vcm_render_gpu_wavefront(
                 for i in range(n_pix * 3): denoised[i] = pixels[i]
             else:
                 denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
-                        denoised, Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+                        denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
             _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
             pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()

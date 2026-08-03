@@ -1228,7 +1228,7 @@ def parse_and_render(
             denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(),
                     normals.unsafe_ptr(), dept.unsafe_ptr(),
                     fw, fh, denoised.unsafe_ptr(),
-                    Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+                    Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
                                  psc[0].film_filename, Int32(32), Int32(32))
         var albedo_name_buf = List[UInt8](capacity=11)
@@ -1542,7 +1542,7 @@ def render_interactive(
             denoise(beauty.unsafe_ptr(), albedo.unsafe_ptr(),
                     normals_int.unsafe_ptr(), depth_int.unsafe_ptr(),
                     fw, fh, denoised.unsafe_ptr(),
-                    Int32(5), Float32(3.0), Float32(0.2), Float32(0.3), Float32(0.05))
+                    Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
         viewer_update_framebuffer(v, denoised.unsafe_ptr(), fw, fh)
 

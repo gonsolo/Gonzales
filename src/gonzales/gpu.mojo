@@ -14,6 +14,7 @@ from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured
 from .guide import null_guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
+from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -3584,6 +3585,54 @@ def estimate_variance_gpu(
     variance_out[tid] = v if v > Float32(0) else Float32(0)
 
 
+def firefly_clamp_gpu(
+    beauty: UnsafePointer[Float32, MutAnyOrigin],
+    output: UnsafePointer[Float32, MutAnyOrigin],
+    fw: Int, fh: Int,
+):
+    """GPU counterpart of postprocess.mojo's _clamp_fireflies, which the GPU
+    à-trous path never had until now -- a live divergence (see
+    project_gpu_denoiser_energy_bug.md memory): without it, a single
+    extreme-radiance pixel smears across the filter's full effective
+    radius (up to 31px at 5 passes) exactly as it did on CPU before that
+    fix existed. Same isolated-pixel test as CPU, via the SAME shared
+    _firefly_clamp_pixel -- only the neighbor-gathering loop differs (one
+    GPU thread per pixel vs a nested CPU loop)."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= fw * fh:
+        return
+    var px = tid % fw
+    var py = tid // fw
+    var max_n = Float32(0)
+    var max_n_r = Float32(0)
+    var max_n_g = Float32(0)
+    var max_n_b = Float32(0)
+    var has_neighbor = False
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            if dx == 0 and dy == 0:
+                continue
+            var nx = px + dx
+            var ny = py + dy
+            if nx < 0 or nx >= fw or ny < 0 or ny >= fh:
+                continue
+            has_neighbor = True
+            var ni = (ny * fw + nx) * 3
+            var lum_n = RGB(beauty[ni], beauty[ni + 1], beauty[ni + 2]).luma()
+            if lum_n > max_n:
+                max_n = lum_n
+            if beauty[ni + 0] > max_n_r: max_n_r = beauty[ni + 0]
+            if beauty[ni + 1] > max_n_g: max_n_g = beauty[ni + 1]
+            if beauty[ni + 2] > max_n_b: max_n_b = beauty[ni + 2]
+    var ci = tid * 3
+    var c = _firefly_clamp_pixel(
+        beauty[ci + 0], beauty[ci + 1], beauty[ci + 2],
+        max_n, max_n_r, max_n_g, max_n_b, has_neighbor)
+    output[ci + 0] = c.r
+    output[ci + 1] = c.g
+    output[ci + 2] = c.b
+
+
 def atrous_filter_gpu(
     input: UnsafePointer[Float32, MutAnyOrigin],
     albedo: UnsafePointer[Float32, MutAnyOrigin],
@@ -3615,19 +3664,20 @@ def atrous_filter_gpu(
         return
     var cl = c.luma()
     var var_p = variance[tid]
-    var sigma_a2 = sigma_a * sigma_a
     var ca = RGB(albedo[tid*3], albedo[tid*3+1], albedo[tid*3+2])
     var cn = Vec3f(normals[tid*3], normals[tid*3+1], normals[tid*3+2])
-    var cd = depth[tid]
-    var inv_sn = Float32(1) / sigma_n
-    var inv2sd = Float32(1) / (Float32(2) * sigma_d * sigma_d)
     # Clamp depth before squaring to avoid Float32 overflow (background sentinel=1e38).
-    var cd_clamped = min(cd, Float32(1e18))
+    var cd_clamped = min(depth[tid], Float32(1e18))
     var cd_sq = max(cd_clamped * cd_clamped, Float32(1e-6))
 
     var acc = RGB(Float32(0))
     var acc_w = Float32(0)
 
+    # Per-tap weight is _atrous_tap_weight (postprocess.mojo), shared
+    # VERBATIM with the CPU denoise() pass loop -- see that function's
+    # own docstring for why min(var_p,var_q), not var_p alone, matters
+    # (an asymmetric weight destroys energy instead of moving it; this
+    # was a real, measured bug -- project_gpu_denoiser_energy_bug.md).
     for dy in range(-2, 3):
         for dx in range(-2, 3):
             var nx = px + dx * step; var ny = py + dy * step
@@ -3639,38 +3689,12 @@ def atrous_filter_gpu(
                 continue
             var qc = RGB(input[ni], input[ni+1], input[ni+2])
             var dl = qc.luma() - cl
-            # Symmetric in (p,q) via min() -- deliberately NOT the centre
-            # pixel's variance alone. Keying the tolerance to var_p only makes
-            # w(p,q) != w(q,p), and this filter normalizes by its own weight
-            # sum, so an asymmetric weight DESTROYS energy rather than moving
-            # it: a small bright feature sits at high spatial variance, so it
-            # accepts dark neighbours and dims, while those neighbours (low
-            # variance) reject it and never brighten. Measured on
-            # Scenes/restir-manylights.pbrt, whose emissive quads are exactly
-            # that case: 31.7% of total image energy vanished (bright pixels
-            # lost 38800, dim pixels gained only 3914). The CPU denoiser never
-            # had this because it has no variance-keyed term at all.
-            #
-            # min() rather than max(): mix only where BOTH pixels are noisy.
-            # That matters because estimate_variance_gpu measures SPATIAL
-            # variance, which cannot tell a real edge from noise -- a genuine
-            # edge reads as maximum "noise", so a max()/var_p rule blurs
-            # hardest exactly where it should blur least.
-            var var_q = variance[ni1]
-            var sigma_l2 = sigma_l * sigma_l * min(var_p, var_q) + Float32(1e-6)
-            var w_l = exp(-dl * dl / sigma_l2)
             var dalb = RGB(albedo[ni], albedo[ni+1], albedo[ni+2]) - ca
-            var w_a = exp(-(dalb * dalb).sum() / sigma_a2)
             var ndot = normals[ni]*cn.x + normals[ni+1]*cn.y + normals[ni+2]*cn.z
-            var normal_diff = max(Float32(0), Float32(1) - ndot)
             var dd = min(depth[ni1], Float32(1e18)) - cd_clamped
-            var rel_depth2 = (dd * dd) / cd_sq
-            var w_nd = exp(-(normal_diff * inv_sn + rel_depth2 * inv2sd))
-            var adx = dx if dx >= 0 else -dx; var ady = dy if dy >= 0 else -dy
-            var hx = Float32(0.0625) if adx == 2 else (Float32(0.25) if adx == 1 else Float32(0.375))
-            var hy = Float32(0.0625) if ady == 2 else (Float32(0.25) if ady == 1 else Float32(0.375))
-            var w_s = hx * hy
-            var w = w_s * w_l * w_a * w_nd
+            var w = _atrous_spatial_weight(dx, dy) * _atrous_tap_weight(
+                dl, var_p, variance[ni1], dalb, ndot, dd, cd_sq,
+                sigma_l, sigma_a, sigma_n, sigma_d)
             acc += qc * w
             acc_w += w
 
@@ -3720,8 +3744,24 @@ def gpu_atrous_denoise(
                     var dst = output.bitcast[UInt8]()
                     memcpy(dest=dst, src=src, count=bytes_b)
                 return
-            handle[].ctx.enqueue_function[estimate_variance_gpu](
+            # Firefly pre-clamp -- matches CPU's denoise() (postprocess.mojo),
+            # which GPU never had before this. Without it a single extreme
+            # pixel smears across the filter's full effective radius (up to
+            # 31px at 5 passes). Writes into atrous_pong_buf: pass 0 below
+            # then reads from THAT (clamped) buffer, reusing atrous_ping_buf
+            # (whose unclamped contents are no longer needed) as scratch --
+            # ping/pong roles are therefore swapped relative to before this
+            # change, tracked explicitly via clamp_dst_ptr below rather than
+            # implicitly through the i%2 alternation.
+            handle[].ctx.enqueue_function[firefly_clamp_gpu](
                 handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32](),
+                fw, fh,
+                grid_dim=grid_n, block_dim=block_size,
+            )
+            var clamp_dst_ptr = handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32]()
+            handle[].ctx.enqueue_function[estimate_variance_gpu](
+                clamp_dst_ptr,
                 handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32](),
                 fw, fh,
                 grid_dim=grid_n, block_dim=block_size,
@@ -3740,18 +3780,21 @@ def gpu_atrous_denoise(
             var n_passes = min(5, max(1, Int(frame_count)))
             for i in range(n_passes):
                 var step = 1 << i   # 1, 2, 4, 8, 16
-                var src_ptr = ping_ptr if i % 2 == 0 else pong_ptr
-                var dst_ptr = pong_ptr if i % 2 == 0 else ping_ptr
+                # Pass 0 reads the CLAMPED buffer (pong), not ping -- see the
+                # firefly-clamp comment above for why the starting side is
+                # swapped from the pre-firefly-clamp version of this loop.
+                var src_ptr = pong_ptr if i % 2 == 0 else ping_ptr
+                var dst_ptr = ping_ptr if i % 2 == 0 else pong_ptr
                 handle[].ctx.enqueue_function[atrous_filter_gpu](
                     src_ptr, alb_ptr, var_ptr, nrm_ptr, dep_ptr, cmask_ptr, dst_ptr,
                     fw, fh, step,
                     Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05),
                     grid_dim=grid_n, block_dim=block_size,
                 )
-            # Result is in pong if n_passes is odd, ping if even.
+            # Result is in ping if n_passes is odd, pong if even (start=pong).
             handle[].ctx.synchronize()
             var bytes = n_pix * 12
-            var result_buf = handle[].atrous_pong_buf if n_passes % 2 == 1 else handle[].atrous_ping_buf
+            var result_buf = handle[].atrous_ping_buf if n_passes % 2 == 1 else handle[].atrous_pong_buf
             with result_buf.map_to_host() as h:
                 var src = h.unsafe_ptr()
                 var dst = output.bitcast[UInt8]()
